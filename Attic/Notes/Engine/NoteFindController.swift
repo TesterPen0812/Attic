@@ -16,11 +16,20 @@ final class NoteFindController: ObservableObject {
     @Published private(set) var isShown = false
     @Published var query = "" { didSet { refresh(selectFirst: true) } }
     @Published private(set) var matches: [Match] = [] {
-        didSet { noteHighlightsNeedUpdate = true }
+        didSet {
+            noteHighlightsNeedUpdate = true
+            tableHighlights.removeAll()
+            for match in matches {
+                if let id = match.tableID, let cell = match.cell, let range = match.cellRange {
+                    tableHighlights[id, default: [:]][cell, default: []].append(range)
+                }
+            }
+        }
     }
     @Published private(set) var index: Int? = nil
     @Published var fieldFocused = false
     private var noteHighlightsNeedUpdate = false
+    private var tableHighlights: [UUID: [NoteTable.Position: [NSRange]]] = [:]
     private var paintedNoteRanges: [NSRange] = []
     private var dirtyHighlights: NSRange?
     private var pendingSearchRange: NSRange?
@@ -310,9 +319,14 @@ final class NoteFindController: ObservableObject {
         let match = matches[index]
         engine.unfoldHeadings(containing: match.noteRange)
         if let id = match.tableID, let cell = match.cell, let range = match.cellRange,
-           let (table, _) = engine.tableAttachment(id: id) {
-            engine.textView?.scrollRangeToVisible(match.noteRange)
-            if activateCell { engine.enterTable(table, at: cell, caret: .range(range)); fieldFocused = false }
+           match.noteRange.location >= 0, match.noteRange.location < engine.textStorage.length,
+           let table = engine.tableAttachment(at: match.noteRange.location), table.objectID == id {
+            if activateCell {
+                engine.enterTable(table, at: cell, caret: .range(range))
+                fieldFocused = false
+            } else {
+                engine.textView?.scrollRangeToVisible(match.noteRange)
+            }
         } else {
             engine.activeTableView?.deactivate()
             if activateCell && !fieldFocused {
@@ -321,12 +335,13 @@ final class NoteFindController: ObservableObject {
             engine.textView?.setSelectedRange(match.noteRange)
             engine.textView?.scrollRangeToVisible(match.noteRange)
         }
-        updateHighlights()
+        // Navigation changes only the selection. The cached match ink stays
+        // identical; entering a table refreshes its editor through enterTable.
     }
 
     func decorate(_ string: NSMutableAttributedString, tableID: UUID, cell: NoteTable.Position) {
-        for match in matches where match.tableID == tableID && match.cell == cell {
-            if let range = match.cellRange, NSMaxRange(range) <= string.length {
+        for range in tableHighlights[tableID]?[cell] ?? [] {
+            if NSMaxRange(range) <= string.length {
                 string.addAttribute(.backgroundColor, value: highlight, range: range)
             }
         }
@@ -373,14 +388,19 @@ final class NoteFindController: ObservableObject {
             dirtyHighlights = nil
             noteHighlightsNeedUpdate = false
         }
-        for view in engine.tableViews() {
-            view.canvas.needsDisplay = true
-            if view.hasEditor, let cell = view.activeCell, let id = view.attachment?.objectID,
-               let layout = view.editor.textLayoutManager, let content = layout.textContentManager {
-                layout.removeRenderingAttribute(.backgroundColor, for: content.documentRange)
-                for match in matches where match.tableID == id && match.cell == cell {
-                    if let range = match.cellRange,
-                       let start = content.location(content.documentRange.location, offsetBy: range.location),
+        for view in engine.tableViews() { updateTableHighlights(in: view, clear: clear) }
+    }
+
+    /// A focus change affects this editor's ink, not every table in the note.
+    func updateTableHighlights(in view: NoteTableView, clear: Bool = false) {
+        guard isShown || clear else { return }
+        view.canvas.needsDisplay = true
+        if view.hasEditor, let cell = view.activeCell, let id = view.attachment?.objectID,
+           let layout = view.editor.textLayoutManager, let content = layout.textContentManager {
+            layout.removeRenderingAttribute(.backgroundColor, for: content.documentRange)
+            if !clear {
+                for range in tableHighlights[id]?[cell] ?? [] {
+                    if let start = content.location(content.documentRange.location, offsetBy: range.location),
                        let end = content.location(start, offsetBy: range.length),
                        let textRange = NSTextRange(location: start, end: end) {
                         layout.addRenderingAttribute(.backgroundColor, value: highlight, for: textRange)

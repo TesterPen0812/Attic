@@ -1491,7 +1491,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return ids
     }
 
+    /// Work counter: full attachment enumerations, including presentation work.
+    private(set) var objectEnumerationPassCount = 0
+
     func objects() -> [(NoteObjectAttachment, NSRange)] {
+        objectEnumerationPassCount += 1
         var result: [(NoteObjectAttachment, NSRange)] = []
         textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
             if let object = value as? NoteObjectAttachment { result.append((object, range)) }
@@ -2329,7 +2333,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let textView else { return }
         let literal = paragraphStyle(at: textView.selectedRange().location)?.isCode == true
             || textView.typingAttributes[.noteMark(.code)] != nil
-        textView.isContinuousSpellCheckingEnabled = !literal
+        // AppKit resets temporary checking runs even for the same value.
+        // With Find ink in a long note that traverses the entire run store.
+        if textView.isContinuousSpellCheckingEnabled != !literal {
+            textView.isContinuousSpellCheckingEnabled = !literal
+        }
         textView.isAutomaticSpellingCorrectionEnabled = !literal
         textView.isAutomaticTextReplacementEnabled = !literal
         textView.isAutomaticQuoteSubstitutionEnabled = !literal

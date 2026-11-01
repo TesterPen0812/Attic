@@ -14,6 +14,13 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
+    #if DEBUG
+    /// Native configuration writes can traverse every temporary Find run.
+    private(set) var continuousSpellCheckingWriteCount = 0
+    override var isContinuousSpellCheckingEnabled: Bool {
+        didSet { continuousSpellCheckingWriteCount += 1 }
+    }
+    #endif
     /// O4-04: the text's colours follow the window's appearance at once,
     /// even while a native menu tracks. The design reaches the engine
     /// through the Notes page's `onChange(of: design)`, and SwiftUI runs

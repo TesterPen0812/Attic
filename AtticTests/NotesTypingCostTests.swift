@@ -5,6 +5,71 @@ import XCTest
 /// Deterministic work counters; times are evidence, never invented budgets.
 @MainActor
 final class NotesTypingCostTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+    }
+
+    override func tearDown() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
+        try await super.tearDown()
+    }
+
+    func testFindNavigationDoesNotEnumerateALargeNotesObjectsAgain() {
+        for count in [1_000, 5_000] {
+            let (engine, view) = editor([.text("Title")] + (0..<count).map { .text("Line \($0) needle") })
+            defer { engine.find.close(); engine.detachView() }
+            engine.find.show()
+            engine.find.query = "needle"
+            let searches = engine.find.searchedUTF16Count
+            let enumerations = engine.objectEnumerationPassCount
+            #if DEBUG
+            let checkingWrites = view.continuousSpellCheckingWriteCount
+            #endif
+            let ms = milliseconds { engine.find.next(); engine.find.next(backward: true) }
+            print("QUALITY1_FIND paragraphs=\(count) next_previous_ms=\(ms) object_enumerations=\(engine.objectEnumerationPassCount - enumerations)")
+            XCTAssertEqual(engine.find.searchedUTF16Count, searches)
+            XCTAssertEqual(engine.objectEnumerationPassCount, enumerations,
+                           "navigation reuses matches and ink; it must not enumerate the whole note")
+            #if DEBUG
+            XCTAssertEqual(view.continuousSpellCheckingWriteCount, checkingWrites,
+                           "unchanged prose selection must not reset all native temporary attribute runs")
+            #endif
+            XCTAssertEqual(view.selectedRange(), engine.find.matches[0].noteRange)
+        }
+    }
+
+    func testFindTableFocusDoesNotRepaintEveryTableInALargeNote() throws {
+        let (engine, view) = editor([.text("Title"), .text("needle body"),
+            .table(NoteTable(texts: [["needle cell", "needle other"]]))]
+            + (0..<5_000).map { .text("needle paragraph \($0)") })
+        let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let scroll = try XCTUnwrap(view.enclosingScrollView)
+        scroll.frame = root.bounds
+        root.addSubview(scroll)
+        root.addSubview(table.tableView)
+        let window = NSWindow(contentRect: root.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        defer { engine.find.close(); window.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        let enumerations = engine.objectEnumerationPassCount
+        engine.find.next()
+        XCTAssertTrue(window.firstResponder === table.tableView.editor)
+        XCTAssertEqual(table.tableView.editor.selectedRange(), engine.find.matches[1].cellRange)
+        engine.find.next()
+        XCTAssertEqual(table.tableView.editor.selectedRange(), engine.find.matches[2].cellRange)
+        engine.find.next()
+        XCTAssertTrue(window.firstResponder === view)
+        XCTAssertEqual(view.selectedRange(), engine.find.matches[3].noteRange)
+        XCTAssertEqual(engine.objectEnumerationPassCount, enumerations,
+                       "cell focus needs only that table's cached match ink")
+    }
+
     func testB11MeasureWrapLayout() throws {
         for run in 0..<5 {
             let (engine, view) = editor([.text("Title"), .text("")])
@@ -140,6 +205,20 @@ final class NotesTypingCostTests: XCTestCase {
             let editedParagraphLength = engine.paragraphRange(at: 10).length
             XCTAssertEqual(engine.find.searchedUTF16Count - scanned, editedParagraphLength)
             XCTAssertLessThanOrEqual(engine.find.invalidatedUTF16Count - invalidated, editedParagraphLength)
+            if count == 5_000, ProcessInfo.processInfo.environment["ATTIC_FIND_NAV_PROFILE"] == "1" {
+                print("QUALITY1_FIND_PROFILE pid=\(ProcessInfo.processInfo.processIdentifier)")
+                fflush(stdout)
+                Thread.sleep(forTimeInterval: 3)
+                let deadline = Date().addingTimeInterval(20)
+                var alternate = false
+                while Date() < deadline {
+                    view.setSelectedRange(NSRange(location: 10, length: 1))
+                    view.insertText(alternate ? "x" : "y", replacementRange: view.selectedRange())
+                    alternate.toggle()
+                    engine.find.next()
+                    engine.find.next(backward: true)
+                }
+            }
             let navSearches = engine.find.objectSearchPassCount, navScan = engine.find.searchedUTF16Count
             let navInvalidation = engine.find.invalidatedUTF16Count
             let navigationMS = milliseconds { engine.find.next(); engine.find.next(backward: true) }
