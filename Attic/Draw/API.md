@@ -64,8 +64,9 @@ Use `copy` to encode `DrawStore.clipboardType` (`com.taha.attic.draw-objects.v1`
 into the pasteboard. After successfully writing the pasteboard, call `cut` to
 remove the same IDs. `paste` validates the version, assigns fresh IDs, offsets
 geometry, and places the objects above existing objects as one Undo step. Copy
-as Image (PNG at 2×, plus the original data for one image: a PNG original on
-a second pasteboard item, other types on the same one) and Export… (PNG
+as Image (PNG at 2× on the board colour; for one image, a single pasteboard
+item with the original bytes in their own type, plus a PNG of the image when
+the original isn't one) and Export… (PNG
 at 2×, vector PDF with full-resolution images) render on the page side
 (`DrawExport`, `DrawImageActions`), off the main thread. Export… and Save
 Image write the whole file to a staging folder, swap it in atomically, and only

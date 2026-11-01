@@ -221,15 +221,38 @@ final class DrawImageActions: DrawImageSeam {
         }
     }
 
-    /// The selection's ⋯ → Copy as Image: a PNG at 2× on the board colour;
-    /// one image also puts its original data on the pasteboard.
+    /// The selection's ⋯ → Copy as Image: a PNG at 2× on the board colour.
+    /// One image is the image itself: one pasteboard item with its original
+    /// bytes in their own type, plus a PNG of it when it isn't one (for apps
+    /// that only read PNG), and no board behind it.
     func copyAsImage(_ objects: [DrawObject]) {
         guard !objects.isEmpty else { return }
-        var original: (Data, NSPasteboard.PasteboardType)?
         if objects.count == 1, case .image(let image) = objects[0].content {
-            original = (image.original, NSPasteboard.PasteboardType(image.contentType))
+            return copyOriginal(image)
         }
-        copy(objects, original: original)
+        copy(objects)
+    }
+
+    private func copyOriginal(_ image: DrawImage) {
+        let original = image.original, type = NSPasteboard.PasteboardType(image.contentType)
+        lastTask = Task { @MainActor [weak self] in
+            let png = type == .png ? nil : await Task.detached(priority: .userInitiated) { Self.png(of: original) }.value
+            guard let pasteboard = self?.model?.pasteboard else { return }
+            pasteboard.clearContents()
+            let item = NSPasteboardItem()
+            item.setData(original, forType: type)
+            if let png { item.setData(png, forType: .png) }
+            pasteboard.writeObjects([item])
+        }
+    }
+
+    /// A PNG of the image's own pixels (orientation and colour kept).
+    nonisolated private static func png(of data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImageFromSource(destination, source, 0, nil)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
     // MARK: Canvas menu
@@ -255,30 +278,16 @@ final class DrawImageActions: DrawImageSeam {
     func copyCanvas(_ id: UUID) {
         let content = objects(of: id)
         guard !content.isEmpty else { return }
-        copy(content, original: nil)
+        copy(content)
     }
 
-    private func copy(_ objects: [DrawObject], original: (Data, NSPasteboard.PasteboardType)?) {
+    private func copy(_ objects: [DrawObject]) {
         let dark = Self.isDark
         lastTask = Task { @MainActor [weak self] in
             let png = await Task.detached(priority: .userInitiated) { DrawExport.render(objects, format: .png, dark: dark) }.value
             guard let png, let pasteboard = self?.model?.pasteboard else { return }
             pasteboard.clearContents()
-            let rendered = NSPasteboardItem()
-            rendered.setData(png, forType: .png)
-            var items = [rendered]
-            if let original {
-                if original.1 == .png {
-                    // A PNG original can't share the rendered PNG's type:
-                    // it travels as a second item, byte for byte.
-                    let item = NSPasteboardItem()
-                    item.setData(original.0, forType: original.1)
-                    items.append(item)
-                } else {
-                    rendered.setData(original.0, forType: original.1)
-                }
-            }
-            pasteboard.writeObjects(items)
+            pasteboard.setData(png, forType: .png)
         }
     }
 
