@@ -261,11 +261,19 @@ final class DrawRenderLog: @unchecked Sendable {
     }
 
     func render(_ objects: [DrawObject], dark: Bool) async -> Data? {
-        lock.lock(); begun.append(objects.first?.id); let gate = heldBy; lock.unlock()
+        let gate = begin(objects.first?.id)
         await gate?.wait()
         let data = await Task.detached(priority: .utility) { DrawThumbnail.render(objects, dark: dark) }.value
-        lock.lock(); finished.append((objects.first?.id, dark)); lock.unlock()
+        finish(objects.first?.id, dark: dark)
         return data
+    }
+
+    private func begin(_ object: UUID?) -> Draw3Gate? {
+        lock.withLock { begun.append(object); return heldBy }
+    }
+
+    private func finish(_ object: UUID?, dark: Bool) {
+        lock.withLock { finished.append((object, dark)) }
     }
 
     func started(of object: UUID) -> Int { lock.lock(); defer { lock.unlock() }; return begun.filter { $0 == object }.count }

@@ -41,11 +41,20 @@ target whose replicas disagree (canvas, object or payload rows: parent,
 digest and bytes) or whose canvas has an unsettled edit is kept and counted
 in the report. There is no Clear command.
 
-`.thumbnail(data)` is a quiet write: no Undo step, no new `updatedAt`, no new
-place in the library, and it doesn't count as an edit. History steps carry the
-latest thumbnail, so Undo never brings back an older one. The page renders it
-off the main thread once edits settle and when a canvas closes or switches;
-nil (nothing drawn) keeps the library's empty card.
+`.thumbnail(data, dark:)` is a quiet write: no Undo step, no new `updatedAt`, no new
+place in the library, and it doesn't count as an edit. It records the
+appearance it was rendered for in the optional `DrawCanvas.thumbnailDark`
+(nil without a thumbnail, or for one written before it was kept); the same
+bytes for the other appearance still write. History steps carry the latest
+thumbnail and its appearance, so Undo never brings back an older one. The page
+renders it off the main thread once edits settle and when a canvas closes or
+switches; nil (nothing drawn) keeps the library's empty card. When the
+appearance no longer matches, the page renders it again: the open canvas
+through the same settle path after an appearance change, and any other canvas
+only when its thumbnail is about to show (`DrawLibraryActions.thumbnailsShown`,
+which the menu's and Search's rows call once they appear). Requests are
+queued for the next turn of the main loop and coalesced per canvas; the old
+thumbnail shows until the new one lands.
 
 Observe `revision`, `lastDelta`, `pendingEdits` and `hasUnsettledEdits` on the
 concrete observable store. Successful saves publish one delta and advance history
