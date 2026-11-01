@@ -147,7 +147,9 @@ final class DrawPageModel: ObservableObject {
     /// Save Image, Copy as Image and Export… (the page's image seam).
     private(set) lazy var images = DrawImageActions(model: self)
     /// The latest drop or paste of images, until it is placed.
-    var pendingImport: Task<Void, Never>?
+    private(set) var pendingImport: Task<Void, Never>?
+    /// Every drop or paste of images not yet placed (quit waits for all).
+    private var imports: [UUID: Task<Void, Never>] = [:]
     /// A canvas's thumbnail renders once its edits have been quiet this long.
     var thumbnailSettleDelay: TimeInterval = 1.5
     /// Renders a thumbnail away from the main thread (tests hold one back).
@@ -166,6 +168,9 @@ final class DrawPageModel: ObservableObject {
     private var thumbnailGeneration = 0
     /// The save notice's ✕ hides it until the next problem.
     @Published private var dismissedSaveProblem: String?
+    /// A file Save Image or Export… couldn't write, or an image that
+    /// couldn't be added: shown in the same notice, without Retry.
+    @Published private var actionProblem: String?
 
     init(store: any DrawStoreProtocol) {
         self.store = store
@@ -211,8 +216,16 @@ final class DrawPageModel: ObservableObject {
     /// The shell's notice for a save the store couldn't confirm (`.retry` or
     /// `.held`), with Retry: the open canvas's first, else any canvas's.
     var saveNotice: PanelNoticeContent? {
-        guard let problem = saveProblem, problem.message != dismissedSaveProblem else { return nil }
-        return PanelNoticeContent(message: problem.message, canRetry: true)
+        if let problem = saveProblem, problem.message != dismissedSaveProblem {
+            return PanelNoticeContent(message: problem.message, canRetry: true)
+        }
+        return actionProblem.map { PanelNoticeContent(message: $0, canRetry: false) }
+    }
+
+    /// Shows a problem that has nothing to retry (a file that couldn't be
+    /// written: the old one is left as it was).
+    func report(_ message: String) {
+        actionProblem = message
     }
 
     private var saveProblem: (id: UUID, message: String)? {
@@ -241,7 +254,11 @@ final class DrawPageModel: ObservableObject {
 
     /// The notice's ✕ (the edit stays unsettled, so quit still waits).
     func dismissSaveError() {
-        dismissedSaveProblem = saveProblem?.message
+        if let problem = saveProblem, problem.message != dismissedSaveProblem {
+            dismissedSaveProblem = problem.message
+        } else {
+            actionProblem = nil
+        }
     }
 
     /// The app's quit: the stroke in progress and any import finish, the
@@ -249,7 +266,7 @@ final class DrawPageModel: ObservableObject {
     /// reconciled. False while one is still unsaved (quit stops).
     func prepareToQuit() async -> Bool {
         finishLiveInput()
-        await pendingImport?.value
+        while let next = imports.values.first { await next.value }
         flushThumbnail()
         for render in thumbnailRenders.values { await render.task.value }
         if store.hasUnsettledEdits { retrySave() }
@@ -298,6 +315,10 @@ final class DrawPageModel: ObservableObject {
         thumbnailGeneration += 1
         let generation = thumbnailGeneration
         guard !snapshot.isEmpty else {
+            // Nothing drawn: any render still under way is out of date and
+            // must never land after the empty card.
+            thumbnailRenders[id]?.task.cancel()
+            thumbnailRenders[id] = nil
             writeThumbnail(nil, on: id)
             return
         }
@@ -831,6 +852,39 @@ final class DrawPageModel: ObservableObject {
         let result = store.perform(command, on: canvasID)
         apply(result)
         return result
+    }
+
+    /// A command for a canvas that may no longer be open (an image import
+    /// that finished after a switch): it goes to that canvas through the
+    /// store, and a failure shows rather than vanishing.
+    @discardableResult
+    func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
+        guard id != canvasID else { return perform(command) }
+        let result = store.perform(command, on: id)
+        switch result {
+        case .unchanged:
+            break
+        case .saved:
+            renderThumbnail(id, objects: (try? store.open(id).objects) ?? [])
+        case .retry(let message), .held(let message):
+            thumbnailDirty.insert(id)
+            if store.pendingEdits[id] != nil {
+                dismissedSaveProblem = nil
+            } else {
+                report(message.isEmpty ? String(localized: "The image couldn’t be added to its canvas.") : message)
+            }
+        }
+        objectWillChange.send()
+        return result
+    }
+
+    func importStarted(_ token: UUID, _ task: Task<Void, Never>) {
+        imports[token] = task
+        pendingImport = task
+    }
+
+    func importFinished(_ token: UUID) {
+        imports[token] = nil
     }
 
     /// Folds a store result into the open canvas's objects.
