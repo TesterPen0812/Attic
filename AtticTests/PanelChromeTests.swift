@@ -816,6 +816,151 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
+    // MARK: Shapes: what the views draw (wave 2 review 3)
+
+    /// A render's alpha at 4 px a point: one pixel per cell of the 0.25 pt
+    /// grid the outline tests use.
+    private struct AlphaGrid {
+        static let scale: CGFloat = 4
+        let width: Int, height: Int, bytes: [UInt8]
+        init(_ image: CGImage) {
+            width = image.width; height = image.height
+            var buffer = [UInt8](repeating: 0, count: width * height * 4)
+            buffer.withUnsafeMutableBytes { raw in
+                let context = CGContext(data: raw.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8,
+                                        bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+            bytes = buffer
+        }
+        /// Row 0 is the image's top.
+        func alpha(_ x: Int, _ y: Int) -> CGFloat { CGFloat(bytes[((height - 1 - y) * width + x) * 4 + 3]) / 255 }
+    }
+
+    /// How far the drawn coverage is from each candidate outline over the
+    /// corner boxes (summed |alpha - inside|), and how many grid cells the
+    /// two candidates disagree on. Antialiasing costs both alike, so a
+    /// render of `expected` is nearer it by about the cells they differ on.
+    private func cornerDistances(_ grid: AlphaGrid, normal: CGFloat, rect: CGRect, box: CGFloat,
+                                 expected: (CGPoint) -> Bool, old: (CGPoint) -> Bool)
+        -> (expected: CGFloat, old: CGFloat, cells: Int) {
+        let s = AlphaGrid.scale, steps = Int(box * s)
+        var toExpected: CGFloat = 0, toOld: CGFloat = 0, cells = 0
+        for (x0, y0) in [(rect.minX, rect.minY), (rect.maxX - box, rect.minY),
+                         (rect.minX, rect.maxY - box), (rect.maxX - box, rect.maxY - box)] {
+            for i in 0..<steps {
+                for j in 0..<steps {
+                    let point = CGPoint(x: x0 + (CGFloat(i) + 0.5) / s, y: y0 + (CGFloat(j) + 0.5) / s)
+                    let px = Int(point.x * s), py = Int(point.y * s)
+                    guard px >= 0, py >= 0, px < grid.width, py < grid.height else { continue }
+                    let a = min(1, grid.alpha(px, py) / normal)
+                    let e = expected(point), o = old(point)
+                    toExpected += abs(a - (e ? 1 : 0))
+                    toOld += abs(a - (o ? 1 : 0))
+                    if e != o { cells += 1 }
+                }
+            }
+        }
+        return (toExpected, toOld, cells)
+    }
+
+    private func assertDrawsExpected(_ d: (expected: CGFloat, old: CGFloat, cells: Int), _ name: String,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        print("ATTIC_SHAPE_RENDER \(name) to_expected=\(d.expected) to_old=\(d.old) cells=\(d.cells)")
+        XCTAssertGreaterThan(d.cells, 4, "\(name): the grid tells the two apart", file: file, line: line)
+        XCTAssertGreaterThan(d.old - d.expected, CGFloat(d.cells) / 2,
+                             "\(name): the view draws the squircle, not the old rounded rectangle", file: file, line: line)
+    }
+
+    private func renderSwiftUI<V: View>(_ view: V) throws -> (AlphaGrid, CGSize) {
+        let renderer = ImageRenderer(content: view.atticDesign(AtticDesignContext(mode: .light)))
+        renderer.scale = AlphaGrid.scale
+        let image = try XCTUnwrap(renderer.cgImage)
+        return (AlphaGrid(image), CGSize(width: CGFloat(image.width) / AlphaGrid.scale,
+                                         height: CGFloat(image.height) / AlphaGrid.scale))
+    }
+
+    private func assertFillDrawn<V: View>(_ view: V, radius: CGFloat, exponent: CGFloat, _ name: String,
+                                          file: StaticString = #filePath, line: UInt = #line) throws {
+        let (grid, size) = try renderSwiftUI(view)
+        let rect = CGRect(origin: .zero, size: size)
+        let normal = grid.alpha(grid.width / 2, grid.height / 2)
+        XCTAssertGreaterThan(normal, 0.05, "\(name): the fill is drawn", file: file, line: line)
+        let expected = Squircle(cornerRadius: radius, exponent: exponent).path(in: rect)
+        let old = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+        assertDrawsExpected(cornerDistances(grid, normal: normal, rect: rect,
+                                            box: min(radius + 2, size.width / 2, size.height / 2),
+                                            expected: { expected.contains($0) }, old: { old.contains($0) }),
+                            name, file: file, line: line)
+    }
+
+    func testTheGroupCardDrawsItsSquircleEvenClampedOnASingleRow() throws {
+        try withSystemLooksStated {
+            for height: CGFloat in [160, 40] {
+                try assertFillDrawn(AtticGroupCard { Color.clear.frame(width: 300, height: height) },
+                                    radius: AtticRadius.groupCard, exponent: AtticShape.surfaceExponent,
+                                    "group card \(Int(height)) pt")
+            }
+        }
+    }
+
+    func testTheToastDrawsItsCurve14Capsule() throws {
+        try withSystemLooksStated {
+            let height = AtticControlSize.toastHeight
+            try assertFillDrawn(AtticUndoToast(message: "Moved to Done", onUndo: {}),
+                                radius: AtticRadius.control(height: height), exponent: AtticShape.controlExponent, "toast")
+        }
+    }
+
+    func testASelectedFileCardsRingIsDrawnOnTheCardsSquircle() throws {
+        try withSystemLooksStated {
+            let file = NoteBlock.file(attachmentID: UUID(), filename: "Ring.txt", contentTypeIdentifier: "public.plain-text",
+                                      byteCount: 12)
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Ring"), file, .text("after")]))
+            let (scrollView, textView) = engine.makeView()
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 600), styleMask: [.titled],
+                                  backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            scrollView.frame = try XCTUnwrap(window.contentView).bounds
+            window.contentView?.addSubview(scrollView)
+            textView.frame = NSRect(x: 0, y: 0, width: 320, height: 600)
+            textView.layoutSubtreeIfNeeded()
+            let controls = NoteObjectControls(engine: engine, textView: textView)
+            engine.refreshObjectFaces()
+            defer { controls.invalidate(); window.close() }
+            let range = try XCTUnwrap(engine.objectPlacement(try XCTUnwrap(file.id))?.1)
+            textView.setSelectedRange(range)
+            controls.updateSelection()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            func rings(in view: NSView) -> [NoteObjectSelectionView] {
+                view.subviews.flatMap { ($0 as? NoteObjectSelectionView).map { [$0] } ?? [] + rings(in: $0) }
+            }
+            let ring = try XCTUnwrap(rings(in: try XCTUnwrap(window.contentView)).first, "the ring is shown")
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                                                     pixelsWide: Int(ring.bounds.width * AlphaGrid.scale),
+                                                     pixelsHigh: Int(ring.bounds.height * AlphaGrid.scale),
+                                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = ring.bounds.size
+            ring.cacheDisplay(in: ring.bounds, to: rep)
+            let grid = AlphaGrid(try XCTUnwrap(rep.cgImage))
+            let m = AtticNoteObjectMetrics.self
+            let card = ring.bounds.insetBy(dx: m.resizeHitTarget / 2, dy: m.resizeHitTarget / 2)
+            let width = m.ringWidth, radius = AtticRadius.noteBlock
+            let expected = Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).inset(by: width / 2)
+                .path(in: card).cgPath.copy(strokingWithWidth: width, lineCap: .butt, lineJoin: .miter, miterLimit: 10)
+            let old = RoundedRectangle(cornerRadius: radius, style: .continuous).inset(by: width / 2)
+                .path(in: card).cgPath.copy(strokingWithWidth: width, lineCap: .butt, lineJoin: .miter, miterLimit: 10)
+            var peak: CGFloat = 0
+            for x in 0..<grid.width { for y in 0..<grid.height { peak = max(peak, grid.alpha(x, y)) } }
+            XCTAssertGreaterThan(peak, 0.5, "the ring is drawn")
+            assertDrawsExpected(cornerDistances(grid, normal: peak, rect: card, box: radius + 2,
+                                                expected: { expected.contains($0) }, old: { old.contains($0) }),
+                                "file card ring")
+        }
+    }
+
     // MARK: The "+" card (Phase B)
 
     private func barFrames(_ ids: [String], in host: AtticPanelHostingView) throws -> [CGRect] {
