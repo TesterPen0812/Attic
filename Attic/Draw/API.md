@@ -43,5 +43,21 @@ remove the same IDs. `paste` validates the version, assigns fresh IDs, offsets
 geometry, and places the objects above existing objects as one Undo step. Copy
 as Image and all pasteboard/UI rendering are the next builder's responsibility.
 
-The persistent backend will use this same surface. This API never accesses old
-`Canvas*` rows and is not yet wired into the old Canvas page or shared UI routes.
+For durable storage, use `DrawPersistentStore(container: appContainer)` behind
+the same protocol. It accepts an existing container; it never opens a default
+path. `PersistenceController.appModelTypes` registers the three new entities.
+The writer serializes on the main actor, uses one fresh autosave-disabled
+context and one save per command. Binary payloads are separate from object
+headers and library metadata. Library reads load only metadata and optional
+thumbnails. SQL indexes bound changed-family lookups; unchanged originals are
+not read or rewritten. History holds sparse object patches, not board copies.
+
+Thrown saves use a fresh read of all affected physical replicas: exact before
+means Retry, exact after publishes once, mixed/unreadable remains held. There
+is no automatic overwrite/discard of a held draft. A normal failed edit stays
+visible through `open`/`pendingEdits`, while `library` describes durable data.
+
+This API never accesses old `Canvas*` rows and is not yet wired into the old
+Canvas page, shared search, Recently Deleted UI, quit route, or pasteboard.
+Those callers must adopt the API, including the unsettled-edit guard, during
+the later UI/switch-over work. Undo survives session switches, not app relaunch.

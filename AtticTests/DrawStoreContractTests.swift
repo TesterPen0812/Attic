@@ -40,7 +40,10 @@ final class DrawStoreContractTests: XCTestCase {
     }
 
     func testClipboardCutPasteAndImageRoundTrip() throws {
-        let store = DrawInMemoryStore()
+        try clipboardContract(DrawInMemoryStore())
+    }
+
+    func clipboardContract(_ store: any DrawStoreProtocol) throws {
         let board = store.create()
         let image = DrawObject(content: .image(DrawImage(original: Data([0, 1, 255]), pixelWidth: 50, pixelHeight: 20)))
         let stroke = DrawObject(content: .stroke([DrawPoint(x: 1, y: 2), DrawPoint(x: 3, y: 4)]))
@@ -58,7 +61,10 @@ final class DrawStoreContractTests: XCTestCase {
     }
 
     func testImageDeletionIsRestorableAndTextTypingIsOneStepPerCommand() throws {
-        let store = DrawInMemoryStore()
+        try typingContract(DrawInMemoryStore())
+    }
+
+    func typingContract(_ store: any DrawStoreProtocol) throws {
         let board = store.create()
         var text = DrawObject(content: .text("a"))
         let image = DrawObject(content: .image(DrawImage(original: Data([9]), pixelWidth: 1, pixelHeight: 1)))

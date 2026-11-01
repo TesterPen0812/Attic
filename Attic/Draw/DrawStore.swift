@@ -23,7 +23,17 @@ class DrawStore: DrawStoreProtocol {
             DrawSnapshot(canvas: canvas, objects: objects.values.filter { $0.deletedAt == nil }.sorted(by: DrawStore.objectOrder))
         }
     }
-    private struct Step { var change: DrawChange; var before: State; var after: State }
+    private struct Step {
+        var change: DrawChange
+        var before: DrawCanvas
+        var after: DrawCanvas
+        var beforePersisted: Bool
+        var afterPersisted: Bool
+        var reversed: Self {
+            Self(change: change.reversed, before: after, after: before,
+                 beforePersisted: afterPersisted, afterPersisted: beforePersisted)
+        }
+    }
     private struct History { var undo: [Step] = []; var redo: [Step] = [] }
     private enum Action { case edit, undo, redo }
     private struct Pending { var step: Step; var action: Action }
@@ -49,7 +59,8 @@ class DrawStore: DrawStoreProtocol {
         return try library().compactMap { canvas in
             guard tags.allSatisfy({ tag in canvas.tags.contains { $0.lowercased() == tag } }),
                   words.allSatisfy({ canvas.name.localizedStandardContains($0) || canvas.textIndex.localizedStandardContains($0) }) else { return nil }
-            let ids = words.isEmpty ? [] : try repository.textMatches(words, in: canvas.id)
+            let textWords = words.filter { canvas.textIndex.localizedStandardContains($0) }
+            let ids = textWords.isEmpty ? [] : try repository.textMatches(textWords, in: canvas.id)
             return DrawSearchMatch(canvas: canvas, matchingTextBoxIDs: ids)
         }
     }
@@ -61,62 +72,66 @@ class DrawStore: DrawStoreProtocol {
         return canvas
     }
 
-    func open(_ id: UUID) throws -> DrawSnapshot { try state(id).snapshot }
+    func open(_ id: UUID) throws -> DrawSnapshot {
+        _ = revision; _ = pendingEdits
+        return try state(id).snapshot
+    }
     func deletedImages(in id: UUID) throws -> [DrawObject] {
-        try state(id).objects.values.filter { $0.isImage && $0.deletedAt != nil }.sorted(by: Self.objectOrder)
+        _ = revision; _ = pendingEdits
+        return try state(id).objects.values.filter { $0.isImage && $0.deletedAt != nil }.sorted(by: Self.objectOrder)
     }
 
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
         guard pending[id] == nil else { return pendingEdits[id]!.outcome }
         do {
-            let before = try state(id)
-            var after = before
-            var touched: Set<UUID> = []
-            guard before.canvas.deletedAt == nil || Self.isRestore(command) else {
-                return .held("Restore this canvas before editing it.")
-            }
-            switch command {
-            case .put(let objects):
-                guard Set(objects.map(\.id)).count == objects.count else { throw DrawStoreError.invalidObject }
-                for object in objects {
-                    try Self.validate(object)
-                    after.objects[object.id] = object
-                    touched.insert(object.id)
-                }
-            case .remove(let ids):
-                for objectID in ids where after.objects[objectID] != nil {
-                    after.objects[objectID]?.deletedAt = now()
-                    touched.insert(objectID)
-                }
-            case .restoreObjects(let ids):
-                for objectID in ids where after.objects[objectID] != nil {
-                    after.objects[objectID]?.deletedAt = nil
-                    touched.insert(objectID)
-                }
-            case .rename(let name): after.canvas.name = Self.name(name)
-            case .tags(let tags):
-                after.canvas.tags = Array(Set(tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased() }.filter { !$0.isEmpty })).sorted()
-            case .thumbnail(let bytes): after.canvas.thumbnail = bytes
-            case .deleteCanvas: after.canvas.deletedAt = now()
-            case .restoreCanvas: after.canvas.deletedAt = nil
-            }
-            touched = touched.filter { before.objects[$0] != after.objects[$0] }
-            guard !touched.isEmpty || before.canvas != after.canvas else { return .unchanged }
-            if touched.contains(where: { !(before.objects[$0]?.text ?? "").isEmpty || !(after.objects[$0]?.text ?? "").isEmpty }) {
-                after.canvas.textIndex = after.objects.values.filter { $0.deletedAt == nil && !$0.text.isEmpty }
-                    .sorted(by: Self.objectOrder).map(\.text).joined(separator: "\n")
-            }
-            after.canvas.updatedAt = now()
-            // Only the first content write materialises a lazy board. Metadata
-            // commands on an empty draft remain local, including their Undo.
-            after.persisted = before.persisted || !after.objects.isEmpty
-            let change = DrawChange(canvasID: id,
-                                    before: before.persisted ? before.canvas : nil,
-                                    after: after.persisted ? after.canvas : nil,
-                                    objectsBefore: before.objects.filter { touched.contains($0.key) },
-                                    objectsAfter: after.objects.filter { touched.contains($0.key) })
-            return execute(Step(change: change, before: before, after: after), action: .edit)
+            guard let step = try prepare(command, on: id) else { return .unchanged }
+            return execute(step, action: .edit)
         } catch { return .held("Could not prepare the edit: \(error)") }
+    }
+
+    /// Read a sparse patch without copying the whole object dictionary into
+    /// history. This read scope ends before settle mutates the cached state.
+    private func prepare(_ command: DrawCommand, on id: UUID) throws -> Step? {
+        let before = try state(id)
+        guard before.canvas.deletedAt == nil || Self.isRestore(command) else { throw DrawStoreError.missingCanvas }
+        var after = before.canvas
+        var objects: [UUID: DrawObject] = [:]
+        switch command {
+        case .put(let values):
+            guard Set(values.map(\.id)).count == values.count else { throw DrawStoreError.invalidObject }
+            for object in values { try Self.validate(object); objects[object.id] = object }
+        case .remove(let ids):
+            for objectID in ids {
+                guard var object = before.objects[objectID], object.deletedAt == nil else { continue }
+                object.deletedAt = now(); objects[objectID] = object
+            }
+        case .restoreObjects(let ids):
+            for objectID in ids {
+                guard var object = before.objects[objectID] else { continue }
+                object.deletedAt = nil; objects[objectID] = object
+            }
+        case .rename(let name): after.name = Self.name(name)
+        case .tags(let tags):
+            after.tags = Array(Set(tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased() }.filter { !$0.isEmpty })).sorted()
+        case .thumbnail(let bytes): after.thumbnail = bytes
+        case .deleteCanvas: after.deletedAt = now()
+        case .restoreCanvas: after.deletedAt = nil
+        }
+        objects = objects.filter { before.objects[$0.key] != $0.value }
+        guard !objects.isEmpty || before.canvas != after else { return nil }
+        var originals: [UUID: DrawObject] = [:]
+        for id in objects.keys { originals[id] = before.objects[id] }
+        if objects.keys.contains(where: { !(originals[$0]?.text ?? "").isEmpty || !(objects[$0]?.text ?? "").isEmpty }) {
+            let unchangedText = before.objects.values.filter { objects[$0.id] == nil && $0.deletedAt == nil && !$0.text.isEmpty }
+            let changedText = objects.values.filter { $0.deletedAt == nil && !$0.text.isEmpty }
+            after.textIndex = (unchangedText + changedText).sorted(by: Self.objectOrder).map(\.text).joined(separator: "\n")
+        }
+        after.updatedAt = now()
+        let persisted = before.persisted || !objects.isEmpty
+        let change = DrawChange(canvasID: id, before: before.persisted ? before.canvas : nil,
+                                after: persisted ? after : nil, objectsBefore: originals, objectsAfter: objects)
+        return Step(change: change, before: before.canvas, after: after,
+                    beforePersisted: before.persisted, afterPersisted: persisted)
     }
 
     func retry(on id: UUID) -> DrawSaveResult {
@@ -132,12 +147,18 @@ class DrawStore: DrawStoreProtocol {
         return settle(repository.reconcile(edit.step.change), step: edit.step, action: edit.action)
     }
 
-    func canUndo(on id: UUID) -> Bool { pending[id] == nil && !(histories[id]?.undo.isEmpty ?? true) }
-    func canRedo(on id: UUID) -> Bool { pending[id] == nil && !(histories[id]?.redo.isEmpty ?? true) }
+    func canUndo(on id: UUID) -> Bool {
+        _ = revision; _ = pendingEdits
+        return pending[id] == nil && !(histories[id]?.undo.isEmpty ?? true)
+    }
+    func canRedo(on id: UUID) -> Bool {
+        _ = revision; _ = pendingEdits
+        return pending[id] == nil && !(histories[id]?.redo.isEmpty ?? true)
+    }
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }
-        return execute(Step(change: step.change.reversed, before: step.after, after: step.before), action: .undo)
+        return execute(step.reversed, action: .undo)
     }
     func redo(on id: UUID) -> DrawSaveResult {
         guard canRedo(on: id), let step = histories[id]?.redo.last else { return .unchanged }
@@ -201,7 +222,9 @@ class DrawStore: DrawStoreProtocol {
     }
     private func settle(_ outcome: DrawWriteOutcome, step: Step, action: Action) -> DrawSaveResult {
         let id = step.change.canvasID
-        states[id] = step.after
+        states[id]?.canvas = step.after
+        states[id]?.persisted = step.afterPersisted
+        for objectID in step.change.objectIDs { states[id]?.objects[objectID] = step.change.objectsAfter[objectID] }
         switch outcome {
         case .committed:
             pending[id] = nil
@@ -215,7 +238,7 @@ class DrawStore: DrawStoreProtocol {
                 histories[id, default: History()].undo.append(step)
             }
             revision &+= 1
-            let delta = DrawDelta(canvas: step.after.canvas,
+            let delta = DrawDelta(canvas: step.after,
                                   upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
                                   removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
                                   revision: revision)
@@ -227,7 +250,7 @@ class DrawStore: DrawStoreProtocol {
     }
     private func retain(_ outcome: DrawSaveResult, step: Step, action: Action) -> DrawSaveResult {
         pending[step.change.canvasID] = Pending(step: step, action: action)
-        pendingEdits[step.change.canvasID] = DrawPendingEdit(canvas: step.after.canvas, objects: step.after.snapshot.objects, outcome: outcome)
+        pendingEdits[step.change.canvasID] = DrawPendingEdit(canvas: step.after, objects: states[step.change.canvasID]?.snapshot.objects ?? [], outcome: outcome)
         return outcome
     }
     private static func name(_ value: String?) -> String {
