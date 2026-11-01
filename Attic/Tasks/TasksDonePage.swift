@@ -126,7 +126,10 @@ struct TasksDonePage<Cell: View>: View {
                     // its count does (U-12).
                     // The owner's panel design's empty state.
                     TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, filtered: false, tag: model.tagFilter),
-                                    clear: { model.typeDoneSearch(""); model.chooseTagChip(nil) })
+                                    clear: { model.typeDoneSearch(""); model.chooseTagChip(nil) },
+                                    // T3: no results here, the other tabs' matches as links.
+                                    elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: .done),
+                                    follow: { model.followSearch(from: .done, to: $0) })
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
                     // And the other tabs' matches (T3).
