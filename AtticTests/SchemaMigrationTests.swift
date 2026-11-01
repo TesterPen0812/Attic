@@ -33,7 +33,7 @@ final class SchemaMigrationTests: XCTestCase {
             let entities = Dictionary(uniqueKeysWithValues: container.schema.entities.map { ($0.name, $0) })
             XCTAssertEqual(Set(entities.keys), [
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
-                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance",
+                "CanvasImageItem", "CanvasSemanticObjectItem", "DrawCanvasRecord", "DrawObjectRecord", "DrawPayloadRecord", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance",
                 "TagColour",
                 "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation", "TaskAttachmentMigrationRecord"
             ])
@@ -99,7 +99,7 @@ final class SchemaMigrationTests: XCTestCase {
             }
         }
         XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
-                       ["ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour",
+                       ["DrawCanvasRecord", "DrawObjectRecord", "DrawPayloadRecord", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour",
                         "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation", "TaskAttachmentMigrationRecord"])
         XCTAssertEqual(current.entitiesByName["NoteItem"]?.attributesByName["contentFormat"]?.defaultValue as? Int, 0)
         XCTAssertEqual(current.entitiesByName["TaskItem"]?.attributesByName["listOrderVersion"]?.defaultValue as? Int, 0)
