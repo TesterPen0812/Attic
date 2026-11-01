@@ -201,8 +201,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isPanelMotionActive = false {
         // The island skips the motion's frames (it is a child window, so
         // it moves with the panel) and settles beside it when it ends.
-        didSet { if oldValue, !isPanelMotionActive { layoutIsland() } }
+        didSet {
+            guard oldValue, !isPanelMotionActive else { return }
+            layoutIsland()
+            if islandSpotPending { DispatchQueue.main.async { [weak self] in self?.islandSpotDidChange() } }
+        }
     }
+    /// The island's spot changed while the panel moved: applied once it rests.
+    private var islandSpotPending = false
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
     /// The hide animation a swipe drives (nil: Slide),
@@ -309,6 +315,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         configurePanel()
         bindContentSize()
         uiState.island.onClick = { [weak self] in self?.activateFromIsland() }
+        settings.$islandSpot.removeDuplicates().dropFirst()
+            // After the stored value changes (`@Published` sends before).
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.islandSpotDidChange() }
+            .store(in: &cancellables)
         uiState.$dockingPreviewCorner.sink { [weak self] corner in
             self?.updateDockingIndicator(corner: corner)
             self?.layoutIsland(previewCorner: corner)
@@ -350,7 +361,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let top = corner == .topRight || corner == .topLeft
         let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
                               y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
-        let island = PanelIslandLayout.islandFrame(panelFrame: frame, corner: corner)
+        let island = PanelIslandLayout.islandFrame(panelFrame: frame, corner: corner, spot: islandSpot)
         let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame, island],
             within: TestPresentationPolicy.placementFrame(screen.visibleFrame).insetBy(dx: 4, dy: 4), gap: 8)
         let indicator = dockingIndicator ?? NSPanel(contentRect: target,
@@ -1037,7 +1048,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             in: visibleFrame
         )
         // The panel keeps room for the island on the side it would dock to.
-        let panelArea = PanelIslandLayout.panelArea(in: visibleFrame, corner: previewCorner)
+        let panelArea = PanelIslandLayout.panelArea(in: visibleFrame, corner: previewCorner, spot: islandSpot)
         if currentScreen !== screen {
             currentScreen = screen
             updateResizeLimits(in: panelArea)
@@ -1068,7 +1079,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         currentScreen = screen
         let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
-        updateResizeLimits(in: PanelIslandLayout.panelArea(in: visibleFrame, corner: currentCorner))
+        updateResizeLimits(in: PanelIslandLayout.panelArea(in: visibleFrame, corner: currentCorner, spot: islandSpot))
         let releaseAction = PanelDockingPolicy.releaseAction(
             velocity: velocity,
             translation: translation,
@@ -1486,7 +1497,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                   self.panel.isVisible == hiding, self.settings.hideAnimation == mode else { return }
             // The pointer has just left (or arrived in the corner): hover fresh.
             // A reveal's snapshot holds the island at the corner it reveals in.
-            if !hiding { container.placeIslandStandIn(corner: self.currentCorner) }
+            if !hiding { container.placeIslandStandIn(corner: self.currentCorner, spot: self.islandSpot) }
             container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), hoverFresh: true)
         }
         expectedChangeWork = work
@@ -1532,7 +1543,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let mode = settings.hideAnimation
         // The island's stand-in at this reveal's corner first: Genie
         // snapshots it where it is (a hide may have left it at another).
-        contentContainer?.placeIslandStandIn(corner: corner)
+        contentContainer?.placeIslandStandIn(corner: corner, spot: islandSpot)
         guard mode != .slide, let container = contentContainer else {
             contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
             return
@@ -1590,20 +1601,41 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     // MARK: Tall island
 
+    /// Where the island sits around the panel (Settings › Panel; Accepted
+    /// 2026-11-01 "Island position: seven spots around the panel").
+    private var islandSpot: PanelIslandSpot { settings.islandSpot }
+
+    /// A new spot: the island moves there straight away, and the panel
+    /// docks with its side edge 43 pt in (screen side) or 12 pt in (anywhere
+    /// else). A hide, reveal or swipe in flight picks it up when it ends.
+    private func islandSpotDidChange() {
+        guard !isPanelMotionActive, !isInteractiveDismissal, !isWindowDragging, !isLiveResizing else {
+            islandSpotPending = true
+            return
+        }
+        islandSpotPending = false
+        recoverPanelInsideUsableArea()
+        layoutIsland()
+        contentContainer?.noteContentMayChange()
+    }
+
     /// The panel's part of `screen`'s work area for `corner`: the island's
     /// strip comes off that corner's side.
     private func usableFrame(on screen: NSScreen, corner: ScreenCorner) -> CGRect {
-        PanelIslandLayout.panelArea(in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner)
+        PanelIslandLayout.panelArea(in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner,
+                                    spot: islandSpot)
     }
 
     /// The side the island is on: the corner a drag would dock to, else the
     /// docked corner.
     private func layoutIsland(previewCorner: ScreenCorner?? = nil) {
         let corner = (previewCorner ?? uiState.dockingPreviewCorner) ?? currentCorner
-        islandWindows.layout(panelFrame: panel.visibleContentFrame, corner: corner)
+        islandWindows.layout(panelFrame: panel.visibleContentFrame, corner: corner, spot: islandSpot)
         // The stand-in waits over the island window, transparent (a Genie
         // snapshot taken at rest draws it).
-        if contentContainer?.isIslandStandInShown == false { contentContainer?.placeIslandStandIn(corner: corner) }
+        if contentContainer?.isIslandStandInShown == false {
+            contentContainer?.placeIslandStandIn(corner: corner, spot: islandSpot)
+        }
     }
 
     /// The panel starts to move (a hide, a reveal from hidden or a swipe):
@@ -1618,7 +1650,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // Placed for this motion's corner (a reveal may be in a new one).
-        contentContainer?.placeIslandStandIn(corner: currentCorner)
+        contentContainer?.placeIslandStandIn(corner: currentCorner, spot: islandSpot)
         if swaps { contentContainer?.setIslandStandInShown(true) }
         islandWindows.handOff(shown: shown)
         CATransaction.commit()
@@ -1642,7 +1674,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         contentContainer?.setIslandStandInShown(false)
         CATransaction.commit()
         islandSwapProbe?(true, false)
-        contentContainer?.placeIslandStandIn(corner: islandWindows.corner)
+        contentContainer?.placeIslandStandIn(corner: islandWindows.corner, spot: islandWindows.spot)
     }
 
     private func showIsland() {
@@ -1655,7 +1687,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The 8 pt between the panel and the island, at the island's height.
     private func islandGapContains(_ point: CGPoint) -> Bool {
         guard islandWindows.isVisible, islandWindows.shownAlpha > 0.01 else { return false }
-        return PanelIslandLayout.gapFrame(panelFrame: panel.visibleContentFrame, corner: islandWindows.corner)
+        return PanelIslandLayout.gapFrame(panelFrame: panel.visibleContentFrame, corner: islandWindows.corner,
+                                          spot: islandWindows.spot)
             .contains(point)
     }
 
