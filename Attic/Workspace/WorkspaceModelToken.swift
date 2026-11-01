@@ -233,9 +233,6 @@ enum WorkspaceModelFields {
         return values
     }
 
-    @MainActor static func patchValues(_ keys: Set<String>, from model: any PersistentModel) throws -> [String: Data] {
-        try capture(model, keys: keys)
-    }
     /// Transfer only changed fields without serializing document bytes/text.
     /// The complete fingerprints were validated before this typed patch runs.
     @MainActor static func copy(_ keys: Set<String>, from source: any PersistentModel, to target: any PersistentModel) throws {

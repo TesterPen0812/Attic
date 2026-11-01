@@ -239,10 +239,6 @@ extension WorkspaceSessionRegistry {
         return Array(ordered.dropFirst())
     }
 
-    /// The task's own note is in Recently Deleted (and no live one exists):
-    /// the page offers Restore Note instead of a new draft (§ 5.6).
-    func hasDeletedOwnNote(_ taskID: UUID) -> Bool { deletedOwnNoteID(taskID) != nil }
-
     func deletedOwnNoteID(_ taskID: UUID) -> UUID? {
         guard let context = coordinator?.freshContext(),
               let rows = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })) else { return nil }

@@ -1297,10 +1297,7 @@ extension NoteDraftJournal {
         let io = self.io
         return try Self.waitForIO { try await io.prepareOperation(envelope) }
     }
-    nonisolated func inventoryCheckpointsSynchronously() throws -> [NoteDraftRecoveryEntry] {
-        let io = self.io
-        return try Self.waitForIO { try await io.inventoryCheckpoints() }
-    }
+
     nonisolated func operationEnvelopesSynchronously() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
         let io = self.io
         return try Self.waitForIO { try await io.operationEnvelopes() }

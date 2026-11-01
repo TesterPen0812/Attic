@@ -880,10 +880,6 @@ final class NotesPageController: ObservableObject {
         return rows.sorted { $0.createdAt < $1.createdAt }.filter { seen.insert($0.id).inserted }
     }
 
-    private func pendingWorkspaceEdits(_ session: NoteSession) -> [NotePendingEdit] {
-        store.pendingEdits(noteID: session.noteID, taskID: session.pendingTaskID ?? store.note(withID: session.noteID)?.taskID)
-    }
-
     private func beginWorkspaceProposalReview(_ id: UUID) async -> Bool {
         guard let family = try? store.pendingEditRows(id), let edit = family.first,
               NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [edit.noteID]),

@@ -385,21 +385,6 @@ struct AtticNoteRow: View {
     }
 }
 
-/// A group's heading in All notes (Pinned, Today, This week, Earlier): one
-/// row's pitch, its text on the rows' title line, like the Done log's days.
-struct AtticNoteGroupHeading: View {
-    let title: String
-
-    var body: some View {
-        AtticText(verbatim: title, style: .noteRowMeta, ink: .helper)
-            .frame(height: AtticTaskRowMetrics.titleLineHeight)
-            .frame(height: AtticLayout.rowPitch)
-            .padding(.leading, AtticNoteMetrics.rowTextX)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-    }
-}
-
 // MARK: - Tag suggestions
 
 /// One suggestion while a `#word` is typed in a note's title (p2-01 #3):

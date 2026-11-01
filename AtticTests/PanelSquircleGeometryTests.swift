@@ -279,40 +279,8 @@ final class PanelSquircleGeometryTests: XCTestCase {
             - hitSize
             - modeDockWidth
             - insets.trailing
-        let quickEntryWidth = TaskEntryBarLayout.textFieldWidth(
-            panelWidth: width,
-            chromeInsets: insets
-        )
 
         XCTAssertGreaterThanOrEqual(topGroupSpacing, 12)
-        XCTAssertGreaterThanOrEqual(quickEntryWidth, 120)
-    }
-
-    func testUnifiedTaskEntryBarKeepsItsFieldAndActionsUsableAcrossSupportedGeometry() {
-        for width in stride(from: PanelContentSize.min, through: PanelContentSize.max, by: 1) {
-            let panelSize = CGSize(
-                width: width,
-                height: PanelGeometry.preferredWorkspaceHeight(contentWidth: width)
-            )
-
-            for radius in stride(from: PanelCornerSize.min, through: PanelCornerSize.max, by: 1) {
-                let insets = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: panelSize)
-                let barWidth = TaskEntryBarLayout.width(
-                    panelWidth: width,
-                    chromeInsets: insets
-                )
-                let fieldWidth = TaskEntryBarLayout.textFieldWidth(
-                    panelWidth: width,
-                    chromeInsets: insets
-                )
-
-                XCTAssertGreaterThanOrEqual(
-                    barWidth,
-                    (2 * AtticStyle.controlHitSize) + AtticStyle.composerAttachWidth + 120 + 26
-                )
-                XCTAssertGreaterThanOrEqual(fieldWidth, 120)
-            }
-        }
     }
 
     @MainActor

@@ -178,25 +178,5 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         }
         return scopes
     }
-    static func fromBaseline(_ scope: WorkspaceScope, _ baseline: [WorkspaceOwner: WorkspaceModelToken]) throws -> Self {
-        let entity: WorkspaceOwner.Entity
-        let field: String
-        let id: UUID
-        switch scope {
-        case let .all(value):
-            return Self(scope: scope, members: baseline.values.filter { $0.owner.entity == value && !$0.replicas.isEmpty }.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
-        case let .children(value): entity = .task; field = "parentID"; id = value
-        case let .taskNotes(value): entity = .note; field = "taskID"; id = value
-        case let .attachments(value): entity = .attachment; field = "noteID"; id = value
-        case let .versions(value): entity = .version; field = "noteID"; id = value
-        case let .proposals(value): entity = .proposal; field = "noteID"; id = value
-        case let .taskAssociations(value): entity = .association; field = "taskID"; id = value
-        case let .noteAssociations(value): entity = .association; field = "noteID"; id = value
-        case let .preservations(value): entity = .preservation; field = "rootID"; id = value
-        }
-        let encoded = try WorkspaceModelFields.encode(id)
-        return Self(scope: scope, members: baseline.values.filter {
-            $0.owner.entity == entity && $0.replicas.contains { $0.fields[field] == encoded }
-        }.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
-    }
+
 }

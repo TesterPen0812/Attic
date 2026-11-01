@@ -23,12 +23,6 @@ final class NoteCoordinateMapper {
 
     // MARK: Conversions
 
-    /// A rectangle in the text view, in the scroll view's document.
-    func documentRect(fromText rect: NSRect) -> NSRect {
-        guard let textView, let document = scrollView?.documentView else { return rect }
-        return document.convert(rect, from: textView)
-    }
-
     /// A rectangle in the scroll view's document, in the text view.
     func textRect(fromDocument rect: NSRect) -> NSRect {
         guard let textView, let document = scrollView?.documentView else { return rect }
@@ -75,14 +69,6 @@ final class NoteCoordinateMapper {
         visible.origin.y += top
         visible.size.height = max(0, visible.height - top - bottom)
         return textView.convert(visible, from: clip)
-    }
-
-    /// The text that is on screen and not under the header or the bottom
-    /// row: `unobscuredRect` clipped to the text view.
-    func visibleTextRect(topInsetReduction: CGFloat = 0, bottomInset: CGFloat? = nil) -> NSRect {
-        guard let textView else { return .zero }
-        return unobscuredRect(topInsetReduction: topInsetReduction, bottomInset: bottomInset)
-            .intersection(textView.bounds)
     }
 
     // MARK: Ranges

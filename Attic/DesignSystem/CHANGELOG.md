@@ -1,5 +1,9 @@
 ## 2026-11-01 · Bounded diagnostics
 
+## 2026-11-01 — unused presentation helpers
+
+- Removed the test-only scroll-under fade, obsolete quick-entry/drawer layout helpers, unused task action menu and unused note group heading. Active panel geometry and controls keep their existing implementations.
+
 Material-corner and reveal probes keep at most 4,096 recent samples, including
 optimized Local builds. Overflow drops the oldest quarter in one batch.
 

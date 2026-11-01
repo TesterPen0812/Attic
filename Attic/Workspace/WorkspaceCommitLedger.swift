@@ -59,7 +59,6 @@ final class WorkspaceCommitLedger {
     }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
-    func isSaving(_ context: ModelContext) -> Bool { savingContext === context }
     func register(_ context: ModelContext) {
         if let previous = stamp(context), previous.ledgerID != identity { return }
         let current = ContextStamp(ledgerID: identity, syncedGeneration: generation)
