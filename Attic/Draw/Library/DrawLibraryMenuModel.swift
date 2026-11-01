@@ -121,7 +121,7 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// canvas that is still a draft (nothing drawn yet) leads the list so it
     /// keeps its check.
     var canvases: [DrawCanvas] {
-        guard DrawLibrarySetting.isEnabled else { return [] }
+        guard AtticDraw.isEnabled else { return [] }
         let query = query
         if !query.isEmpty { return ((try? store.search(query)) ?? []).map(\.canvas) }
         var list = (try? store.library()) ?? []
@@ -144,7 +144,7 @@ final class DrawLibraryMenuModel: ObservableObject {
     }
 
     var rows: [Row] {
-        guard DrawLibrarySetting.isEnabled else { return [] }
+        guard AtticDraw.isEnabled else { return [] }
         let query = query
         let found = canvases
         var rows = found.map { canvas in

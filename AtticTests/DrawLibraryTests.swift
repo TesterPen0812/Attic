@@ -20,14 +20,14 @@ final class DrawLibraryTests: XCTestCase {
         try await super.setUp()
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
-        DrawLibrarySetting.override = true
+        AtticDraw.enabledOverride = true
         log = []
     }
 
     override func tearDown() async throws {
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
-        DrawLibrarySetting.override = nil
+        AtticDraw.enabledOverride = nil
         DrawLibraryHub.register(nil)
         try await super.tearDown()
     }
@@ -327,14 +327,14 @@ final class DrawLibraryTests: XCTestCase {
         let search = DrawSearchModel(store: seed.store, actions: actions())
         search.query = "kitchen"
 
-        DrawLibrarySetting.override = false
+        AtticDraw.enabledOverride = false
         deleted.reload()
         XCTAssertTrue(deleted.entries.isEmpty)
         XCTAssertTrue(model.rows.isEmpty)
         XCTAssertTrue(search.results.isEmpty)
         XCTAssertNil(DrawLibraryHub.activeStore)
 
-        DrawLibrarySetting.override = true
+        AtticDraw.enabledOverride = true
         deleted.reload()
         XCTAssertEqual(deleted.entries.map(\.title), ["Logo ideas"])
         XCTAssertFalse(model.rows.isEmpty)

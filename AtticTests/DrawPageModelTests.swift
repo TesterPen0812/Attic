@@ -13,7 +13,7 @@ final class DrawPageModelTests: XCTestCase {
         super.setUp()
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false
-        DrawLibrarySetting.override = true
+        AtticDraw.enabledOverride = true
         store = DrawInMemoryStore()
         model = DrawPageModel(store: store)
         model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw-tests-\(UUID().uuidString)"))
@@ -26,7 +26,7 @@ final class DrawPageModelTests: XCTestCase {
         model.pasteboard.releaseGlobally()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
-        DrawLibrarySetting.override = nil
+        AtticDraw.enabledOverride = nil
         super.tearDown()
     }
 

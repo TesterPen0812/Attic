@@ -34,7 +34,7 @@ final class DrawSearchModel: ObservableObject {
 
     var results: [Result] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard DrawLibrarySetting.isEnabled, !query.isEmpty else { return [] }
+        guard AtticDraw.isEnabled, !query.isEmpty else { return [] }
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init).filter { !$0.hasPrefix("#") }
         return ((try? store.search(query)) ?? []).map { match in
             let canvas = match.canvas
