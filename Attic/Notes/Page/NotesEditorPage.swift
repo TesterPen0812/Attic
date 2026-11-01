@@ -123,14 +123,17 @@ struct NotesEditorPage: View {
             // The note's variable blur behind the header (none behind the
             // bottom row, owner 2026-10-22), its own layer between the note and the controls (All notes and
             // history draw theirs under their own controls).
-            if showsEditor, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
+            if showsEditor || reviewsInPlace, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
             if showsEditor, controller.proposalReview == nil, controller.historyBrowser == nil {
                 headerTitle
             }
-            if controller.proposalReview == nil, controller.historyBrowser == nil {
+            // N5: a proposal reviewed inside the note keeps the note's rows;
+            // the top row's note actions wait until the review ends.
+            if !hidesRowsForReview, controller.historyBrowser == nil {
                 topRow
+                    .disabled(reviewsInPlace)
             }
-            if controller.proposalReview == nil, controller.historyBrowser == nil {
+            if !hidesRowsForReview, controller.historyBrowser == nil {
                 bottomRow
                     .padding(.leading, layout.chromeInsets.leading)
                     .padding(.trailing, layout.chromeInsets.trailing)
@@ -284,6 +287,13 @@ struct NotesEditorPage: View {
         !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil
     }
 
+    /// A per-change review shows inside the note (N5, Idea B); a deletion or
+    /// a workspace operation keeps its whole-page comparison.
+    private var reviewsInPlace: Bool {
+        !controller.isLibraryPresented && controller.proposalReview?.changes != nil
+    }
+    private var hidesRowsForReview: Bool { controller.proposalReview != nil && !reviewsInPlace }
+
     // MARK: Content
 
     @ViewBuilder
@@ -301,6 +311,11 @@ struct NotesEditorPage: View {
                              onBack: { toggleLibrary() },
                              onCreate: { title, tag in newNote(title: title, tag: tag) })
                 .transition(slide(from: Self.libraryEdge))
+        } else if let review = controller.proposalReview, let changes = review.changes {
+            NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
+                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: bottomControls + bottomInset,
+                design: design)
+                .accessibilitySortPriority(3)
         } else if let review = controller.proposalReview {
             NoteProposalComparison(controller: controller, store: noteStore, review: review,
                 columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom,
@@ -648,6 +663,12 @@ struct NotesEditorPage: View {
     // MARK: Navigation
 
     private func toggleLibrary() {
+        // All notes during an in-note review ends the review first (the
+        // proposal waits; nothing decided is written).
+        if reviewsInPlace {
+            controller.endProposalReview()
+            return
+        }
         if controller.isLibraryPresented {
             library.clearSearch()
             controller.dismissLibrary()
@@ -1355,6 +1376,353 @@ struct NoteProposalComparison: View {
     private func run(_ action: @escaping @MainActor () async -> Bool) {
         busy = true
         Task { _ = await action(); busy = false }
+    }
+}
+
+/// N5, Idea B (Planning.md, Accepted "2026-11-01 · Adaptive picks"; draft
+/// `adaptive-drafts-notes.html`, panel N5 Idea B): an agent's proposal is
+/// reviewed inside the note. The card under the top row counts what's left,
+/// with ••• (Save as New Note, Discard Proposal), Reject and Accept for every
+/// change still open; each change shows in place, removed lines struck
+/// through on red above their added lines on green, with its own Reject and
+/// Accept. Decisions stay in memory (⌘Z, ⇧⌘Z) until the last one writes the
+/// note from the accepted changes only. Esc ends the review; the proposal waits.
+struct NoteProposalInPlaceReview: View {
+    @ObservedObject var controller: NotesPageController
+    let review: NoteProposalReview
+    let changes: NoteProposalChangeSet
+    let columnInset: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let design: AtticDesignContext
+    @State private var busy = false
+    @State private var cardHeight: CGFloat = NoteProposalReviewMetrics.cardMinHeight
+
+    var body: some View {
+        let display = changes.display(decisions: controller.proposalDecisions)
+        ZStack(alignment: .top) {
+            NoteProposalReviewDocument(display: display, noteID: review.noteID, design: design,
+                                       imageProvider: controller, columnInset: columnInset,
+                                       topInset: topInset + cardHeight + NoteProposalReviewMetrics.cardGap,
+                                       bottomInset: bottomInset) { id, accept in
+                run { await controller.decideProposalChange(id, accept: accept) }
+            }
+            .accessibilityIdentifier("notes-proposal-document")
+            card
+                .padding(.horizontal, max(0, columnInset - NoteProposalReviewMetrics.cardOutset))
+                .padding(.top, topInset)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height - topInset }) { cardHeight = max($0, 0) }
+            keys
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("notes-proposal-review")
+    }
+
+    private var remaining: Int { controller.remainingProposalChanges }
+
+    private var card: some View {
+        let metrics = NoteProposalReviewMetrics.self
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: metrics.cardGapInside) {
+                Circle()
+                    .fill(Color(nsColor: .systemBlue))
+                    .frame(width: metrics.dot, height: metrics.dot)
+                    .accessibilityHidden(true)
+                Text(remaining == 1 ? "1 change to review." : "\(remaining) changes to review.")
+                    .font(.system(size: metrics.cardFont))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.numericText())
+                    .accessibilityIdentifier("notes-proposal-count")
+                HStack(spacing: metrics.buttonGap) {
+                    actionsMenu
+                    pill("Reject", dark: false, id: "notes-proposal-reject-all") {
+                        run { await controller.decideRemainingProposalChanges(accept: false) }
+                    }
+                    pill("Accept", dark: true, id: "notes-proposal-accept-all") {
+                        run { await controller.decideRemainingProposalChanges(accept: true) }
+                    }
+                }
+                .disabled(busy)
+            }
+            if let message = controller.proposalReviewNotice {
+                Text(message)
+                    .font(.system(size: metrics.noticeFont))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, metrics.dot + metrics.cardGapInside)
+                    .accessibilityIdentifier("notes-proposal-failure")
+            }
+        }
+        .padding(.vertical, metrics.cardPadding)
+        .padding(.leading, metrics.cardLeading)
+        .padding(.trailing, metrics.cardPadding)
+        .atticGlassControl(in: Squircle(cornerRadius: NoteProposalReviewMetrics.cardRadius, exponent: AtticShape.surfaceExponent),
+                           interactive: false)
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: remaining)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("notes-proposal-card")
+    }
+
+    private var actionsMenu: some View {
+        Menu {
+            Button("Save as New Note") { run { await controller.saveReviewedProposalAsNew() } }
+                .accessibilityIdentifier("notes-proposal-save-new")
+            Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
+                .accessibilityIdentifier("notes-proposal-discard")
+            if controller.reviewProposals.count > 1 {
+                Divider()
+                ForEach(controller.reviewProposals, id: \.id) { edit in
+                    Button("\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")") {
+                        Task { _ = await controller.beginProposalReview(id: edit.id) }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: NoteProposalReviewMetrics.menuGlyph, weight: .medium))
+                .frame(width: NoteProposalReviewMetrics.menuSize, height: NoteProposalReviewMetrics.menuSize)
+                .contentShape(Circle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Proposal actions")
+        .accessibilityLabel("Proposal actions")
+        .accessibilityIdentifier("notes-proposal-menu")
+    }
+
+    private func pill(_ title: LocalizedStringKey, dark: Bool, id: String, action: @escaping () -> Void) -> some View {
+        let metrics = NoteProposalReviewMetrics.self
+        return Button(action: action) {
+            Text(title)
+                .font(.system(size: metrics.pillFont, weight: dark ? .semibold : .medium))
+                .foregroundStyle(dark ? Color(nsColor: .windowBackgroundColor) : Color(nsColor: .labelColor))
+                .padding(.horizontal, dark ? metrics.pillPadding : metrics.softPillPadding)
+                .frame(height: metrics.pillHeight)
+                .background(AtticControlShape.shape(cornerRadius: metrics.pillHeight / 2, exponent: AtticShape.controlExponent)
+                    .fill(dark ? Color(nsColor: .labelColor) : Color.primary.opacity(0.06)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+    }
+
+    /// Esc ends the review (the proposal waits); ⌘Z and ⇧⌘Z step through
+    /// the decisions.
+    private var keys: some View {
+        ZStack {
+            Button("") { controller.endProposalReview() }
+                .keyboardShortcut(.cancelAction)
+            Button("") { _ = controller.undoProposalDecision() }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!controller.canUndoProposalDecision || busy)
+            Button("") { _ = controller.redoProposalDecision() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!controller.canRedoProposalDecision || busy)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    private func run(_ action: @escaping @MainActor () async -> Bool) {
+        busy = true
+        Task { _ = await action(); busy = false }
+    }
+}
+
+/// Draft N5 Idea B's values, design px halved.
+enum NoteProposalReviewMetrics {
+    static let cardGap: CGFloat = 11          // .pcard → .blks, 22 px
+    static let cardRadius: CGFloat = 17       // Accepted "Shapes": the review bar 34 px
+    static let cardPadding: CGFloat = 7       // 14 px
+    static let cardLeading: CGFloat = 9       // 18 px
+    static let cardOutset: CGFloat = 9        // the card's text lines up with the note's
+    static let cardGapInside: CGFloat = 7     // 14 px
+    static let cardMinHeight: CGFloat = 34    // 20 pt buttons + 2 × 7
+    static let cardFont: CGFloat = 10.5       // 21 px
+    static let noticeFont: CGFloat = 9.5
+    static let dot: CGFloat = 6               // 12 px
+    static let pillHeight: CGFloat = 20       // 40 px
+    static let pillFont: CGFloat = 9.5        // 19 px
+    static let pillPadding: CGFloat = 8       // 16 px
+    static let softPillPadding: CGFloat = 7   // 14 px
+    static let buttonGap: CGFloat = 3         // 6 px
+    static let menuSize: CGFloat = 22         // .tiny, 44 px
+    static let menuGlyph: CGFloat = 11
+    static let changeButton: CGFloat = 17     // .chg button, 34 px
+    static let changeInset: CGFloat = 4       // right: 8 px
+}
+
+/// One change's Reject and Accept, at the end of its last line.
+private struct NoteProposalChangeControls: View {
+    let change: Int
+    let onDecide: (Bool) -> Void
+
+    var body: some View {
+        let size = NoteProposalReviewMetrics.changeButton
+        HStack(spacing: NoteProposalReviewMetrics.buttonGap) {
+            Button { onDecide(false) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .frame(width: size, height: size)
+                    .background(AtticControlShape.shape(cornerRadius: size / 2, exponent: AtticShape.controlExponent).fill(Color.primary.opacity(0.06)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Reject change")
+            .accessibilityLabel("Reject change")
+            .accessibilityIdentifier("notes-proposal-change-reject-\(change)")
+            Button { onDecide(true) } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .windowBackgroundColor))
+                    .frame(width: size, height: size)
+                    .background(AtticControlShape.shape(cornerRadius: size / 2, exponent: AtticShape.controlExponent).fill(Color(nsColor: .labelColor)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Accept change")
+            .accessibilityLabel("Accept change")
+            .accessibilityIdentifier("notes-proposal-change-accept-\(change)")
+        }
+        .fixedSize()
+    }
+}
+
+/// The review's note: the shipping read-only engine with the review's
+/// marks (`NoteBlockLayoutFragment.reviewMark`), and each open change's
+/// Reject and Accept as subviews of the text, so they scroll with it.
+struct NoteProposalReviewDocument: NSViewRepresentable {
+    let display: NoteProposalDisplay
+    let noteID: UUID
+    let design: AtticDesignContext
+    let imageProvider: NoteImageProviding
+    let columnInset: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let onDecide: (Int, Bool) -> Void
+
+    final class Host: NSView {
+        var onLayout: (@MainActor () -> Void)?
+        override func layout() {
+            super.layout()
+            onLayout?()
+        }
+    }
+
+    @MainActor final class Coordinator {
+        var engine: NoteEditorEngine?
+        var display: NoteProposalDisplay?
+        var controls: [(block: Int, view: NSView)] = []
+        var columnInset: CGFloat = 0
+        var frameObserver: NSObjectProtocol?
+        var onDecide: (Int, Bool) -> Void = { _, _ in }
+
+
+        /// Each control sits 4 pt inside the band's trailing end, centred
+        /// on its block (draft: `right: 8px; top: 50%`).
+        func positionControls() {
+            guard let engine, let text = engine.textView, !controls.isEmpty else { return }
+            if let layout = text.textLayoutManager { layout.ensureLayout(for: layout.documentRange) }
+            let ranges = engine.paragraphRanges(forBlocks: controls.map(\.block))
+            guard ranges.count == controls.count else { return }
+            let trailing = text.bounds.width - columnInset + 3 - NoteProposalReviewMetrics.changeInset
+            for (control, range) in zip(controls, ranges) {
+                let size = control.view.fittingSize
+                let rect = engine.rect(for: NSRange(location: range.location, length: max(range.length, 1)))
+                    ?? engine.caretRect(at: range.location)
+                guard let rect else { control.view.isHidden = true; continue }
+                control.view.isHidden = false
+                control.view.frame = NSRect(x: trailing - size.width, y: rect.midY - size.height / 2,
+                                            width: size.width, height: size.height).integral
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let host = Host()
+        host.onLayout = { [weak coordinator = context.coordinator] in coordinator?.positionControls() }
+        context.coordinator.onDecide = onDecide
+        install(in: host, coordinator: context.coordinator, offset: nil)
+        return host
+    }
+
+    func updateNSView(_ host: NSView, context: Context) {
+        context.coordinator.onDecide = onDecide
+        guard context.coordinator.display != display else {
+            context.coordinator.engine?.update(design: design)
+            if let scroll = context.coordinator.engine?.scrollView,
+               scroll.contentInsets.top != topInset || scroll.contentInsets.bottom != bottomInset {
+                scroll.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+            }
+            if let text = context.coordinator.engine?.textView, text.textContainerInset.width != columnInset {
+                text.textContainerInset = NSSize(width: columnInset, height: 0)
+                context.coordinator.columnInset = columnInset
+                context.coordinator.positionControls()
+            }
+            return
+        }
+        // A decision redraws the note as it will read; the scroll position stays.
+        let offset = context.coordinator.engine?.scrollView?.contentView.bounds.origin.y
+        install(in: host, coordinator: context.coordinator, offset: offset)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 300))
+    }
+
+    private func install(in host: NSView, coordinator: Coordinator, offset: CGFloat?) {
+        coordinator.engine?.detachView()
+        coordinator.frameObserver.map(NotificationCenter.default.removeObserver)
+        coordinator.frameObserver = nil
+        host.subviews.forEach { $0.removeFromSuperview() }
+        let engine = NoteEditorEngine(noteID: noteID, document: display.document, readOnly: true,
+                                      design: design, imageProvider: imageProvider)
+        engine.applyReviewMarks(display.marks, controls: Set(display.controls.keys))
+        coordinator.engine = engine
+        coordinator.display = display
+        coordinator.columnInset = columnInset
+        let (scroll, text) = engine.makeView()
+        text.textContainerInset = NSSize(width: columnInset, height: 0)
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        scroll.frame = host.bounds
+        scroll.autoresizingMask = [.width, .height]
+        host.addSubview(scroll)
+        coordinator.controls = display.controls.sorted { $0.key < $1.key }.map { block, change in
+            let view = NSHostingView(rootView: NoteProposalChangeControls(change: change) { [weak coordinator] accept in
+                coordinator?.onDecide(change, accept)
+            })
+            view.setFrameSize(view.fittingSize)
+            text.addSubview(view)
+            return (block, view)
+        }
+        text.postsFrameChangedNotifications = true
+        coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+            object: text, queue: .main) { [weak coordinator] _ in
+            MainActor.assumeIsolated { coordinator?.positionControls() }
+        }
+        coordinator.positionControls()
+        DispatchQueue.main.async { [weak coordinator] in
+            if let offset {
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            coordinator?.positionControls()
+        }
+    }
+
+    static func dismantleNSView(_ host: NSView, coordinator: Coordinator) {
+        coordinator.frameObserver.map(NotificationCenter.default.removeObserver)
+        coordinator.frameObserver = nil
+        coordinator.engine?.detachView()
     }
 }
 
