@@ -376,6 +376,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     /// The row ↑ ↓ are on; nil until they move (Return then takes the
     /// typed word, as Space does), or the typed word's own existing tag.
     private var highlightedSuggestion: Int?
+    private var hasBodyUpdateScheduled = false
     /// Every tag in Notes with how many notes carry it.
     var tagCounts: () -> [String: Int] = { [:] }
     /// Measures the tag line's wrapped height at the column's width.
@@ -452,7 +453,9 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }
         engine.onCaretChange = { [weak self] in
             self?.updateSuggestions()
-            self?.updateHasBody()
+            // Native selection restoration also calls this from makeNSView.
+            // Publish chrome after that SwiftUI update has finished.
+            self?.scheduleHasBodyUpdate()
         }
         chrome.accessories = self
         rebuild()
@@ -707,7 +710,18 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
                                        range: NSRange(location: start, length: string.length - start)).location != NSNotFound
     }
 
+    private func scheduleHasBodyUpdate() {
+        guard !hasBodyUpdateScheduled else { return }
+        hasBodyUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hasBodyUpdateScheduled = false
+            self.updateHasBody()
+        }
+    }
+
     func updateHasBody() {
+        guard chrome.accessories === self else { return }
         let has = Self.hasBody(engine.textStorage.string as NSString, title: engine.titleParagraphRange)
         if chrome.hasBody != has { chrome.hasBody = has }
     }
