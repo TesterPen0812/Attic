@@ -318,12 +318,14 @@ final class PanelPullOutHostedTests: XCTestCase {
                 weak var floating: PanelFloatingPanel?
                 weak var window: AtticPanel?
                 weak var hosting: AtticPanelHostingView?
+                weak var pageState: PanelUIState?
                 try autoreleasepool {
                     try pull(page, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
                     let made = try XCTUnwrap(rig.pullOut.panel(for: page))
                     floating = made
                     window = made.panel
                     hosting = made.hostingViewForTesting
+                    pageState = made.uiState
                     // A press brings it forward (the callback that held it).
                     made.hostingViewForTesting.onWindowDragBegan?()
                     made.hostingViewForTesting.onWindowDragEnded?(made.visibleFrame, CGPoint(x: made.visibleFrame.midX,
@@ -331,10 +333,11 @@ final class PanelPullOutHostedTests: XCTestCase {
                     XCTAssertTrue(rig.pullOut.dockIn(page), "cycle \(cycle)")
                 }
                 spin(until: { rig.pullOut.panel(for: page) == nil })
-                spin(until: { floating == nil && window == nil && hosting == nil })
+                spin(until: { floating == nil && window == nil && hosting == nil && pageState == nil })
                 XCTAssertNil(floating, "cycle \(cycle): the floating panel")
                 XCTAssertNil(window, "cycle \(cycle): its window")
                 XCTAssertNil(hosting, "cycle \(cycle): its hosting view")
+                XCTAssertNil(pageState, "cycle \(cycle): its page state")
             }
         }
     }
