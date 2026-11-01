@@ -10,11 +10,14 @@ final class DrawStoreContractTests: XCTestCase {
     // The persistent implementation runs this exact contract in the next slice.
     func contract(_ store: any DrawStoreProtocol) throws {
         XCTAssertTrue(try store.library().isEmpty)
-        let first = store.create(name: "Ideas")
+        let first = store.create(name: "Draft")
+        XCTAssertTrue(store.perform(.rename("Ideas"), on: first.id).isSaved)
+        XCTAssertTrue(store.perform(.thumbnail(Data([1, 2, 3])), on: first.id).isSaved)
         XCTAssertTrue(try store.library().isEmpty, "An empty new canvas is only a draft")
         var text = DrawObject(content: .text("hello world"))
         XCTAssertTrue(store.perform(.put([text]), on: first.id).isSaved)
         XCTAssertEqual(try store.library().map(\.name), ["Ideas"])
+        XCTAssertEqual(try store.library().first?.thumbnail, Data([1, 2, 3]))
         XCTAssertTrue(store.perform(.tags(["Work"]), on: first.id).isSaved)
         XCTAssertEqual(try store.search("#work").map(\.canvas.id), [first.id])
         XCTAssertEqual(try store.search("hello").first?.matchingTextBoxIDs, [text.id])
@@ -31,6 +34,7 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertEqual(try store.open(first.id).objects.first?.content, .text("hello changed"))
         let copy = try XCTUnwrap(store.duplicate(first.id, name: "Copy"))
         XCTAssertNotEqual(copy.id, first.id)
+        XCTAssertEqual(copy.thumbnail, Data([1, 2, 3]))
         XCTAssertNotEqual(try store.open(copy.id).objects.first?.id, text.id)
         XCTAssertTrue(store.perform(.deleteCanvas, on: first.id).isSaved)
         XCTAssertFalse(try store.library().contains { $0.id == first.id })
@@ -56,6 +60,7 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertEqual(objects.count, 2)
         XCTAssertFalse(objects.contains { $0.id == image.id || $0.id == stroke.id })
         XCTAssertTrue(objects.contains { $0.content == image.content })
+        XCTAssertTrue(objects.contains { $0.content == .stroke([DrawPoint(x: 11, y: 22), DrawPoint(x: 13, y: 24)]) })
         XCTAssertTrue(store.undo(on: board.id).isSaved)
         XCTAssertTrue(try store.open(board.id).objects.isEmpty)
     }

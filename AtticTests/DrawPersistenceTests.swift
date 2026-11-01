@@ -248,6 +248,28 @@ final class DrawPersistenceTests: XCTestCase {
         XCTAssertTrue(try fresh.fetch(FetchDescriptor<DrawPayloadRecord>()).allSatisfy { $0.bytes == Data([255, 0, 9]) })
     }
 
+    func testDivergentBinaryReplicasPresentTheSameWinnerRegardlessOfInsertionOrder() throws {
+        let originals = [Data([1]), Data([2])].sorted { DrawCodec.digest($0) < DrawCodec.digest($1) }
+        for order in [originals, originals.reversed().map { $0 }] {
+            let container = try container()
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let canvas = DrawCanvas()
+            let board = DrawCanvasRecord()
+            try board.apply(canvas); context.insert(board)
+            let id = UUID()
+            for original in order {
+                let object = DrawObject(id: id, content: .image(DrawImage(original: original, pixelWidth: 1, pixelHeight: 1)))
+                let row = DrawObjectRecord(); try row.apply(object, canvasID: canvas.id); context.insert(row)
+                let payload = DrawPayloadRecord(); payload.apply(original, id: id, canvasID: canvas.id, role: "object"); context.insert(payload)
+            }
+            try context.save()
+            let store = DrawPersistentStore(container: container)
+            XCTAssertEqual(try store.open(canvas.id).objects.first?.content,
+                           .image(DrawImage(original: try XCTUnwrap(originals.last), pixelWidth: 1, pixelHeight: 1)))
+        }
+    }
+
     func testOldCanvasRowsRemainByteForByteUnchanged() throws {
         let container = try container()
         let context = ModelContext(container)

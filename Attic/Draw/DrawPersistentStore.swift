@@ -255,7 +255,7 @@ final class DrawSwiftDataRepository: DrawRepository {
     }
 
     private func canvasWinner(_ rows: [DrawCanvasRecord]) throws -> DrawCanvasRecord {
-        let sorted = try rows.map { ($0, try DrawCodec.encode($0.value())) }.sorted {
+        let sorted = try rows.map { ($0, try DrawCodec.encode([DrawCodec.string($0.value()), $0.thumbnailID?.uuidString ?? ""])) }.sorted {
             if ($0.0.deletedAt != nil) != ($1.0.deletedAt != nil) { return $0.0.deletedAt != nil }
             if $0.0.updatedAt != $1.0.updatedAt { return $0.0.updatedAt > $1.0.updatedAt }
             return $1.1.lexicographicallyPrecedes($0.1)
@@ -266,6 +266,10 @@ final class DrawSwiftDataRepository: DrawRepository {
     private func objectWinner(_ rows: [DrawObjectRecord]) -> DrawObjectRecord? {
         rows.sorted {
             if ($0.deletedAt != nil) != ($1.deletedAt != nil) { return $0.deletedAt != nil }
+            if $0.header.utf8.elementsEqual($1.header.utf8) {
+                if $0.payloadDigest != $1.payloadDigest { return $0.payloadDigest > $1.payloadDigest }
+                return $0.formatVersion > $1.formatVersion
+            }
             return $1.header.utf8.lexicographicallyPrecedes($0.header.utf8)
         }.first
     }
