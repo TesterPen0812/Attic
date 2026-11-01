@@ -153,7 +153,10 @@ enum DrawSaveResult: Equatable, Sendable {
 struct DrawPendingEdit: Equatable, Sendable {
     var canvas: DrawCanvas
     var objects: [DrawObject]
+    /// The first unsaved edit's outcome (`.retry` or `.held`).
     var outcome: DrawSaveResult
+    /// How many edits on this canvas wait to be saved, in order.
+    var count = 1
 }
 
 enum DrawStoreError: Error { case missingCanvas, invalidClipboard, invalidObject, pendingEdit }

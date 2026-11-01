@@ -432,6 +432,7 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved, "The second save fails too")
         XCTAssertFalse(store.retry(on: board.id).isSaved, "And so does Retry")
         XCTAssertTrue(store.hasUnsettledEdits, "Quit still waits")
+        XCTAssertEqual(store.pendingEdits[board.id]?.count, 2, "Both count as unsaved")
         XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id])
 
         log.fail = false
