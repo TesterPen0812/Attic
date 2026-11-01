@@ -116,6 +116,21 @@ final class WorkspaceHistoryTests: XCTestCase {
         XCTAssertEqual(replacement.storage.string, "")
     }
 
+    func testB08MissingRetryCoordinatorReleasesReservedDraftInput() async throws {
+        XCTAssertTrue(workspace.reserveInput())
+        var delivered = 0
+        workspace.submitInput { delivered += 1 }
+        weak var previousCoordinator = coordinator
+        workspace.trackExternalOperation(UUID(), using: coordinator, peers: [], installed: false, completion: {})
+        coordinator = nil
+        XCTAssertNil(previousCoordinator, "the sleeping retry must hold its coordinator weakly")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(workspace.permitsUnsavedDraft)
+        XCTAssertFalse(workspace.isInputReserved)
+        XCTAssertEqual(delivered, 1, "release queued input even when there is no coordinator to retry")
+        XCTAssertTrue(workspace.hasPendingPublication, "keep the unresolved operation")
+    }
+
     func testOpusR3UnknownAbortAutomaticallyReleasesTheReservation() async throws {
         coordinator.save = { _ in throw WorkspaceFoundationError.preparationFailed }
         coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }

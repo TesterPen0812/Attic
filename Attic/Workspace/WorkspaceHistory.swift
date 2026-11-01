@@ -421,8 +421,13 @@ final class WorkspaceHistory {
         guard retryTask == nil, hasPendingPublication else { return }
         retryTask = Task { [weak self, weak pendingCoordinator] in
             do { try await Task.sleep(for: delay) } catch { return }
-            guard let self, let pendingCoordinator, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
             self.retryTask = nil
+            guard let pendingCoordinator else {
+                self.permitUnsavedDraft()
+                self.recoveryPeers.compactMap(\.value).forEach { $0.permitUnsavedDraft() }
+                return
+            }
             if await self.retryPublication(using: pendingCoordinator) { return }
             guard self.hasPendingPublication else { return }
             // Keep the operation envelope and owner holds, but stop blocking
