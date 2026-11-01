@@ -1475,6 +1475,8 @@ final class AtticPanelContentContainer: NSView {
         var mode: PanelHideAnimation
         var bounds: CGSize
         var surfaceRect: CGRect
+        /// Where the island's stand-in is (the snapshot draws it there).
+        var islandRect: CGRect?
         var dark: Bool
         var surface: PanelGenieSurface?
         var contentGeneration: Int
@@ -1498,7 +1500,7 @@ final class AtticPanelContentContainer: NSView {
 
     private func snapshotKey(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) -> PreparedSnapshotKey {
         PreparedSnapshotKey(
-            mode: mode, bounds: bounds.size, surfaceRect: hostingView.frame,
+            mode: mode, bounds: bounds.size, surfaceRect: hostingView.frame, islandRect: islandStandIn?.frame,
             dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
             surface: surface, contentGeneration: contentGeneration
         )

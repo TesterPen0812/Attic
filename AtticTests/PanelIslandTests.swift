@@ -653,6 +653,54 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// Genie hiding in one corner and revealing in another (same panel
+    /// size): the snapshot the reveal flies holds the island at the new
+    /// corner and nothing at the old one, whether it is taken at the reveal
+    /// (cold) or was prepared while hidden at the old corner (warm). Astra U2.
+    func testAGenieRevealInANewCornerSnapshotsTheIslandThere() throws {
+        for (reduceTransparency, warm) in [(false, false), (false, true), (true, true)] {
+            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+                AtticTransparencySeam.systemOverride = reduceTransparency
+                let screen = try XCTUnwrap(controller.currentScreen)
+                let container = try content(panel)
+                let genie = container.genieForTesting
+                spin(until: { !container.isIslandStandInShown })
+                @MainActor func items(_ corner: ScreenCorner) -> [CGPoint] {
+                    let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner)
+                    return PanelPage.allCases.indices.map { index in
+                        let item = local(PanelIslandLayout.itemFrame(index, in: island), in: panel)
+                        return CGPoint(x: item.midX, y: item.midY)
+                    }
+                }
+                var from = ScreenCorner.topRight
+                for to in [ScreenCorner.bottomRight, .bottomLeft, .topLeft, .topRight] {
+                    let note = "reduce transparency \(reduceTransparency), \(warm ? "warm" : "cold"), \(from) to \(to)"
+                    var hidden = false
+                    _ = controller.requestHide { hidden = $0 == .hidden }
+                    spin(until: { hidden })
+                    XCTAssertTrue(hidden, note)
+                    let size = panel.visibleContentFrame.size
+                    let old = items(from)
+                    // An expected reveal prepares the snapshot while hidden.
+                    if warm { container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil) }
+                    XCTAssertTrue(controller.show(on: screen, corner: to), note)
+                    XCTAssertEqual(panel.visibleContentFrame.size, size, "\(note): the same size")
+                    for (index, point) in items(to).enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertGreaterThan(alpha, 60, "\(note): item \(index) at the new corner")
+                    }
+                    for (index, point) in old.enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertLessThan(alpha, 20, "\(note): nothing where item \(index) was")
+                    }
+                    spin(until: { !container.isIslandStandInShown })
+                    XCTAssertFalse(container.isIslandStandInShown, "\(note): handed back at rest")
+                    from = to
+                }
+            }
+        }
+    }
+
     /// No flash at a swap (motion start, reveal end, spring-back end): just
     /// before and just after it, the island's region draws the same, with
     /// the stand-in showing the same page, chip and look, and no label.
