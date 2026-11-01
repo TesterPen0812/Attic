@@ -249,7 +249,7 @@ final class TasksPageModelTests: XCTestCase {
         model.select(tab: .now)
         model.addBar.text = "Ship it"
         let opened = try XCTUnwrap(model.submitAddBar(openingPage: true))
-        XCTAssertEqual(model.expandedFiles, [opened], "⌘Return adds the task and opens its files")
+        XCTAssertEqual(store.task(withID: opened)?.title, "Ship it", "⌘Return adds the task (its files list is gone)")
 
         // On Done the bar still adds, to Now, and says so.
         model.select(tab: .done)
@@ -273,8 +273,7 @@ final class TasksPageModelTests: XCTestCase {
             let id = try XCTUnwrap(model.submitAddBar(openingPage: true))
             XCTAssertEqual(store.task(withID: id)?.status, source == .backlog ? .backlog : .todo)
             XCTAssertEqual(model.tab, target)
-            XCTAssertTrue(model.rows(for: target).contains { $0.id == id }, "the promised files belong to a visible task")
-            XCTAssertTrue(model.expandedFiles.contains(id))
+            XCTAssertTrue(model.rows(for: target).contains { $0.id == id }, "the new task is visible")
             XCTAssertEqual(model.scrollRequest?.id, id)
             XCTAssertEqual(model.scrollRequest?.tab, target)
             XCTAssertNil(model.toasts.current, "successful reveal needs no out-of-view toast")

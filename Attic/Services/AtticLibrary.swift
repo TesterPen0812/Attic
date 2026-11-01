@@ -319,7 +319,15 @@ final class AtticLibrary {
         orderStep(id, in: history) { tasks.move(taskID: id, toIndex: index) }
     }
 
-    private func orderStep(_ id: UUID, in history: UndoHistoryID, _ move: () -> Bool) -> CommandOutcome {
+    /// A row dragged into another day (Adaptive picks, 2026-11-01): its
+    /// date and its place as one step, so one undo puts back both.
+    @discardableResult
+    func moveTask(_ id: UUID, toDueDay day: DueDay?, before: UUID?, after: UUID?,
+                  in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        orderStep(id, in: history, name: "Edit Task") { tasks.moveTask(id, toDueDay: day, before: before, after: after) }
+    }
+
+    private func orderStep(_ id: UUID, in history: UndoHistoryID, name: String = "Move Task", _ move: () -> Bool) -> CommandOutcome {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
@@ -331,7 +339,7 @@ final class AtticLibrary {
             succeeded = true
             let after = group.compactMap(tasks.editableState(of:))
             guard before != after else { return nil }
-            return editStep("Move Task", before: before, after: after)
+            return editStep(name, before: before, after: after)
         }
         return taskOutcome(succeeded, since: serial, ids: [id])
     }

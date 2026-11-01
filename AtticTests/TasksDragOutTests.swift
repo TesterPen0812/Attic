@@ -379,17 +379,16 @@ final class TasksDragO2Tests: XCTestCase {
         XCTAssertEqual(AtticDropLanding.frame(for: .zero, in: slot), slot)
     }
 
-    func testTheSlotIsTheFilesListsIconColumn() {
+    /// The files list is gone (Accepted 2026-11-01 "Task rows: no paperclip
+    /// count"): a file lands in the row itself, on its last line at the text
+    /// column, where its tiles are.
+    func testTheSlotIsTheRowsLastLineAtTheTextColumn() {
         let row = CGRect(x: 8, y: 200, width: 360, height: 34)
-        let closed = TasksPage.dropLandingSlot(rowFrame: row, filesExpanded: false)
-        XCTAssertEqual(closed.minX, 8 + TasksDesignMetrics.textX)
-        XCTAssertEqual(closed.size, CGSize(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot))
-        XCTAssertTrue(row.contains(closed), "closed, it lands in the row itself")
-        // Open: two files, then "Attach file…", where the new file goes.
-        let open = CGRect(x: 8, y: 200, width: 360, height: 34 + 3 * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding)
-        let slot = TasksPage.dropLandingSlot(rowFrame: open, filesExpanded: true)
-        let attachLine = open.maxY - AtticQuickLookMetrics.bottomPadding - AtticLayout.subtaskPitch
-        XCTAssertEqual(slot.midY, attachLine + AtticLayout.subtaskPitch / 2, accuracy: 0.001)
+        let slot = TasksPage.dropLandingSlot(rowFrame: row)
+        XCTAssertEqual(slot.minX, 8 + TasksDesignMetrics.textX)
+        XCTAssertEqual(slot.size, CGSize(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot))
+        XCTAssertTrue(row.contains(slot), "it lands in the row itself")
+        XCTAssertEqual(slot.midY, row.maxY - AtticLayout.subtaskPitch / 2, accuracy: 0.001)
     }
 
     func testTheHostAsksTheShownSourceInItsWindowAndConvertsTheSlot() {
@@ -639,52 +638,6 @@ final class TasksDragO2Tests: XCTestCase {
         XCTAssertEqual(store.listedTask(withID: first.id)?.attachments, before)
         let verified = try await files.verifiedURL(for: before[0])
         XCTAssertNotNil(verified)
-    }
-
-    // MARK: O17-16, a file leaves on its own
-
-    func testAFileLeavesAsItselfWithItsOwnPicture() throws {
-        let reference = TaskImageReference(id: UUID(), filename: "Floor plan.pdf", digest: "d1",
-                                           contentTypeIdentifier: UTType.pdf.identifier, byteCount: 2_048)
-        let provider = TaskAttachmentDragItem(reference: reference, files: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "TasksDragO2")))
-            .itemProvider()
-        XCTAssertEqual(provider.registeredTypeIdentifiers, [UTType.pdf.identifier, TaskDropContent.attachmentCardType.identifier])
-        XCTAssertEqual(provider.suggestedName, "Floor plan")
-        // Its picture: the kind's icon and the name, nothing of the row.
-        let renderer = ImageRenderer(content: TaskFileDragPreview(file: reference))
-        renderer.scale = 2
-        let picture = try XCTUnwrap(renderer.nsImage)
-        XCTAssertEqual(picture.size.height, TaskFileDragPreview.iconSide + 10, accuracy: 0.5)
-        XCTAssertLessThanOrEqual(picture.size.width, 6 + TaskFileDragPreview.iconSide + 8 + 220 + 12 + 0.5)
-
-        // An image shows the thumbnail its row already drew.
-        let image = TaskImageReference(id: UUID(), filename: "Sketch.png", digest: "d2-\(UUID().uuidString)",
-                                       contentTypeIdentifier: UTType.png.identifier, byteCount: 512)
-        let thumbnail = NSImage(size: CGSize(width: 8, height: 8), flipped: false) { rect in
-            NSColor.systemRed.setFill(); rect.fill(); return true
-        }
-        TaskThumbnailMemory.remember(thumbnail, for: image.digest)
-        XCTAssertTrue(TaskThumbnailMemory.image(for: image.digest) === thumbnail)
-        XCTAssertNotNil(ImageRenderer(content: TaskFileDragPreview(file: image)).nsImage)
-
-        // Evidence renders for the round's report, on request only.
-        if let directory = ProcessInfo.processInfo.environment["ATTIC_O2_RENDERS"] {
-            let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(directory, isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
-                for (kind, file) in [("pdf", reference), ("image", image)] {
-                    let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
-                    var data: Data?
-                    appearance.performAsCurrentDrawingAppearance {
-                        let renderer = ImageRenderer(content: TaskFileDragPreview(file: file).padding(12)
-                            .background(scheme == .dark ? Color.black : Color.white).environment(\.colorScheme, scheme))
-                        renderer.scale = 2
-                        data = renderer.cgImage.map { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) } ?? nil
-                    }
-                    try XCTUnwrap(data).write(to: folder.appendingPathComponent("file-drag-\(kind)-\(name).png"))
-                }
-            }
-        }
     }
 }
 

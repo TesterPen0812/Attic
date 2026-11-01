@@ -76,9 +76,10 @@ final class TasksFollowup2Tests: XCTestCase {
 
     // MARK: - L5: the rarer commands under More
 
-    /// The top level keeps the common actions; Show Files, Move Up and
+    /// The top level keeps the common actions; Copy, Duplicate, Move Up and
     /// Move Down sit under More with their keys, and the keys still find
-    /// them in the one list.
+    /// them in the one list. (Show Files went with the files list:
+    /// Accepted 2026-11-01 "Task rows: no paperclip count".)
     func testTheRarerCommandsSitUnderMoreWithTheirKeys() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -96,12 +97,12 @@ final class TasksFollowup2Tests: XCTestCase {
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(commands), [], "rule 2: an icon on every row")
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
         XCTAssertEqual(Self.kinds(AtticGlassMenuCard.layout(more.children)),
-                       ["Show Files", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
-        XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate,
+                       ["Copy", "Duplicate", "—", "Move Up", "Move Down"])
+        XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.copy, AtticTaskShortcut.duplicate,
                                                        AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(more.children), [])
         // Call the plumber is the last to do: Move Down is off, Move Up runs.
-        XCTAssertEqual(more.children.map(\.isDisabled), [false, false, false, false, true])
+        XCTAssertEqual(more.children.map(\.isDisabled), [false, false, false, true])
         XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.moveUp, in: commands)?.title, "Move Up")
         XCTAssertEqual(AtticMenuCommand.command(key: .upArrow, characters: "", modifiers: .command, in: commands)?.title, "Move Up")
         // ⌘C and ⌘D still find Copy and Duplicate inside More.
@@ -120,7 +121,7 @@ final class TasksFollowup2Tests: XCTestCase {
         let menu = AtticNativeMenu.make(commands)
         let submenu = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu)
         XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title },
-                       ["Show Files", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
+                       ["Copy", "Duplicate", "—", "Move Up", "Move Down"])
     }
 
     static func kinds(_ layout: AtticGlassMenuCard.Layout) -> [String] {

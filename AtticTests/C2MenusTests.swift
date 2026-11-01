@@ -53,16 +53,17 @@ final class C2MenusTests: XCTestCase {
         XCTAssertEqual(removed.value, [row.id])
     }
 
-    /// More ›: Show Files and Add Files… (the plan's menu word) │ Copy,
-    /// Duplicate │ Move Up, Move Down. Add Files… keeps its picker.
-    func testTaskMenuMoreKeepsAddFilesBesideShowFiles() throws {
+    /// More ›: Add Files… (the plan's menu word) │ Copy, Duplicate │ Move
+    /// Up, Move Down. Add Files… keeps its picker. (Show Files went with
+    /// the files list: Accepted 2026-11-01 "Task rows: no paperclip count".)
+    func testTaskMenuMoreKeepsAddFiles() throws {
         let (hosted, _, _, files) = try taskHost(removable: true)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })
         hosted.model.selectOnly(row.id)
         let more = try XCTUnwrap(hosted.page.taskCommands(row.id, tab: .now).first { $0.title == "More" })
         XCTAssertEqual(TasksFollowup2Tests.kinds(AtticGlassMenuCard.layout(more.children)),
-                       ["Show Files", "Add Files…", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
+                       ["Add Files…", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(more.children), [])
         try XCTUnwrap(more.children.first { $0.title == "Add Files…" }).action()
         XCTAssertEqual(files.value, [row.id])

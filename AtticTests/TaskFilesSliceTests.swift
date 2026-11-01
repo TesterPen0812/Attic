@@ -174,11 +174,10 @@ final class TaskFilesSliceTests: XCTestCase {
         notes.store.refresh()
         model.setNoteOwners(Set([try XCTUnwrap(ownNote(moved))].map { _ in moved }))
         let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == moved })
-        XCTAssertEqual(row.model.attachments, 0, "the paperclip and count retire")
+        XCTAssertEqual(row.model.attachments, 0, "its row files retire")
+        XCTAssertTrue(row.model.tileFiles.isEmpty, "and their tiles")
         XCTAssertTrue(row.model.hasPage, "the doc.text glyph stays")
-        model.setFilesExpanded(moved, true)
-        XCTAssertTrue(try XCTUnwrap(model.rows(for: .now).first { $0.id == moved }).files.isEmpty)
-        // A refused family keeps the legacy paperclip, count and files list.
+        // A refused family keeps its legacy row files (as tiles).
         let kept = try XCTUnwrap(model.rows(for: .now).first { $0.id == refused })
         XCTAssertEqual(kept.model.attachments, 21)
         XCTAssertEqual(tasks.fileMigration.status(of: refused).refusal, .tooManyFiles)

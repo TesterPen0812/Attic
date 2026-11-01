@@ -465,7 +465,8 @@ final class RoundO1Tests: XCTestCase {
             XCTAssertEqual(store.task(withID: first)?.attachments.first?.filename, "Lease.pdf")
             let pasted = model.rows(for: .now).filter { $0.id != first }
             XCTAssertEqual(pasted.count, asOne ? 0 : 1)
-            XCTAssertTrue(pasted.allSatisfy { $0.files.isEmpty }, "a multi-task paste assigns files to its first task")
+            XCTAssertTrue(pasted.allSatisfy { store.task(withID: $0.id)?.attachments.isEmpty ?? true },
+                          "a multi-task paste assigns files to its first task")
             model.addBarState.text.text = "Unrelated task"
             let next = try XCTUnwrap(model.submitAddBar())
             XCTAssertEqual(store.task(withID: next)?.attachments.count, 0)
@@ -585,44 +586,6 @@ final class RoundO1Tests: XCTestCase {
         print(String(format: "O1_ELLIPSIS drawn gap/dot %.2f (dots %@ gaps %@) typeset bold %.2f", ratio(drawn),
                      drawn.dots.description, drawn.gaps.description, ratio(typeset)))
         XCTAssertLessThanOrEqual(ratio(drawn), ratio(typeset) + 0.02, "the dots sit as close as a typeset ellipsis's")
-    }
-
-    // MARK: - O17-11 · no eye on a file line
-
-    func testAFileLineUnderThePointerShowsRemoveAloneAndStillPreviewsByKeyboardAndVoiceOver() throws {
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let store = TaskStore(container: container)
-        let file = TaskImageReference(id: UUID(), filename: "Lease.pdf", digest: "d", contentTypeIdentifier: UTType.pdf.identifier, byteCount: 2048)
-        let row = TasksFileRow(file: file, store: store, owner: UUID(), remove: {})
-            .frame(width: 280)
-            .padding(.horizontal, 12)
-            .atticForcedState(.hover)
-            .atticDesign(AtticDesignContext(mode: .light))
-            .background(Color.white)
-        let host = NSHostingView(rootView: AnyView(row))
-        host.frame = CGRect(origin: .zero, size: host.fittingSize)
-        host.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: rep)
-        // Glyph clusters in the line's trailing 60 pt (where the size was).
-        let scale = CGFloat(rep.pixelsWide) / host.bounds.width
-        let from = Int((host.bounds.width - 12 - 60) * scale)
-        var clusters = 0
-        var inside = false
-        for x in from..<Int((host.bounds.width - 12) * scale) {
-            var on = false
-            for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)?.brightnessComponent ?? 1) < 0.7 {
-                on = true
-                break
-            }
-            if on, !inside { clusters += 1 }
-            inside = on
-        }
-        XCTAssertEqual(clusters, 1, "Remove alone: a click on the line already previews it")
-        // Keyboard and VoiceOver still preview: Space and the default
-        // action (unchanged), and Quick Look by name among its actions.
-        XCTAssertEqual(TasksFileRow.voiceOverActions(canOpen: true), [.quickLook, .open, .remove])
-        XCTAssertEqual(TasksFileRow.voiceOverActions(canOpen: false), [.quickLook, .remove])
     }
 
     // MARK: - O17-14 · equal inner padding in a quiet action's hover

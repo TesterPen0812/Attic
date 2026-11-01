@@ -83,9 +83,6 @@ struct TasksListRow: Identifiable, Equatable {
     let status: TaskStatus
     /// Only when the quick look is open.
     let subtasks: [AtticSubtaskModel]
-    /// The task's stored files, only when its files list is open (A1: the
-    /// files count opens them inline, apart from the subtasks).
-    var files: [TaskImageReference] = []
     /// The task's due day (the date groups, owner's panel design).
     var due: DueDay? = nil
 
@@ -101,7 +98,7 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
             && lhs.subtasks.map(\.isDone) == rhs.subtasks.map(\.isDone)
             && lhs.subtasks.map(\.title) == rhs.subtasks.map(\.title)
-            && lhs.files == rhs.files && lhs.due == rhs.due && lhs.model.tileFiles == rhs.model.tileFiles
+            && lhs.due == rhs.due && lhs.model.tileFiles == rhs.model.tileFiles
     }
 }
 
@@ -237,15 +234,6 @@ final class TasksPageModel: ObservableObject {
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
     @Published private(set) var expanded: Set<UUID> = []
-    /// Rows whose files list is open (A1, owner decision: the files count
-    /// opens only the files, the subtasks count only the subtasks; each
-    /// opens and closes on its own).
-    @Published private(set) var expandedFiles: Set<UUID> = []
-
-    /// Only a files list visible on this tab holds the panel open.
-    var hasVisibleInlineFiles: Bool {
-        !expandedFiles.isEmpty && rows(for: tab).contains { expandedFiles.contains($0.id) }
-    }
     @Published private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
@@ -349,6 +337,10 @@ final class TasksPageModel: ObservableObject {
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
     @Published var completedTodayExpanded = false
+    /// A row is being dragged on Now (Adaptive picks, "Drag a task into
+    /// another day"): Today and Tomorrow show as empty headers to drop
+    /// under. Set when the drag lifts and cleared when it ends.
+    @Published var dayDragLive = false
     /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
     /// Today; nil without Calendar access, with the switch off, or with no
     /// event still ahead today.
@@ -458,12 +450,18 @@ final class TasksPageModel: ObservableObject {
     /// The tag chip chosen under the search (owner, 2026-10-28; the
     /// design's `listFilter`): one tag at a time, for the panel's session
     /// (not remembered), on Now and Later. Nil is All.
-    @Published var tagFilter: String?
+    @Published var tagFilter: String? {
+        // Done draws from its own results (T6: the tag bar filters Done).
+        willSet { if newValue != tagFilter { doneResults.objectWillChange.send() } }
+    }
     /// Bumped when the library's tags change (their order, a rename): the
     /// tag chips are rebuilt.
     var tagInventoryRevision: UInt64 = 0
     /// The tag chips, built once per change (`tagChips()`).
     var tagChipsCache: (revision: UInt64, inventory: UInt64, tags: [String])?
+    /// Find's counts on the other tabs (T3), built once per query, tag and
+    /// change (`searchMatchesElsewhere(from:)`).
+    var elsewhereCountsCache: (key: TasksElsewhereKey, counts: [TasksElsewhereCount])?
     /// Where the page and the views are remembered across relaunch (L7).
     var memory: TasksPageMemory?
     /// Loaded pages of the Done log (lazily, a page at a time). Published
@@ -484,6 +482,8 @@ final class TasksPageModel: ObservableObject {
     /// an archived row shows its checklist from its archived family.
     private var doneLogChildren: [UUID: [TaskItem]] = [:]
     private var doneLogQuery: String?
+    /// The tag the loaded Done log pages were read for (T6).
+    private var doneLogTag: String?
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
 
@@ -582,7 +582,6 @@ final class TasksPageModel: ObservableObject {
             subtasks = doneLogChildren[task.id] ?? []
         }
         let open = expanded.contains(task.id)
-        let filesOpen = expandedFiles.contains(task.id)
         var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                             calendar: services.calendar(), locale: services.locale)
         // Find's matches are marked in the title (item 6, as on Done).
@@ -593,14 +592,14 @@ final class TasksPageModel: ObservableObject {
         // no paperclip, unless Earlier files remain; others as on main.
         let files = store.fileMigration.rowFiles(for: task)
         model.attachments = files.count
-        // The owner's panel design: the files as tiles (at most six).
-        model.tileFiles = Array(files.prefix(TasksPanelDesign.maxTiles))
+        // The owner's panel design: the files as tiles, all of them (the
+        // strip scrolls sideways when they overflow).
+        model.tileFiles = files
         return TasksListRow(
             id: task.id,
             model: model,
             status: task.listedStatus,
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
-            files: filesOpen ? files : [],
             due: task.dueDay
         )
     }
@@ -611,7 +610,6 @@ final class TasksPageModel: ObservableObject {
         let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
-        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
@@ -620,6 +618,8 @@ final class TasksPageModel: ObservableObject {
         let tag: String?
         let folded: Set<String>
         let nextEvent: TasksNextEvent?
+        /// A row is being dragged on Now: Today and Tomorrow show.
+        let dayDrag: Bool
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -631,7 +631,6 @@ final class TasksPageModel: ObservableObject {
         let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
-        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
@@ -645,6 +644,8 @@ final class TasksPageModel: ObservableObject {
         let folded: Set<String>
         /// The next event at the top of Today (Now only).
         let nextEvent: TasksNextEvent?
+        /// A row is being dragged on Now (its Today and Tomorrow show).
+        let dayDrag: Bool
         /// Whether this page is the one that answers the user (the tab
         /// shown, on screen): it gains and loses editors, focus and popovers
         /// with it (round 12).
@@ -653,10 +654,10 @@ final class TasksPageModel: ObservableObject {
 
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                  expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
+                  completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), nextEvent: nextEvent(on: tab),
-                  owner: self.tab == tab && isPageShown)
+                  dayDrag: tab == .now && dayDragLive, owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -679,9 +680,9 @@ final class TasksPageModel: ObservableObject {
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                          expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
+                          completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
-                          folded: folded(on: tab), nextEvent: nextEvent(on: tab))
+                          folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
@@ -709,6 +710,7 @@ final class TasksPageModel: ObservableObject {
             : TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, times: times, today: key.today,
                                       calendar: services.calendar(), locale: services.locale)
         if key.nextEvent != nil { groups = TasksPanelDesign.withTodayForNextEvent(groups) }
+        if key.dayDrag { groups = TasksPanelDesign.withDropDays(groups, today: key.today, calendar: services.calendar()) }
         let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for group in groups where !key.folded.contains(group.key) {
             var drawn: [TasksListRow] = []
@@ -719,8 +721,7 @@ final class TasksPageModel: ObservableObject {
                 if !group.rowsShowDate, row.model.due != nil {
                     var model = row.model
                     model.due = nil
-                    row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks,
-                                       files: row.files, due: row.due)
+                    row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks, due: row.due)
                 }
                 sections.open.append(row)
                 drawn.append(row)
@@ -805,7 +806,7 @@ final class TasksPageModel: ObservableObject {
     /// cleanup) and the Done log, grouped by the day they were finished,
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
-        let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
+        let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch, tag: tagFilter,
                           today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment,
                           folded: folded(on: .done))
         if let doneCache, doneCache.key == key { return doneCache.days }
@@ -821,6 +822,7 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let loaded: [UUID]
         let search: String
+        let tag: String?
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
         let folded: Set<String>
@@ -831,7 +833,8 @@ final class TasksPageModel: ObservableObject {
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let today = store.doneTodayTasks()
-        let finished = (today.filter { store.matchesItemSearch($0, query: query) } + doneLogTasks)
+        let tag = tagFilter
+        let finished = (today.filter { store.matchesItemSearch($0, query: query) && (tag.map($0.tags.contains) ?? true) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
         var days: [TasksDoneDay] = []
@@ -843,7 +846,7 @@ final class TasksPageModel: ObservableObject {
                 // The match is highlighted in the title (owner item 17).
                 var model = row.model
                 model.titleMatch = query
-                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks, files: row.files)
+                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks)
             }
             if current?.day == day {
                 current?.rows.append(row)
@@ -868,13 +871,14 @@ final class TasksPageModel: ObservableObject {
     func doneSearchCount() -> (matches: Int, total: Int)? {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return nil }
-        let key = DoneCountKey(revision: store.revision, query: query)
+        let key = DoneCountKey(revision: store.revision, query: query, tag: tagFilter)
         if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
-        let today = store.doneTodayTasks()
+        let tag = tagFilter
+        let today = store.doneTodayTasks().filter { tag.map($0.tags.contains) ?? true }
         var count: (matches: Int, total: Int)?
         if doneLogFailure == nil {
-            let logMatches = store.indexedDoneLogCount(matching: query)
-            let logTotal = store.indexedDoneLogCount()
+            let logMatches = store.indexedDoneLogCount(matching: query, tag: tag)
+            let logTotal = store.indexedDoneLogCount(tag: tag)
             count = (today.filter { store.matchesItemSearch($0, query: query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
@@ -884,6 +888,7 @@ final class TasksPageModel: ObservableObject {
     private struct DoneCountKey: Equatable {
         let revision: UInt64
         let query: String
+        let tag: String?
     }
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
@@ -892,19 +897,22 @@ final class TasksPageModel: ObservableObject {
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard doneLogQuery != query || doneLogRevision != store.revision else { return }
-        let limit = doneLogQuery == query ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
-        let page = store.indexedDoneLogPage(limit: limit, matching: query)
+        let tag = tagFilter
+        let same = doneLogQuery == query && doneLogTag == tag
+        guard !same || doneLogRevision != store.revision else { return }
+        let limit = same ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
+        let page = store.indexedDoneLogPage(limit: limit, matching: query, tag: tag)
         if let failure = page.failure {
             // Keep what the page showed for this search; a new search shows
             // what was read. Not marked as loaded, so Retry reads again.
-            if doneLogQuery != query { setDoneLog(page.tasks) }
+            if !same { setDoneLog(page.tasks) }
             doneLogCursor = page.next
             doneLogHasMore = true
             doneLogFailure = failure
             return
         }
         doneLogQuery = query
+        doneLogTag = tag
         doneLogRevision = store.revision
         setDoneLog(page.tasks)
         doneLogCursor = page.next
@@ -918,12 +926,12 @@ final class TasksPageModel: ObservableObject {
     func loadMoreDoneLog(limit: Int = doneLogPageSize) {
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        if doneLogQuery != query { loadDoneLogIfNeeded(); return }
+        if doneLogQuery != query || doneLogTag != tagFilter { loadDoneLogIfNeeded(); return }
         if doneLogRevision != store.revision {
             loadDoneLogIfNeeded()
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
-        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
+        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "", tag: doneLogTag)
         doneCountCache = nil
         // The indexed cursor supplies canonical IDs in completion order.
         // Existing families remain valid for this store revision.
@@ -943,7 +951,8 @@ final class TasksPageModel: ObservableObject {
     /// stopped (or the first page, when that was what failed).
     func retryDoneLog() {
         doneLogFailure = nil
-        if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogRevision != store.revision {
+        if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogTag != tagFilter
+            || doneLogRevision != store.revision {
             loadDoneLogIfNeeded()
         } else {
             loadMoreDoneLog()
@@ -1289,12 +1298,14 @@ final class TasksPageModel: ObservableObject {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            if let tag = tagFilter, !task.tags.contains(tag) { tagFilter = nil }
             if parent != nil { doneDetailID = task.id }
             unfoldDoneDay(of: task.id)
         } else if target == .done {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !store.matchesItemSearch(task, query: query) { doneSearch = "" }
+            if let tag = tagFilter, !task.tags.contains(tag) { tagFilter = nil }
             if parent != nil { doneDetailID = task.id }
             guard revealInDoneLog(task.id) else {
                 // Not loaded: nothing is selected or scrolled to until it is.
@@ -1351,7 +1362,7 @@ final class TasksPageModel: ObservableObject {
         loadDoneLogIfNeeded()
         if !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
            doneLogTasks.count < Self.doneRevealReach {
-            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "") ?? (Self.doneRevealReach - 1)
+            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "", tag: doneLogTag) ?? (Self.doneRevealReach - 1)
             let remaining = max(0, offset + 1 - doneLogTasks.count)
             let pages = max(1, (remaining + Self.doneRevealStep - 1) / Self.doneRevealStep)
             loadMoreDoneLog(limit: min(pages * Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
@@ -1720,7 +1731,6 @@ final class TasksPageModel: ObservableObject {
         selection.subtract(live)
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
-        expandedFiles.subtract(live)
         // Orchestrator decision 2026-10-23: deletion includes each task's writing.
         let withWriting = live.filter(noteOwners.contains).count
         if let title {
@@ -1994,8 +2004,8 @@ final class TasksPageModel: ObservableObject {
     var searchPlaceholder: String { String(localized: "Search done tasks") }
 
 
-    /// Return adds and keeps the bar focused; ⌘Return reveals the new
-    /// task and opens its inline files. Returns the new task.
+    /// Return adds and keeps the bar focused; ⌘Return also reveals the new
+    /// task. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
         guard composerFilesReadyForSubmission() else { return nil }
@@ -2014,7 +2024,6 @@ final class TasksPageModel: ObservableObject {
         selectOnly(nil)
         var revealed = false
         if openingPage {
-            expandedFiles.insert(task.id)
             revealed = show(task.id) == .shown
         }
         addedRequest = ScrollRequest(id: task.id)
@@ -2179,25 +2188,13 @@ final class TasksPageModel: ObservableObject {
 
     private var postedToastID: UUID?
 
-    /// "Show files" (⌘Return, the menu, VoiceOver, the files count): a task
-    /// in the lists opens or closes its files inline, under the row (A1);
-    /// a task in the Done log opens its read-only details here: its
-    /// subtasks and the files it kept.
+    /// Without the host's task pages (previews, tests): a task in the Done
+    /// log opens its read-only details here, its subtasks and the files it
+    /// kept. A task in the lists has nothing to open (its files show as
+    /// its tiles; Accepted 2026-11-01 "Task rows: no paperclip count").
     func openPage(_ id: UUID) {
-        if store.task(withID: id) != nil {
-            toggleFiles(id)
-        } else if store.listedTask(withID: id) != nil {
-            doneDetailID = id
-        }
-    }
-
-    /// The files list under a row opens or closes, apart from its subtasks.
-    func toggleFiles(_ id: UUID) {
-        if expandedFiles.contains(id) { expandedFiles.remove(id) } else { expandedFiles.insert(id) }
-    }
-
-    func setFilesExpanded(_ id: UUID, _ open: Bool) {
-        if open != expandedFiles.contains(id) { toggleFiles(id) }
+        guard store.task(withID: id) == nil, store.listedTask(withID: id) != nil else { return }
+        doneDetailID = id
     }
 
     /// The Done log task whose details are open.
