@@ -12,7 +12,10 @@ final class CalendarPageState: ObservableObject {
 
     func model(store: TaskStore) -> CalendarPageModel {
         if let model { return model }
-        let made = CalendarPageModel(store: store, source: Self.makeSource())
+        let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
+            guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
+            return try CalendarEventWriters.makeDefault(undoRoute: undo)
+        })
         model = made
         return made
     }

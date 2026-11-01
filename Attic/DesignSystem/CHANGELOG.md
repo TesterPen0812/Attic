@@ -1,3 +1,13 @@
+## 2026-11-01 · Adaptive Priority, Calendar and island
+
+Priority widens into four 26 pt choices in the composer. Calendar event
+rows open in place using the existing row selection fill, typography and
+motion; Calendar and Length choices share the row while Delete stays.
+Search folds to the selected week. The 27 pt navigation capsule gains a
+44 pt Today cell between its existing arrows, only away from today.
+Island context menus use the existing Attic menu and pull-out paths.
+Expansion uses the existing expand preset and is instant with Reduce Motion.
+
 ## 2026-11-01 · Native query editing
 
 The single-line search field owns a stable TextKit 1 field editor. Its first

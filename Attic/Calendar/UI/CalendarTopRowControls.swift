@@ -24,7 +24,7 @@ struct CalendarMonthTitle: View {
                     .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
             }
             .lineLimit(1)
-            .fixedSize()
+            .minimumScaleFactor(0.8)
             .frame(height: AtticControlSize.headerControl)
             .contentShape(Rectangle())
         }
@@ -46,13 +46,15 @@ struct CalendarMonthTitle: View {
     }
 }
 
-/// The Calendar page's own switch on the top row: ‹ › in one capsule before
-/// ••• (Accepted 2026-10-30), the top row's 27 pt glass with 21 pt cells in
-/// its 3 pt inset.
+/// ‹ Today › in one 27 pt capsule before ••• (Adaptive picks C3, Accepted
+/// 2026-11-01). Today folds away on today; the existing arrows keep their
+/// 21 pt cells and 3 pt inset.
 struct CalendarMonthArrows: View {
     let isWeekView: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
+    var todayShown = false
+    var onToday: () -> Void = {}
 
     @Environment(\.atticDesign) private var design
 
@@ -60,6 +62,20 @@ struct CalendarMonthArrows: View {
         HStack(spacing: CalendarDesign.arrowsGap) {
             arrow("chevron.left", label: isWeekView ? "Previous week" : "Previous month", action: onPrevious)
                 .accessibilityIdentifier("calendar-previous")
+            if todayShown {
+                Button(action: onToday) {
+                    Text("Today")
+                        .font(.system(size: CalendarDesign.navigationTodayFont, weight: .medium))
+                        .foregroundStyle(design.tokens.ink(.heading).color)
+                        .frame(width: CalendarDesign.navigationTodayWidth, height: AtticPageButtonMetrics.segment)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help(String(localized: "Go to today (⌘T)"))
+                .accessibilityIdentifier("calendar-today")
+                .transition(.opacity)
+            }
             arrow("chevron.right", label: isWeekView ? "Next week" : "Next month", action: onNext)
                 .accessibilityIdentifier("calendar-next")
         }
@@ -68,6 +84,8 @@ struct CalendarMonthArrows: View {
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticDesignCorners()
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("calendar-navigation")
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: todayShown)
     }
 
     private func arrow(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
