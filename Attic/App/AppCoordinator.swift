@@ -563,6 +563,7 @@ final class AppCoordinator: ObservableObject {
             // only the explicit start of a test scenario resets that state.
             canvasViewDefaults?.removeObject(forKey: CanvasViewStateArchive.defaultsKey)
         }
+        if AtticDraw.isEnabled, !runtime.isUnitTestHost { DrawPageModel.install(container: container) }
         let canvasSession = CanvasSession(
             store: canvasStore,
             viewStateDefaults: canvasViewDefaults

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import Combine
 import Observation
 import SwiftUI
@@ -151,7 +152,14 @@ final class DrawPageModel: ObservableObject {
 
     /// The one model the panel keeps for the session (the store owns Undo,
     /// so it outlives page and panel switches).
-    static let shared = DrawPageModel(store: DrawInMemoryStore())
+    /// The panel's page. The app installs the durable store at launch
+    /// (`install(container:)`); tests and previews keep the in-memory one.
+    private(set) static var shared = DrawPageModel(store: DrawInMemoryStore())
+
+    /// Called once by the app with its own container, only while the setting is on.
+    static func install(container: ModelContainer) {
+        shared = DrawPageModel(store: DrawPersistentStore(container: container))
+    }
 
     var viewport: DrawViewport { viewportState.viewport }
 
