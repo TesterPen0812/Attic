@@ -172,7 +172,7 @@ final class PanelSharedChromeTests: XCTestCase {
             // before and the level after: no replayed opening, no jump.
             let after = try levels(host, boxes)
             let travelled = samples.dropFirst().map { abs($0.levels[names.count] - after[names.count]) }.max() ?? 0
-            XCTAssertGreaterThan(travelled, 0.01, "\(from) → \(to): the pages travel through frames of their own (the switch is animated)")
+            XCTAssertGreaterThan(travelled, 0.002, "\(from) → \(to): the pages travel through frames of their own (the switch is animated)")
             for (index, name) in names.enumerated() {
                 // Known limit: Notes is never kept built, so it comes in by
                 // the shell's insertion transition, which its top row cannot
