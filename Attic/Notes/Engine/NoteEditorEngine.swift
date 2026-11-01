@@ -2793,6 +2793,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                         let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
                         style.textLists = lists
                         selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
+                    } else if attrs[.attachment] is NoteChecklistAttachment {
+                        // RTF splits even a reused outer list after a non-list
+                        // paragraph. Give the checklist its ancestors and an
+                        // empty native marker; its checkbox already draws one.
+                        let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
+                        lists = Array(lists.prefix(depth))
+                        while lists.count <= depth { lists.append(NSTextList(markerFormat: .init(rawValue: ""), options: 0)) }
+                        let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                        style.textLists = lists
+                        selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
                     } else { lists.removeAll() }
                     position = NSMaxRange(paragraph)
                 }

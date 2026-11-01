@@ -80,6 +80,23 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB13RTFOuterNumberingContinuesThroughNestedChecklist() throws {
+        var first = NoteBlock.text("outer", style: "number"); first.start = 7
+        var check = NoteBlock.checklist("nested"); check.indent = 1
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, check, .text("next", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertEqual(engine.listMarker(at: location(of: "next", in: engine)), .number("8."))
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.rtf]))
+        let copied = try XCTUnwrap(NSAttributedString(rtf: XCTUnwrap(board.data(forType: .rtf)), documentAttributes: nil))
+        let firstList = try XCTUnwrap((copied.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.textLists.first)
+        let next = (copied.string as NSString).range(of: "next").location
+        let nextList = try XCTUnwrap((copied.attribute(.paragraphStyle, at: next, effectiveRange: nil) as? NSParagraphStyle)?.textLists.first)
+        XCTAssertTrue(firstList === nextList, "a deeper checklist keeps the outer native list run")
+        XCTAssertEqual(nextList.startingItemNumber, 7)
+        XCTAssertEqual(nextList.startingItemNumber + copied.itemNumber(in: nextList, at: next) - 1, 8)
+    }
+
     func testB14RTFNestedNumberMarkersMatchTheEditor() throws {
         var letter = NoteBlock.text("letter", style: "number"); letter.indent = 1
         var roman = NoteBlock.text("roman", style: "number"); roman.indent = 2
