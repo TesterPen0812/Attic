@@ -20,8 +20,8 @@ struct TasksDayDrop: Equatable {
     /// The drop's place among the day's drawn rows.
     let index: Int
     /// The day's row it lands just before, or (at the end of its state's
-    /// rows) just after; both nil when its place in the day is decided by
-    /// its clock or it is the only one of its state there.
+    /// rows) just after; both nil when no row of its state is drawn at its
+    /// time there (its clock and state alone decide its place).
     let before: UUID?
     let after: UUID?
     /// The drop line's centre, in the page.
@@ -70,9 +70,14 @@ enum TasksDayDropFinder {
 
     /// The day under `y` (the last header or row starting above it), when
     /// it is not the dragged row's own day and takes drops: where the row
-    /// would land there. The status edge holds (started tasks stay
-    /// together), an untimed task lands after the day's timed ones, and a
-    /// timed one lands in clock order.
+    /// would land there, in the order the day is drawn in
+    /// (`TasksPanelDesign.groups`): by clock, an untimed row after the
+    /// timed ones (No date is not sorted by clock), and rows of the same
+    /// time in their states' order (started first), then by place. A timed
+    /// row lands in clock order, after its own state's rows of the same
+    /// time; an untimed one where it was dropped among the untimed rows of
+    /// its state (batch 3, Terra 4: the finder used to look for its state's
+    /// run across the whole day, which a clock-sorted day doesn't keep).
     static func target(at y: CGFloat, dragged: Row, ownKey: String?, days: [Day], today: DueDay) -> TasksDayDrop? {
         // The day under the pointer: the nearest header or row above it.
         var under: Int?
@@ -89,17 +94,21 @@ enum TasksDayDropFinder {
         guard day.key != ownKey, let change = change(for: day.kind, today: today) else { return nil }
         let rows = day.rows
         let rank = rank(dragged.status)
-        // The run of the dragged task's state in that day.
-        var lower = (rows.lastIndex { Self.rank($0.status) < rank }).map { $0 + 1 } ?? 0
-        var upper = rows.firstIndex { Self.rank($0.status) > rank } ?? rows.count
-        if upper < lower { upper = lower }
-        let timed = dragged.time != nil && change != .clear
-        if !timed, let last = rows[lower..<upper].lastIndex(where: { $0.time != nil }) {
-            lower = last + 1
-        }
+        // The day's clock as it is drawn (No date keeps its states' order).
+        let byClock = change != .clear
+        func clock(_ time: Int?) -> Int { byClock ? (time ?? 1440) : 0 }
+        let own = clock(dragged.time)
+        // The rows drawn at the dropped row's time: there its state, then
+        // its place, decide.
+        let tieStart = rows.firstIndex { clock($0.time) >= own } ?? rows.count
+        let tieEnd = rows.firstIndex { clock($0.time) > own } ?? rows.count
+        let tie = rows[tieStart..<max(tieStart, tieEnd)]
+        let lower = (tie.lastIndex { Self.rank($0.status) < rank }).map { $0 + 1 } ?? tieStart
+        let upper = max(lower, tie.firstIndex { Self.rank($0.status) > rank } ?? tie.endIndex)
+        let timed = byClock && dragged.time != nil
         var index: Int
-        if let time = dragged.time, timed {
-            index = rows[lower..<upper].firstIndex { ($0.time ?? 1440) > time } ?? upper
+        if timed {
+            index = upper
         } else {
             // Where it was dropped: before the first row whose middle is
             // below the pointer. Rows not built yet lie above the first
@@ -114,15 +123,16 @@ enum TasksDayDropFinder {
                 seenFrame = true
                 if frame.midY > y { index = offset; break }
             }
+            index = min(max(index, lower), upper)
         }
-        index = min(max(index, lower), upper)
+        // Its place among its state's rows drawn beside it (the order
+        // group): a timed one after those of its time, so the line and
+        // the landing agree on a tie.
         var before: UUID?, after: UUID?
-        if !timed {
-            if index < rows.count, rows[index].status == dragged.status {
-                before = rows[index].id
-            } else if index > 0, rows[index - 1].status == dragged.status {
-                after = rows[index - 1].id
-            }
+        if !timed, index < upper, rows[index].status == dragged.status {
+            before = rows[index].id
+        } else if index > lower, rows[index - 1].status == dragged.status {
+            after = rows[index - 1].id
         }
         let lineY: CGFloat
         if index < rows.count, let frame = rows[index].frame {
