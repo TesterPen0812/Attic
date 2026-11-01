@@ -93,9 +93,12 @@ final class CalendarPageHostedTests: XCTestCase {
             AtticTransparencySeam.systemOverride = nil
         }
         try withPage(events: [event("one", on: 29), event("two", on: 29, hour: 11)]) { page in
-            XCTAssertTrue(try XCTUnwrap(page.element("calendar-event-one")).accessibilityPerformPress?() ?? false)
+            let head = try XCTUnwrap((page.element("calendar-event-one") as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+            let point = page.window.convertPoint(fromScreen: CGPoint(x: head.maxX - 2, y: head.midY))
+            page.click(at: point, count: 1)
             page.settle()
             XCTAssertNotNil(page.element("calendar-event-open-one"))
+            XCTAssertNotNil(page.element("calendar-event-duration-one"))
             XCTAssertNil(page.element("calendar-event-delete-one"))
             XCTAssertNil(page.element("calendar-event-title-one"))
             XCTAssertTrue(try XCTUnwrap(page.element("calendar-event-two")).accessibilityPerformPress?() ?? false)

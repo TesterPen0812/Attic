@@ -222,15 +222,29 @@ struct CalendarEventRow: View {
     @ObservedObject var rows = CalendarEventRowState()
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var headFocused: Bool
 
     private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                Button { Task { await rows.toggle(event, on: day) } } label: { summary }
+                Button(action: toggleRow) { summary }
                     .buttonStyle(.plain)
+                    .focused($headFocused)
                     .focusEffectDisabled()
+                    .atticFocusRing(headFocused && keyboardFocusVisible, cornerRadius: CalendarDesign.eventRadius)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.isEmpty else { return .ignored }
+                        toggleRow()
+                        return .handled
+                    }
+                    .onKeyPress(.space, phases: .down) { press in
+                        guard press.modifiers.isEmpty else { return .ignored }
+                        toggleRow()
+                        return .handled
+                    }
                     .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
                     .accessibilityIdentifier("calendar-event-\(event.id)")
                 if isOpen, rows.canEdit {
@@ -258,6 +272,8 @@ struct CalendarEventRow: View {
         }
         .accessibilityElement(children: .contain)
     }
+
+    private func toggleRow() { Task { await rows.toggle(event, on: day) } }
 
     private var summary: some View {
         let tokens = design.tokens
@@ -297,6 +313,7 @@ struct CalendarEventRow: View {
             .padding(.vertical, CalendarDesign.eventPaddingY)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var editableHead: some View {
@@ -340,10 +357,13 @@ struct CalendarEventRow: View {
                         .accessibilityIdentifier("calendar-event-delete-\(event.id)")
                         .disabled(rows.busy)
                 } else {
-                    Text(verbatim: event.calendarTitle)
-                        .lineLimit(1)
+                    choiceLabel(event.calendarTitle, dot: event.colour)
+                    choiceLabel(event.isAllDay ? String(localized: "All day")
+                                : ComposerCard.length(Int(event.end.timeIntervalSince(event.start) / 60)))
+                        .accessibilityIdentifier("calendar-event-duration-\(event.id)")
                     Spacer(minLength: 0)
                     Button("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }
+                        .fixedSize()
                         .accessibilityIdentifier("calendar-event-open-\(event.id)")
                 }
             }
@@ -401,16 +421,18 @@ struct CalendarEventRow: View {
 
     private func choice(_ title: String, selected: Bool = false, dot: CalendarEventColour? = nil,
                         action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let dot { Circle().fill(dot.rgba.color).frame(width: 4, height: 4) }
-                Text(verbatim: title).lineLimit(1)
-            }
-            .padding(.horizontal, 6).frame(height: 18)
-            .background(AtticControlShape.shape(cornerRadius: 9, exponent: AtticShape.controlExponent)
-                .fill(design.tokens.ink(.heading).withAlpha(selected ? 0.06 : (rows.expandedChoice == nil ? 0.05 : 0)).color))
+        Button(action: action) { choiceLabel(title, selected: selected, dot: dot) }
+            .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func choiceLabel(_ title: String, selected: Bool = false, dot: CalendarEventColour? = nil) -> some View {
+        HStack(spacing: 4) {
+            if let dot { Circle().fill(dot.rgba.color).frame(width: 4, height: 4) }
+            Text(verbatim: title).lineLimit(1)
         }
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .padding(.horizontal, 6).frame(height: 18)
+        .background(AtticControlShape.shape(cornerRadius: 9, exponent: AtticShape.controlExponent)
+            .fill(design.tokens.ink(.heading).withAlpha(selected ? 0.06 : (rows.expandedChoice == nil ? 0.05 : 0)).color))
     }
 
     private static func endText(start: String, length: Int) -> String {
