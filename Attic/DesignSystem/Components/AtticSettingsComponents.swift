@@ -129,7 +129,7 @@ struct AtticContentCard<Content: View>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.contentCard, style: .continuous)
+        let shape = Self.shape
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(shape.fill(tokens.contentCard.color))
@@ -137,6 +137,11 @@ struct AtticContentCard<Content: View>: View {
             .overlay(shape.strokeBorder(tokens.contentCardRim.color, lineWidth: max(1 / displayScale, 0.5)))
             .atticControlProbe("Content card", id: probeID, expectedSize: nil, radius: AtticRadius.contentCard, expectedRadius: 10)
     }
+
+    /// The card's outline: a squircle (Shapes, Accepted 2026-10-30). Its
+    /// radius stays 10: it sits 8 pt inside the window's corner, so the
+    /// concentric rule, not the card radius, sets it.
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.contentCard, exponent: AtticShape.surfaceExponent) }
 }
 
 /// The page's 16 pt bold title, aligned with the traffic lights.
@@ -169,7 +174,7 @@ struct AtticSectionHeading: View {
 }
 
 /// A group card: recessed, flat, borderless (a 1 pt border only under
-/// Increase Contrast), radius 17. Rows are separated by dividers that run
+/// Increase Contrast), the card radius (24), squircle. Rows are separated by dividers that run
 /// from the text column to the right edge.
 struct AtticGroupCard<Content: View>: View {
     @ViewBuilder let content: Content
@@ -179,15 +184,23 @@ struct AtticGroupCard<Content: View>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
+        let shape = AtticGroupCardShape.shape
         VStack(spacing: 0) { content }
             .background(shape.fill(tokens.groupCard.color))
             .clipShape(shape)
             .overlay {
                 if let border = tokens.groupCardBorder { shape.strokeBorder(border.color, lineWidth: AtticHairline.contrastBorder) }
             }
-            .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: 17)
+            .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: AtticRadius.card)
     }
+}
+
+/// A group card's outline (and the Appearance preview's, a card of the
+/// same family).
+enum AtticGroupCardShape {
+    /// A card: the card radius, squircle (Shapes, Accepted 2026-10-30, and
+    /// "Rounder cards", 2026-10-31: 48 px for every card).
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.groupCard, exponent: AtticShape.surfaceExponent) }
 }
 
 /// The divider inside a group card.
@@ -715,7 +728,7 @@ struct AtticAppearancePreview<Panel: View>: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
+        let shape = AtticGroupCardShape.shape
         ZStack(alignment: .top) {
             AtticStandInWallpaper(dark: design.mode == .dark)
             // The miniature panel runs past the card's bottom: it fades out

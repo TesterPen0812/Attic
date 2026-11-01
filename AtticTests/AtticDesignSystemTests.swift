@@ -59,7 +59,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
         // Menus back to 32 design px, 16 pt (Accepted 2026-10-31, "Owner
         // notes on Attic Wave 2", updating "Shapes"' 28).
-        XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [16, 17, 10, 8, 10])
+        XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [16, 24, 10, 8, 10])
     }
 
     /// Phase 0's qualities in Direction A (2026-09-26): the pin and the
