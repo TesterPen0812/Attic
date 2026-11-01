@@ -38,6 +38,82 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(publications, 1)
     }
 
+    func testB01CopyOutRTFDKeepsFilesImagesAndPrivateFragmentWithoutEditing() throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = [("shot.png", "public.png", png), ("résumé.txt", "public.plain-text", Data("File bytes ¬".utf8))].map {
+            StagedNoteAttachment(id: UUID(), filename: $0.0, contentTypeIdentifier: $0.1,
+                byteCount: Int64($0.2.count), digest: NotePayloadDigest.sha256($0.2), data: $0.2)
+        }
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Before"),
+            .image(attachmentID: items[0].id, pixelWidth: 2, pixelHeight: 2), .text("Between"),
+            .file(attachmentID: items[1].id, filename: items[1].filename,
+                  contentTypeIdentifier: items[1].contentTypeIdentifier, byteCount: items[1].byteCount), .text("After")]), staged: items)
+        defer { engine.detachView() }
+        let before = engine.checkpointDocument(), undoCount = engine.history.undoOps.count
+        let nativeObjects = engine.objects().map { $0.0 }
+        let nativeWrappers = nativeObjects.map { $0.fileWrapper }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        view.setSelectedRange(NSRange(location: 0, length: engine.textStorage.length))
+        XCTAssertTrue(view.writablePasteboardTypes.contains(.rtfd))
+        XCTAssertTrue(view.writeSelection(to: board, types: view.writablePasteboardTypes))
+        let copied = try XCTUnwrap(NSAttributedString(rtfd: XCTUnwrap(board.data(forType: .rtfd)), documentAttributes: nil))
+        var wrappers: [FileWrapper] = []
+        copied.enumerateAttribute(.attachment, in: NSRange(location: 0, length: copied.length)) { value, _, _ in
+            if let wrapper = (value as? NSTextAttachment)?.fileWrapper { wrappers.append(wrapper) }
+        }
+        XCTAssertEqual(wrappers.count, 2)
+        for item in items {
+            XCTAssertTrue(wrappers.contains { $0.regularFileContents == item.data && $0.preferredFilename == item.filename })
+        }
+        for word in ["Title", "Before", "Between", "After"] { XCTAssertTrue(copied.string.contains(word)) }
+        let privateCopy = try XCTUnwrap(NoteContentCodec.decode(XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType)), context: .fragment).document)
+        XCTAssertEqual(privateCopy.attachmentIDs, before.attachmentIDs)
+        XCTAssertEqual(engine.checkpointDocument(), before)
+        XCTAssertEqual(engine.history.undoOps.count, undoCount)
+        XCTAssertTrue(zip(nativeObjects, engine.objects().map { $0.0 }).allSatisfy { $0 === $1 })
+        for (object, wrapper) in zip(nativeObjects, nativeWrappers) {
+            XCTAssertEqual(object.fileWrapper?.regularFileContents, wrapper?.regularFileContents, "copy must not alter live attachment bytes")
+            XCTAssertEqual(object.fileWrapper?.preferredFilename, wrapper?.preferredFilename, "copy must not alter live filenames")
+        }
+    }
+
+    func testB13RTFOuterNumberingContinuesThroughNestedChecklist() throws {
+        var first = NoteBlock.text("outer", style: "number"); first.start = 7
+        var check = NoteBlock.checklist("nested"); check.indent = 1
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, check, .text("next", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertEqual(engine.listMarker(at: location(of: "next", in: engine)), .number("8."))
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.rtf]))
+        let copied = try XCTUnwrap(NSAttributedString(rtf: XCTUnwrap(board.data(forType: .rtf)), documentAttributes: nil))
+        let firstList = try XCTUnwrap((copied.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.textLists.first)
+        let next = (copied.string as NSString).range(of: "next").location
+        let nextList = try XCTUnwrap((copied.attribute(.paragraphStyle, at: next, effectiveRange: nil) as? NSParagraphStyle)?.textLists.first)
+        XCTAssertTrue(firstList === nextList, "a deeper checklist keeps the outer native list run")
+        XCTAssertEqual(nextList.startingItemNumber, 7)
+        XCTAssertEqual(nextList.startingItemNumber + copied.itemNumber(in: nextList, at: next) - 1, 8)
+    }
+
+    func testB14RTFNestedNumberMarkersMatchTheEditor() throws {
+        var letter = NoteBlock.text("letter", style: "number"); letter.indent = 1
+        var roman = NoteBlock.text("roman", style: "number"); roman.indent = 2
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("outer", style: "number"), letter, roman]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertEqual(engine.listMarker(at: location(of: "letter", in: engine)), .letter("a."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "roman", in: engine)), .roman("i."))
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.rtf]))
+        let copied = try XCTUnwrap(NSAttributedString(rtf: XCTUnwrap(board.data(forType: .rtf)), documentAttributes: nil))
+        for (word, marker) in [("outer", "1"), ("letter", "a."), ("roman", "i.")] {
+            let at = (copied.string as NSString).range(of: word).location
+            let list = try XCTUnwrap((copied.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle)?.textLists.last)
+            XCTAssertEqual(list.marker(forItemNumber: 1), marker)
+        }
+    }
+
     func testB02RichCopyPreservesNumberedListStartsAndRestarts() throws {
         var first = NoteBlock.text("first", style: "number"); first.start = 7
         var restart = NoteBlock.text("restart", style: "number"); restart.start = 12

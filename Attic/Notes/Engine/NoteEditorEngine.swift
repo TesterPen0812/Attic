@@ -2736,8 +2736,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // Only public RTF needs the visible ordinal. Private fragments keep
         // implicit starts so copies and moves continue the destination's list.
         let rtfVisibleStart: Int?
-        if case let .number(marker) = listMarker(at: range.location) {
-            rtfVisibleStart = Int(marker.dropLast())
+        if paragraphStyle(at: range.location) == .number {
+            rtfVisibleStart = numberedOrdinal(at: lineRange(at: range.location).location, indent: indentAt(range.location) ?? 0)
         } else { rtfVisibleStart = nil }
         return writeSelection(selected, to: pasteboard, types: types, rtfVisibleStart: rtfVisibleStart)
     }
@@ -2770,7 +2770,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 // A fragment's first paragraph is body text, not a title.
                 let body = NoteDocument(blocks: [.text("")] + fragment.blocks)
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
-            case .rtf:
+            case .rtf, .rtfd:
                 let selected = NSMutableAttributedString(attributedString: text)
                 if let rtfVisibleStart {
                     let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
@@ -2786,13 +2786,25 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     let attrs = selected.attributes(at: position, effectiveRange: nil)
                     if let kind = attrs[.noteBlockStyle] as? String, ["number", "bullet"].contains(kind) {
                         let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
-                        let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                        let marker: NSTextList.MarkerFormat = kind == "number"
+                            ? (depth == 1 ? .init(rawValue: NSTextList.MarkerFormat.lowercaseLatin.rawValue + ".")
+                               : (depth == 2 ? .init(rawValue: NSTextList.MarkerFormat.lowercaseRoman.rawValue + ".") : .decimal)) : .disc
                         if lists.count > depth + 1 { lists = Array(lists.prefix(depth + 1)) }
                         while lists.count <= depth { lists.append(NSTextList(markerFormat: marker, options: 0)) }
                         if lists[depth].markerFormat != marker || attrs[.noteListStart] != nil {
                             lists[depth] = NSTextList(markerFormat: marker, options: 0)
                             lists[depth].startingItemNumber = attrs[.noteListStart] as? Int ?? 1
                         }
+                        let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                        style.textLists = lists
+                        selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
+                    } else if attrs[.attachment] is NoteChecklistAttachment {
+                        // RTF splits even a reused outer list after a non-list
+                        // paragraph. Give the checklist its ancestors and an
+                        // empty native marker; its checkbox already draws one.
+                        let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
+                        lists = Array(lists.prefix(depth))
+                        while lists.count <= depth { lists.append(NSTextList(markerFormat: .init(rawValue: ""), options: 0)) }
                         let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
                         style.textLists = lists
                         selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
@@ -2808,9 +2820,31 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     selected.replaceCharacters(in: part, with: NSAttributedString(string: NoteTableText.tsv(table),
                                                                                   attributes: style.bodyAttributes))
                 }
+                if type == .rtfd {
+                    // Export copies of native attachments. The live editor's
+                    // objects, stored bytes and private fragment stay untouched.
+                    var attachments: [(NSRange, UUID?, String)] = []
+                    selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in
+                        if let image = value as? NoteImageAttachment {
+                            attachments.append((part, image.attachmentID, image.filename))
+                        } else if let file = value as? NoteFileAttachment {
+                            attachments.append((part, file.attachmentID, file.filename))
+                        }
+                    }
+                    for (part, id, filename) in attachments.reversed() {
+                        if let id, let item = staged[id] ?? imageProvider?.attachmentBytes(forAttachment: id) {
+                            let wrapper = FileWrapper(regularFileWithContents: item.data)
+                            wrapper.preferredFilename = (item.filename as NSString).lastPathComponent
+                            selected.addAttribute(.attachment, value: NSTextAttachment(fileWrapper: wrapper), range: part)
+                        } else {
+                            selected.replaceCharacters(in: part, with: "[\(filename.isEmpty ? "Image" : filename)]")
+                        }
+                    }
+                }
+                let documentType: NSAttributedString.DocumentType = type == .rtfd ? .rtfd : .rtf
                 if let data = try? selected.data(from: NSRange(location: 0, length: selected.length),
-                                                 documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    wrote = pasteboard.setData(data, forType: .rtf) || wrote
+                                                 documentAttributes: [.documentType: documentType]) {
+                    wrote = pasteboard.setData(data, forType: type) || wrote
                 }
             default:
                 break

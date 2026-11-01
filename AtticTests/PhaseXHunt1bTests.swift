@@ -1715,11 +1715,14 @@ extension PhaseXHunt5Tests {
         for identifier in ["Europe/London", "America/New_York", "Pacific/Auckland", "Asia/Kathmandu"] {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = try XCTUnwrap(TimeZone(identifier: identifier))
-            var now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 23, minute: 30)))
+            let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: Date()))
+            var now = try XCTUnwrap(calendar.date(bySettingHour: 23, minute: 30, second: 0, of: tomorrow))
             let store = try makeTestStore(now: { now })
             let task = try XCTUnwrap(store.create(title: "Done")); XCTAssertTrue(store.markDone(task))
             let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
             service.start()
+            let initialTimer: Timer = try field("timer", in: service)
+            XCTAssertGreaterThan(initialTimer.fireDate, Date(), "the fixture must not arm a native timer in the real past")
             for step in 0..<24 {
                 let oldTimer: Timer = try field("timer", in: service)
                 let name = notifications[step % notifications.count]
