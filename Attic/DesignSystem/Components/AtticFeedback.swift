@@ -51,11 +51,24 @@ struct AtticUndoToast: View {
         .padding(.leading, AtticToastMetrics.leadingPadding)
         .padding(.trailing, AtticControlSize.capsuleInset)
         .frame(height: height)
-        .background(AtticPopoverBackground(cornerRadius: radius, exponent: nil))
+        .background(AtticPopoverBackground(cornerRadius: radius, exponent: Self.shape.exponent))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
         .atticAnnounceErrors(isFailure ? [message] : [])
         .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: AtticRadius.control(height: height))
+    }
+
+    /// The toast's outline (and the notice's, raised like it): a wide
+    /// control, rounded by half its height.
+    static var shape: AtticControlOutline {
+        AtticControlOutline(cornerRadius: AtticRadius.control(height: AtticControlSize.toastHeight), exponent: nil)
+    }
+
+    /// The Undo (or Retry) chip inside it (or inside the status pill),
+    /// concentric.
+    static func buttonShape(outer: CGFloat = AtticUndoToast.shape.cornerRadius) -> AtticControlOutline {
+        let inner = AtticRadius.nested(outer: outer, gap: AtticControlSize.capsuleInset) ?? outer
+        return AtticControlOutline(cornerRadius: inner, exponent: shape.exponent)
     }
 }
 
@@ -84,14 +97,13 @@ private struct AtticToastButton: View {
     }
 
     private var button: some View {
-        let inner = AtticRadius.nested(outer: outerRadius, gap: AtticControlSize.capsuleInset) ?? outerRadius
         let hover = forced == .hover || hovered
         return Button(action: action) {
             AtticText(verbatim: title, style: .controlLabel, ink: .heading)
                 .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: AtticControlSize.smallHeight)
-                .background(RoundedRectangle(cornerRadius: inner, style: .continuous).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
-                .contentShape(RoundedRectangle(cornerRadius: inner, style: .continuous))
+                .background(AtticUndoToast.buttonShape(outer: outerRadius).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
+                .contentShape(AtticUndoToast.buttonShape(outer: outerRadius))
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
@@ -131,7 +143,7 @@ struct AtticNotice: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(message)
             if let actionTitle, let onAction {
-                AtticNoticeButton(title: actionTitle, outerRadius: radius, action: onAction)
+                AtticNoticeButton(title: actionTitle, action: onAction)
             }
             AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
                 .accessibilityIdentifier("panel-error-dismiss")
@@ -140,7 +152,7 @@ struct AtticNotice: View {
         .padding(.trailing, AtticControlSize.capsuleInset)
         .padding(.vertical, AtticControlSize.capsuleInset)
         .frame(minHeight: AtticControlSize.toastHeight)
-        .background(AtticPopoverBackground(cornerRadius: radius))
+        .background(AtticPopoverBackground(cornerRadius: radius, exponent: AtticUndoToast.shape.exponent))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
         .atticAnnounceErrors([message])
@@ -150,7 +162,6 @@ struct AtticNotice: View {
 
 private struct AtticNoticeButton: View {
     let title: String
-    let outerRadius: CGFloat
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -158,14 +169,13 @@ private struct AtticNoticeButton: View {
     @State private var hovered = false
 
     var body: some View {
-        let inner = AtticRadius.nested(outer: outerRadius, gap: AtticControlSize.capsuleInset) ?? outerRadius
         let hover = forced == .hover || hovered
         Button(action: action) {
             AtticText(verbatim: title, style: .controlLabel, ink: .heading)
                 .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: AtticControlSize.smallHeight)
-                .background(RoundedRectangle(cornerRadius: inner, style: .continuous).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
-                .contentShape(RoundedRectangle(cornerRadius: inner, style: .continuous))
+                .background(AtticUndoToast.buttonShape().fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
+                .contentShape(AtticUndoToast.buttonShape())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -364,11 +374,14 @@ struct AtticCarryPreview: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// The lifted card's outline.
+    static var cardShape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.tile, exponent: nil) }
+
     @ViewBuilder
     private var card: some View {
         let tokens = design.tokens
         let m = AtticDragMetrics.self
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.tile, style: .continuous)
+        let shape = Self.cardShape
         Group {
             switch item {
             case let .task(title, state, priority):
@@ -431,7 +444,7 @@ struct AtticReorderLift<Content: View>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.highlight, style: .continuous)
+        let shape = AtticReorderLiftModifier.shape
         content
             .background {
                 ZStack {
@@ -663,6 +676,10 @@ struct AtticReorderLiftModifier: ViewModifier {
     /// its shadow go as it settles, drawn apart from the card).
     var shadow = true
 
+    /// The lifted card's outline: the drag tile a task leaves as (in the
+    /// panel, the image the drag carries and the card springing home).
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.highlight, exponent: nil) }
+
     /// The lifted card's fill: the panel's base colour, fully opaque.
     static func fill(design: AtticDesignContext) -> AtticRGBA {
         let model = design.tokens.panel
@@ -673,7 +690,7 @@ struct AtticReorderLiftModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.highlight, style: .continuous)
+        let shape = Self.shape
         content
             .background {
                 // Only the background changes: `content` keeps its identity.

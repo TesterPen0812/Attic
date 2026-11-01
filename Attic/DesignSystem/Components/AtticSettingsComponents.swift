@@ -129,7 +129,7 @@ struct AtticContentCard<Content: View>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.contentCard, style: .continuous)
+        let shape = Self.shape
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(shape.fill(tokens.contentCard.color))
@@ -137,6 +137,9 @@ struct AtticContentCard<Content: View>: View {
             .overlay(shape.strokeBorder(tokens.contentCardRim.color, lineWidth: max(1 / displayScale, 0.5)))
             .atticControlProbe("Content card", id: probeID, expectedSize: nil, radius: AtticRadius.contentCard, expectedRadius: 10)
     }
+
+    /// The card's outline.
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.contentCard, exponent: nil) }
 }
 
 /// The page's 16 pt bold title, aligned with the traffic lights.
@@ -179,7 +182,7 @@ struct AtticGroupCard<Content: View>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
+        let shape = AtticGroupCardShape.shape
         VStack(spacing: 0) { content }
             .background(shape.fill(tokens.groupCard.color))
             .clipShape(shape)
@@ -188,6 +191,12 @@ struct AtticGroupCard<Content: View>: View {
             }
             .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: 17)
     }
+}
+
+/// A group card's outline (and the Appearance preview's, a card of the
+/// same family).
+enum AtticGroupCardShape {
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.groupCard, exponent: nil) }
 }
 
 /// The divider inside a group card.
@@ -715,7 +724,7 @@ struct AtticAppearancePreview<Panel: View>: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
+        let shape = AtticGroupCardShape.shape
         ZStack(alignment: .top) {
             AtticStandInWallpaper(dark: design.mode == .dark)
             // The miniature panel runs past the card's bottom: it fades out

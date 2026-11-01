@@ -199,7 +199,7 @@ struct AtticNoteFileCard: View {
         let m = AtticNoteObjectMetrics.self
         let size = CGSize(width: width, height: m.blockCardHeight)
         let placement = AtticNoteObjectLayout.placement(of: face, in: size)
-        let shape = RoundedRectangle(cornerRadius: m.blockRadius, style: .continuous)
+        let shape = m.blockShape
         let nameX = m.cardPadding + m.cardIconSlot + m.cardIconGap
         let actions = AtticNoteObjectLayout.headerActions(in: size)
         return ZStack(alignment: .topLeading) {
@@ -241,7 +241,7 @@ struct AtticNoteFileCard: View {
         let m = AtticNoteObjectMetrics.self
         let size = CGSize(width: width, height: AtticNoteObjectMetrics.cardHeight)
         let placement = AtticNoteObjectLayout.placement(of: face, in: size)
-        let shape = RoundedRectangle(cornerRadius: m.cardRadius, style: .continuous)
+        let shape = m.cardShape
         let nameX = m.cardPadding + m.cardIconSlot + m.cardIconGap
         return ZStack(alignment: .topLeading) {
             shape.fill(design.tokens.recessed.color)
@@ -321,7 +321,7 @@ struct AtticNoteCarryCard: View {
 
     var body: some View {
         let m = AtticNoteObjectMetrics.self
-        let shape = RoundedRectangle(cornerRadius: m.cardRadius, style: .continuous)
+        let shape = m.cardShape
         let tokens = design.tokens
         HStack(spacing: m.cardIconGap) {
             AtticIcon(systemName: systemImage, size: 17, weight: .regular, ink: .icon)

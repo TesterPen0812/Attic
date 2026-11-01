@@ -133,7 +133,7 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         selectionView.show(objectRect: rect, resizable: resizable,
                            // The object's own corners (F-06b): the card's 10;
                            // a picture's 8 (U-24: the same rounded ring).
-                           cornerRadius: (object as? NoteFileAttachment).map { $0.isBlockCard ? AtticNoteObjectMetrics.blockRadius : AtticNoteObjectMetrics.cardRadius } ?? AtticRadius.image,
+                           shape: (object as? NoteFileAttachment).map { $0.isBlockCard ? AtticNoteObjectMetrics.blockShape : AtticNoteObjectMetrics.cardShape },
                            in: textView)
         if selectionView.isHidden || selectionView.alphaValue < 1 { fade(selectionView, in: true) }
     }
@@ -409,11 +409,13 @@ final class NoteObjectSelectionView: NSView {
         return handle.frame.contains(local) ? handle : nil
     }
 
-    private var cornerRadius: CGFloat = AtticRadius.image
+    /// The card's outline; nil: a picture's plain rounded corners
+    /// (`AtticRadius.image`, as `NoteImageAttachment` clips it).
+    private var shape: AtticControlOutline?
 
-    func show(objectRect: CGRect, resizable: Bool, cornerRadius: CGFloat, in view: NSView) {
+    func show(objectRect: CGRect, resizable: Bool, shape: AtticControlOutline?, in view: NSView) {
         objectWidth = objectRect.width
-        self.cornerRadius = cornerRadius
+        self.shape = shape
         handle.isHidden = !resizable
         place(objectRect)
     }
@@ -430,12 +432,17 @@ final class NoteObjectSelectionView: NSView {
         needsDisplay = true
     }
 
-    /// The ring's path: the object's own rounded rectangle, the stroke
-    /// wholly inside its edge (F-06b).
-    static func ringPath(objectRect: CGRect, cornerRadius: CGFloat) -> NSBezierPath {
+    /// The ring's path: the object's own outline, the stroke wholly inside
+    /// its edge (F-06b).
+    static func ringPath(objectRect: CGRect, shape: AtticControlOutline?) -> NSBezierPath {
         let width = AtticNoteObjectMetrics.ringWidth
-        let path = NSBezierPath(roundedRect: objectRect.insetBy(dx: width / 2, dy: width / 2),
-                                xRadius: max(0, cornerRadius - width / 2), yRadius: max(0, cornerRadius - width / 2))
+        let path: NSBezierPath
+        if let shape {
+            path = NSBezierPath(cgPath: shape.inset(by: width / 2).path(in: objectRect).cgPath)
+        } else {
+            let radius = max(0, AtticRadius.image - width / 2)
+            path = NSBezierPath(roundedRect: objectRect.insetBy(dx: width / 2, dy: width / 2), xRadius: radius, yRadius: radius)
+        }
         path.lineWidth = width
         return path
     }
@@ -443,7 +450,7 @@ final class NoteObjectSelectionView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let room = AtticNoteObjectMetrics.resizeHitTarget / 2
         color.setStroke()
-        Self.ringPath(objectRect: bounds.insetBy(dx: room, dy: room), cornerRadius: cornerRadius).stroke()
+        Self.ringPath(objectRect: bounds.insetBy(dx: room, dy: room), shape: shape).stroke()
     }
 }
 
