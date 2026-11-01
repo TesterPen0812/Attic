@@ -26,6 +26,40 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+    func testB01ReopenedStoredFilesCopyAsRTFDWithoutSavingTheNote() async throws {
+        let image = try realImage(), data = Data("Stored file bytes ¬".utf8)
+        let file = StagedNoteAttachment(id: UUID(), filename: "stored.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        let document = NoteDocument(blocks: [.text("Stored"), .image(attachmentID: image.id, pixelWidth: 2, pixelHeight: 2),
+            .file(attachmentID: file.id, filename: file.filename, contentTypeIdentifier: file.contentTypeIdentifier, byteCount: file.byteCount)])
+        let (id, _) = try store.createDocumentNote(id: UUID(), document: document, staged: [image, file]).get()
+        let coldStore = trackAttachmentReconciliation(of: NoteStore(container: store.container,
+            persist: { [gate] in try gate!.save($0) }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let controller = NotesPageController(store: coldStore, journal: NoteDraftJournal(directory: directory), defaults: nil)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let engine = try XCTUnwrap(controller.active?.engine)
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        XCTAssertTrue(engine.staged.isEmpty, "copy must use the reopened session's durable bytes")
+        let saved = try XCTUnwrap(coldStore.note(withID: id)), content = saved.content, revision = saved.revisionID
+        let saves = gate.saveCount, before = engine.checkpointDocument()
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        view.setSelectedRange(NSRange(location: 0, length: engine.textStorage.length))
+        XCTAssertTrue(view.writeSelection(to: board, types: view.writablePasteboardTypes))
+        let copied = try XCTUnwrap(NSAttributedString(rtfd: XCTUnwrap(board.data(forType: .rtfd)), documentAttributes: nil))
+        var payloads: [Data] = []
+        copied.enumerateAttribute(.attachment, in: NSRange(location: 0, length: copied.length)) { value, _, _ in
+            if let bytes = (value as? NSTextAttachment)?.fileWrapper?.regularFileContents { payloads.append(bytes) }
+        }
+        XCTAssertEqual(payloads.count, 2)
+        XCTAssertTrue(payloads.contains(image.data))
+        XCTAssertTrue(payloads.contains(file.data))
+        XCTAssertEqual(saved.content, content)
+        XCTAssertEqual(saved.revisionID, revision)
+        XCTAssertEqual(gate.saveCount, saves, "copy never saves or changes the source")
+        XCTAssertEqual(engine.checkpointDocument(), before)
+    }
+
     func testFL3NoteSwitchEndsThePreviousTypingVisit() async throws {
         try await checkFL3TypingVisits(leaving: .openNote)
     }

@@ -2765,7 +2765,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 // A fragment's first paragraph is body text, not a title.
                 let body = NoteDocument(blocks: [.text("")] + fragment.blocks)
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
-            case .rtf:
+            case .rtf, .rtfd:
                 let selected = NSMutableAttributedString(attributedString: text)
                 if let rtfVisibleStart {
                     let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
@@ -2803,9 +2803,31 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     selected.replaceCharacters(in: part, with: NSAttributedString(string: NoteTableText.tsv(table),
                                                                                   attributes: style.bodyAttributes))
                 }
+                if type == .rtfd {
+                    // Export copies of native attachments. The live editor's
+                    // objects, stored bytes and private fragment stay untouched.
+                    var attachments: [(NSRange, UUID?, String)] = []
+                    selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in
+                        if let image = value as? NoteImageAttachment {
+                            attachments.append((part, image.attachmentID, image.filename))
+                        } else if let file = value as? NoteFileAttachment {
+                            attachments.append((part, file.attachmentID, file.filename))
+                        }
+                    }
+                    for (part, id, filename) in attachments.reversed() {
+                        if let id, let item = staged[id] ?? imageProvider?.attachmentBytes(forAttachment: id) {
+                            let wrapper = FileWrapper(regularFileWithContents: item.data)
+                            wrapper.preferredFilename = (item.filename as NSString).lastPathComponent
+                            selected.addAttribute(.attachment, value: NSTextAttachment(fileWrapper: wrapper), range: part)
+                        } else {
+                            selected.replaceCharacters(in: part, with: "[\(filename.isEmpty ? "Image" : filename)]")
+                        }
+                    }
+                }
+                let documentType: NSAttributedString.DocumentType = type == .rtfd ? .rtfd : .rtf
                 if let data = try? selected.data(from: NSRange(location: 0, length: selected.length),
-                                                 documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    wrote = pasteboard.setData(data, forType: .rtf) || wrote
+                                                 documentAttributes: [.documentType: documentType]) {
+                    wrote = pasteboard.setData(data, forType: type) || wrote
                 }
             default:
                 break
