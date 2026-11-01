@@ -358,6 +358,53 @@ final class PanelIslandPositionTests: XCTestCase {
         }
     }
 
+    /// Genie: a spot chosen while the panel is hidden is where the reveal's
+    /// snapshot draws the island. A snapshot prepared before the change is
+    /// stale (its key holds the stand-in's frame and spot), and the stand-in
+    /// is placed at the new spot before the reveal prepares its snapshot.
+    func testAGenieRevealAfterASpotChangeSnapshotsTheIslandAtTheNewSpot() throws {
+        for warm in [false, true] {
+            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel, settings in
+                let screen = try XCTUnwrap(controller.currentScreen)
+                let container = try content(panel)
+                let genie = container.genieForTesting
+                spin(until: { !container.isIslandStandInShown })
+                @MainActor func items() -> [CGPoint] {
+                    let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: .topRight, spot: settings.islandSpot)
+                    return L.pages.indices.map { index in
+                        let item = local(L.itemFrame(index, in: island), in: panel)
+                        return CGPoint(x: item.midX, y: item.midY)
+                    }
+                }
+                for spot in [PanelIslandSpot.openSideMiddle, .acrossOpenEnd, .screenSideCornerEnd] {
+                    let note = "\(warm ? "warm" : "cold"), to \(spot)"
+                    var hidden = false
+                    _ = controller.requestHide { hidden = $0 == .hidden }
+                    spin(until: { hidden })
+                    XCTAssertTrue(hidden, note)
+                    let old = items()
+                    // A snapshot from before the change must not be used.
+                    container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil)
+                    settings.islandSpot = spot
+                    spin(0.05)
+                    if warm { container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil) }
+                    XCTAssertTrue(controller.show(on: screen, corner: .topRight), note)
+                    XCTAssertTrue(container.isIslandStandInShown, "\(note): revealing")
+                    for (index, point) in items().enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertGreaterThan(alpha, 60, "\(note): item \(index) at the new spot")
+                    }
+                    for (index, point) in old.enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertLessThan(alpha, 20, "\(note): nothing where item \(index) was")
+                    }
+                    spin(until: { !container.isIslandStandInShown })
+                    XCTAssertEqual(controller.islandWindowsForTesting.spot, spot, note)
+                }
+            }
+        }
+    }
+
     /// The dismissing swipe moves both under the fingers, about the corner
     /// of the two, and springs both back.
     func testTheSwipeMovesBothAndSpringsBack() throws {

@@ -1170,7 +1170,7 @@ final class AtticPanelContentContainer: NSView {
 
     /// Puts the stand-in exactly over the island's window: beside the
     /// surface on `corner`'s side, with the window's clear margin.
-    func placeIslandStandIn(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) {
+    func placeIslandStandIn(corner: ScreenCorner, spot: PanelIslandSpot) {
         islandSpot = spot
         guard let view = islandStandIn else { return }
         let capsule = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner, spot: spot)
@@ -1480,6 +1480,9 @@ final class AtticPanelContentContainer: NSView {
         var surfaceRect: CGRect
         /// Where the island's stand-in is (the snapshot draws it there).
         var islandRect: CGRect?
+        /// The island's spot (Accepted 2026-11-01 "Island position"): a
+        /// new spot draws it standing or flat.
+        var islandSpot: PanelIslandSpot
         var dark: Bool
         var surface: PanelGenieSurface?
         var contentGeneration: Int
@@ -1503,7 +1506,7 @@ final class AtticPanelContentContainer: NSView {
 
     private func snapshotKey(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) -> PreparedSnapshotKey {
         PreparedSnapshotKey(
-            mode: mode, bounds: bounds.size, surfaceRect: hostingView.frame, islandRect: islandStandIn?.frame,
+            mode: mode, bounds: bounds.size, surfaceRect: hostingView.frame, islandRect: islandStandIn?.frame, islandSpot: islandSpot,
             dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
             surface: surface, contentGeneration: contentGeneration
         )
