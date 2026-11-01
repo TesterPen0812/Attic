@@ -60,7 +60,8 @@ final class AdaptiveFindTests: XCTestCase {
     private func spoken(_ identifier: String, in host: NSView) -> String? {
         guard let element = element(identifier, in: host) else { return nil }
         if let label = element.accessibilityLabel?(), !label.isEmpty { return label }
-        return element.accessibilityValue?() as? String
+        guard let object = element as? NSObject, object.responds(to: NSSelectorFromString("accessibilityValue")) else { return nil }
+        return object.value(forKey: "accessibilityValue") as? String
     }
 
     /// The real panel on Notes with one note open whose body says "quote"
