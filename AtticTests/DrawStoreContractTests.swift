@@ -7,6 +7,19 @@ import XCTest
 final class DrawStoreContractTests: XCTestCase {
     func testMemoryContract() throws { try contract(DrawInMemoryStore()) }
 
+    func testTagsUseAtticsSharedRules() throws {
+        try tagContract(DrawInMemoryStore())
+    }
+
+    func tagContract(_ store: any DrawStoreProtocol) throws {
+        let board = store.create()
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("tagged"))]), on: board.id).isSaved)
+        XCTAssertTrue(store.perform(.tags(["##Work__PLAN !!!", "work plan", "???"]), on: board.id).isSaved)
+        XCTAssertEqual(try store.library().first?.tags, ["work-plan"])
+        XCTAssertEqual(try store.search("#WORK_PLAN").map(\.canvas.id), [board.id])
+        XCTAssertTrue(try store.search("#???").isEmpty)
+    }
+
     // The persistent implementation runs this exact contract in the next slice.
     func contract(_ store: any DrawStoreProtocol) throws {
         XCTAssertTrue(try store.library().isEmpty)

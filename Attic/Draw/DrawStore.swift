@@ -54,7 +54,9 @@ class DrawStore: DrawStoreProtocol {
 
     func search(_ query: String) throws -> [DrawSearchMatch] {
         let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
-        let tags = tokens.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()).lowercased() }
+        let rawTags = tokens.filter { $0.hasPrefix("#") }
+        let tags = rawTags.compactMap(AtticTag.normalize)
+        guard tags.count == rawTags.count else { return [] }
         let words = tokens.filter { !$0.hasPrefix("#") }
         return try library().compactMap { canvas in
             guard tags.allSatisfy({ tag in canvas.tags.contains { $0.lowercased() == tag } }),
@@ -112,7 +114,7 @@ class DrawStore: DrawStoreProtocol {
             }
         case .rename(let name): after.name = Self.name(name)
         case .tags(let tags):
-            after.tags = Array(Set(tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased() }.filter { !$0.isEmpty })).sorted()
+            after.tags = AtticTag.normalizedSet(tags)
         case .thumbnail(let bytes): after.thumbnail = bytes
         case .deleteCanvas: after.deletedAt = now()
         case .restoreCanvas: after.deletedAt = nil

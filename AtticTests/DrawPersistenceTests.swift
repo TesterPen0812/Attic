@@ -28,6 +28,7 @@ final class DrawPersistenceTests: XCTestCase {
 
     func testPersistentContract() throws {
         try DrawStoreContractTests().contract(DrawPersistentStore(container: container()))
+        try DrawStoreContractTests().tagContract(DrawPersistentStore(container: container()))
     }
 
     func testPersistentClipboardContract() throws {

@@ -22,7 +22,9 @@ Colours are Ink/Blue/Red/Green/Orange; sizes map to 1.5/2.25/4 pt strokes and
 11/14/20 pt text; corners are Square/Rounded.
 
 `library(deleted:)` lists metadata newest first. `search` combines `#tags` with
-name/text terms and returns matching text box IDs for reveal. `duplicate` gives
+name/text terms and returns matching text box IDs for reveal. Tags use Attic's
+shared normalizer (lowercase, hyphen separators, 64-character maximum) for both
+commands and queries. `duplicate` gives
 objects fresh IDs. New and empty duplicates stay drafts until first content.
 `deleteCanvas`/`restoreCanvas` manage deleted canvases; `deletedImages(in:)` and
 `restoreObjects` expose individually deleted images for Recently Deleted.
