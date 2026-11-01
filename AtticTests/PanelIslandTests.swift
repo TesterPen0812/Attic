@@ -157,6 +157,48 @@ final class PanelIslandTests: XCTestCase {
         XCTAssertLessThan(try rowInk(1), 0.01)
     }
 
+    func testIslandOffersPullOutAndPutBackAsVoiceOverActions() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try withController(configure: { _ in
+            AtticMotionPreference.systemReduceMotionOverride = true
+            AtticTransparencySeam.systemOverride = true
+        }) { controller, state, _ in
+            let host = try XCTUnwrap(controller.islandWindowsForTesting.island.contentView)
+            @MainActor func actions() throws -> [NSAccessibilityCustomAction] {
+                let item = try XCTUnwrap(elements(host).first { $0.accessibilityIdentifier?() == PanelPage.notes.accessibilityIdentifier })
+                return (item as? NSObject)?.value(forKey: "accessibilityCustomActions") as? [NSAccessibilityCustomAction] ?? []
+            }
+            @MainActor func run(_ action: NSAccessibilityCustomAction) {
+                if let handler = action.handler { _ = handler() }
+                else if let target = action.target as? NSObject { _ = target.perform(action.selector, with: action) }
+                spin(0.4)
+            }
+            @MainActor func menu() throws -> [AtticMenuCommand] {
+                let item = try XCTUnwrap(elements(host).first { $0.accessibilityIdentifier?() == PanelPage.notes.accessibilityIdentifier })
+                let frame = try XCTUnwrap((item as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+                let window = controller.islandWindowsForTesting.island
+                let point = window.convertPoint(fromScreen: CGPoint(x: frame.midX, y: frame.midY))
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                    timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                return try XCTUnwrap(AtticContextMenus.commands(for: event))
+            }
+            XCTAssertEqual(try menu().map(\.title), ["Open in Own Panel"])
+            XCTAssertEqual(try actions().map(\.name), ["Open in Own Panel"])
+            run(try XCTUnwrap(actions().first))
+            XCTAssertTrue(state.island.outPages.contains(.notes))
+            XCTAssertEqual(try menu().map(\.title), ["Open in Own Panel", "Put Back"])
+            XCTAssertEqual(try actions().map(\.name), ["Open in Own Panel", "Put Back"])
+            try XCTUnwrap(menu().last).action()
+            spin(0.4)
+            XCTAssertFalse(state.island.outPages.contains(.notes))
+        }
+    }
+
     func testAClickOnAnItemSwitchesThroughThePanelsPathAndVoiceOverCanPressIt() throws {
         try withController { controller, state, _ in
             let windows = controller.islandWindowsForTesting

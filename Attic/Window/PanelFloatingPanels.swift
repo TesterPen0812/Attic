@@ -347,6 +347,8 @@ final class PanelPullOutController {
         self.docked = docked
         deps = dependencies
         outline = PanelLandingOutline(cornerRadius: dependencies.settings.panelCornerSize)
+        docked.island.onOpenInOwnPanel = { [weak self] in self?.openInOwnPanel($0) }
+        docked.island.onPutBack = { [weak self] in self?.dockIn($0) }
         docked.onPageElsewhere = { [weak self] page in self?.bringForward(page) }
         docked.onOpenElsewhere = { [weak self] page, switchesDocked in
             self?.bringForward(page, switchesDocked: switchesDocked) ?? false
@@ -365,6 +367,19 @@ final class PanelPullOutController {
     var isDragging: Bool { drag != nil }
 
     // MARK: Pulling out
+
+    /// Keyboard/menu counterpart of pulling an island item. Use the same
+    /// creation and leave checks, then release it without a snap drag.
+    func openInOwnPanel(_ page: PanelPage) {
+        if panels[page] != nil { _ = bringForward(page); return }
+        guard let home = dockedFrame() else { return }
+        let grab = PanelPullOutLayout.grab(for: docked.panelSize)
+        let direction: CGFloat = home.midX > (workArea(CGPoint(x: home.midX, y: home.midY))?.midX ?? home.midX) ? -1 : 1
+        let pointer = CGPoint(x: home.minX + grab.x + direction * 32, y: home.maxY - grab.y - 32)
+        guard beginPull(page, at: pointer) else { return }
+        drag = nil
+        raise(page, makeKey: true)
+    }
 
     /// A pull off the island (`PanelIslandWindows.onPull`).
     func handle(_ pull: PanelIslandPull) {
