@@ -387,8 +387,13 @@ extension NoteEditorEngine {
             let bottom = view.grid.cellRect(NoteTable.Position(row: range.rows.upperBound, column: range.columns.upperBound))
             return (view.canvas.convert(top, to: textView), view.canvas.convert(bottom, to: textView))
         }
+        return cellTextRects(view.editor.selectedRange(), in: view, textView: textView)
+    }
+
+    /// A cell's text range's first and last line, in the text view's
+    /// coordinates (nil for an empty range, or with no editor laid out).
+    func cellTextRects(_ selection: NSRange, in view: NoteTableView, textView: NSTextView) -> (first: NSRect, last: NSRect)? {
         let editor = view.editor
-        let selection = editor.selectedRange()
         guard selection.length > 0, let layoutManager = editor.textLayoutManager,
               let content = layoutManager.textContentManager,
               let start = content.location(content.documentRange.location, offsetBy: selection.location),
