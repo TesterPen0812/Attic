@@ -14,6 +14,9 @@ struct DrawLibraryActions {
     /// Whether a canvas has anything drawn (Export… and Copy as Image are
     /// greyed while it doesn't).
     let hasContent: @MainActor (_ canvasID: UUID) -> Bool
+    /// These canvases' thumbnails are about to show (the menu, Search): the
+    /// page re-renders any drawn for the other appearance.
+    let thumbnailsShown: @MainActor (_ canvases: [DrawCanvas]) -> Void
 
     init(open: @escaping @MainActor (_ canvasID: UUID) -> Void,
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
@@ -21,7 +24,8 @@ struct DrawLibraryActions {
          close: @escaping @MainActor () -> Void,
          export: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
-         hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true }) {
+         hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true },
+         thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in }) {
         openCanvas = open
         makeCanvas = newCanvas
         revealObject = reveal
@@ -29,6 +33,7 @@ struct DrawLibraryActions {
         self.export = export
         self.copyAsImage = copyAsImage
         self.hasContent = hasContent
+        self.thumbnailsShown = thumbnailsShown
     }
 
     /// Shows this canvas on the board.

@@ -138,7 +138,7 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
-        if case .thumbnail(let bytes) = command { return writeThumbnail(bytes, on: id) }
+        if case .thumbnail(let bytes, _) = command { return writeThumbnail(bytes, on: id) }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
             guard pending[id] != nil else { return execute(step, action: .edit) }
@@ -176,7 +176,7 @@ class DrawStore: DrawStoreProtocol {
         case .rename(let name): after.name = Self.name(name)
         case .tags(let tags):
             after.tags = AtticTag.normalizedSet(tags)
-        case .thumbnail(let bytes): after.thumbnail = bytes
+        case .thumbnail(let bytes, _): after.thumbnail = bytes
         case .deleteCanvas: after.deletedAt = now()
         case .restoreCanvas: after.deletedAt = nil
         }

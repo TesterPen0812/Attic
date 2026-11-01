@@ -55,6 +55,11 @@ final class DrawSearchModel: ObservableObject {
         }
     }
 
+    /// The results are showing: their thumbnails take the menu's path.
+    func showThumbnails() {
+        actions.thumbnailsShown(results.map(\.canvas))
+    }
+
     /// The drawing's 28 characters, then an ellipsis.
     static func shortened(_ text: String, limit: Int = 28) -> String {
         let flat = text.replacingOccurrences(of: "\n", with: " ")

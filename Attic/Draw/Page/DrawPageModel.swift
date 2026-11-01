@@ -192,7 +192,8 @@ final class DrawPageModel: ObservableObject {
                            close: { [weak self] in self?.closeFilter() },
                            export: { [weak self] in self?.images.exportCanvas($0) },
                            copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
-                           hasContent: { [weak self] in self?.hasContent($0) ?? false })
+                           hasContent: { [weak self] in self?.hasContent($0) ?? false },
+                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -332,6 +333,12 @@ final class DrawPageModel: ObservableObject {
         }
         thumbnailRenders[id] = (generation, task)
     }
+
+    /// These thumbnails are about to show.
+    func thumbnailsShown(_ canvases: [DrawCanvas]) {}
+
+    /// The app's appearance changed.
+    func appearanceChanged() {}
 
     private func writeThumbnail(_ data: Data?, on id: UUID) {
         let synced = appliedRevision == store.revision
