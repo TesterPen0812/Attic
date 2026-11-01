@@ -1647,12 +1647,12 @@ struct TasksPage: View {
                     pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
                     pointer.dayDrop.setLineX((origin.minX + TasksDesignMetrics.textX)...(origin.maxX - TasksDesignMetrics.rowPaddingX))
                 }
-                beginDayDrop(in: tab, reorders: reorders)
+                beginDayDrop(in: tab)
             },
             onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
             onEnd: finishDrag,
             onPushPastGroup: { if reorders { showBoundaryHint() } },
-            crossDay: { location in updateDayDrop(for: id, in: tab, at: location, reorders: reorders) }
+            crossDay: { location in updateDayDrop(for: id, in: tab, at: location) }
         ) { live in
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
@@ -2806,8 +2806,7 @@ struct TasksPage: View {
         next.scrolled += moved
         let total = dragSession.translation + next.scrolled
         // The list moved under the pointer: it may be over another day now.
-        let crossing = updateDayDrop(for: current.id, in: tab, at: location,
-                                     reorders: Self.reorders(tab: tab, manual: model.reorders(on: tab)))
+        let crossing = updateDayDrop(for: current.id, in: tab, at: location)
         next.targetIndex = crossing ? current.startIndex : TasksReorderCell<EmptyView, EmptyView>.target(
             start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }, geometry: dragSession.geometry
         )
@@ -2957,7 +2956,8 @@ struct TasksPage: View {
         // list right after a drop.
         setFocus(finished.id)
         // Released in another day (Adaptive picks): the date changes there.
-        let dayDrop = finished.tab == .now ? pointer.dayDrop.target : nil
+        // Only Now's manual order, read now: a sorted view never moves a row.
+        let dayDrop = finished.tab == .now && model.reorders(on: .now) ? pointer.dayDrop.target : nil
         let commit = {
             var transaction = Transaction()
             transaction.disablesAnimations = true
@@ -3013,9 +3013,9 @@ struct TasksPage: View {
 
     /// A row lifted on Now's manual order: Today and Tomorrow show as
     /// empty headers if no task is due on them, to drop under.
-    private func beginDayDrop(in tab: TasksTab, reorders: Bool) {
+    private func beginDayDrop(in tab: TasksTab) {
         pointer.dayDrop.set(nil)
-        guard tab == .now, reorders, !model.dayDragLive else { return }
+        guard tab == .now, model.reorders(on: tab), !model.dayDragLive else { return }
         withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             model.dayDragLive = true
         }
@@ -3032,8 +3032,12 @@ struct TasksPage: View {
 
     /// Whether the pointer at `location` is in another day that takes the
     /// dragged row; the target (its header's mark, the drop line) follows.
-    private func updateDayDrop(for id: UUID, in tab: TasksTab, at location: CGPoint, reorders: Bool) -> Bool {
-        let target = tab == .now && reorders && !dragSession.isCancelled
+    /// The sort is read at the drag, never the value captured when the
+    /// list built the cell (a cell kept from before a sort change can
+    /// still hold the manual order's): a sorted view must never move a
+    /// row into another day (CI run 41323778515).
+    private func updateDayDrop(for id: UUID, in tab: TasksTab, at location: CGPoint) -> Bool {
+        let target = tab == .now && model.reorders(on: tab) && !dragSession.isCancelled
             ? dayDropTarget(for: id, at: location) : nil
         pointer.dayDrop.set(target)
         return target != nil
