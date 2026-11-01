@@ -160,7 +160,9 @@ struct RecentlyDeletedSettingsView: View {
         // Restore │ Select All │ Delete Permanently…: icons on every row and
         // the destructive command last (Dropdown content: answers, owner,
         // 2026-10-24, sheet 5).
-        return [
+        // Draw's rows have no permanent delete yet (the Draw store has none).
+        let purgeable = targets.filter(\.canDeletePermanently)
+        let commands = [
             AtticMenuCommand(verbatim: RecentlyDeletedPresentation.restoreTitle(count: targets.count),
                              systemImage: "arrow.uturn.backward",
                              shortcut: onSelection ? RecentlyDeletedKeys.restore : nil) {
@@ -170,11 +172,14 @@ struct RecentlyDeletedSettingsView: View {
                              isDisabled: model.listedEntries.count < 2, startsSection: true) {
                 model.selectAll()
             },
-            AtticMenuCommand(verbatim: RecentlyDeletedPresentation.deleteTitle(count: targets.count),
+        ]
+        guard !purgeable.isEmpty else { return commands }
+        return commands + [
+            AtticMenuCommand(verbatim: RecentlyDeletedPresentation.deleteTitle(count: purgeable.count),
                              systemImage: "trash",
                              shortcut: onSelection ? RecentlyDeletedKeys.delete : nil,
                              isDestructive: true, startsSection: true) {
-                model.requestDelete(targets)
+                model.requestDelete(purgeable)
             }
         ]
     }

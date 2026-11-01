@@ -15,6 +15,16 @@ struct CanvasPageHost: View {
 
 
     var body: some View {
+        // The Draw page takes Canvas's place only while `AtticDraw.enabled`
+        // is on (off until job 3 switches it over).
+        if AtticDraw.isEnabled {
+            DrawPageHost(model: .shared, uiState: uiState, layout: layout)
+        } else {
+            canvas
+        }
+    }
+
+    private var canvas: some View {
         CanvasPanelContent(
             session: canvasSession,
             horizontalInset: layout.contentInsets.leading,

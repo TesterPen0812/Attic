@@ -130,7 +130,7 @@ struct AtticPanelView: View {
         }
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
-            header
+            header.modifier(PanelHeaderDim(state: topRowState, page: currentPage))
         }
         .overlay(alignment: .bottom) {
             // The bottom bar every page shares (owner, 2026-10-31): drawn

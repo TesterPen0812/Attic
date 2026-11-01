@@ -32,6 +32,10 @@ enum PersistenceController {
             CanvasStrokeItem.self,
             CanvasImageItem.self,
             CanvasSemanticObjectItem.self,
+            // Draw rebuild: additive, independent of the retained Canvas rows.
+            DrawCanvasRecord.self,
+            DrawObjectRecord.self,
+            DrawPayloadRecord.self,
             ItemLink.self,
             // Phase 2: note versions and agents' pending note edits.
             NoteVersion.self,

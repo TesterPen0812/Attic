@@ -126,7 +126,7 @@ struct PanelBottomBarLook: Equatable {
         case .tasks: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "tasks-tag-bar", shown: true), plus: tasksPlus)
         case .notes: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "notes-tag-bar", shown: true), plus: notesPlus)
         case .calendar: PanelBottomBarLook(middle: .today(shown: false), plus: calendarPlus)
-        case .canvas: PanelBottomBarLook()
+        case .canvas: AtticDraw.isEnabled ? PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus) : PanelBottomBarLook()
         }
     }
 }
@@ -185,7 +185,8 @@ struct PanelTopRowLook: Equatable {
         case .tasks: PanelTopRowLook(shown: true, searchLabel: String(localized: "Find (⌘F)"), searchIdentifier: "tasks-find-button")
         case .notes: PanelTopRowLook(shown: true, searchLabel: String(localized: "Search notes (⌘F)"), searchIdentifier: "notes-search-button")
         case .calendar: PanelTopRowLook(shown: true, searchLabel: String(localized: "Search"), searchIdentifier: "calendar-search-button")
-        case .canvas: PanelTopRowLook(shown: false, searchLabel: String(localized: "Search"), searchIdentifier: "canvas-search-button")
+        case .canvas: PanelTopRowLook(shown: AtticDraw.isEnabled, searchLabel: String(localized: "Search"),
+                                      searchIdentifier: AtticDraw.isEnabled ? "draw-search-button" : "canvas-search-button")
         }
     }
 }
