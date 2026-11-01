@@ -167,7 +167,7 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(PanelPage.tasks.section, .tasks)
         // The Calendar page (owner's panel design, 28 Oct): Tasks, Notes,
         // Calendar; Canvas stays after them.
-        XCTAssertEqual(PanelPage.allCases.map(\.title), ["Tasks", "Notes", "Calendar", "Canvas"])
+        XCTAssertEqual(PanelPage.allCases.map(\.title), ["Tasks", "Notes", "Calendar", "Draw"])
     }
 
     func testPageSwitchItemsCarryCommandDigitsAndStableIdentifiers() {
@@ -304,7 +304,7 @@ final class PanelShellTests: XCTestCase {
         // pages and Pin with theirs.
         XCTAssertEqual(commands[2].shortcut, KeyboardShortcut("n", modifiers: [.command, .shift]))
         XCTAssertEqual(commands[3].shortcut, KeyboardShortcut("f", modifiers: [.command, .shift]))
-        XCTAssertEqual(commands[4].children.map(\.title), ["Tasks", "Notes", "Calendar", "Canvas", "Pin Panel"])
+        XCTAssertEqual(commands[4].children.map(\.title), ["Tasks", "Notes", "Calendar", "Draw", "Pin Panel"])
         XCTAssertEqual(commands[4].children.map(\.shortcut), [
             KeyboardShortcut("1", modifiers: .command), KeyboardShortcut("2", modifiers: .command),
             KeyboardShortcut("3", modifiers: .command), KeyboardShortcut("4", modifiers: .command), KeyboardShortcut("p", modifiers: [.command, .shift])

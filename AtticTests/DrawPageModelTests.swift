@@ -201,7 +201,7 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.selectionActions, [.saveImage, .duplicate, .delete, .more])
         model.select(ids)
         XCTAssertEqual(model.selectionActions, [.style, .duplicate, .delete, .more])
-        XCTAssertFalse(model.isEnabled(.copyAsImage), "Copy as Image waits for job 3's seam")
+        XCTAssertTrue(model.isEnabled(.copyAsImage), "Draw 3: Copy as Image works on the selection")
         XCTAssertEqual(DrawMoreCommand.allCases.map(\.title),
                        ["Cut", "Copy", "Paste", "Duplicate", "Copy as Image", "Bring to Front", "Send to Back", "Delete"])
     }

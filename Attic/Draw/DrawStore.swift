@@ -274,9 +274,12 @@ class DrawStore: DrawStoreProtocol {
         guard pending[id] == nil, let current = try? state(id), current.canvas.thumbnail != bytes else { return .unchanged }
         var after = current.canvas
         after.thumbnail = bytes
-        guard current.persisted, current.canvas.deletedAt == nil else {
-            if !current.persisted { states[id]?.canvas = after }
-            return .unchanged
+        guard current.canvas.deletedAt == nil else { return .unchanged }
+        // A draft keeps its thumbnail in memory until its first save.
+        guard current.persisted else {
+            states[id]?.canvas = after
+            revision &+= 1
+            return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
         }
         let change = DrawChange(canvasID: id, before: current.canvas, after: after, objectsBefore: [:], objectsAfter: [:])
         var outcome = repository.write(change)
