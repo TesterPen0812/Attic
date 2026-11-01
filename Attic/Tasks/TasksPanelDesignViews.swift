@@ -606,12 +606,16 @@ struct TasksFoldClip: Shape {
 /// folded away while you search, so this is its route.
 struct TasksFindCountLine: View {
     let text: String
+    /// The count's own element: it reads "1 of N" to accessibility, and
+    /// the links are elements of their own beside it.
+    let countID: String
     let elsewhere: [TasksElsewhereCount]
     let follow: (TasksTab) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
             AtticText(verbatim: text, style: .rowMeta, ink: .helper)
+                .accessibilityIdentifier(countID)
             ForEach(elsewhere, id: \.tab) { part in
                 AtticText(verbatim: " · ", style: .rowMeta, ink: .helper)
                 TasksFindCountLink(title: String(localized: "\(part.count) in \(part.tab.title)")) { follow(part.tab) }

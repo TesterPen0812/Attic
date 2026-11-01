@@ -131,11 +131,11 @@ struct TasksDonePage<Cell: View>: View {
                     // A quiet line under the results (v22 card B).
                     // And the other tabs' matches (T3).
                     TasksFindCountLine(text: String(localized: "\(count.matches) of \(count.total) done tasks"),
+                                       countID: "tasks-done-search-count",
                                        elsewhere: model.searchMatchesElsewhere(from: .done),
                                        follow: { model.followSearch(from: .done, to: $0) })
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, TasksDesignMetrics.textX)
-                        .accessibilityIdentifier("tasks-done-search-count")
                 }
             }
             .padding(.bottom, bottomClearance - bottomMargin)

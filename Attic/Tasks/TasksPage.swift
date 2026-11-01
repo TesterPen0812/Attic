@@ -1519,11 +1519,11 @@ struct TasksPage: View {
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {
                         // Find's quiet count, and the other tabs' matches (T3).
                         TasksFindCountLine(text: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
+                                           countID: "tasks-find-count",
                                            elsewhere: model.searchMatchesElsewhere(from: tab),
                                            follow: { followSearch(from: tab, to: $0) })
                             .frame(height: AtticLayout.rowPitch)
                             .padding(.leading, TasksDesignMetrics.textX)
-                            .accessibilityIdentifier("tasks-find-count")
                     } else if sections.open.isEmpty, sections.groups.isEmpty {
                         // The owner's panel design's empty states.
                         let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters, tag: model.tagFilter(on: tab))
