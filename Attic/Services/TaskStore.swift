@@ -2713,12 +2713,15 @@ final class TaskStore: ObservableObject {
         let title: NSString
         let completed: Date
         let created: Date
+        /// The tag bar filters Done too (T6, Accepted 2026-11-01).
+        let tags: [String]
 
         init(_ task: TaskItem) {
             id = task.id
             title = task.title as NSString
             completed = task.completedAt ?? task.updatedAt
             created = task.createdAt
+            tags = task.tags
         }
     }
 
@@ -2792,7 +2795,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var doneSearchEntries: [DoneSearchEntry] = []
-    private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
+    private var doneSearchMatches: (query: String, tag: String?, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         indexItemTasks(winners, replacing: ids)
@@ -2816,35 +2819,43 @@ final class TaskStore: ObservableObject {
         doneSearchMatches = nil
     }
 
-    private func doneSearchIDs(matching query: String) -> [UUID] {
+    private func doneSearchIDs(matching query: String, tag: String? = nil) -> [UUID] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let locale = Locale.current.identifier
-        if let cached = doneSearchMatches, cached.query == query, cached.locale == locale { return cached.ids }
+        if let cached = doneSearchMatches, cached.query == query, cached.tag == tag, cached.locale == locale { return cached.ids }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
-        let ids = doneSearchEntries.compactMap {
-            query.isEmpty || $0.title.localizedStandardContains(query) || additionalItemMatch($0.id, query: query) ? $0.id : nil
+        let ids = doneSearchEntries.compactMap { entry -> UUID? in
+            if let tag, !entry.tags.contains(tag) { return nil }
+            return query.isEmpty || entry.title.localizedStandardContains(query) || additionalItemMatch(entry.id, query: query) ? entry.id : nil
         }
-        doneSearchMatches = (query, locale, ids)
+        doneSearchMatches = (query, tag, locale, ids)
         return ids
     }
 
-    func indexedDoneLogOffset(of id: UUID, matching query: String) -> Int? {
-        doneSearchIDs(matching: query).firstIndex(of: id)
+    func indexedDoneLogOffset(of id: UUID, matching query: String, tag: String? = nil) -> Int? {
+        doneSearchIDs(matching: query, tag: tag).firstIndex(of: id)
     }
 
-    func indexedDoneLogCount(matching query: String = "") -> Int {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? doneSearchEntries.count : doneSearchIDs(matching: query).count
+    func indexedDoneLogCount(matching query: String = "", tag: String? = nil) -> Int {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tag == nil
+            ? doneSearchEntries.count : doneSearchIDs(matching: query, tag: tag).count
+    }
+
+    /// Every tag on a task in the Done log, from the index (no read).
+    func indexedDoneLogTags() -> Set<String> {
+        var tags = Set<String>()
+        for entry in doneSearchEntries { tags.formUnion(entry.tags) }
+        return tags
     }
 
     /// The panel's logical cursor walks matching canonical IDs. Only this
     /// page is hydrated; no SQL string predicate or full-log count on typing.
     /// The raw physical cursor above remains available to command clients.
     func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
-                            matching query: String = "") -> DoneLogPage {
+                            matching query: String = "", tag: String? = nil) -> DoneLogPage {
         donePageReadCount += 1
-        let ids = doneSearchIDs(matching: query)
+        let ids = doneSearchIDs(matching: query, tag: tag)
         let start = min(cursor.rowOffset, ids.count)
         let end = min(start + max(0, limit), ids.count)
         let pageIDs = Array(ids[start..<end])
@@ -3848,21 +3859,7 @@ final class TaskStore: ObservableObject {
 
         let timestamp = now()
         do {
-            if let sparseOrder = sparseManualOrder(at: destinationIndex, in: group) {
-                let replicas = try storedTasks(matching: task.id)
-                let shown = TaskContentSnapshot(task)
-                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
-                for replica in replicas {
-                    let agrees = replica === task || TaskContentSnapshot(replica) == shown
-                    replica.manualOrder = sparseOrder
-                    replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
-                }
-            } else {
-                // Legacy stores can have missing or tightly packed values. Pay the
-                // O(n) rebalance once, then normal reorders only dirty the moved row.
-                try assignSpacedManualOrders(to: group, updatedAt: timestamp)
-            }
+            try stageOrder(of: task, at: destinationIndex, in: group, updatedAt: timestamp)
         } catch {
             context.rollback()
             // refresh() clears the notice on success, so the reorder failure
@@ -3872,6 +3869,69 @@ final class TaskStore: ObservableObject {
             return false
         }
         return save(owner: owner)
+    }
+
+    /// Writes `task`'s new place, `index` in `group` (already in its new
+    /// order). Only the moved task's order changes, unless the orders
+    /// around it are too close, when the group is re-spaced once.
+    private func stageOrder(of task: TaskItem, at index: Int, in group: [TaskItem], updatedAt timestamp: Date,
+                            retaining edits: RetainedTaskEdits? = nil) throws {
+        if let sparseOrder = sparseManualOrder(at: index, in: group) {
+            let replicas = try storedTasks(matching: task.id)
+            edits?.capture(replicas)
+            let shown = TaskContentSnapshot(task)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            for replica in replicas {
+                let agrees = replica === task || TaskContentSnapshot(replica) == shown
+                replica.manualOrder = sparseOrder
+                replica.listOrderVersion = TaskItem.currentListOrderVersion
+                if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
+            }
+        } else {
+            // Legacy stores can have missing or tightly packed values. Pay the
+            // O(n) rebalance once, then normal reorders only dirty the moved row.
+            try assignSpacedManualOrders(to: group, updatedAt: timestamp, retaining: edits)
+        }
+    }
+
+    /// A row dragged into another day on Now (Adaptive picks, 2026-11-01):
+    /// its date set as the date card sets it (`stageUpdate`, so its time
+    /// stays, and goes with the date when the date is cleared), and its
+    /// place in its order group just before `beforeID`, or just after
+    /// `afterID` (neither: its place is kept), in one save: both change or
+    /// neither does.
+    @discardableResult
+    func moveTask(_ taskID: UUID, toDueDay dueDay: DueDay?, before beforeID: UUID?, after afterID: UUID?) -> Bool {
+        guard prepareTaskEdit() else { return false }
+        guard let task = task(withID: taskID) else { return false }
+        let owner = familyOwner(of: task)
+        let retainedEdits = RetainedTaskEdits()
+        var changed = false
+        do {
+            changed = try stageUpdate(task, dueDay: .some(dueDay), allowingUnfinishedSubtasks: true, retaining: retainedEdits)
+            var group = orderGroup(of: task)
+            if let source = group.firstIndex(where: { $0.id == taskID }) {
+                let moved = group.remove(at: source)
+                var destination = source
+                if let beforeID, let index = group.firstIndex(where: { $0.id == beforeID }) {
+                    destination = index
+                } else if let afterID, let index = group.firstIndex(where: { $0.id == afterID }) {
+                    destination = index + 1
+                }
+                destination = min(destination, group.count)
+                group.insert(moved, at: destination)
+                if destination != source {
+                    try stageOrder(of: task, at: destination, in: group, updatedAt: now(), retaining: retainedEdits)
+                    changed = true
+                }
+            }
+        } catch {
+            rollback(retaining: retainedEdits)
+            try? reloadTasks()
+            report(error.localizedDescription, owner: owner)
+            return false
+        }
+        return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
     func refresh() {

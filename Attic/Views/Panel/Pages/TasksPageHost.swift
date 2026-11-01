@@ -60,7 +60,6 @@ struct TasksPageHost: View {
 
     @State private var addBarFocused = false
     @State private var editHold: PanelEditHold
-    @State private var filesHold: PanelEditHold
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
     /// The panel's "+" card, which replaces the add bar in the panel.
@@ -70,7 +69,7 @@ struct TasksPageHost: View {
          layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
          primaryInputFocusRequest: UInt64, isCurrent: Bool = true, taskNotes: TaskNoteEntryServices? = nil,
          openCalendarDay: ((DueDay) -> Void)? = nil,
-         editHold: PanelEditHold? = nil, filesHold: PanelEditHold? = nil) {
+         editHold: PanelEditHold? = nil) {
         self.taskNotes = taskNotes
         self.openCalendarDay = openCalendarDay
         self.store = store
@@ -82,7 +81,6 @@ struct TasksPageHost: View {
         self.primaryInputFocusRequest = primaryInputFocusRequest
         self.isCurrent = isCurrent
         _editHold = State(initialValue: editHold ?? PanelEditHold())
-        _filesHold = State(initialValue: filesHold ?? PanelEditHold())
     }
 
     /// Before the page's first build: rows capture whether a title click
@@ -112,19 +110,15 @@ struct TasksPageHost: View {
 
     /// The host's callbacks, also exercised without the Tasks page's own
     /// monitors when testing the lifetime of its holds.
-    var pageChrome: TasksPageChrome { pageChrome(editHold: editHold, filesHold: filesHold) }
+    var pageChrome: TasksPageChrome { pageChrome(editHold: editHold) }
 
-    func pageChrome(editHold: PanelEditHold, filesHold: PanelEditHold) -> TasksPageChrome {
+    func pageChrome(editHold: PanelEditHold) -> TasksPageChrome {
         TasksPageChrome(
             bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
             typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
             editLock: { [editHold] editing in
                 editHold.apply = { [uiState] active in uiState.setInteractionLock(.taskEditing, isActive: active) }
                 editHold.set(editing)
-            },
-            filesLock: { [filesHold] visible in
-                filesHold.apply = { [uiState] active in uiState.setInteractionLock(.taskFilesVisible, isActive: active) }
-                filesHold.set(visible)
             }
         )
     }
@@ -152,12 +146,10 @@ struct TasksPageHost: View {
         // 5): an editor left open behind Notes never keeps Notes up.
         .onChange(of: isCurrent) { _, current in
             editHold.setSuspended(!current)
-            filesHold.setSuspended(!current)
             model.isPageShown = current
         }
         .onDisappear {
             editHold.setSuspended(true)
-            filesHold.setSuspended(true)
         }
         // Kept built behind another page, it shows again where it was left
         // (its tab, its selection): only a reveal of the panel starts it on
@@ -206,9 +198,7 @@ struct TasksPageHost: View {
             model.services.chooseFiles = { [store, uiState, weak model] id in
                 // A family whose files are in its note adds to the note.
                 if store.fileMigration.isMigrated(id), let choose = model?.services.chooseFilesForNote { choose(id); return }
-                TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, ownerID in
-                    model?.setFilesExpanded(ownerID, true)
-                }
+                TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, _ in }
             }
             // The add bar's Attach (O17-06): the files wait for the new task.
             model.services.chooseComposerFiles = { [uiState, weak model] in
@@ -220,7 +210,6 @@ struct TasksPageHost: View {
                 }
             }
             editHold.setSuspended(!isCurrent)
-            filesHold.setSuspended(!isCurrent)
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
@@ -249,13 +238,12 @@ struct TasksPageHost: View {
                     model.setExpanded(row.id, true)
                 }
                 // The first row with subtasks gets N generated files of
-                // different kinds (in-memory store only), its files list open.
+                // different kinds (in-memory store only), shown as its tiles.
                 if let count = environment["ATTIC_UI_TEST_SEED_FILES"].flatMap(Int.init), count > 0,
                    let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
                     Task { @MainActor in
                         guard let urls = try? TasksCaptureFiles.make(count) else { return }
                         _ = await store.attachStagedFiles(to: row.id) { TaskAttachmentStaging(urls: urls) }
-                        model.setFilesExpanded(row.id, true)
                     }
                 }
             }

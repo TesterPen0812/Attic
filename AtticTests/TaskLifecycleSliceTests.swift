@@ -3004,7 +3004,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == id })
         var without = row.model
         without.hasPage = false
-        XCTAssertNotEqual(row, TasksListRow(id: row.id, model: without, status: row.status, subtasks: row.subtasks, files: row.files))
+        XCTAssertNotEqual(row, TasksListRow(id: row.id, model: without, status: row.status, subtasks: row.subtasks))
     }
 
     /// The page leaves after Make Subtask and after its Undo (Back worked

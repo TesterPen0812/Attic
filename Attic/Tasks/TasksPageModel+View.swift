@@ -155,13 +155,15 @@ extension TasksPageModel {
 
     // MARK: Tag chips (owner, 2026-10-28)
 
-    /// The tag chip filtering `tab` (Done has none).
+    /// The tag chip filtering `tab`: one for every tab, Done included (T6,
+    /// Accepted 2026-11-01, which removed Done's exception).
     func tagFilter(on tab: TasksTab) -> String? {
-        tab == .done ? nil : tagFilter
+        tagFilter
     }
 
-    /// The chips after All: the tags on the tasks that exist (Now's and
-    /// Later's), in the library's order (most used first). Built once per
+    /// The chips after All: the tags on the tasks that exist (Now's,
+    /// Later's and, since T6, Done's: today's and the Done log's, from its
+    /// index), in the library's order (most used first). Built once per
     /// change.
     func tagChips() -> [String] {
         let revision = store.revision, inventory = tagInventoryRevision
@@ -175,6 +177,7 @@ extension TasksPageModel {
                 }
             }
         }
+        for tag in store.indexedDoneLogTags().sorted() where inUse.insert(tag).inserted { firstSeen.append(tag) }
         let ordered = library.tags.names.filter { inUse.contains($0) }
         let listed = Set(ordered)
         let tags = ordered + firstSeen.filter { !listed.contains($0) }
@@ -237,6 +240,45 @@ extension TasksPageModel {
         let scope: TaskScope = tab == .backlog ? .backlog : .tasks
         let total = store.snapshot(for: scope).sections.filter { $0.status != .done }.reduce(0) { $0 + $1.tasks.count }
         return (sections(for: tab).open.count, total)
+    }
+
+    /// T3 (Accepted 2026-11-01): while you search on `tab`, how many tasks
+    /// match the same query (and tag) on each other tab, in the switch's
+    /// order, leaving out a tab with none. Now and Later count their open
+    /// tasks as their Find does; Done counts today's finished tasks and the
+    /// Done log through its index (no page is read), as its own count does.
+    func searchMatchesElsewhere(from tab: TasksTab) -> [TasksElsewhereCount] {
+        let query = trimmedQuery(for: tab)
+        guard !query.isEmpty else { return [] }
+        let key = TasksElsewhereKey(revision: store.revision, query: query, tag: tagFilter, from: tab)
+        if let cache = elsewhereCountsCache, cache.key == key { return cache.counts }
+        let tag = tagFilter
+        let tagged: (TaskItem) -> Bool = { task in tag.map(task.tags.contains) ?? true }
+        var counts: [TasksElsewhereCount] = []
+        for other in TasksTab.allCases where other != tab {
+            let count: Int
+            switch other {
+            case .now, .backlog:
+                let scope: TaskScope = other == .backlog ? .backlog : .tasks
+                count = store.snapshot(for: scope).sections.filter { $0.status != .done }.reduce(0) { total, section in
+                    total + section.tasks.filter { tagged($0) && store.matchesItemSearch($0, query: query) }.count
+                }
+            case .done:
+                count = store.doneTodayTasks().filter { tagged($0) && store.matchesItemSearch($0, query: query) }.count
+                    + store.indexedDoneLogCount(matching: query, tag: tag)
+            }
+            if count > 0 { counts.append(TasksElsewhereCount(tab: other, count: count)) }
+        }
+        elsewhereCountsCache = (key, counts)
+        return counts
+    }
+
+    /// A click on "2 in Later" (T3): that tab, with the query kept.
+    func followSearch(from tab: TasksTab, to target: TasksTab) {
+        let query = trimmedQuery(for: tab)
+        guard !query.isEmpty, target != tab else { return }
+        setSearchQuery(query, for: target)
+        select(tab: target)
     }
 
     /// A reorder while the page shows only some tasks (a filter or Find, in
@@ -307,4 +349,17 @@ struct TasksPageMemory {
             defaults.set(data, forKey: viewKey)
         }
     }
+}
+
+/// One part of Find's count line on another tab ("2 in Later", T3).
+struct TasksElsewhereCount: Equatable {
+    let tab: TasksTab
+    let count: Int
+}
+
+struct TasksElsewhereKey: Equatable {
+    let revision: UInt64
+    let query: String
+    let tag: String?
+    let from: TasksTab
 }

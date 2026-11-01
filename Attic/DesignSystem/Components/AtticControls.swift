@@ -1274,6 +1274,7 @@ struct AtticSmallButton: View {
     let floating: Bool
     let action: () -> Void
 
+    @Environment(\.atticSmallControlBarSize) private var barSize
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
@@ -1293,7 +1294,7 @@ struct AtticSmallButton: View {
     }
 
     var body: some View {
-        let height = floating ? AtticTopGlassMetrics.height : AtticControlSize.smallHeight
+        let height = floating ? AtticTopGlassMetrics.height : (barSize?.height ?? AtticControlSize.smallHeight)
         let radius = AtticRadius.control(height: height)
         let shape = AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent)
         Button(action: action) {
@@ -1307,7 +1308,21 @@ struct AtticSmallButton: View {
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
         .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius,
-                           expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height) : 12)
+                           expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height)
+                               : (barSize.map { AtticRadius.control(height: $0.height) } ?? 12))
+    }
+}
+
+private struct AtticSmallControlBarSizeKey: EnvironmentKey {
+    static let defaultValue: CGSize? = nil
+}
+
+extension EnvironmentValues {
+    /// The small controls' size inside a bottom-bar card (the selection bar
+    /// in the tag bar's place, T2): the bar's 21 pt chips, 23 pt wide.
+    var atticSmallControlBarSize: CGSize? {
+        get { self[AtticSmallControlBarSizeKey.self] }
+        set { self[AtticSmallControlBarSizeKey.self] = newValue }
     }
 }
 
@@ -1386,8 +1401,13 @@ private struct AtticSmallButtonFrame: ViewModifier {
     let floating: Bool
     let iconOnly: Bool
 
+    @Environment(\.atticSmallControlBarSize) private var barSize
+
     func body(content: Content) -> some View {
-        if floating {
+        if let barSize, !floating {
+            content.frame(minWidth: barSize.width, maxWidth: iconOnly ? barSize.width : nil,
+                          minHeight: barSize.height, maxHeight: barSize.height)
+        } else if floating {
             let height = AtticTopGlassMetrics.height
             content.frame(minWidth: height, maxWidth: iconOnly ? height : nil, minHeight: height, maxHeight: height)
         } else {
@@ -1437,26 +1457,57 @@ struct AtticSelectionBar: View {
     /// What VoiceOver says after the count ("mixed priority, tagged
     /// launch"); nil says nothing more.
     var summary: String? = nil
+    /// In the bottom bar, in the tag bar's place (T2, Accepted
+    /// 2026-11-01): the bar's 27 pt card with 21 pt controls, as wide as
+    /// its content.
+    var inBar = false
+    /// The tag filter on, kept in sight after the count ("3 selected ·
+    /// #launch"), in its own colour.
+    var filterTag: (title: String, color: Color)? = nil
 
     @State private var probeID = UUID()
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let height = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
-        let radius = AtticRadius.control(height: height)
-        HStack(spacing: AtticSelectionBarMetrics.controlSpacing) {
+        let m = AtticSelectionBarMetrics.self
+        let inset = inBar ? m.barInset : AtticControlSize.capsuleInset
+        let height = inBar ? m.barHeight : AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+        // In the bar, the tag bar's capsule (curve 1.4, half the height).
+        let radius = inBar ? AtticShape.controlRadius(height: height) : AtticRadius.control(height: height)
+        HStack(spacing: m.controlSpacing) {
             // The count is never cut mid-word ("3 sel…"): it reads "3
             // selected" when the room allows and "3" when it does not (a
             // rounder panel corner, a bigger count); VoiceOver has the words.
-            ViewThatFits(in: .horizontal) {
-                AtticText(verbatim: String(localized: "\(count) selected"), style: .controlLabel, ink: .body)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                AtticText(verbatim: String(count), style: .controlLabel, ink: .body)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+            Group {
+                if inBar {
+                    ViewThatFits(in: .horizontal) {
+                        if let filterTag {
+                            (barText(String(localized: "\(count) selected")) + barText(" · ")
+                                + Text(verbatim: filterTag.title).foregroundStyle(filterTag.color))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        barText(String(localized: "\(count) selected"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        barText(String(count))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .font(.system(size: m.barFontSize, weight: .medium))
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        AtticText(verbatim: String(localized: "\(count) selected"), style: .controlLabel, ink: .body)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        AtticText(verbatim: String(count), style: .controlLabel, ink: .body)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
             }
-                .padding(.leading, AtticSelectionBarMetrics.countLeading)
-                .padding(.trailing, AtticSelectionBarMetrics.countTrailing)
+                .padding(.leading, inBar ? m.barCountLeading : m.countLeading)
+                .padding(.trailing, m.countTrailing)
                 .accessibilityValue(summary ?? "")
             ForEach(actions) { action in
                 if let menu = action.menu {
@@ -1469,13 +1520,20 @@ struct AtticSelectionBar: View {
                 }
             }
         }
-        .padding(AtticControlSize.capsuleInset)
+        .environment(\.atticSmallControlBarSize, inBar ? m.barControl : nil)
+        .padding(inset)
         .frame(height: height)
         .atticRaisedMaterial(cornerRadius: radius, interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "\(count) selected"))
         .accessibilityValue(summary ?? "")
-        .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: inBar ? AtticShape.controlRadius(height: m.barHeight) : 15)
+    }
+
+    /// The count's words in the bar: the tags' type, in the heading ink.
+    private func barText(_ words: String) -> Text {
+        Text(verbatim: words).foregroundStyle(design.tokens.color(.heading))
     }
 }
 

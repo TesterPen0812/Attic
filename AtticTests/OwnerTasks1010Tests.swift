@@ -46,9 +46,9 @@ final class OwnerTasks1010Tests: XCTestCase {
         let a = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 520))
         let b = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 420, height: 650))
         XCTAssertEqual(a.chromeInsets, b.chromeInsets)
-        let before = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false, isFilesExpanded: false,
+        let before = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false,
                                  isDropTarget: false, isFocused: false, tab: .now, layout: a, isLive: false)
-        let after = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false, isFilesExpanded: false,
+        let after = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false,
                                 isDropTarget: false, isFocused: false, tab: .now, layout: b, isLive: false)
         XCTAssertEqual(before, after, "resizing the native row frame must not rebuild its unchanged controls")
     }

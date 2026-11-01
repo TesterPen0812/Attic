@@ -79,7 +79,6 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertEqual(model.editingTitle, "Unsaved edit")
         XCTAssertEqual(store.task(withID: other.id)?.title, "Original title")
         XCTAssertEqual(model.toasts.current?.message, "Added to Now")
-        XCTAssertTrue(model.expandedFiles.contains(id))
     }
 
     func testAFailedPasteKeepsTheOfferUntilTheTasksExist() throws {
@@ -327,8 +326,7 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertNil(store.task(withID: task.id))
 
         model.openPage(task.id)
-        XCTAssertTrue(model.expandedFiles.isEmpty, "a logged task opens its read-only details, not a files list")
-        XCTAssertEqual(model.doneDetailID, task.id)
+        XCTAssertEqual(model.doneDetailID, task.id, "a logged task opens its read-only details")
         let detail = try XCTUnwrap(model.doneDetail(for: task.id))
         XCTAssertEqual(detail.title, "Ship")
         XCTAssertEqual(detail.subtasks.map(\.title), ["Pack"])
@@ -336,11 +334,12 @@ final class TasksReviewFixTests: XCTestCase {
         let url = try await files.verifiedURL(for: try XCTUnwrap(detail.files.first))
         XCTAssertNotNil(url, "the file is kept while the task is in the log")
 
+        // A task in the lists has no files list to open (Accepted
+        // 2026-11-01 "Task rows: no paperclip count"): nothing changes.
+        model.doneDetailID = nil
         let live = try XCTUnwrap(store.create(title: "Live"))
         model.openPage(live.id)
-        XCTAssertEqual(model.expandedFiles, [live.id], "a task in the lists opens its files under its row")
-        model.openPage(live.id)
-        XCTAssertTrue(model.expandedFiles.isEmpty, "and the same command closes them")
+        XCTAssertNil(model.doneDetailID, "a task in the lists opens no details here")
     }
 
     // MARK: 6. Own focus rings only for the keyboard

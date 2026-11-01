@@ -221,9 +221,9 @@ final class TasksRound6Tests: XCTestCase {
     }
 
     /// The composer has the keyboard and a Later row is selected (CU
-    /// recheck 4b, P2): ⌘Return with no draft opens the row's files; with
-    /// a draft it stays the composer's (it adds the task and opens it).
-    func testCommandReturnInTheComposerOpensTheSelectedRowsFilesOnlyWithoutADraft() throws {
+    /// recheck 4b, P2): ⌘Return with no draft opens the row's page; with
+    /// a draft it stays the composer's (it adds the task).
+    func testCommandReturnInTheComposerOpensTheSelectedRowsPageOnlyWithoutADraft() throws {
         try requireKeyWindowTests()
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.page, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "  "))
@@ -233,10 +233,15 @@ final class TasksRound6Tests: XCTestCase {
             XCTAssertFalse(TasksPage.typingFieldPasses(kept, composerDraft: nil), "the field keeps \(kept)")
         }
 
-        let hosted = try Hosted(height: 520)
+        // The files list is gone (Accepted 2026-11-01 "Task rows: no
+        // paperclip count"): ⌘Return opens the row's page, as the shell does.
+        final class Opened { var ids: [UUID] = [] }
+        let opened = Opened()
+        var services = TasksPageServices()
+        services.openTaskNote = { opened.ids.append($0) }
+        let hosted = try Hosted(height: 520, services: services)
         defer { hosted.close() }
         hosted.window.makeKey()
-        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         hosted.go(to: .backlog)
         let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id)
         hosted.model.selectOnly(later)
@@ -246,18 +251,17 @@ final class TasksRound6Tests: XCTestCase {
         XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer has the keyboard")
         try post(hosted, key: "\r", keyCode: 36, modifiers: .command)
         hosted.spin(0.3)
-        XCTAssertEqual(opened, [later], "⌘Return with no draft opens the selected row's files")
+        XCTAssertEqual(opened.ids, [later], "⌘Return with no draft opens the selected row's page")
 
-        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
+        opened.ids = []
         hosted.model.addBar = TaskAddBarText(text: "Call the plumber")
         hosted.spin(0.3)
         let before = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id))
         try post(hosted, key: "\r", keyCode: 36, modifiers: .command)
         hosted.spin(0.3)
-        XCTAssertFalse(opened.contains(later), "with a draft, ⌘Return is the composer's")
+        XCTAssertFalse(opened.ids.contains(later), "with a draft, ⌘Return is the composer's")
         let added = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id)).subtracting(before)
         XCTAssertEqual(added.count, 1, "the draft was added")
-        XCTAssertEqual(opened, Array(added), "and its page opened")
     }
     #endif
 

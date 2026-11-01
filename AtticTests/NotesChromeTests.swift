@@ -146,7 +146,10 @@ final class NotesChromeTests: XCTestCase {
             let compose = try XCTUnwrap(frame(of: "notes-new-note", in: host), "compose")
             XCTAssertEqual(compose.height, NotesBarMetrics.control, accuracy: 0.5)
             XCTAssertEqual(tagBar.height, NotesBarMetrics.control, accuracy: 0.5)
-            XCTAssertEqual(compose.minX - tagBar.maxX, NotesBarMetrics.gap, accuracy: 0.5, "10 px apart")
+            // Only as wide as its tags (the user's addition to T6, Accepted
+            // 2026-11-01): it never reaches past the gap before "+".
+            XCTAssertGreaterThanOrEqual(compose.minX - tagBar.maxX, NotesBarMetrics.gap - 0.5, "at least 10 px apart")
+            XCTAssertEqual(tagBar.minX, layout.chromeInsets.leading, accuracy: 0.5, "against the panel's left")
             XCTAssertEqual(compose.maxX, host.bounds.width - layout.chromeInsets.trailing, accuracy: 0.5, "compose on the right")
             XCTAssertNil(element("notes-all-notes", in: host), "no Back while All notes shows")
             XCTAssertNil(element("notes-format-button", in: host))

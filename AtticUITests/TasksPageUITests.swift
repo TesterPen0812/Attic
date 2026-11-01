@@ -731,12 +731,12 @@ final class TasksPageUITests: XCTestCase {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
-        // The rarer file and reorder commands sit under More (follow-up
-        // part 2, L5).
+        // The rarer reorder commands sit under More (follow-up part 2, L5;
+        // Show Files went with the files list, Accepted 2026-11-01).
         openItem("More").hover()
         XCTAssertTrue(openItem("Move Down").waitForExistence(timeout: 3), "More holds Move Down")
         waitFor(openItem("Move Down").frame.width > 0, "More's submenu opens")
-        XCTAssertTrue(openItem("Show Files").exists && openItem("Move Up").exists, "and Show Files and Move Up")
+        XCTAssertTrue(openItem("Move Up").exists && !openItem("Show Files").exists, "and Move Up, with no Show Files")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
         waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,

@@ -9,7 +9,6 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
-    case taskFilesVisible
     case taskConfirmation
     case notesEditorFocus
     case notesDirty

@@ -78,29 +78,31 @@ final class RoundNLeaksTests: XCTestCase {
         XCTAssertNil(chrome.value); XCTAssertNil(library.value)
     }
 
-    func testL05RemovedTasksHostReleasesBothHolds() throws {
-        let edit = Weak<PanelEditHold>(), files = Weak<PanelEditHold>()
+    /// The files hold went with the files list (Accepted 2026-11-01 "Task
+    /// rows: no paperclip count"): the edit hold is the host's only one.
+    func testL05RemovedTasksHostReleasesItsEditHold() throws {
+        let edit = Weak<PanelEditHold>()
         try autoreleasepool {
             let store = try makeTestStore()
             let uiState = PanelUIState()
             let suite = "RoundN.\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: suite)!
             defer { defaults.removePersistentDomain(forName: suite) }
-            let editHold = PanelEditHold(), filesHold = PanelEditHold()
-            edit.value = editHold; files.value = filesHold
+            let editHold = PanelEditHold()
+            edit.value = editHold
             let host = TasksPageHost(store: store, uiState: uiState, settings: AppSettings(defaults: defaults), state: TasksPageState(),
                 layout: PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520)),
                 chromeInteractionState: PanelChromeInteractionState(), primaryInputFocusRequest: 0,
-                editHold: editHold, filesHold: filesHold)
-            let chrome = host.pageChrome(editHold: editHold, filesHold: filesHold)
-            chrome.editLock(true); chrome.filesLock(true)
-            XCTAssertEqual(edit.value?.isHeld, true); XCTAssertEqual(files.value?.isHeld, true)
-            chrome.editLock(false); chrome.filesLock(false)
-            edit.value?.setSuspended(true); files.value?.setSuspended(true)
+                editHold: editHold)
+            let chrome = host.pageChrome(editHold: editHold)
+            chrome.editLock(true)
+            XCTAssertEqual(edit.value?.isHeld, true)
+            chrome.editLock(false)
+            edit.value?.setSuspended(true)
         }
-        awaitRelease { edit.value == nil && files.value == nil }
-        pauseForTrace([("editHold", edit.value), ("filesHold", files.value)])
-        XCTAssertNil(edit.value); XCTAssertNil(files.value)
+        awaitRelease { edit.value == nil }
+        pauseForTrace([("editHold", edit.value)])
+        XCTAssertNil(edit.value)
     }
 
     func testL03RetryableRowFailureDoesNotRetainThePageModel() throws {

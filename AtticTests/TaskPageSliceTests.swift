@@ -554,16 +554,7 @@ final class TaskPageSliceTests: XCTestCase {
         actions.openPage()
         hosted.spin(0.2)
         XCTAssertEqual(opened, [row.id])
-        XCTAssertFalse(hosted.model.expandedFiles.contains(row.id), "⌘Return no longer opens the files list")
         XCTAssertEqual(hosted.model.selection, [row.id], "the row is the anchor Back returns to")
-    }
-
-    /// Without the service (Phase 1 hosts), ⌘Return still opens the files.
-    func testRowOpenCommandWithoutTaskPagesStillShowsFiles() throws {
-        let hosted = try Hosted(height: 520, keyWindow: false)
-        defer { hosted.close() }
-        let row = try XCTUnwrap(hosted.model.rows(for: .now).first)
-        XCTAssertNotEqual(hosted.page.actions(for: row.id, in: .now).names.openPage, "Open page")
     }
 }
 

@@ -74,6 +74,8 @@ struct TasksDonePage<Cell: View>: View {
         // again, it catches up with whatever changed meanwhile.
         .onAppear { if drawn { model.loadDoneLogIfNeeded() } }
         .onChange(of: model.doneSearch) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
+        // The tag bar filters Done too (T6).
+        .onChange(of: model.tagFilter) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
         .onChange(of: drawn) { _, drawn in if drawn { model.loadDoneLogIfNeeded() } }
         .background {
             if drawn {
@@ -123,14 +125,17 @@ struct TasksDonePage<Cell: View>: View {
                     // A no-match line sits on the search's text column, as
                     // its count does (U-12).
                     // The owner's panel design's empty state.
-                    TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, filtered: false),
-                                    clear: { model.typeDoneSearch("") })
+                    TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, filtered: false, tag: model.tagFilter),
+                                    clear: { model.typeDoneSearch(""); model.chooseTagChip(nil) })
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
-                    AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)
+                    // And the other tabs' matches (T3).
+                    TasksFindCountLine(text: String(localized: "\(count.matches) of \(count.total) done tasks"),
+                                       countID: "tasks-done-search-count",
+                                       elsewhere: model.searchMatchesElsewhere(from: .done),
+                                       follow: { model.followSearch(from: .done, to: $0) })
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, TasksDesignMetrics.textX)
-                        .accessibilityIdentifier("tasks-done-search-count")
                 }
             }
             .padding(.bottom, bottomClearance - bottomMargin)
