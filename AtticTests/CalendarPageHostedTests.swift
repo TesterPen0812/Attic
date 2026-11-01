@@ -55,7 +55,7 @@ final class CalendarPageHostedTests: XCTestCase {
             page.settle()
             XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
             XCTAssertNotNil(page.element("calendar-search"))
-            XCTAssertTrue(try XCTUnwrap(page.element("search-close")).accessibilityPerformPress?() ?? false)
+            XCTAssertTrue(try XCTUnwrap(page.element(label: "End search")).accessibilityPerformPress?() ?? false)
             page.settle()
             XCTAssertEqual(page.offset, 0, accuracy: 0.5)
         }
@@ -502,6 +502,11 @@ final class CalendarPageHostedTests: XCTestCase {
         }
 
         func element(_ identifier: String) -> AnyObject? { matching(identifier).first }
+
+        func element(label: String) -> AnyObject? {
+            host.layoutSubtreeIfNeeded()
+            return Self.elements(host).first { ($0.accessibilityLabel?() ?? "") == label }
+        }
 
         func matching(_ identifier: String) -> [AnyObject] {
             host.layoutSubtreeIfNeeded()
