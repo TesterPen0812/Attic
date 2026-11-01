@@ -8,6 +8,18 @@ import XCTest
 /// A keystroke follows panel reveal; reveal does not precompute any query.
 @MainActor
 final class DoneSearchCostTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+    }
+
+    override func tearDown() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
+        try await super.tearDown()
+    }
+
     /// The spec's 16 ms query budget holds each query's median across the
     /// three fresh sessions (owner, 2026-10-03), not every single sample: a
     /// shared CI runner's spike put one sample of 24 over 16 ms (16.19 ms
@@ -313,6 +325,35 @@ final class DoneSearchCostTests: XCTestCase {
             CostBudget.assertLessThan(sample, 500, "the frame the Done results arrive in: \(resultFrames)")
         }
 
+    }
+
+    /// Keep the input boundary structural: timings are reported by the cost
+    /// test, while this guard is independent of the machine's frame time.
+    func testFirstNativeCharacterLeavesDoneResultsAndTheTaskPageAloneUntilFlush() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
+        }
+        let host = try FrameCostHost()
+        defer { host.close() }
+        host.place(.done)
+        host.model.beginSearch()
+        host.spin(0.6)
+        Hosted.pumpEvents()
+        let editor = try XCTUnwrap(host.window.firstResponder as? NSTextView)
+        let ids = host.model.doneLogTasks.map(\.id)
+        let evaluations = TasksPage.tabsEvaluations
+        let milliseconds = host.frame {
+            editor.insertText("F", replacementRange: editor.selectedRange())
+        }
+        print("ATTIC_DONE_FIRST_CHARACTER frame_ms=\(milliseconds)")
+        XCTAssertEqual(host.model.doneSearchInput.text, "F")
+        XCTAssertEqual(host.model.doneSearch, "")
+        XCTAssertEqual(host.model.doneLogTasks.map(\.id), ids)
+        XCTAssertEqual(TasksPage.tabsEvaluations, evaluations)
+        host.model.flushDoneSearchInput()
+        XCTAssertEqual(host.model.doneSearch, "F")
+        host.model.loadDoneLogIfNeeded()
+        XCTAssertEqual(host.model.doneSearchCount()?.matches, host.store.indexedDoneLogCount(matching: "F"))
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
