@@ -106,6 +106,44 @@ final class AdaptiveTasksTests: XCTestCase {
         }
     }
 
+    /// T3 with no results on the current tab (Accepted, not drawn): the
+    /// line reads "No results · 2 in Later · 1 in Done", each part a link
+    /// to that tab that keeps the query, as the count line's links; a tab
+    /// with no matches is left out; no matches anywhere is just "No results".
+    func testNoResultsShowsTheOtherTabsMatchesAsLinks() throws {
+        try withPanel(seed: [TaskDraft(title: "Water plants"),
+                             TaskDraft(title: "Launch walkthrough", status: .backlog),
+                             TaskDraft(title: "Launch stickers", status: .backlog)]) { host, _, tasksState, store, _ in
+            let model = tasksState.model(for: store, toasts: nil)
+            model.setSearchQuery("launch", for: .now)
+            spin(0.5)
+            XCTAssertNotNil(element("tasks-empty-line", in: host), "No results on Now")
+            XCTAssertNil(element("tasks-find-count", in: host), "no count line: Now has no matches")
+            let later = try XCTUnwrap(element("tasks-find-count-later", in: host), "· 2 in Later on the No results line")
+            XCTAssertEqual(later.accessibilityLabel?(), "2 in Later")
+            XCTAssertNil(element("tasks-find-count-done", in: host), "no part for Done's 0")
+            XCTAssertTrue(later.accessibilityPerformPress?() ?? false)
+            spin(0.5)
+            XCTAssertEqual(model.tab, .backlog)
+            XCTAssertEqual(model.trimmedQuery(for: .backlog), "launch", "the query is kept")
+
+            // Done with no results: its line links to Now's match.
+            model.setSearchQuery("water", for: .done)
+            model.select(tab: .done)
+            spin(0.5)
+            XCTAssertNotNil(element("tasks-empty-line", in: host), "No results on Done")
+            let now = try XCTUnwrap(element("tasks-find-count-now", in: host), "· 1 in Now on Done's No results line")
+            XCTAssertEqual(now.accessibilityLabel?(), "1 in Now")
+            XCTAssertNil(element("tasks-find-count-later", in: host))
+
+            // No matches anywhere: just "No results".
+            model.setSearchQuery("zebra", for: .done)
+            spin(0.5)
+            XCTAssertNotNil(element("tasks-empty-line", in: host))
+            for tab in ["now", "later", "done"] { XCTAssertNil(element("tasks-find-count-\(tab)", in: host), "no \(tab) part") }
+        }
+    }
+
     /// Now's Find counts Done's matches through the Done log's index, so
     /// Now's first key still shows at once on 5,000 finished tasks: the
     /// count's median stays in Done's own 16 ms query budget.

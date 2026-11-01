@@ -67,23 +67,121 @@ final class TasksCrossDayDragTests: XCTestCase {
         XCTAssertNil(TasksDayDropFinder.change(for: .overdue, today: today))
     }
 
+    /// A day is drawn in clock order (an untimed row after the timed ones),
+    /// started before to-do among rows of the same time: an untimed
+    /// started row is drawn after the timed rows (batch 3: the fixture
+    /// used to draw it first, an order the page never draws).
     func testStartedTasksStayTogetherAndATimedTaskTakesItsClockPlace() {
         let (started, nine, untimed, eleven) = (UUID(), UUID(), UUID(), UUID())
-        let rows = [row(started, .inProgress, y: 30), row(nine, time: 540, y: 60), row(eleven, time: 660, y: 90), row(untimed, y: 120)]
+        let rows = [row(nine, time: 540, y: 30), row(eleven, time: 660, y: 60), row(started, .inProgress, y: 90), row(untimed, y: 120)]
         let days: [TasksDayDropFinder.Day] = [.init(key: "tomorrow", kind: .day(tomorrow), header: CGRect(x: 0, y: 0, width: 300, height: 30), rows: rows)]
-        // A task to do, untimed, held over the started row: after the
-        // started ones and after the timed ones.
+        // A task to do, untimed, held over the first row: after the timed
+        // ones and after the untimed started one.
         let todo = TasksDayDropFinder.target(at: 32, dragged: row(UUID(), y: nil), ownKey: "today", days: days, today: today)
         XCTAssertEqual(todo?.index, 3)
         XCTAssertEqual(todo?.before, untimed)
         // A timed one (10:00) lands between 09:00 and 11:00 wherever it is held.
         let timed = TasksDayDropFinder.target(at: 125, dragged: row(UUID(), time: 600, y: nil), ownKey: "today", days: days, today: today)
-        XCTAssertEqual(timed?.index, 2)
-        XCTAssertEqual(timed?.lineY, 90)
-        // A started one stays with the started ones.
+        XCTAssertEqual(timed?.index, 1)
+        XCTAssertEqual(timed?.lineY, 60)
+        // An untimed started one stays with the untimed started ones.
         let start = TasksDayDropFinder.target(at: 125, dragged: row(UUID(), .inProgress, y: nil), ownKey: "today", days: days, today: today)
-        XCTAssertEqual(start?.index, 1)
+        XCTAssertEqual(start?.index, 3)
         XCTAssertEqual(start?.after, started)
+    }
+
+    /// Terra 4 (batch 3): a 9:00 to-do then a 10:00 started task. A 9:30
+    /// to-do's line sits between them, where it lands, not after 10:00.
+    func testAMixedStatusTimedDayDrawsTheLineBetweenNineAndTen() {
+        let (nine, ten) = (UUID(), UUID())
+        let rows = [row(nine, time: 540, y: 30), row(ten, .inProgress, time: 600, y: 60)]
+        let days: [TasksDayDropFinder.Day] = [.init(key: "tomorrow", kind: .day(tomorrow), header: CGRect(x: 0, y: 0, width: 300, height: 30), rows: rows)]
+        for y: CGFloat in [10, 40, 75, 85] {
+            let drop = TasksDayDropFinder.target(at: y, dragged: row(UUID(), time: 570, y: nil), ownKey: "today", days: days, today: today)
+            XCTAssertEqual(drop?.index, 1, "held at \(y)")
+            XCTAssertEqual(drop?.lineY, 60, "the line on 10:00's top, under 9:00 (held at \(y))")
+        }
+    }
+
+    /// The day's rows and headers laid out top to bottom, 30 pt each, as
+    /// the page reports their frames: the finder's input for a live drop.
+    private func liveDays(_ model: TasksPageModel, _ store: TaskStore, without dragged: UUID) -> [TasksDayDropFinder.Day] {
+        let sections = model.sections(for: .now)
+        var y: CGFloat = 0
+        return sections.groups.map { group in
+            let header = CGRect(x: 0, y: y, width: 300, height: 30)
+            y += 30
+            let rows = (sections.groupRows[group.key] ?? []).filter { $0.id != dragged }.map { drawn -> TasksDayDropFinder.Row in
+                defer { y += 30 }
+                return .init(id: drawn.id, status: drawn.status, time: store.task(withID: drawn.id)?.dueTimeMinutes,
+                             frame: CGRect(x: 0, y: y, width: 300, height: 30))
+            }
+            return .init(key: group.key, kind: group.kind, header: header, rows: rows)
+        }
+    }
+
+    /// The live drop for `title` held at `y` in its day's place, then the
+    /// drop itself: the row lands where the line was drawn.
+    private func assertTheDropLandsOnItsLine(_ title: String, among seed: [TaskDraft], held where: (TasksDayDropFinder.Day) -> CGFloat,
+                                             line expected: Int, file: StaticString = #filePath, line: UInt = #line) throws {
+        let (store, model) = try makeModel()
+        _ = store.commit(seed)
+        let moving = try id(title, store)
+        let task = try XCTUnwrap(store.task(withID: moving))
+        let days = liveDays(model, store, without: moving)
+        let tomorrowDay = try XCTUnwrap(days.first { $0.kind == .day(tomorrow) }, file: file, line: line)
+        let drop = try XCTUnwrap(TasksDayDropFinder.target(at: `where`(tomorrowDay), dragged: .init(id: moving, status: task.status,
+                                 time: task.dueTimeMinutes, frame: nil), ownKey: "today", days: days, today: today), file: file, line: line)
+        XCTAssertEqual(drop.key, tomorrowDay.key, file: file, line: line)
+        XCTAssertEqual(drop.index, expected, "\(title): the line's row", file: file, line: line)
+        let lineRow = drop.index < tomorrowDay.rows.count ? tomorrowDay.rows[drop.index].frame?.minY : tomorrowDay.rows.last?.frame?.maxY
+        XCTAssertEqual(drop.lineY, lineRow, "\(title): the line on that row's top", file: file, line: line)
+        XCTAssertTrue(model.moveToDay(moving, drop).isApplied, file: file, line: line)
+        let landed = try XCTUnwrap(ids(model, in: .day(tomorrow)), file: file, line: line)
+        XCTAssertEqual(landed.firstIndex(of: moving), drop.index, "\(title) lands on its line: \(landed.map { store.task(withID: $0)?.title ?? "?" })",
+                       file: file, line: line)
+    }
+
+    /// Terra 4's regression, live: the 9:30 to-do lands between 9:00 and 10:00.
+    func testAMixedStatusTimedDropLandsOnItsLine() throws {
+        try assertTheDropLandsOnItsLine("Half nine", among: [
+            TaskDraft(title: "Half nine", dueDay: today, dueTimeMinutes: 570),
+            TaskDraft(title: "Nine", dueDay: tomorrow, dueTimeMinutes: 540),
+            TaskDraft(title: "Ten", dueDay: tomorrow, dueTimeMinutes: 600, status: .inProgress)
+        ], held: { $0.rows[1].frame!.midY + 10 }, line: 1)
+    }
+
+    /// A day mixing started, timed and untimed rows (drawn 9:00 to-do,
+    /// 10:00 started, 11:00 to-do, an untimed started one, two untimed
+    /// to-dos), and drops on the header: each lands on its line.
+    func testADayMixingStartedTimedAndUntimedRowsLandsEveryDropOnItsLine() throws {
+        func seed(_ moving: TaskDraft) -> [TaskDraft] {
+            [moving,
+             TaskDraft(title: "Plan", dueDay: tomorrow, dueTimeMinutes: 540),
+             TaskDraft(title: "Call", dueDay: tomorrow, dueTimeMinutes: 600, status: .inProgress),
+             TaskDraft(title: "Lunch", dueDay: tomorrow, dueTimeMinutes: 660),
+             TaskDraft(title: "Draft", dueDay: tomorrow, status: .inProgress),
+             TaskDraft(title: "Milk", dueDay: tomorrow),
+             TaskDraft(title: "Post", dueDay: tomorrow)]
+        }
+        let top: (TasksDayDropFinder.Day) -> CGFloat = { $0.rows[0].frame!.midY - 5 }
+        let header: (TasksDayDropFinder.Day) -> CGFloat = { $0.header!.midY }
+        // An untimed started task, held over the first row or the header:
+        // with the untimed started one, after the timed rows.
+        try assertTheDropLandsOnItsLine("Sketch", among: seed(TaskDraft(title: "Sketch", dueDay: today, status: .inProgress)), held: top, line: 3)
+        try assertTheDropLandsOnItsLine("Sketch", among: seed(TaskDraft(title: "Sketch", dueDay: today, status: .inProgress)), held: header, line: 3)
+        // A 10:30 to-do: between 10:00 and 11:00 wherever it is held.
+        try assertTheDropLandsOnItsLine("Tidy", among: seed(TaskDraft(title: "Tidy", dueDay: today, dueTimeMinutes: 630)), held: header, line: 2)
+        // A 9:30 started one: between 9:00 and 10:00.
+        try assertTheDropLandsOnItsLine("Pack", among: seed(TaskDraft(title: "Pack", dueDay: today, dueTimeMinutes: 570, status: .inProgress)),
+                                        held: top, line: 1)
+        // A 10:00 to-do: after the 10:00 started one (started first at the same time).
+        try assertTheDropLandsOnItsLine("Read", among: seed(TaskDraft(title: "Read", dueDay: today, dueTimeMinutes: 600)), held: top, line: 2)
+        // An untimed to-do on the header: first of the untimed to-dos.
+        try assertTheDropLandsOnItsLine("Water", among: seed(TaskDraft(title: "Water", dueDay: today)), held: header, line: 4)
+        // ...and held over the last row's lower half: after it.
+        try assertTheDropLandsOnItsLine("Water", among: seed(TaskDraft(title: "Water", dueDay: today)),
+                                        held: { $0.rows.last!.frame!.maxY - 2 }, line: 6)
     }
 
     // MARK: - The model

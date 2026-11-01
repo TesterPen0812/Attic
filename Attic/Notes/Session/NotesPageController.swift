@@ -1196,6 +1196,9 @@ final class NotesPageController: ObservableObject {
             proposalReviewNotice = "Your draft changed. Review the refreshed comparison before replacing."
             return false
         }
+        if let merged, !review.isDeletion, session.workspacePage != nil {
+            return await acceptReviewedChangesOnTaskPage(review, merged: merged, session: session, generation: generation)
+        }
         return await performAfterRecovery {
             guard self.proposalReview == review, self.isReviewSessionCurrent(session), !session.isImporting,
                   self.canLeaveComposition(in: session) else { return false }
@@ -1262,6 +1265,55 @@ final class NotesPageController: ObservableObject {
                 return true
             }
         }
+    }
+
+    /// Batch 3: a task's page writes the reviewed changes (N5) through its
+    /// own workspace history, as its Restore Version does, so ⌘Z puts back
+    /// the text the review replaced (the regular note's Undo after Restore
+    /// Version). The proposal resolves in the same commit; a failed save
+    /// writes nothing and keeps the review open.
+    private func acceptReviewedChangesOnTaskPage(_ review: NoteProposalReview, merged: NoteDocument, session: NoteSession,
+                                                 generation: UInt64) async -> Bool {
+        let engine = session.engine
+        guard proposalReview == review, isReviewSessionCurrent(session), !session.isImporting, canLeaveComposition(in: session),
+              let note = store.note(withID: review.noteID), note.revisionToken == review.revision,
+              note.content == review.savedContent, session.editGeneration == generation, session.state == .clean,
+              engine.document() == review.current, engine.tags == review.currentTags, engine.tags == session.baseTags else {
+            _ = refreshProposalReview(id: review.id, session: session)
+            proposalReviewNotice = "The note changed. The comparison has refreshed; review it before replacing."
+            return false
+        }
+        guard merged.isWritableByThisBuild, let owner = note.taskID, let presenter = TaskNotePresenter.open(for: owner),
+              let coordinator = try? WorkspaceLegacyBridge.coordinator(for: store.container) else {
+            proposalReviewNotice = "The note could not be saved. Nothing was replaced."
+            return false
+        }
+        let signature = review.signature, noteID = review.noteID
+        let agent = review.agent.isEmpty ? String(localized: "Agent") : review.agent
+        engine.setCompatibilityTitle(merged.title)
+        let candidate = engine.bodyText(for: Array(merged.blocks.dropFirst()))
+        let selection = engine.textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        let edit = TaskNoteTextEdit(engine: engine, session: session, notes: self, tasks: presenter.model.store,
+            coordinator: coordinator, history: presenter.page.history, noteID: noteID,
+            parentID: owner, selectionBefore: selection, caretAfter: selection.location)
+        let outcome = await edit.perform(name: String(localized: "Accept Changes"), candidate: candidate, entryID: UUID(),
+            forwardWrites: [.init(entity: .proposal, id: signature.id)], forward: { commit in
+                let id = signature.id
+                let rows = try commit.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.id == id }))
+                guard NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]),
+                      rows.first.map(NoteProposalSignature.init) == signature else { throw WorkspaceFoundationError.conflict }
+                rows.forEach { WorkspaceLegacyBridge.delete($0, in: commit) }
+                let notes = try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+                let timestamp = Date()
+                for row in notes { row.externalEditorName = agent; row.externalEditedAt = timestamp }
+            }, inverse: { _ in .init(writes: [], check: { _ in }, preservations: [:], stage: { _, _ in }) })
+        guard outcome == .committed || outcome == .publicationPending else {
+            if session.engine === engine { engine.setCompatibilityTitle(review.current.title) }
+            if proposalReview?.id == review.id { proposalReviewNotice = "The note could not be saved. Nothing was replaced." }
+            return false
+        }
+        if proposalReview?.id == review.id { endProposalReview() }
+        return true
     }
 
     @discardableResult

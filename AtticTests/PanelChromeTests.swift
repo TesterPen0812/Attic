@@ -1021,7 +1021,11 @@ final class PanelChromeTests: XCTestCase {
     /// and the bottom bar and top row stay still.
     func testTheGrowAndShrinkDrawOneSurfaceOnAFixedCornerWithTheBarsStill() throws {
         AtticMotionPreference.systemReduceMotionOverride = false
-        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
         try withPanel { host, state, _, _, _, _ in
             state.selectSection(.tasks)
             spin(1.0)
@@ -1032,29 +1036,42 @@ final class PanelChromeTests: XCTestCase {
             ComposerOverlay.corners = []
             var doubled = 0
             var samples = 0
-            @MainActor func sample(for seconds: TimeInterval, plus: String) throws {
-                let end = Date().addingTimeInterval(seconds)
-                while Date() < end {
-                    spin(0.012)
+            // Terra 9 (batch 3): the motion is stepped, never sampled in
+            // real time. As the page switch's test does, the presentation
+            // is paused and its clock stepped 60 frames a second through
+            // 0.8 s, so a slow host can neither skip frames nor fit fewer.
+            @MainActor func sample(frames: Int = 48, plus: String, _ start: () throws -> Void) throws {
+                let layer = try XCTUnwrap(host.layer)
+                let begin = layer.convertTime(CACurrentMediaTime(), from: nil)
+                layer.speed = 0
+                layer.timeOffset = begin
+                defer { layer.speed = 1; layer.timeOffset = 0 }
+                host._renderForTest(interval: 0)
+                try start()
+                for step in 0...frames {
+                    // The grow starts one turn after the "+" is handed over.
+                    RunLoop.main.run(until: Date())
+                    host._renderForTest(interval: step == 0 ? 0 : 1.0 / 60)
+                    layer.timeOffset = begin + Double(step) / 60
+                    CATransaction.flush()
                     samples += 1
                     if ComposerOverlay.isPresented && PanelSharedBottomBar.drawsPlus { doubled += 1 }
-                    assertSameFrames(before, try barFrames(still, in: host), "the bars stay still (sample \(samples))")
+                    assertSameFrames(before, try barFrames(still, in: host), "the bars stay still (frame \(step))")
                     let now = try XCTUnwrap(frame(of: plus, in: host))
                     XCTAssertEqual(now.maxX, plusFrame.maxX, accuracy: 0.5)
                     XCTAssertEqual(now.maxY, plusFrame.maxY, accuracy: 0.5)
                 }
             }
             let plus = try XCTUnwrap(element("tasks-new-task", in: host))
-            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
-            try sample(for: 0.8, plus: "tasks-new-task")
+            try sample(plus: "tasks-new-task") { XCTAssertTrue(plus.accessibilityPerformPress?() ?? false) }
             let opening = ComposerOverlay.surfaces
             XCTAssertTrue(opening.contains { $0.size.width > 30 && $0.size.width < 285 },
                           "an in-between frame on the way open: \(opening.map(\.size.width))")
             XCTAssertEqual(opening.last?.size.width ?? 0, 289, accuracy: 0.5)
             ComposerOverlay.surfaces = []
             // Closing through a page switch.
-            state.selectSection(.calendar)
-            try sample(for: 0.8, plus: "calendar-new-task")
+            try sample(plus: "calendar-new-task") { state.selectSection(.calendar) }
+            spin(0.3)
             let closing = ComposerOverlay.surfaces
             XCTAssertTrue(closing.contains { $0.size.width > 30 && $0.size.width < 285 },
                           "an in-between frame on the way back: \(closing.map(\.size.width))")

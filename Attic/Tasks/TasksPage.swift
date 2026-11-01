@@ -1529,7 +1529,10 @@ struct TasksPage: View {
                         let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters, tag: model.tagFilter(on: tab))
                         TasksEmptyState(empty: empty, clear: { clearFilters(on: tab) },
                                         action: tab == .now && model.offersLater && !empty.canClear
-                                            ? (String(localized: "Choose from Later"), { model.select(tab: .backlog) }) : nil)
+                                            ? (String(localized: "Choose from Later"), { model.select(tab: .backlog) }) : nil,
+                                        // T3: no results here, the other tabs' matches as links.
+                                        elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: tab),
+                                        follow: { followSearch(from: tab, to: $0) })
                     }
                     // Done tasks recede into one quiet line; a click shows
                     // them under it (and hides them again).

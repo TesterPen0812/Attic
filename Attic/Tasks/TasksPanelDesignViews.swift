@@ -391,12 +391,21 @@ struct TasksEmptyState: View {
     let empty: TasksPanelDesign.Empty
     var clear: (() -> Void)? = nil
     var action: (title: String, run: () -> Void)? = nil
+    /// T3 with no results on this tab (Accepted 2026-11-01): the other
+    /// tabs' matches on the title's line, "No results · 2 in Later", each a
+    /// link (the count line's look, keys and VoiceOver).
+    var elsewhere: [TasksElsewhereCount] = []
+    var follow: (TasksTab) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(verbatim: empty.title)
-                .font(.system(size: 11, weight: .semibold))
-                .modifier(TasksInk(.heading))
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(verbatim: empty.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .modifier(TasksInk(.heading))
+                TasksElsewhereLinks(elsewhere: elsewhere, follow: follow)
+            }
+            .lineLimit(1)
             Text(verbatim: empty.body)
                 .font(.system(size: 10))
                 .multilineTextAlignment(.center)
@@ -616,14 +625,25 @@ struct TasksFindCountLine: View {
         HStack(spacing: 0) {
             AtticText(verbatim: text, style: .rowMeta, ink: .helper)
                 .accessibilityIdentifier(countID)
-            ForEach(elsewhere, id: \.tab) { part in
-                AtticText(verbatim: " · ", style: .rowMeta, ink: .helper)
-                TasksFindCountLink(title: String(localized: "\(part.count) in \(part.tab.title)")) { follow(part.tab) }
-                    .accessibilityIdentifier("tasks-find-count-\(part.tab.title.lowercased())")
-            }
+            TasksElsewhereLinks(elsewhere: elsewhere, follow: follow)
         }
         .lineLimit(1)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// "· 2 in Later · 5 in Done" (T3): each part a link to that tab; the
+/// count line and the No results line draw the same parts.
+struct TasksElsewhereLinks: View {
+    let elsewhere: [TasksElsewhereCount]
+    let follow: (TasksTab) -> Void
+
+    var body: some View {
+        ForEach(elsewhere, id: \.tab) { part in
+            AtticText(verbatim: " · ", style: .rowMeta, ink: .helper)
+            TasksFindCountLink(title: String(localized: "\(part.count) in \(part.tab.title)")) { follow(part.tab) }
+                .accessibilityIdentifier("tasks-find-count-\(part.tab.title.lowercased())")
+        }
     }
 }
 

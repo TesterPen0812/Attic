@@ -532,7 +532,9 @@ final class NoteFormatControls: NSObject {
     func barPlacement(selection: NSRange) -> (frame: NSRect, below: Bool)? {
         guard let textView else { return nil }
         let first: NSRect, last: NSRect
-        if tableMarkTarget, let rects = engine.tableSelectionRects(in: textView) {
+        if let rects = barCellAnchor {
+            (first, last) = rects
+        } else if tableMarkTarget, let rects = engine.tableSelectionRects(in: textView) {
             (first, last) = rects
         } else {
             guard selection.length > 0,
@@ -1049,16 +1051,26 @@ final class NoteFormatControls: NSObject {
     /// link around a caret).
     private var barAnchor: NSRange?
 
-    private func openLinkField(over range: NSRange) -> Bool {
-        guard range.length > 0, NSMaxRange(range) <= engine.textStorage.length else { return false }
+    /// The cell text the bar stands over while a cell's link field is open
+    /// (its first and last line in the text view): the keyboard is the
+    /// field's then, so the table's own selection can't place the bar.
+    private var barCellAnchor: (first: NSRect, last: NSRect)?
+
+    /// `cell`: a cell's text (batch 3, N3 in a table), else `range` of the note's text.
+    private func openLinkField(over range: NSRange, cell: (first: NSRect, last: NSRect)? = nil) -> Bool {
+        if cell == nil {
+            guard range.length > 0, NSMaxRange(range) <= engine.textStorage.length else { return false }
+        }
         slashModel.hide()
         formatModel.highlightPalette = nil
         formatModel.barKeyboardIndex = nil
-        formatModel.setSnapshot(NoteFormatSnapshot.make(router: router, selection: range))
-        barAnchor = range
+        formatModel.setSnapshot(NoteFormatSnapshot.make(router: router, selection: cell == nil ? range : selection))
+        barAnchor = cell == nil ? range : nil
+        barCellAnchor = cell
         barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
         guard placeBar(animated: formatModel.barShown) else {
             barAnchor = nil
+            barCellAnchor = nil
             return false
         }
         linkInBar = true
@@ -1079,6 +1091,7 @@ final class NoteFormatControls: NSObject {
         guard linkInBar else { return }
         linkInBar = false
         barAnchor = nil
+        barCellAnchor = nil
         formatModel.linkFieldOpen = false
         barHost.acceptsKeyboard = false
     }
@@ -1190,12 +1203,16 @@ final class NoteFormatControls: NSObject {
     private var cellLinkTarget: NoteCellLinkTarget?
     private var cellCardAnchor: NSRect?
 
+    /// Link… on a cell's text. Batch 3 (N3 in a table): the bar over the
+    /// cell widens into the address field, its controls folding away, as
+    /// on the note's text (the column-wide card is gone for cells too);
+    /// with no room for the bar, the card still opens.
     func openCellLinkCard(target: NoteCellLinkTarget) {
-        guard let textView, let rects = engine.tableSelectionRects(in: textView) ?? engine.focusedTable.map({ view in
-            let rect = view.canvas.convert(view.grid.cellRect(target.position), to: textView)
-            return (rect, rect)
-        }) else { return }
-        hideBar()
+        guard let textView, let view = engine.tableAttachment(id: target.tableID)?.0.hostedView ?? engine.focusedTable else { return }
+        let cellRect = view.canvas.convert(view.grid.cellRect(target.position), to: textView)
+        let rects: (first: NSRect, last: NSRect) = engine.cellTextRects(target.range, in: view, textView: textView)
+            ?? engine.tableSelectionRects(in: textView) ?? (cellRect, cellRect)
+        if linkInBar { cancelCard(refocus: false) }
         cardFromSlash = false
         linkTarget = nil
         cellLinkTarget = target
@@ -1204,6 +1221,8 @@ final class NoteFormatControls: NSObject {
         cardModel.viewportHeight = nil
         cardModel.viewportWidth = nil
         cardModel.openLink(url: target.url)
+        if openLinkField(over: target.range, cell: rects) { return }
+        hideBar()
         presentCard()
     }
 
