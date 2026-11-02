@@ -168,9 +168,12 @@ extension PhoneLibrary {
 
     // Position a root above existing roots; an edit within the same list keeps its place.
     private func frontOrder(excluding id: UUID, in context: ModelContext) throws -> Int64 {
-        var query = FetchDescriptor<TaskItem>(predicate: #Predicate {
-            $0.parentID == nil && $0.id != id && $0.deletedAt == nil && $0.doneLoggedAt == nil && $0.manualOrder != nil
-        }, sortBy: [SortDescriptor(\TaskItem.manualOrder, order: .reverse)])
+        let roots = #Predicate<TaskItem> { row in
+            (row.parentID == nil && row.id != id) && (row.deletedAt == nil && row.doneLoggedAt == nil)
+        }
+        // Descending store order puts nil ranks last. If all ranks are nil, start at zero.
+        let byRank = SortDescriptor<TaskItem>(\TaskItem.manualOrder, order: .reverse)
+        var query = FetchDescriptor<TaskItem>(predicate: roots, sortBy: [byRank])
         query.fetchLimit = 1
         let maximum = try context.fetch(query).first?.manualOrder ?? 0
         let (order, overflow) = maximum.addingReportingOverflow(1024)

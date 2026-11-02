@@ -5,6 +5,19 @@ import XCTest
 
 @MainActor
 final class TaskStoreMobileTests: XCTestCase {
+    func testNewRootRanksAboveNegativeOrdersIgnoringUnrankedAndInactiveRows() throws {
+        let db = try PersistenceController.makeContainer(inMemory: true)
+        let writer = ModelContext(db)
+        let ranked = TaskItem(title: "Ranked"); ranked.manualOrder = -20
+        let unranked = TaskItem(title: "Unranked"); unranked.manualOrder = nil
+        let child = TaskItem(title: "Child"); child.parentID = ranked.id; child.manualOrder = .max
+        let deleted = TaskItem(title: "Deleted"); deleted.deletedAt = Date(); deleted.manualOrder = .max
+        let archived = TaskItem(title: "Archived"); archived.doneLoggedAt = Date(); archived.manualOrder = .max
+        for task in [ranked, unranked, child, deleted, archived] { writer.insert(task) }
+        try writer.save()
+        XCTAssertEqual(try PhoneLibrary(container: db).createTask(title: "New").manualOrder, 1004)
+    }
+
     func testMobileUsesSharedTaskSemanticsWithoutCloudKitInTests() throws {
         XCTAssertNil(PersistenceController.makeConfiguration(inMemory: true).cloudKitContainerIdentifier)
         let store = PhoneLibrary(container: try PersistenceController.makeContainer(inMemory: true))
