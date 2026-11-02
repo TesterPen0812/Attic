@@ -113,6 +113,7 @@ struct PhoneNoteHistory {
                 row.content = bytes; row.contentFormat = restored.format; row.title = title; row.body = body; row.plainText = plain
                 row.imageCount = images; row.fileCount = files.count; row.firstFileName = files.first?.filename
                 row.revision = head.source.revision + 1; row.revisionID = token; row.updatedAt = stamp
+                row.deletedAttachmentIDsRaw = nil
             }
             if rows.contains(where: { $0 !== preferred && Self.noteLess(preferred, $0) }) {
                 preferred.updatedAt = Date(timeIntervalSinceReferenceDate: stamp.timeIntervalSinceReferenceDate.nextUp)
@@ -288,8 +289,12 @@ private extension PhoneNoteHistory {
                 let keys = Set(redirects.compactMap(\.preservation)), tasks = Set(redirects.map(\.task))
                 guard keys.count == 1, tasks.count == 1, let key = keys.first, let task = tasks.first else { throw Failure.mixedOwner }
                 let records = try c.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.id == key }))
-                guard let first = records.first, records.allSatisfy({ $0.snapshot == first.snapshot && $0.rootID == first.rootID &&
-                    $0.provenance == first.provenance && $0.purgedAt == first.purgedAt }),
+                guard let first = records.first, records.allSatisfy({
+                    $0.rootID == first.rootID && $0.deletedAt == first.deletedAt &&
+                    $0.capturedAt == first.capturedAt && $0.provenance == first.provenance &&
+                    $0.snapshot == first.snapshot && $0.purgedAt == first.purgedAt &&
+                    $0.retiredAt == first.retiredAt && $0.dependencyOwnersData == first.dependencyOwnersData
+                }),
                     let p = try? JSONDecoder().decode(Preservation.self, from: first.snapshot), p.rootID == first.rootID,
                     Set(p.members.map(\.id)).count == p.members.count, let retired = p.members.first(where: { $0.id == task })
                 else { throw Failure.mixedOwner }

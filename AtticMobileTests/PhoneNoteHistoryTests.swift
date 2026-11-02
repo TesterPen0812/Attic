@@ -52,7 +52,8 @@ final class PhoneNoteHistoryTests: XCTestCase {
 
     func testRestorePreservesOriginalAndAllReplicasMetadataAndOnlyReconcilesAttachmentVisibility() throws {
         let db = try database(), c = ModelContext(db), id = UUID(), rev = UUID(), target = UUID()
-        note(c, id: id, revisionID: rev, tag: "a"); note(c, id: id, revisionID: rev, tag: "b")
+        note(c, id: id, revisionID: rev, tag: "a").deletedAttachmentIDsRaw = UUID().uuidString
+        note(c, id: id, revisionID: rev, tag: "b").deletedAttachmentIDsRaw = UUID().uuidString
         let fileID = UUID(), removedID = UUID(), missingID = UUID()
         let doc = NoteDocument(blocks: [.text("  Old   head "), .file(attachmentID: fileID, filename: "kit.txt", contentTypeIdentifier: "public.text", byteCount: 2), .image(attachmentID: missingID)])
         var wire = try NoteContentCodec.encode(doc); wire.append(10)
@@ -73,7 +74,8 @@ final class PhoneNoteHistoryTests: XCTestCase {
         XCTAssertTrue(notes.allSatisfy { $0.content == wire && $0.revisionID == next.revisionID && $0.revision == 4 &&
             $0.title == "Old head" && $0.plainText == NoteTextExport.plainText(doc) && $0.body == NoteTextExport.plainBody(doc) &&
             $0.imageCount == 1 && $0.fileCount == 1 && $0.firstFileName == "kit.txt" && $0.contentFingerprint == NoteItem.fingerprint(wire) &&
-            $0.pinnedAt == t && $0.externalEditedAt == t && $0.externalEditorName == "Existing" && $0.createdAt == t })
+            $0.pinnedAt == t && $0.externalEditedAt == t && $0.externalEditorName == "Existing" && $0.createdAt == t &&
+            $0.deletedAttachmentIDsRaw == nil })
         let versions = try reader.fetch(FetchDescriptor<NoteVersion>())
         XCTAssertEqual(versions.filter { $0.id == target && $0.content == wire }.count, 2)
         XCTAssertEqual(versions.filter { $0.reason == .beforeRestore && $0.content == raw && $0.sourceRevisionID == rev }.count, 1)
