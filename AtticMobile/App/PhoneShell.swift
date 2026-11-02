@@ -1,0 +1,708 @@
+import SwiftData
+import SwiftUI
+
+enum PhoneTab: String, CaseIterable, Identifiable {
+    case home, tasks, calendar
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .home: "house"
+        case .tasks: "checkmark.circle"
+        case .calendar: "calendar"
+        }
+    }
+}
+
+enum PhoneRoute: Hashable {
+    case allNotes(tag: String?)
+    case note(UUID)
+    case task(UUID)
+    case canvases
+    case canvas(UUID)
+}
+
+enum PhoneTasksTab: String, CaseIterable, Identifiable {
+    case now, later, done
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .now: "checkmark.circle"
+        case .later: "circle.dashed"
+        case .done: "checkmark.circle.fill"
+        }
+    }
+}
+
+/// The main screens and pushed destinations share one navigation stack. The
+/// bottom controls use native material; content stays on an unboxed surface.
+struct PhoneShell: View {
+    @StateObject private var state: PhoneAppState
+    private let syntheticCalendar: Bool
+    @State private var tab: PhoneTab = .home
+    @State private var path: [PhoneRoute] = []
+    @State private var tasksTab: PhoneTasksTab = .now
+    @State private var selectedTag: String?
+    @State private var collapsed: Set<String> = []
+    @State private var expandedTags: Set<String> = []
+    @State private var searchPresented = false
+    @State private var capturePresented = false
+    @ScaledMetric(relativeTo: .largeTitle) private var pageTitleSize: CGFloat = 34
+
+    init(container: ModelContainer, syntheticCalendar: Bool) {
+        _state = StateObject(wrappedValue: PhoneAppState(container: container))
+        self.syntheticCalendar = syntheticCalendar
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            screen(root: true) { rootContent }
+                .navigationDestination(for: PhoneRoute.self) { route in
+                    screen(root: false) { destination(route) }
+                }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { dock }
+        .background(Color(uiColor: .systemBackground))
+        .sheet(isPresented: $searchPresented) {
+            PhoneSearchSheet(state: state) { route in
+                searchPresented = false
+                DispatchQueue.main.async { path.append(route) }
+            }
+        }
+        .sheet(isPresented: $capturePresented) {
+            PhoneCaptureSheet(state: state)
+        }
+        .alert("Could not save", isPresented: Binding(
+            get: { state.errorMessage != nil },
+            set: { if !$0 { state.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { state.errorMessage = nil }
+        } message: {
+            Text(state.errorMessage ?? "The operation could not be completed.")
+        }
+    }
+
+    private func screen<Content: View>(root: Bool, @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                if root {
+                    Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+                } else {
+                    Button {
+                        if !path.isEmpty { path.removeLast() }
+                    } label: {
+                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Back")
+                    .background(.regularMaterial, in: Circle())
+                }
+                Spacer()
+                Menu {
+                    Button("Refresh", systemImage: "arrow.clockwise") { state.refresh() }
+                    Button("All notes", systemImage: "note.text") { path.append(.allNotes(tag: nil)) }
+                    Button("Canvases", systemImage: "scribble.variable") { path.append(.canvases) }
+                    if root && tab == .tasks {
+                        Section("Filter tasks by tag") {
+                            Button("All tags") { selectedTag = nil }
+                            ForEach(taskTags, id: \.self) { tag in
+                                Button("#" + tag) { selectedTag = tag }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 20, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: Circle())
+                }
+                .accessibilityLabel("More options")
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            content()
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    @ViewBuilder private var rootContent: some View {
+        if !state.loaded {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            switch tab {
+            case .home: home
+            case .tasks: tasks
+            case .calendar:
+                PhoneCalendarPage(tasks: state.tasks, syntheticEventsEnabled: syntheticCalendar) { taskID in
+                    path.append(.task(taskID))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func destination(_ route: PhoneRoute) -> some View {
+        switch route {
+        case let .allNotes(tag): notesList(tag: tag)
+        case let .note(id): PhoneNotePage(state: state, noteID: id)
+        case let .task(id): PhoneTaskPage(state: state, taskID: id)
+        case .canvases: canvasesList
+        case let .canvas(id): PhoneCanvasPage(state: state, canvasID: id)
+        }
+    }
+
+    private var dock: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 0) {
+                ForEach(PhoneTab.allCases) { option in
+                    Button {
+                        if !path.isEmpty { path.removeAll() }
+                        withAnimation(.easeInOut(duration: 0.22)) { tab = option }
+                    } label: {
+                        Image(systemName: tab == option ? option.symbol + ".fill" : option.symbol)
+                            .font(.system(size: 22))
+                            .frame(width: 48, height: 44)
+                            .foregroundStyle(tab == option ? Color.accentColor : Color.primary)
+                            .background {
+                                if tab == option { Capsule().fill(Color.accentColor.opacity(0.11)) }
+                            }
+                    }
+                    .accessibilityLabel(option.title)
+                    .accessibilityAddTraits(tab == option ? .isSelected : [])
+                }
+            }
+            .padding(4)
+            .background(.regularMaterial, in: Capsule())
+            Spacer(minLength: 8)
+            HStack(spacing: 0) {
+                Button { searchPresented = true } label: {
+                    Image(systemName: "magnifyingglass").font(.system(size: 21))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Search")
+                Button { capturePresented = true } label: {
+                    Image(systemName: "plus").font(.system(size: 24, weight: .regular))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Create")
+            }
+            .padding(4)
+            .background(.regularMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 5)
+        .background(Color(uiColor: .systemBackground).opacity(0.90))
+    }
+
+    private func pageTitle(_ text: String) -> some View {
+        Text(text).font(.system(size: pageTitleSize, weight: .bold))
+            .tracking(-1.0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.top, 13)
+            .padding(.bottom, 10)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var home: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                pageTitle("Home")
+                Button { searchPresented = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                        Text("Search")
+                        Spacer()
+                    }
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(height: 44)
+                    .padding(.horizontal, 14)
+                    .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                if !state.notes.isEmpty || !state.tasks.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(Array(state.notes.prefix(3))) { note in
+                                Button { path.append(.note(note.id)) } label: {
+                                    VStack(alignment: .leading, spacing: 9) {
+                                        Text(note.title.isEmpty ? "Untitled note" : note.title)
+                                            .font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                                        Divider()
+                                        Text(note.body.isEmpty ? " " : note.body)
+                                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                                            .lineLimit(7).frame(maxWidth: .infinity, alignment: .leading)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(14)
+                                    .frame(width: 150, height: 185, alignment: .topLeading)
+                                    .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(.quaternary))
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                            Button {
+                                path.removeAll()
+                                tab = .tasks
+                            } label: {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Today").font(.system(size: 16, weight: .semibold))
+                                    Divider()
+                                    ForEach(Array(state.tasks.filter { $0.listedStatus != .done }.prefix(3))) { task in
+                                        Label(task.title, systemImage: "circle")
+                                            .font(.system(size: 12)).lineLimit(2)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(14)
+                                .frame(width: 150, height: 185, alignment: .topLeading)
+                                .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(.quaternary))
+                            }
+                            .foregroundStyle(.primary)
+                        }.padding(.horizontal, 16)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 18)
+                }
+                homeLink("All notes", symbol: "note.text") { path.append(.allNotes(tag: nil)) }
+                homeLink("Canvases", symbol: "scribble.variable") { path.append(.canvases) }
+
+                sectionHeading("Pinned", icon: "pin", count: state.notes.filter { $0.pinnedAt != nil }.count,
+                               key: "home-pinned")
+                if !collapsed.contains("home-pinned") {
+                    let pinned = state.notes.filter { $0.pinnedAt != nil }
+                    if pinned.isEmpty { emptySection("No pinned notes") }
+                    ForEach(pinned) { note in
+                        noteRow(note) { path.append(.note(note.id)) }
+                    }
+                }
+                sectionHeading("Tags", icon: "number", count: noteTags.count, key: "home-tags")
+                if !collapsed.contains("home-tags") {
+                    if noteTags.isEmpty { emptySection("No tags yet") }
+                    ForEach(noteTags, id: \.self) { tag in
+                        Button {
+                            if expandedTags.contains(tag) { expandedTags.remove(tag) }
+                            else { expandedTags.insert(tag) }
+                        } label: {
+                            HStack(spacing: 13) {
+                                Text("#").font(.system(size: 22, weight: .medium)).foregroundStyle(.tint)
+                                    .frame(width: 24)
+                                Text(tag).font(.body).foregroundStyle(.primary)
+                                Spacer()
+                                Text(state.notes.filter { $0.tags.contains(tag) }.count, format: .number)
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: expandedTags.contains(tag) ? "chevron.up" : "chevron.down")
+                                    .foregroundStyle(.tertiary)
+                            }.padding(.horizontal, 20).frame(minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("#\(tag)")
+                        if expandedTags.contains(tag) {
+                            ForEach(state.notes.filter { $0.tags.contains(tag) }) { note in
+                                noteRow(note) { path.append(.note(note.id)) }.padding(.leading, 20)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 35)
+        }
+    }
+
+    private func homeLink(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 13) {
+                Image(systemName: symbol).font(.system(size: 21)).foregroundStyle(.secondary).frame(width: 24)
+                Text(title).font(.body).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
+            }.padding(.horizontal, 20).frame(minHeight: 48)
+        }.buttonStyle(.plain)
+    }
+
+    private var noteTags: [String] {
+        Array(Set(state.notes.flatMap(\.tags))).sorted()
+    }
+    private var taskTags: [String] {
+        Array(Set(state.tasks.flatMap(\.tags))).sorted()
+    }
+
+    private var tasks: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                pageTitle("Tasks")
+                HStack(spacing: 8) {
+                    ForEach(PhoneTasksTab.allCases) { option in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { tasksTab = option }
+                        } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: option.symbol)
+                                if tasksTab == option { Text(option.title) }
+                            }
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(tasksTab == option ? Color.accentColor : Color.secondary)
+                            .frame(minWidth: 50, minHeight: 44)
+                            .padding(.horizontal, tasksTab == option ? 12 : 2)
+                            .background(tasksTab == option ? Color.accentColor.opacity(0.12) : Color(uiColor: .secondarySystemFill),
+                                        in: Capsule())
+                        }.accessibilityLabel(option.title).accessibilityAddTraits(tasksTab == option ? .isSelected : [])
+                    }
+                    if let selectedTag {
+                        Button { self.selectedTag = nil } label: {
+                            HStack(spacing: 8) {
+                                Text("#" + selectedTag).lineLimit(1)
+                                Image(systemName: "xmark").font(.caption)
+                            }.foregroundStyle(.tint)
+                                .padding(.horizontal, 12).frame(height: 44)
+                                .background(Color.accentColor.opacity(0.1), in: Capsule())
+                        }.accessibilityLabel("Remove #\(selectedTag) filter")
+                    }
+                    Spacer(minLength: 0)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+                let groups = taskGroups
+                if groups.isEmpty {
+                    ContentUnavailableView(tasksTab == .done ? "Nothing completed" : "No tasks",
+                                           systemImage: "checkmark.circle",
+                                           description: Text(selectedTag == nil ? "Create a task with +." : "No tasks have this tag."))
+                        .frame(maxWidth: .infinity).padding(.top, 40)
+                } else {
+                    ForEach(groups) { group in
+                        sectionHeading(group.title, icon: group.symbol, count: group.rows.count, key: group.key)
+                        if !collapsed.contains(group.key) {
+                            ForEach(group.rows) { task in
+                                taskRow(task)
+                            }
+                        }
+                    }
+                }
+            }.padding(.bottom, 35)
+        }
+    }
+
+    private struct TaskGroup: Identifiable {
+        let key: String, title: String, symbol: String, rows: [PhoneLibrary.TaskRow]
+        var id: String { key }
+    }
+
+    private var taskGroups: [TaskGroup] {
+        let today = DueDay(date: Date(), calendar: .autoupdatingCurrent)
+        let next = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: Date())
+            .map { DueDay(date: $0, calendar: .autoupdatingCurrent) } ?? today
+        let rows = state.tasks.filter { item in
+            item.parentID == nil && (selectedTag == nil || item.tags.contains(selectedTag!)) &&
+            (tasksTab == .done ? item.listedStatus == .done :
+             tasksTab == .later ? item.listedStatus == .backlog :
+             item.listedStatus != .done && item.listedStatus != .backlog)
+        }
+        if tasksTab != .now {
+            let title = tasksTab == .done ? "This week" : "Later"
+            return rows.isEmpty ? [] : [TaskGroup(key: "tasks-\(tasksTab.rawValue)", title: title,
+                                                 symbol: tasksTab.symbol, rows: rows)]
+        }
+        var result: [TaskGroup] = []
+        func add(_ name: String, _ key: String, _ symbol: String, _ filter: (PhoneLibrary.TaskRow) -> Bool) {
+            let items = rows.filter(filter)
+            if !items.isEmpty { result.append(.init(key: key, title: name, symbol: symbol, rows: items)) }
+        }
+        add("Overdue", "overdue", "exclamationmark.circle") { $0.dueDay.map { $0 < today } ?? false }
+        add("Today", "today", "sun.max") { $0.dueDay == today }
+        add("Tomorrow", "tomorrow", "sunrise") { $0.dueDay == next }
+        let upcoming = Dictionary(grouping: rows.filter { ($0.dueDay ?? today) > next }, by: \.dueDay)
+        for day in upcoming.keys.compactMap({ $0 }).sorted() {
+            let label = day.startDate(in: .autoupdatingCurrent)?.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)) ?? day.rawValue
+            if let items = upcoming[day] { result.append(.init(key: day.rawValue, title: label, symbol: "calendar", rows: items)) }
+        }
+        add("No date", "no-date", "tray") { $0.dueDay == nil }
+        return result
+    }
+
+    private func taskRow(_ row: PhoneLibrary.TaskRow) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                let destination: TaskStatus = row.listedStatus == .done ? .todo : .done
+                state.change { _ = try state.library.updateTask(
+                    id: row.id, patch: .init(title: nil, priority: nil, status: destination)) }
+            } label: {
+                Image(systemName: row.listedStatus == .done ? "checkmark.circle.fill" :
+                        row.listedStatus == .backlog ? "circle.dashed" :
+                        row.status == .inProgress ? "circle.lefthalf.filled" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle((row.dueDay.map { $0 < DueDay(date: Date(), calendar: .autoupdatingCurrent) } ?? false)
+                                     ? Color.red : Color.secondary)
+                    .frame(width: 28, height: 44)
+            }.accessibilityLabel(row.listedStatus == .done ? "Mark not done" : "Mark done")
+            Button { path.append(.task(row.id)) } label: {
+                HStack(spacing: 6) {
+                    Text(row.title).font(.body).lineLimit(1)
+                        .foregroundStyle(row.listedStatus == .done ? Color.secondary : Color.primary)
+                    if row.priority == .high {
+                        Text("!!").font(.system(size: 14, weight: .bold)).foregroundStyle(.orange)
+                    }
+                    Spacer(minLength: 3)
+                    if let due = row.dueDay {
+                        chip(due.startDate(in: .autoupdatingCurrent)?.formatted(.dateTime.day().month(.abbreviated)) ?? due.rawValue,
+                             overdue: due < DueDay(date: Date(), calendar: .autoupdatingCurrent))
+                    }
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel(row.title)
+            .accessibilityHint("Open task")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 18)
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { path.append(.task(row.id)) }
+            Button("Move to Later", systemImage: "clock") {
+                state.change { _ = try state.library.updateTask(id: row.id, patch: .init(title: nil, priority: nil, status: .backlog)) }
+            }
+            Button(row.listedStatus == .done ? "Move to Now" : "Mark Done", systemImage: "checkmark") {
+                state.change { _ = try state.library.updateTask(id: row.id, patch: .init(title: nil, priority: nil,
+                                                                                         status: row.listedStatus == .done ? .todo : .done)) }
+            }
+        }
+    }
+
+    private func chip(_ text: String, overdue: Bool = false) -> some View {
+        Text(text).font(.system(size: 14, weight: .medium)).lineLimit(1)
+            .foregroundStyle(overdue ? Color.red : Color.accentColor)
+            .padding(.horizontal, 8).frame(height: 26)
+            .background(overdue ? Color.red.opacity(0.1) : Color.accentColor.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func sectionHeading(_ title: String, icon: String, count: Int, key: String) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 19)).foregroundStyle(.secondary).frame(width: 23)
+                Text(title).font(.system(size: 17, weight: .semibold))
+                Spacer()
+                if collapsed.contains(key) { Text("\(count)").foregroundStyle(.secondary) }
+                Image(systemName: collapsed.contains(key) ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 16)).foregroundStyle(.tertiary).frame(width: 32)
+            }
+            .padding(.leading, 20).padding(.trailing, 12)
+            .frame(minHeight: 58)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count) items")
+        .accessibilityValue(collapsed.contains(key) ? "Collapsed" : "Expanded")
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func emptySection(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
+            .padding(.horizontal, 22).padding(.vertical, 12)
+    }
+
+    private func noteRow(_ row: PhoneLibrary.NoteRow, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "note.text").font(.system(size: 20))
+                    .foregroundStyle(.secondary).frame(width: 28)
+                Text(row.title.isEmpty ? "Untitled note" : row.title).font(.body).lineLimit(1)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 4)
+                chip(row.updatedAt.formatted(.dateTime.hour().minute()))
+            }
+            .padding(.horizontal, 20).frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+
+    private func notesList(tag: String?) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                pageTitle("All notes")
+                if let tag {
+                    Button { path.removeLast() } label: {
+                        Label("#" + tag, systemImage: "xmark.circle.fill")
+                            .padding(.horizontal, 14).frame(height: 34)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    }.padding(.horizontal, 18)
+                }
+                let filtered = state.notes.filter { tag == nil || $0.tags.contains(tag!) }
+                let today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+                let weekAgo = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -7, to: today) ?? today
+                let groups: [(String, String, [PhoneLibrary.NoteRow])] = [
+                    ("Pinned", "pin", filtered.filter { $0.pinnedAt != nil }),
+                    ("Today", "sun.max", filtered.filter { $0.pinnedAt == nil && $0.updatedAt >= today }),
+                    ("This week", "calendar", filtered.filter { $0.pinnedAt == nil && $0.updatedAt < today && $0.updatedAt >= weekAgo }),
+                    ("Earlier", "tray", filtered.filter { $0.pinnedAt == nil && $0.updatedAt < weekAgo })
+                ]
+                if filtered.isEmpty { ContentUnavailableView("No notes", systemImage: "note.text").padding(.top, 40) }
+                ForEach(groups.indices, id: \.self) { i in
+                    let group = groups[i]
+                    if !group.2.isEmpty {
+                        sectionHeading(group.0, icon: group.1, count: group.2.count, key: "notes-" + group.0)
+                        if !collapsed.contains("notes-" + group.0) {
+                            ForEach(group.2) { note in noteRow(note) { path.append(.note(note.id)) } }
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 35)
+        }
+    }
+
+    private var canvasesList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                pageTitle("Canvases")
+                if state.canvases.isEmpty {
+                    ContentUnavailableView("No canvases", systemImage: "scribble.variable")
+                        .frame(maxWidth: .infinity).padding(.top, 35)
+                } else {
+                    ForEach(state.canvases, id: \.id) { canvas in
+                        Button { path.append(.canvas(canvas.id)) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "scribble.variable").font(.system(size: 20))
+                                    .foregroundStyle(.secondary).frame(width: 28)
+                                Text(canvas.name).foregroundStyle(.primary)
+                                Spacer()
+                                chip(canvas.updatedAt.formatted(.dateTime.day().month(.abbreviated)))
+                            }.padding(.horizontal, 20).frame(minHeight: 44)
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Searches the same local library snapshots as the tabs. No network lookup
+/// and no implicit reads of note attachments or owner files.
+private struct PhoneSearchSheet: View {
+    @ObservedObject var state: PhoneAppState
+    var open: (PhoneRoute) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let tasks = state.tasks.filter { $0.title.localizedStandardContains(query) }
+                        let notes = state.notes.filter { $0.title.localizedStandardContains(query) || $0.body.localizedStandardContains(query) }
+                        let canvases = state.canvases.filter { $0.name.localizedStandardContains(query) || $0.textIndex.localizedStandardContains(query) }
+                        searchGroup("Tasks", count: tasks.count, symbol: "checkmark.circle")
+                        ForEach(tasks) { task in searchRow(task.title, symbol: "circle") { open(.task(task.id)) } }
+                        searchGroup("Notes", count: notes.count, symbol: "note.text")
+                        ForEach(notes) { note in searchRow(note.title, symbol: "note.text") { open(.note(note.id)) } }
+                        searchGroup("Canvases", count: canvases.count, symbol: "scribble.variable")
+                        ForEach(canvases, id: \.id) { canvas in searchRow(canvas.name, symbol: "scribble.variable") { open(.canvas(canvas.id)) } }
+                        if tasks.isEmpty && notes.isEmpty && canvases.isEmpty {
+                            ContentUnavailableView.search(text: query).padding(.top, 25)
+                        }
+                    }
+                }.padding(.top, 12)
+            }
+            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
+            .safeAreaInset(edge: .top) {
+                TextField("Search tasks, notes and canvases", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
+                    .focused($focused)
+                    .accessibilityIdentifier("phone-search-field")
+            }
+        }
+        .onAppear { focused = true }
+    }
+
+    private func searchGroup(_ title: String, count: Int, symbol: String) -> some View {
+        HStack {
+            Label(title, systemImage: symbol).font(.headline)
+            Text(count, format: .number).foregroundStyle(.secondary)
+        }.padding(.horizontal, 20).frame(minHeight: 50).accessibilityAddTraits(.isHeader)
+    }
+    private func searchRow(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: symbol).frame(width: 26)
+                Text(title.isEmpty ? "Untitled" : title).lineLimit(2)
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
+            }.padding(.horizontal, 20).frame(minHeight: 44)
+        }.buttonStyle(.plain).foregroundStyle(.primary)
+    }
+}
+
+private struct PhoneCaptureSheet: View {
+    @ObservedObject var state: PhoneAppState
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var titleFocused: Bool
+    @State private var kind: Kind = .task
+    @State private var title = ""
+    @State private var bodyText = ""
+    @State private var priority: TaskPriority = .none
+    @State private var dueEnabled = false
+    @State private var dueDate = Date()
+    @State private var pinned = false
+    private enum Kind: String, CaseIterable { case task = "Task", note = "Note" }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Create", selection: $kind) {
+                    ForEach(Kind.allCases, id: \.self) { kind in Text(kind.rawValue).tag(kind) }
+                }.pickerStyle(.segmented)
+                TextField("Title", text: $title).focused($titleFocused)
+                    .accessibilityIdentifier("phone-capture-title")
+                if kind == .note {
+                    TextEditor(text: $bodyText).frame(minHeight: 105)
+                    Toggle("Pin", isOn: $pinned)
+                } else {
+                    Picker("Priority", selection: $priority) {
+                        ForEach(TaskPriority.allCases) { level in Text(level.title).tag(level) }
+                    }
+                    Toggle("Set date", isOn: $dueEnabled)
+                    if dueEnabled { DatePicker("Due", selection: $dueDate, displayedComponents: .date) }
+                }
+            }
+            .navigationTitle("New \(kind.rawValue.lowercased())")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Create") {
+                        let ok: Bool
+                        switch kind {
+                        case .task:
+                            let day = dueEnabled ? DueDay(date: dueDate, calendar: .autoupdatingCurrent) : nil
+                            ok = state.createTask(title, priority: priority, dueDay: day)
+                        case .note:
+                            ok = state.createNote(title, body: bodyText, pinned: pinned)
+                        }
+                        if ok { dismiss() }
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                              (kind == .task || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    .accessibilityIdentifier("phone-capture-create")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear { titleFocused = true }
+    }
+}

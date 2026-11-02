@@ -186,7 +186,8 @@ final class PhoneCalendar {
 extension PhoneCalendar {
     /// A + rows 2 run fixture. The reference Wednesday, its clock, both sets of IDs and the
     /// calendars are fixed. The runner can move the same four-day scenario to another civil day.
-    static func synthetic(starting day: DueDay = DueDay(rawValue: "2026-10-28")!) throws -> PhoneCalendar {
+    static func synthetic(starting day: DueDay = DueDay(rawValue: "2026-10-28")!,
+                          includingFixtureEvents: Bool = true) throws -> PhoneCalendar {
         var dates = Calendar(identifier: .gregorian)
         dates.timeZone = TimeZone(identifier: "Europe/London")!
         guard let first = day.startDate(in: dates) else { throw CalendarEventWriteError.invalidDraft }
@@ -204,6 +205,7 @@ extension PhoneCalendar {
             backend.seedExternal(key, draft: .init(title: title, start: start, end: end, isAllDay: allDay,
                                                    calendarID: calendarID, timeZoneID: zone))
         }
+        if includingFixtureEvents {
         try seed("lecture", "Lecture: Data Structures", "uni", 0, 10)
         try seed("lunch", "Lunch with Sam", "personal", 0, 13)
         try seed("quiz", "Pub quiz", "personal", 0, 19)
@@ -212,17 +214,20 @@ extension PhoneCalendar {
         try seed("birthday", "Mum’s birthday", "personal", 2, 0, allDay: true)
         try seed("seminar", "Seminar: Discrete Maths", "uni", 2, 11)
         try seed("party", "Halloween party", "personal", 3, 20)
+        }
 
         let source = CalendarEventSourceStub(events: backend.occurrences)
         let clock = try at(0, 14, 30)
         var serial: UInt64 = 0
         let phone = PhoneCalendar(source: source, store: backend, record: try CalendarOwnershipRecord(),
-                                  calendar: dates, now: { clock }, makeID: {
+                                  calendar: dates, now: { includingFixtureEvents ? clock : Date() }, makeID: {
             serial += 1
             return UUID(uuidString: String(format: "00000000-0000-4000-8000-%012llx", serial))!
         }, publishWrite: { source.replace(backend.occurrences) })
         // The seed gets the same journal proof as an event created by the user in this run.
-        try phone.create(.init(title: "Launch sync", start: try at(0, 16, 30), length: 1800, calendarID: "work", timeZoneID: zone))
+        if includingFixtureEvents {
+            try phone.create(.init(title: "Launch sync", start: try at(0, 16, 30), length: 1800, calendarID: "work", timeZoneID: zone))
+        }
         return phone
     }
 }
