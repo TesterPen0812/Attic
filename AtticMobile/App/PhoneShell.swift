@@ -69,10 +69,18 @@ struct PhoneShell: View {
         NavigationStack(path: $path) {
             screen(root: true) { rootContent }
                 .navigationDestination(for: PhoneRoute.self) { route in
-                    screen(root: false) { destination(route) }
+                    if case .canvas = route {
+                        // Draw owns its own tool and title chrome; the ordinary
+                        // page header and tab dock would cover its drawing area.
+                        destination(route).toolbar(.hidden, for: .navigationBar)
+                    } else {
+                        screen(root: false) { destination(route) }
+                    }
                 }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { dock }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !isCanvasOpen { dock }
+        }
         .background(Color(uiColor: .systemBackground))
         .sheet(isPresented: $searchPresented) {
             PhoneSearchSheet(state: state) { route in
@@ -101,6 +109,12 @@ struct PhoneShell: View {
         } message: {
             Text(state.errorMessage ?? "The operation could not be completed.")
         }
+    }
+
+    private var isCanvasOpen: Bool {
+        guard let last = path.last else { return false }
+        if case .canvas = last { return true }
+        return false
     }
 
     private func screen<Content: View>(root: Bool, @ViewBuilder content: () -> Content) -> some View {
@@ -169,7 +183,9 @@ struct PhoneShell: View {
         case let .note(id): PhoneNotePage(state: state, noteID: id)
         case let .task(id): PhoneTaskPage(state: state, taskID: id)
         case .canvases: canvasesList
-        case let .canvas(id): PhoneCanvasPage(state: state, canvasID: id)
+        case let .canvas(id): PhoneDrawEditor(state: state, canvasID: id) {
+            if !path.isEmpty { path.removeLast() }
+        }
         }
     }
 
@@ -594,6 +610,20 @@ struct PhoneShell: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 pageTitle("Canvases").accessibilityIdentifier("phone-canvases-title")
+                Button {
+                    let canvas = state.draw.create()
+                    state.refresh()
+                    path.append(.canvas(canvas.id))
+                } label: {
+                    Label("New canvas", systemImage: "plus")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.tint)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .accessibilityIdentifier("phone-create-canvas")
                 if state.canvases.isEmpty {
                     ContentUnavailableView("No canvases", systemImage: "scribble.variable")
                         .frame(maxWidth: .infinity).padding(.top, 35)

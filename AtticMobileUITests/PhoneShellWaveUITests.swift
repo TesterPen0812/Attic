@@ -105,6 +105,23 @@ final class PhoneShellWaveUITests: XCTestCase {
         screenshot("Last tag note")
     }
 
+    func testCreateCanvasOpensDrawAndReturnsToLibrary() throws {
+        let canvases = app.buttons["Canvases"]
+        XCTAssertTrue(canvases.waitForExistence(timeout: 5))
+        canvases.tap()
+        XCTAssertTrue(app.staticTexts["phone-canvases-title"].waitForExistence(timeout: 5))
+        let create = app.buttons["phone-create-canvas"]
+        XCTAssertTrue(create.isHittable)
+        create.tap()
+        XCTAssertTrue(app.buttons["phone-draw-title"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["phone-draw-menu"].exists)
+        XCTAssertTrue(app.buttons["Back"].isHittable)
+        screenshot("Draw created")
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.staticTexts["phone-canvases-title"].waitForExistence(timeout: 5))
+        screenshot("Canvas in library")
+    }
+
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Phone wave · " + name

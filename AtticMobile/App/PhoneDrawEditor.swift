@@ -9,6 +9,7 @@ import UIKit
 struct PhoneDrawEditor: View {
     @ObservedObject private var state: PhoneAppState
     private let canvasID: UUID
+    private let onBack: () -> Void
 
     @Environment(\.colorScheme) private var colourScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -51,9 +52,10 @@ struct PhoneDrawEditor: View {
     @State private var zoomFlashTask: Task<Void, Never>?
     @State private var thumbnailTask: Task<Void, Never>?
 
-    init(state: PhoneAppState, canvasID: UUID) {
+    init(state: PhoneAppState, canvasID: UUID, onBack: @escaping () -> Void) {
         self.state = state
         self.canvasID = canvasID
+        self.onBack = onBack
         _activeID = State(initialValue: canvasID)
     }
 
@@ -816,6 +818,15 @@ struct PhoneDrawEditor: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+
             Button {
                 canvasFilter = ""
                 showCanvasPicker = true
