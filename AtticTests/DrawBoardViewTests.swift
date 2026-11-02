@@ -65,6 +65,18 @@ final class DrawBoardViewTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    func testAccessibilityKeepsTheZoomReadableWhenThePillSaysFit() {
+        model.setTool(.pen)
+        stroke(from: CGPoint(x: 40, y: 100), to: CGPoint(x: 200, y: 160))
+        for zoom in [0.1, 0.5, 1.0, 4.0] {
+            model.setViewport(DrawViewport(x: 10000, y: 10000, zoom: zoom), byUser: true)
+            model.viewportState.isFlashing = false
+            XCTAssertEqual(model.viewportState.pillLabel, "Fit")
+            let value = board.accessibilityValue() as? String ?? ""
+            XCTAssertTrue(value.contains("\(Int(zoom * 100)) %"), "zoom remains readable: \(value)")
+        }
+    }
+
     func testInputNeverRastersOnTheMainThread() {
         XCTAssertTrue(waitForInstall(after: 0), "The first raster installs")
         DrawRasterProbe.reset()

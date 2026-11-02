@@ -50,13 +50,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private(set) var cursorLog: [String] = []
     #endif
 
-    /// The drawing's pen cursor: a dot in the pen colour, sized to the
-    /// stroke on screen (its 16 px image, r = width ÷ 2 + 1 px, at most
-    /// 6 px: halved, the stroke plus 1 pt, at most 6 pt), in a white ring.
+    /// Screen points, independent of the canvas transform and stroke size.
+    /// The 2 Nov brief supersedes the drawing's stroke-sized pen cursor.
     static let cursorRing: CGFloat = 0.6
-    static func penDotDiameter(strokeWidth: Double, zoom: CGFloat) -> CGFloat {
-        min(6, max(2, CGFloat(strokeWidth) * zoom + 1))
-    }
+    static let penDotDiameter: CGFloat = 6
     /// The eraser's 24 px ring, halved: 12 pt, its 10 pt circle the
     /// eraser's own reach (5 pt either side of the pointer).
     static let eraserCursorSize: CGFloat = 12
@@ -236,8 +233,21 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawSelectionChanged() { updateSelection() }
 
     func drawVisibilityChanged() {
-        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil }
+        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
+        if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
+    }
+
+    private func queueInitialKeyboardFocus() {
+        // The shell clears the previous page's responder when switching.
+        // Claim this window's responder after the new page is installed;
+        // this never makes the window key or activates the application.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.model.isShown, !self.isHiddenOrHasHiddenAncestor,
+                  !self.model.isSearching, !self.model.isFiltering, self.model.editing == nil,
+                  let window = self.window, !(window.firstResponder is NSTextView) else { return }
+            window.makeFirstResponder(self)
+        }
     }
 
     func drawLiveChanged() {
@@ -551,17 +561,25 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func viewDidMoveToWindow() {
+        releaseCursor()
         super.viewDidMoveToWindow()
         for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
         stateObservers = []
         guard let window else { return }
+        if model.isShown { queueInitialKeyboardFocus() }
         let names: [(Notification.Name, AnyObject?)] = [
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSApplication.didBecomeActiveNotification, nil), (NSApplication.didResignActiveNotification, nil),
+            (AtticBackgroundInput.didRestorePolicyNotification, window),
+            (AtticPanel.willOrderOutNotification, window), (NSWindow.willCloseNotification, window),
         ]
         for (name, object) in names {
             stateObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.queueCursorRefresh() }
+                MainActor.assumeIsolated {
+                    if name == AtticPanel.willOrderOutNotification || name == NSWindow.willCloseNotification {
+                        self?.releaseCursor()
+                    } else { self?.queueCursorRefresh() }
+                }
             })
         }
         queueCursorRefresh()
@@ -569,7 +587,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func mouseEntered(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
     override func mouseMoved(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
-    override func mouseExited(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { releaseCursor() }
     override func cursorUpdate(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
 
     /// Sets the cursor for the pointer where it rests, on the next turn of
@@ -638,10 +656,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         } else if showsBoardCursor {
             // Off the board: the normal cursor, then whatever the panel's
             // own cursor rects (the drag region, the edges) say.
-            showsBoardCursor = false
-            NSCursor.arrow.set()
+            releaseCursor()
             window?.resetCursorRects()
         }
+    }
+
+    private func releaseCursor() {
+        guard showsBoardCursor else { return }
+        showsBoardCursor = false
+        NSCursor.arrow.set()
     }
 
     /// The board's cursor at a window point, or nil where the board isn't
@@ -666,32 +689,30 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         case .text: .iBeam
         case .shape: .crosshair
         case .pen:
-            Self.penCursor(diameter: Self.penDotDiameter(strokeWidth: model.strokeSize.strokeWidth, zoom: model.viewport.zoom),
-                           colour: DrawPalette(dark: isDark).cgColor(model.colour))
+            Self.penCursor(colour: DrawPalette(dark: isDark).cgColor(model.colour))
         case .eraser: Self.eraserCursor
         }
     }
 
-    private static var penCursors: [String: NSCursor] = [:]
+    // CGColor equality includes its colour space, including unnamed spaces.
+    private static var penCursors: [(colour: CGColor, cursor: NSCursor)] = []
 
     /// The pen's dot: the pen colour, a white ring, the hot spot at its centre.
-    static func penCursor(diameter: CGFloat, colour: CGColor) -> NSCursor {
-        let d = (diameter * 4).rounded() / 4
-        let key = "\(d) \(colour.components ?? [])"
-        if let cursor = penCursors[key] { return cursor }
-        let side = d + cursorRing * 2
+    static func penCursor(colour: CGColor) -> NSCursor {
+        let d = penDotDiameter
+        if let cached = penCursors.first(where: { $0.colour == colour }) { return cached.cursor }
+        let side: CGFloat = 8
         let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
-            let dot = NSBezierPath(ovalIn: CGRect(x: cursorRing, y: cursorRing, width: d, height: d))
+            let outer = d + cursorRing * 2
+            NSColor.white.setFill()
+            NSBezierPath(ovalIn: CGRect(x: (side - outer) / 2, y: (side - outer) / 2, width: outer, height: outer)).fill()
             (NSColor(cgColor: colour) ?? .labelColor).setFill()
-            dot.fill()
-            NSColor.white.setStroke()
-            dot.lineWidth = cursorRing * 2
-            dot.stroke()
+            NSBezierPath(ovalIn: CGRect(x: (side - d) / 2, y: (side - d) / 2, width: d, height: d)).fill()
             return true
         }
         let cursor = NSCursor(image: image, hotSpot: CGPoint(x: side / 2, y: side / 2))
         if penCursors.count > 64 { penCursors.removeAll() }
-        penCursors[key] = cursor
+        penCursors.append((colour, cursor))
         return cursor
     }
 
@@ -714,7 +735,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityLabel() -> String? { String(localized: "Drawing board") }
     override func accessibilityValue() -> Any? {
-        String(localized: "\(model.objects.count) objects, \(model.selection.count) selected")
+        let percent = Int((model.viewport.zoom * 100).rounded())
+        return String(localized: "\(model.objects.count) objects, \(model.selection.count) selected, \(percent) % zoom")
     }
 
     /// The handles' resize, for VoiceOver.

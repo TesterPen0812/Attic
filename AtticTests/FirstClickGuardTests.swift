@@ -182,6 +182,190 @@ final class FirstClickFirstMouseTests: XCTestCase {
     }
 }
 
+/// Safe in the invisible host: observe activation requests without enabling
+/// activation, making a window key, or posting input outside this process.
+@MainActor
+final class FirstClickActivationRequestTests: XCTestCase {
+    private final class PressCounter: NSView {
+        var presses = 0
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override func mouseDown(with event: NSEvent) { presses += 1 }
+    }
+
+    func testOnlyTheReleasedPressRequestsActivationAndStillReachesEverySurface() throws {
+        guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Invisible-host activation spy") }
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let method = try XCTUnwrap(class_getInstanceMethod(NSRunningApplication.self, NSSelectorFromString("activateWithOptions:")))
+        let original = method_getImplementation(method)
+        var requests = 0
+        var acceptsRequest = true
+        var expectedSurface: NSWindow?
+        var mainSurface: NSWindow?
+        let mainMethod = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, NSSelectorFromString("makeMainWindow")))
+        let originalMain = method_getImplementation(mainMethod)
+        let mainSpy: @convention(block) (NSWindow) -> Void = { window in
+            MainActor.assumeIsolated { mainSurface = window }
+        }
+        let mainImplementation = imp_implementationWithBlock(mainSpy)
+        method_setImplementation(mainMethod, mainImplementation)
+        defer { method_setImplementation(mainMethod, originalMain); imp_removeBlock(mainImplementation) }
+        let spy: @convention(block) (NSRunningApplication, UInt) -> Bool = { app, options in
+            MainActor.assumeIsolated {
+                XCTAssertEqual(app.processIdentifier, ProcessInfo.processInfo.processIdentifier)
+                XCTAssertEqual(options, 0, "activation must not raise every Attic window")
+                requests += 1
+                XCTAssertTrue(mainSurface === expectedSurface, "only the clicked surface may be raised by activation")
+            }
+            return acceptsRequest
+        }
+        let implementation = imp_implementationWithBlock(spy)
+        method_setImplementation(method, implementation)
+        defer { method_setImplementation(method, original); imp_removeBlock(implementation) }
+
+        for surface in ["docked", "island", "floating"] {
+            let frame = CGRect(x: -4_000, y: -4_000, width: 200, height: 200)
+            let window: NSPanel = surface == "island"
+                ? PanelIslandWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                : AtticPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            (window as? AtticPanel)?.surfaceMargin = 12
+            defer { window.close() }
+            let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
+            let target = PressCounter(frame: CGRect(x: 50, y: 50, width: 80, height: 80))
+            root.addSubview(target)
+            window.contentView = root
+            requests = 0
+            acceptsRequest = true
+            expectedSurface = window
+            mainSurface = nil
+            window.orderFrontRegardless()
+            XCTAssertEqual(requests, 0, "\(surface): reveal cannot activate")
+            func send(_ type: NSEvent.EventType, at point: CGPoint) throws {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                window.sendEvent(event)
+            }
+            let point = target.convert(CGPoint(x: 40, y: 40), to: nil)
+            try send(.mouseMoved, at: point)
+            XCTAssertEqual(requests, 0, "\(surface): hover cannot activate")
+            try send(.leftMouseDown, at: point)
+            XCTAssertEqual(requests, 0, "\(surface): native appearance must wait for release")
+            XCTAssertEqual(target.presses, 1, "\(surface): activation cannot spend the press")
+            try send(.leftMouseUp, at: point)
+            XCTAssertEqual(requests, 1, "\(surface): the release activates exactly once")
+            // Empty glass has no first-mouse-refusing subview to install on.
+            try send(.leftMouseDown, at: CGPoint(x: 20, y: 20))
+            try send(.leftMouseUp, at: CGPoint(x: 20, y: 20))
+            XCTAssertEqual(requests, 2, "\(surface): empty glass activates too")
+            try send(.leftMouseDown, at: CGPoint(x: 1, y: 1))
+            try send(.leftMouseUp, at: CGPoint(x: 1, y: 1))
+            XCTAssertEqual(requests, 2, "\(surface): clear margins never activate")
+            acceptsRequest = false
+            try send(.leftMouseDown, at: point)
+            try send(.leftMouseUp, at: point)
+            XCTAssertFalse(PanelActivation.shared.isActivationWindow(window), "rejection must release the main-window lease")
+            XCTAssertFalse(NSApp.isActive, "the spy must never activate the host")
+            XCTAssertFalse(window.isKeyWindow, "the host must never take the keyboard")
+        }
+    }
+}
+
+/// App activation is distinct from a non-activating panel becoming key.
+/// These opt-in tests exercise the application's real activation state;
+/// the HID/SCK check covers delivery and the resulting glass pixels.
+@MainActor
+final class FirstClickActivationTests: XCTestCase {
+    private final class PressCounter: NSView {
+        var presses = 0
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override func mouseDown(with event: NSEvent) { presses += 1 }
+    }
+
+    func testOnePressActivatesTheAppAndActsOnDockedIslandAndFloatingSurfaces() throws {
+        try requireKeyWindowTests()
+        try XCTSkipUnless(Host.current().localizedName?.contains("Air") == true,
+                          "Real activation needs an Air window-server click")
+        XCTAssertEqual(try String(contentsOfFile: "/tmp/attic-air-screen.lockdir/owner", encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), "zoom-for-good")
+        try XCTSkipUnless(CGPreflightPostEventAccess(),
+                          "The test host lacks input-posting permission; do not request it or answer a prompt")
+        let modifiers: CGEventFlags = [.maskCommand, .maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]
+        guard CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
+              NSEvent.pressedMouseButtons == 0 else { throw XCTSkip("Input already held; leave it alone") }
+        defer { XCTAssertTrue(CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty) }
+        let finder = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first)
+        func giveFocusBack() {
+            NSApp.yieldActivation(to: finder)
+            XCTAssertTrue(finder.activate(from: .current, options: []))
+            let deadline = Date().addingTimeInterval(2)
+            while NSRunningApplication.current.isActive, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+        }
+        let previousPolicy = NSApp.activationPolicy()
+        XCTAssertTrue(NSApp.setActivationPolicy(.accessory))
+        defer {
+            giveFocusBack()
+            _ = NSApp.setActivationPolicy(previousPolicy)
+        }
+        try FirstClickHarness.withController(self, reduceMotion: true) { harness in
+            let floating = AtticPanel(contentRect: CGRect(x: 200, y: 200, width: 200, height: 200),
+                                      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            floating.isReleasedWhenClosed = false
+            floating.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+            defer { floating.close() }
+            let island = harness.controller.islandWindowsForTesting.island
+            for (name, window) in [("docked", harness.panel as NSWindow), ("island", island), ("floating", floating)] {
+                giveFocusBack()
+                harness.spin(0.3)
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): inactive starting state")
+                window.orderFrontRegardless()
+                harness.spin(0.2)
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): showing must not activate the app")
+                let content = try XCTUnwrap(window.contentView)
+                // The panel's content container intentionally hit-tests only
+                // its hosting view and overlay layer, not arbitrary siblings.
+                let root = (content as? AtticPanelContentContainer)?.overlayLayer ?? content
+                let target = PressCounter(frame: CGRect(x: root.bounds.midX - 10, y: root.bounds.midY - 10,
+                                                        width: 20, height: 20))
+                root.addSubview(target)
+                defer { target.removeFromSuperview() }
+                let location = target.convert(CGPoint(x: 10, y: 10), to: nil)
+                XCTAssertTrue(window.contentView?.superview?.hitTest(location) === target,
+                              "the first press must actually hit the counter")
+                let screenPoint = window.convertPoint(toScreen: location)
+                let global = CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y)
+                func post(_ type: CGEventType) throws {
+                    guard type == .leftMouseUp || NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0) == window.windowNumber else {
+                        XCTFail("Another window covers the test target; no input posted")
+                        throw XCTSkip("Own-window input guard")
+                    }
+                    let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type,
+                        mouseCursorPosition: global, mouseButton: .left))
+                    event.flags = []
+                    event.post(tap: .cghidEventTap) // ordinary mouse only; no gesture construction
+                }
+                try post(.mouseMoved)
+                harness.spin(0.1)
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): pointing must not activate the app")
+                try post(.leftMouseDown)
+                harness.spin(0.1)
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): active glass waits for release")
+                try post(.leftMouseUp)
+                harness.spin(0.3)
+                XCTAssertEqual(target.presses, 1, "\(name): the first press still acts")
+                XCTAssertTrue(NSRunningApplication.current.isActive, "\(name): one click must activate the app, not only its panel")
+            }
+        }
+    }
+}
+
 /// A panel controller on screen (key-window runs), its island, and the
 /// window server's view of where clicks go.
 @MainActor

@@ -603,7 +603,38 @@ final class PanelIslandWindow: NSPanel {
     /// before SwiftUI sees them (pulling a page off the island).
     var onPointer: ((PanelIslandPointer) -> Void)?
 
+    private var pressing = false
+    private var trackedRelease = false
+
+    override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
+        let event = super.nextEvent(matching: mask)
+        recordRelease(event)
+        return event
+    }
+    override func nextEvent(matching mask: NSEvent.EventTypeMask, until expiration: Date?, inMode mode: RunLoop.Mode,
+                            dequeue deqFlag: Bool) -> NSEvent? {
+        let event = super.nextEvent(matching: mask, until: expiration, inMode: mode, dequeue: deqFlag)
+        if deqFlag { recordRelease(event) }
+        return event
+    }
+    private func recordRelease(_ event: NSEvent?) {
+        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) { trackedRelease = true }
+    }
+
     override func sendEvent(_ event: NSEvent) {
+        if AtticPanel.takesFirstPress(event.type) {
+            pressing = true; trackedRelease = false
+            (parent as? AtticPanel)?.beginFirstPress()
+        }
+        defer {
+            if pressing, NSEvent.pressedMouseButtons == 0,
+               (AtticPanel.takesFirstPress(event.type) && trackedRelease)
+                || [.leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .keyDown].contains(event.type) {
+                pressing = false; trackedRelease = false
+                (parent as? AtticPanel)?.finishFirstPress()
+                PanelActivation.shared.released(in: self)
+            }
+        }
         let point = convertPoint(toScreen: event.locationInWindow)
         // Whatever view a press hits takes it (one click always registers).
         if AtticPanel.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }
@@ -619,8 +650,8 @@ final class PanelIslandWindow: NSPanel {
         super.sendEvent(event)
     }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
-    override var canBecomeMain: Bool { false }
-    /// Draws active exactly while its parent, the Attic panel, is key, so
+    override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
+    /// Draws active with the parent's release-delayed key appearance, so
     /// the island's glass looks like the panel's own controls (owner, 1 Nov:
     /// it drew inactive glass while Attic was focused). AppKit's glass asks
     /// the window it is in, and a child window that is never key always
@@ -630,7 +661,9 @@ final class PanelIslandWindow: NSPanel {
     /// and the keyboard stays with the panel. AppKit asks again whenever
     /// the parent's key state changes and when the window is ordered in
     /// attached (`show(attachedTo:)` attaches before it orders in).
-    @objc func _hasActiveAppearance() -> Bool { parent?.isKeyWindow ?? false }
+    @objc func _hasActiveAppearance() -> Bool {
+        (parent as? AtticPanel)?._hasActiveAppearance() ?? (parent?.isKeyWindow ?? false)
+    }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     // Clicks are routed by the island's own passthrough, never by its

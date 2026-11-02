@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import SwiftData
 import SwiftUI
 import XCTest
@@ -88,6 +89,60 @@ final class PanelIntegrationTests: XCTestCase {
         _ = panel.controller.requestHide { hidden = $0 == .hidden }
         spin(until: { hidden })
         XCTAssertTrue(hidden)
+    }
+
+    func testNativePanelAndIslandAppearanceFollowTheReleasedKeyLook() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+        spin(0.3)
+        let panel = rig.controller.panelForTesting
+        let island = rig.controller.islandWindowsForTesting.island
+        func appearance(_ window: NSWindow) throws -> Bool {
+            let selector = NSSelectorFromString("_hasActiveAppearance")
+            let method = try XCTUnwrap(class_getInstanceMethod(type(of: window), selector))
+            typealias Read = @convention(c) (AnyObject, Selector) -> Bool
+            return unsafeBitCast(method_getImplementation(method), to: Read.self)(window, selector)
+        }
+        // The controller's published key look is the release-delayed state;
+        // AppKit's raw key state is deliberately false in the invisible host.
+        for releasedLook in [false, true, false] {
+            rig.uiState.setPanelKey(releasedLook)
+            XCTAssertEqual(try appearance(panel), releasedLook, "native panel follows the published key look")
+            XCTAssertEqual(try appearance(island), releasedLook, "island and panel agree, even before native key state catches up")
+        }
+    }
+
+    func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        for pinned in [false, true] {
+            let rig = try makePanel()
+            XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+            spin(0.8)
+            rig.uiState.isPanelPinned = pinned
+            var result: PanelHideCompletion?
+            let hides = rig.uiState.hideCount
+            _ = rig.controller.requestHide { result = $0 }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            spin(until: { result != nil })
+            XCTAssertEqual(result, .hidden, "activation must not invalidate the accepted hide")
+            XCTAssertFalse(rig.controller.isPanelVisible)
+            XCTAssertEqual(rig.uiState.hideCount, hides + 1)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            spin(0.1)
+            XCTAssertFalse(rig.controller.isPanelVisible, "late activation cannot restore hidden presentation")
+            XCTAssertEqual(rig.uiState.hideCount, hides + 1)
+        }
     }
 
     // MARK: Agent `show` over the real panel

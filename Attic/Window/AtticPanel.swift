@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import ObjectiveC
 import QuartzCore
 import SwiftUI
@@ -96,16 +97,32 @@ final class AtticPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
+    /// The same release-delayed state drives native glass and SwiftUI chrome.
+    var activeAppearance: (() -> Bool)?
+    @objc func _hasActiveAppearance() -> Bool { activeAppearance?() ?? (isKeyWindow && !isPressing) }
+
+    func beginFirstPress() { isPressing = true; trackingConsumedRelease = false }
+    func finishFirstPress() {
+        guard isPressing else { return }
+        isPressing = false
+        trackingConsumedRelease = false
+        onPressEnded?()
+    }
 
     // MARK: Clicks reach the panel (one click always registers)
 
+    static let willOrderOutNotification = Notification.Name("AtticPanelWillOrderOut")
     private var mousePolicy = AtticMousePolicy()
 
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
-        if place == .out { mousePolicy.orderedOut() }
+        if place == .out {
+            NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
+            mousePolicy.orderedOut()
+        }
         super.order(place, relativeTo: otherWin)
         if place != .out { mousePolicy.orderedIn(self) }
+        else { PanelActivation.shared.hidden(self) }
     }
 
     override func orderFrontRegardless() {
@@ -119,8 +136,10 @@ final class AtticPanel: NSPanel {
     }
 
     override func orderOut(_ sender: Any?) {
+        NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
         mousePolicy.orderedOut()
         super.orderOut(sender)
+        PanelActivation.shared.hidden(self)
     }
 
     /// Esc reaches the window only when no responder in it handled the key:
@@ -347,9 +366,10 @@ final class AtticPanel: NSPanel {
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
-        // own views in a list do not accept the first mouse). The panel is
-        // non-activating, so Attic stays where it is.
-        if Self.takesFirstPress(event.type) { isPressing = true; trackingConsumedRelease = false }
+        // own views in a list do not accept the first mouse). The shared
+        // first-press boundary also activates the app for native glass;
+        // ordering and hover remain non-activating.
+        if Self.takesFirstPress(event.type) { beginFirstPress() }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()
@@ -371,9 +391,8 @@ final class AtticPanel: NSPanel {
             if isPressing, NSEvent.pressedMouseButtons == 0,
                (Self.takesFirstPress(event.type) && trackingConsumedRelease)
                 || [.leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .keyDown].contains(event.type) {
-                isPressing = false
-                trackingConsumedRelease = false
-                onPressEnded?()
+                finishFirstPress()
+                PanelActivation.shared.released(in: self)
             }
             return
         }
@@ -2607,6 +2626,11 @@ extension AtticPanel: AtticFirstPressWindow {}
 @MainActor
 enum AtticFirstPress {
     static func prepare(_ event: NSEvent, in window: NSWindow) {
+        // A non-activating panel can be key while another app stays active.
+        // Capture this delivered press; activation is requested after its
+        // release so native glass cannot redraw a control under the press.
+        // Reveal, hover, and gesture arrival never activate.
+        PanelActivation.shared.pressed(event, in: window)
         guard let root = window.contentView?.superview ?? window.contentView,
               let hit = root.hitTest(event.locationInWindow), hit !== root else { return }
         AtticPanelFirstMouseHooks.install(on: hit)
@@ -2637,6 +2661,94 @@ struct AtticMousePolicy {
         // window server.
         window.ignoresMouseEvents = !ignores
         window.ignoresMouseEvents = ignores
+        AtticBackgroundInput.enable(in: window)
+    }
+}
+
+/// WindowServer normally sends gestures to the active app, even when a
+/// non-activating panel under the pointer is key. Opt these windows into
+/// background input instead of activating on hover or forwarding global
+/// events. The same window policy permits its cursor while Attic is inactive.
+///
+/// CGSInternal documents these two tags and the 64-bit tag-mask ABI:
+/// https://github.com/NUIKit/CGSInternal/blob/master/CGSWindow.h
+/// This is a window-policy call, not construction of private event payloads.
+/// Missing symbols leave the window's existing policy intact. The Air replay
+/// check remains the delivery-level guard, including across OS updates.
+@MainActor
+enum AtticBackgroundInput {
+    static let didRestorePolicyNotification = Notification.Name("AtticBackgroundInputDidRestorePolicy")
+    private typealias Connection = @convention(c) () -> Int32
+    private typealias SetTags = @convention(c) (Int32, UInt32, UnsafePointer<UInt64>, Int) -> Int32
+
+    private struct API {
+        let connection: Connection
+        let setTags: SetTags
+    }
+
+    private static let api: API? = {
+        let symbols = UnsafeMutableRawPointer(bitPattern: -2) // Darwin RTLD_DEFAULT
+        guard let connection = dlsym(symbols, "CGSMainConnectionID"),
+              let setTags = dlsym(symbols, "CGSSetWindowTags") else { return nil }
+        return API(connection: unsafeBitCast(connection, to: Connection.self),
+                   setTags: unsafeBitCast(setTags, to: SetTags.self))
+    }()
+
+    // These request/diagnostic boundaries let tests force an SPI failure
+    // without passing malformed values to WindowServer.
+    static var installTags: (NSWindow, UInt64) -> Int32 = { window, mask in
+        guard let api, window.windowNumber > 0 else { return -1 }
+        var tags = mask
+        return api.setTags(api.connection(), UInt32(window.windowNumber), &tags, 64)
+    }
+    static var logFailure: (Int32) -> Void = { status in
+        NSLog("Attic: background gesture/cursor window policy failed (%d)", status)
+    }
+    static var failureLogged = false
+
+    private static var refreshQueued = false
+    private static let focusObservers: [NSObjectProtocol] = {
+        let names = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification]
+        var observers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { refreshAfterFocusChange() }
+            }
+        }
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { refreshAfterFocusChange() }
+            })
+        return observers
+    }()
+
+    private static func refreshAfterFocusChange() {
+        guard !refreshQueued else { return }
+        refreshQueued = true
+        // AppKit rewrites its cursor policy during key/activation changes.
+        // Reinstall once after that transaction, including process activation
+        // changes that do not produce another AppKit activation notification.
+        DispatchQueue.main.async {
+            refreshQueued = false
+            for window in NSApp.windows where window is any AtticFirstPressWindow && window.isVisible {
+                if enable(in: window) {
+                    NotificationCenter.default.post(name: didRestorePolicyNotification, object: window)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    static func enable(in window: NSWindow) -> Bool {
+        _ = focusObservers
+        // Set only these bits; CGSSetWindowTags adds them to the existing
+        // policy. It does not replace activation, transparency or space tags.
+        let status = installTags(window, (1 << 42) | (1 << 5))
+        if status != 0, !failureLogged {
+            failureLogged = true
+            logFailure(status)
+        }
+        return status == 0
     }
 }
 

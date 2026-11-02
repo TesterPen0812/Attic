@@ -89,6 +89,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         AtticPanelInteractionPolicy.configure(panel)
         AtticPanelResizePolicy.configure(panel)
         panel.delegate = self
+        panel.activeAppearance = { [weak uiState] in uiState?.isPanelKey ?? false }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
         panel.onUnhandledUndo = { [weak self] redo in

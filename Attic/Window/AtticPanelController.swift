@@ -740,6 +740,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }
             return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
         }
+        panel.activeAppearance = { [weak uiState] in uiState?.isPanelKey ?? false }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -833,6 +834,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     hostingView.cancelActiveInteraction(reason: .screenChanged)
                     recoverPanelInsideUsableArea()
                 case .applicationActivated:
+                    // Activation is asynchronous and is not a placement change.
+                    // It must never supersede a hide/reveal or revive a hidden panel.
+                    guard panel.isVisible, !isPanelMotionActive, !isInteractiveDismissal else { return }
                     recoverPanelInsideUsableArea(preservingPlacement: true)
                 case .applicationDeactivated:
                     panel.cancelTrackpadSwipe()

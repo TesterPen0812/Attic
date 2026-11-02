@@ -885,6 +885,10 @@ final class Draw3BoardTests: XCTestCase {
         DrawImageDecodeProbe.reset()
         DrawRasterProbe.reset()
 
+        // Sample before the import: its raster may finish in the same run-loop
+        // turn that publishes the object. Sampling afterward waits for a
+        // second raster that no operation requested.
+        let installs = board.rasterInstalls
         // The drop handler only starts the import.
         XCTAssertTrue(board.acceptDrop(from: pasteboard, at: CGPoint(x: 160, y: 200)))
         XCTAssertEqual(DrawImageDecodeProbe.mainThreadDecodes, 0)
@@ -893,7 +897,6 @@ final class Draw3BoardTests: XCTestCase {
         let deadline = Date().addingTimeInterval(20)
         while model.objects.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertEqual(model.objects.count, 1)
-        let installs = board.rasterInstalls
         XCTAssertTrue(waitForInstall(after: installs))
 
         // Select, move, resize, pan and zoom it.

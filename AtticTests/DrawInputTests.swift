@@ -176,6 +176,83 @@ final class DrawInputTests: XCTestCase {
 
     // MARK: 1. Zoom
 
+    private struct RecordedEvent: Decodable {
+        let t: UInt64
+        let data: String
+    }
+
+    /// Preserve the real trackpad's touches, paired gesture/scroll samples,
+    /// phases and timing. Only the target window/point changes in this hosted
+    /// test; WindowServer delivery belongs to the separate Air replay check.
+    private func replay(_ name: String, in rig: Rig, at point: CGPoint) throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/DrawTrackpad/\(name).jsonl")
+        let samples = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map {
+            try JSONDecoder().decode(RecordedEvent.self, from: Data($0.utf8))
+        }
+        let first = try XCTUnwrap(samples.first)
+        let firstBytes = try XCTUnwrap(Data(base64Encoded: first.data))
+        let origin = try XCTUnwrap(CGEvent(withDataAllocator: nil, data: firstBytes as CFData)).location
+        let start = ProcessInfo.processInfo.systemUptime
+        for sample in samples {
+            let deadline = start + Double(sample.t - first.t) / 1_000_000_000
+            let delay = deadline - ProcessInfo.processInfo.systemUptime
+            if delay > 0 { spin(delay) }
+            let bytes = try XCTUnwrap(Data(base64Encoded: sample.data))
+            let cg = try XCTUnwrap(CGEvent(withDataAllocator: nil, data: bytes as CFData))
+            let relative = CGPoint(x: cg.location.x - origin.x, y: origin.y - cg.location.y)
+            let event = try made(cg, at: CGPoint(x: point.x + relative.x, y: point.y + relative.y), in: rig.panel)
+            rig.panel.sendEvent(event)
+        }
+        spin(0.1)
+    }
+
+    func testOwnersRecordedPinchesAndCommandScrollsZoomWithTheirCompleteStreams() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = boardCentre(rig)
+        let point = windowPoint(rig.board, anchor)
+        for name in ["pinch-out", "pinch-in", "command-scroll-out", "command-scroll-in"] {
+            rig.model.setViewport(DrawViewport(), byUser: false)
+            let world = rig.model.viewport.world(anchor)
+            try replay(name, in: rig, at: point)
+            if name.hasSuffix("out") { XCTAssertGreaterThan(rig.model.viewport.zoom, 1.1, name) }
+            else { XCTAssertLessThan(rig.model.viewport.zoom, 0.95, name) }
+            let after = rig.model.viewport.screen(world)
+            XCTAssertEqual(after.x, anchor.x, accuracy: 0.5, name)
+            XCTAssertEqual(after.y, anchor.y, accuracy: 0.5, name)
+            XCTAssertTrue(rig.model.viewportState.pillShown, name)
+            XCTAssertEqual(rig.hideRequests(), 0, name)
+        }
+    }
+
+    func testOwnersRecordedZoomWorksOverASelectionAndAnEditingTextBox() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = boardCentre(rig)
+        let stroke = DrawObject(frame: DrawFrame(x: 60, y: 100, width: 50, height: 50),
+                                content: .stroke([DrawPoint(x: 60, y: 100), DrawPoint(x: 110, y: 150)]))
+        let text = DrawObject(frame: DrawFrame(x: anchor.x - 5, y: anchor.y - 5, width: 160, height: 30),
+                              content: .text("Recorded trackpad"))
+        rig.model.perform(.put([stroke, text]))
+        for editing in [false, true] {
+            for name in ["pinch-out", "command-scroll-out"] {
+                rig.model.endEditing()
+                rig.model.setViewport(DrawViewport(), byUser: false)
+                if editing { rig.model.edit(text.id) } else { rig.model.select([stroke.id]) }
+                spin(0.2)
+                let point = windowPoint(rig.board, anchor)
+                if editing {
+                    XCTAssertTrue(rig.panel.contentView.map { $0.hitTest($0.convert(point, from: nil)) is DrawTextEditorView } == true, "the event starts over the editor")
+                }
+                try replay(name, in: rig, at: point)
+                XCTAssertGreaterThan(rig.model.viewport.zoom, 1.1, "\(name), editing=\(editing)")
+                XCTAssertEqual(rig.hideRequests(), 0)
+                if editing { XCTAssertEqual(rig.model.editingID, text.id, "zoom must preserve the edit") }
+            }
+        }
+    }
+
     func testTheBoardIsWhatTheMiddleOfThePanelHitTests() throws {
         let rig = try makeRig()
         defer { close(rig) }
@@ -401,9 +478,8 @@ final class DrawInputTests: XCTestCase {
         let when = "\(when) [now \(named); \(rig.board.cursorLog.suffix(3).joined(separator: " | "))]"
         switch tool {
         case .pen:
-            let diameter = DrawBoardView.penDotDiameter(strokeWidth: rig.model.strokeSize.strokeWidth, zoom: rig.model.viewport.zoom)
             XCTAssertEqual(cursor.hotSpot.x, cursor.image.size.width / 2, accuracy: 0.01, "\(when): pen hot spot centred", file: file, line: line)
-            XCTAssertEqual(cursor.image.size.width, diameter + DrawBoardView.cursorRing * 2, accuracy: 0.6,
+            XCTAssertEqual(cursor.image.size.width, 8, accuracy: 0.01,
                            "\(when): the pen's dot (\(cursor.image.size))", file: file, line: line)
         case .eraser:
             XCTAssertEqual(cursor.image.size.width, DrawBoardView.eraserCursorSize, accuracy: 0.01,
@@ -479,7 +555,7 @@ final class DrawInputTests: XCTestCase {
         }
     }
 
-    func testThePensCursorFollowsItsColourAndSize() throws {
+    func testThePensCursorFollowsItsColourButKeepsItsScreenSize() throws {
         let rig = try makeRig()
         defer { close(rig) }
         rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
@@ -488,13 +564,121 @@ final class DrawInputTests: XCTestCase {
         let medium = NSCursor.current
         rig.model.pickSize(.large, for: .pen)
         spin(0.2)
-        XCTAssertFalse(NSCursor.current === medium, "a new size, a new dot")
+        // 2 Nov zoom-for-good brief: stroke width no longer sizes the cursor.
+        XCTAssertEqual(NSCursor.current.image.size, medium.image.size, "stroke width must not resize the dot")
         assertCursor(.pen, rig, "large")
         let large = NSCursor.current
         rig.model.pickColour(.red)
         spin(0.2)
         XCTAssertFalse(NSCursor.current === large, "a new colour, a new dot [\(rig.board.cursorLog.suffix(5).joined(separator: " | "))]")
         assertCursor(.pen, rig, "red")
+    }
+
+    func testEveryToolCursorHasTheSameImageAndHotSpotAtEveryZoom() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
+        for tool in [DrawTool.pen, .eraser, .text, .shape, .select] {
+            rig.model.setTool(tool)
+            rig.model.setViewport(DrawViewport(zoom: 1), byUser: false)
+            spin(0.2)
+            let reference = try XCTUnwrap(rig.board.cursor(atWindowPoint: rig.board.pointerOverride!))
+            for zoom in [CGFloat(0.1), 0.25, 0.5, 1, 2, 4] {
+                rig.model.setViewport(DrawViewport(zoom: zoom), byUser: false)
+                spin(0.1)
+                let cursor = try XCTUnwrap(rig.board.cursor(atWindowPoint: rig.board.pointerOverride!))
+                XCTAssertEqual(cursor.image.size, reference.image.size, "\(tool) at \(zoom)")
+                XCTAssertEqual(cursor.hotSpot, reference.hotSpot, "\(tool) at \(zoom)")
+                XCTAssertEqual(cursor.image.tiffRepresentation, reference.image.tiffRepresentation, "\(tool) at \(zoom)")
+            }
+        }
+    }
+
+    func testReturningToDrawGivesTheBoardItsZoomShortcutsWithoutAnotherClick() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.uiState.selectSection(.tasks)
+        spin(0.2)
+        rig.model.magnify(by: -0.5, at: boardCentre(rig))
+        rig.uiState.selectSection(.canvas)
+        spin(0.3)
+        XCTAssertTrue(rig.panel.firstResponder === rig.board,
+                      "the shell clears old-page focus; the new Draw page must claim it")
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .shift, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: rig.panel.windowNumber, context: nil, characters: ")",
+            charactersIgnoringModifiers: ")", isARepeat: false, keyCode: DrawKey.zeroCode))
+        rig.panel.sendEvent(event)
+        XCTAssertEqual(rig.model.viewport.zoom, 1, accuracy: 0.001)
+    }
+
+    func testWorkspaceFocusChangeRefreshesTheRestingCursorAfterBackgroundPolicyRestoration() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.model.setTool(.eraser)
+        rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
+        spin(0.6)
+        rig.board.refreshCursor()
+        assertCursor(.eraser, rig, "before focus change")
+        // A process activation change need not emit another AppKit active
+        // notification. The policy repair must refresh a stationary pointer,
+        // even when the last mouse-moved event preceded that repair.
+        NSCursor.arrow.set()
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification,
+                                                   object: nil)
+        spin(0.2)
+        assertCursor(.eraser, rig, "after workspace-only focus change")
+    }
+
+    func testTheCursorResetsOnExitAndWhenTheWindowHidesWithoutPointerMotion() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        rig.board.pointerOverride = point
+        rig.model.setTool(.pen)
+        rig.board.refreshCursor()
+        XCTAssertFalse(NSCursor.current === NSCursor.arrow)
+        // Exit can arrive with the last in-bounds point when a view is clipped.
+        let exit = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseExited, location: point,
+            modifierFlags: [], timestamp: 0, windowNumber: rig.panel.windowNumber,
+            context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+        rig.board.mouseExited(with: exit)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "exit releases the board cursor immediately")
+        rig.board.refreshCursor()
+        XCTAssertFalse(NSCursor.current === NSCursor.arrow)
+        rig.panel.orderOut(nil)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "hiding under a stationary pointer releases the cursor")
+        spin(0.5)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "a queued refresh cannot restore a hidden cursor")
+    }
+
+    func testPenCursorHasSixPointColourAndAnOuterRingOnAnEightPointImage() throws {
+        let colour = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!, components: [1, 0, 0, 1])!
+        let cursor = DrawBoardView.penCursor(colour: colour)
+        XCTAssertEqual(cursor.image.size, CGSize(width: 8, height: 8))
+        XCTAssertEqual(cursor.hotSpot, CGPoint(x: 4, y: 4))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 160, pixelsHigh: 160,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: 20, y: 20)
+        cursor.image.draw(at: .zero, from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let red = try XCTUnwrap(bitmap.colorAt(x: 132, y: 80)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(red.redComponent, 0.95)
+        XCTAssertLessThan(red.greenComponent, 0.1, "2.6 pt from centre is inside the coloured dot")
+        let ring = try XCTUnwrap(bitmap.colorAt(x: 146, y: 80)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(ring.greenComponent, 0.9, "3.3 pt from centre is the outside white ring")
+        XCTAssertGreaterThan(ring.alphaComponent, 0.9)
+    }
+
+    func testPenCursorCacheDistinguishesColourSpacesWithTheSameComponents() {
+        let components: [CGFloat] = [0.7, 0.3, 0.2, 1]
+        let srgb = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!, components: components)!
+        let p3 = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.displayP3)!, components: components)!
+        XCTAssertFalse(DrawBoardView.penCursor(colour: srgb) === DrawBoardView.penCursor(colour: p3))
     }
 
     func testOffTheBoardTheCursorIsTheNormalOneAndHandlesWin() throws {
