@@ -176,6 +176,83 @@ final class DrawInputTests: XCTestCase {
 
     // MARK: 1. Zoom
 
+    private struct RecordedEvent: Decodable {
+        let t: UInt64
+        let data: String
+    }
+
+    /// Preserve the real trackpad's touches, paired gesture/scroll samples,
+    /// phases and timing. Only the target window/point changes in this hosted
+    /// test; WindowServer delivery belongs to the separate Air replay check.
+    private func replay(_ name: String, in rig: Rig, at point: CGPoint) throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/DrawTrackpad/\(name).jsonl")
+        let samples = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map {
+            try JSONDecoder().decode(RecordedEvent.self, from: Data($0.utf8))
+        }
+        let first = try XCTUnwrap(samples.first)
+        let firstBytes = try XCTUnwrap(Data(base64Encoded: first.data))
+        let origin = try XCTUnwrap(CGEvent(withDataAllocator: nil, data: firstBytes as CFData)).location
+        let start = ProcessInfo.processInfo.systemUptime
+        for sample in samples {
+            let deadline = start + Double(sample.t - first.t) / 1_000_000_000
+            let delay = deadline - ProcessInfo.processInfo.systemUptime
+            if delay > 0 { spin(delay) }
+            let bytes = try XCTUnwrap(Data(base64Encoded: sample.data))
+            let cg = try XCTUnwrap(CGEvent(withDataAllocator: nil, data: bytes as CFData))
+            let relative = CGPoint(x: cg.location.x - origin.x, y: origin.y - cg.location.y)
+            let event = try made(cg, at: CGPoint(x: point.x + relative.x, y: point.y + relative.y), in: rig.panel)
+            rig.panel.sendEvent(event)
+        }
+        spin(0.1)
+    }
+
+    func testOwnersRecordedPinchesAndCommandScrollsZoomWithTheirCompleteStreams() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = boardCentre(rig)
+        let point = windowPoint(rig.board, anchor)
+        for name in ["pinch-out", "pinch-in", "command-scroll-out", "command-scroll-in"] {
+            rig.model.setViewport(DrawViewport(), byUser: false)
+            let world = rig.model.viewport.world(anchor)
+            try replay(name, in: rig, at: point)
+            if name.hasSuffix("out") { XCTAssertGreaterThan(rig.model.viewport.zoom, 1.1, name) }
+            else { XCTAssertLessThan(rig.model.viewport.zoom, 0.95, name) }
+            let after = rig.model.viewport.screen(world)
+            XCTAssertEqual(after.x, anchor.x, accuracy: 0.5, name)
+            XCTAssertEqual(after.y, anchor.y, accuracy: 0.5, name)
+            XCTAssertTrue(rig.model.viewportState.pillShown, name)
+            XCTAssertEqual(rig.hideRequests(), 0, name)
+        }
+    }
+
+    func testOwnersRecordedZoomWorksOverASelectionAndAnEditingTextBox() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = boardCentre(rig)
+        let stroke = DrawObject(frame: DrawFrame(x: 60, y: 100, width: 50, height: 50),
+                                content: .stroke([DrawPoint(x: 60, y: 100), DrawPoint(x: 110, y: 150)]))
+        let text = DrawObject(frame: DrawFrame(x: anchor.x - 5, y: anchor.y - 5, width: 160, height: 30),
+                              content: .text("Recorded trackpad"))
+        rig.model.perform(.put([stroke, text]))
+        for editing in [false, true] {
+            for name in ["pinch-out", "command-scroll-out"] {
+                rig.model.endEditing()
+                rig.model.setViewport(DrawViewport(), byUser: false)
+                if editing { rig.model.edit(text.id) } else { rig.model.select([stroke.id]) }
+                spin(0.2)
+                let point = windowPoint(rig.board, anchor)
+                if editing {
+                    XCTAssertTrue(rig.panel.contentView.map { $0.hitTest($0.convert(point, from: nil)) is DrawTextEditorView } == true, "the event starts over the editor")
+                }
+                try replay(name, in: rig, at: point)
+                XCTAssertGreaterThan(rig.model.viewport.zoom, 1.1, "\(name), editing=\(editing)")
+                XCTAssertEqual(rig.hideRequests(), 0)
+                if editing { XCTAssertEqual(rig.model.editingID, text.id, "zoom must preserve the edit") }
+            }
+        }
+    }
+
     func testTheBoardIsWhatTheMiddleOfThePanelHitTests() throws {
         let rig = try makeRig()
         defer { close(rig) }
