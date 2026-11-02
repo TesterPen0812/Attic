@@ -24,6 +24,7 @@ APP, UNIT, UI = 'AtticMobile', 'AtticMobileTests', 'AtticMobileUITests'
 PROJECT = 'Attic.xcodeproj'
 PBX = PROJECT + '/project.pbxproj'
 SCHEME = PROJECT + '/xcshareddata/xcschemes/AtticMobile.xcscheme'
+SYNC_SCHEME = PROJECT + '/xcshareddata/xcschemes/AtticMobileFakeSync.xcscheme'
 PINS = PROJECT + '/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
 LOCK = 'Scripts/xcodebuild_locked.sh'
 SSH = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'air']
@@ -73,7 +74,7 @@ def inputs(wt, action):
         selected.add(s)
         return wt / s
 
-    for s in (PBX, SCHEME, PINS, LOCK):
+    for s in (PBX, SCHEME, SYNC_SCHEME, PINS, LOCK):
         add(s)
     # An edited wrapper could silently bypass the shared lock or run on the Mac screen.
     need(output(['git', 'hash-object', LOCK], cwd=wt) == '1ea86659a57555802252f91038c4662fed13ebc9' and os.access(wt / LOCK, os.X_OK), 'unreviewed or non-executable machine lock wrapper')
@@ -84,6 +85,15 @@ def inputs(wt, action):
     need(names('.//BuildActionEntry/BuildableReference') == {APP}, 'unexpected scheme build target')
     testables = names('.//TestableReference/BuildableReference')
     need(UNIT in testables and testables <= {UNIT, UI}, 'unexpected scheme test targets')
+    fake_sync_scheme = XML.parse(wt / SYNC_SCHEME)
+    need(not fake_sync_scheme.findall('.//ExecutionAction') and
+         not fake_sync_scheme.findall('.//TestPlanReference'), 'unexpected fake sync scheme action')
+    need({n.attrib['BlueprintName'] for n in fake_sync_scheme.findall('.//BuildActionEntry/BuildableReference')} == {APP},
+         'unexpected fake sync build target')
+    need({n.attrib['BlueprintName'] for n in fake_sync_scheme.findall('.//TestableReference/BuildableReference')} == {'AtticMobileFakeSyncTests'},
+         'unexpected fake sync test target')
+    need(fake_sync_scheme.find('.//TestAction').attrib.get('buildConfiguration') == 'FakeSync',
+         'fake sync tests must use isolated configuration')
     proj = json.loads(output(['/usr/bin/plutil', '-convert', 'json', '-o', '-', str(wt / PBX)]))
     obj = proj['objects']
     parent = {child: key for key, group in obj.items() if group['isa'] == 'PBXGroup' for child in group['children']}

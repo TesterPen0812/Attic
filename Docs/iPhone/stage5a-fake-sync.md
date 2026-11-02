@@ -6,7 +6,7 @@ Status: isolated implementation and test source for `iphone/build-fakesync`, bra
 
 All added Swift lives under `#if ATTIC_CLOUD_SYNC && !ATTIC_LOCAL_ONLY`. `PhoneFakeSyncSession` owns the deterministic application state machine. `PhoneFakeSyncTransport` defines the send/ack/fetch contract. `PhoneFakeSyncServer` simulates private database event delivery, deduplicates operation identities, partitions by account/environment, and injects lost receipts, incomplete assets, duplicates and reordering. `PhoneFakeSyncCKSyncEngineBoundary` can accept an *injected* `CKSyncEngine` and delegate-parsed events when Stage 5b is authorized; Stage 5a never initializes it, calls an SDK method, registers notifications, or accesses a container.
 
-`PhoneFakeSyncRepository.transaction` is an atomic, serializable **test double**, not an existing SwiftData writer hook. A real adapter must register **every** writer (`TaskStore`, note/document transactions, links, tag colours, Draw, archives, restores and library commands) in the *same SwiftData transaction* that saves the local change. It must store outgoing mutations, state serialization and CKRecord system fields in account/environment-specific persistence. It must use fresh `ModelContext`s for imports, commit the imported rows before persisting the import checkpoint, and refresh presentation contexts after commit. Neither the Mac Local store nor the existing iOS Local store has been modified by this branch. The new files need generator/source membership in a future explicit sync target: Local builds use `ATTIC_LOCAL_ONLY` and compile out both the implementation and these tests.
+`PhoneFakeSyncRepository.transaction` is an atomic, serializable **test double**, not an existing SwiftData writer hook. A real adapter must register **every** writer (`TaskStore`, note/document transactions, links, tag colours, Draw, archives, restores and library commands) in the *same SwiftData transaction* that saves the local change. It must store outgoing mutations, state serialization and CKRecord system fields in account/environment-specific persistence. It must use fresh `ModelContext`s for imports, commit the imported rows before persisting the import checkpoint, and refresh presentation contexts after commit. Neither the Mac Local store nor the existing iOS Local store has been modified by this branch. The generated project includes a dedicated `AtticMobileFakeSync` scheme and `AtticMobileFakeSyncTests` target in the `FakeSync` configuration. Ordinary Local builds retain `ATTIC_LOCAL_ONLY` and compile out the fake implementation and tests.
 
 ## Wire invariants
 
@@ -29,4 +29,21 @@ This is an application-level conflict and transport **model**, not a verified Cl
 
 The new `PhoneFakeSyncEngineTests.swift` exercises crash/commit rollback and replay after a lost receipt; duplicate and out-of-order imports; checkpoint rollback; stale acknowledgments; two offline note forks and deliberate resolution; two offline task-note ownership candidates; tombstones, old offline edits and restore; interrupted/missing/corrupted assets; account + Development/Production boundaries; duplicate UUID rows and divergence preservation; and cross-device reopen/Done-family maintenance including a timezone transition. It constructs **only synthetic fixtures** and fake stores.
 
-The Stage 5a test target must be built with `ATTIC_CLOUD_SYNC` **without** `ATTIC_LOCAL_ONLY` (never both), with the new core and test files added to a dedicated sync-only target/configuration by the lead. Do not run Xcode on the MacBook Pro. Builds and tests belong to the MacBook Air, coordinated through `ssh air` and `Scripts/xcodebuild_locked.sh` once the lead has an exclusive Air slot. Because the owner of `iphone/build` controls the project generator and staged Stage 3 files, this branch intentionally does not change `Scripts/generate_project.rb`, `project.pbxproj` or existing app code; its tests are **not** discovered by the current Local scheme. Verification must record exact command, host and results rather than describing source-only checks as passing tests.
+### Verified Air gate · 2 November 2026
+
+The `AtticMobileFakeSync` scheme compiled under `ATTIC_CLOUD_SYNC`
+without `ATTIC_LOCAL_ONLY`, using the dedicated synthetic iPhone 17 Pro
+running iOS 26.5. `Scripts/xcodebuild_locked.sh` on the Air ran the
+fake transport tests with `-configuration FakeSync`, disabled code signing,
+no entitlements and no CloudKit container. **All 15/15 adversarial tests
+passed, zero failures and zero skips.** Actual Air evidence:
+`attic-px-iphone/.build/air-ios/runs/stage5a-local-01/fakesync-tests.xcresult`
+inside the dedicated Air job. The normal `AtticMobile` Local suite separately
+passed 87 of 90 tests (0 failures, 3 intentional opt-in benchmark skips),
+under `stage5a-local-01/tests.xcresult`.
+
+The Xcode project is generated repeatably and the verifier enforces
+mutual exclusion of `ATTIC_CLOUD_SYNC` / `ATTIC_LOCAL_ONLY` in every
+phone configuration. The fake repository is still a test double.
+No real CloudKit network operations, SwiftData writer hooks, or account
+migration were installed. Stage 5b and all owner-only steps remain excluded.

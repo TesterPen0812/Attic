@@ -79,16 +79,24 @@ abort 'Shipping app must not enable crash hooks' if app.build_configurations.any
   config.build_settings.fetch('OTHER_SWIFT_FLAGS', '').include?('ATTIC_OPERATION_CRASH_TESTS')
 }
 
-# Phone builds must fail closed until a separately gated sync configuration exists.
-%w[AtticMobile AtticMobileTests AtticMobileUITests].each do |name|
+# Local builds always fail closed. Only the isolated Stage 5a test scheme may
+# compile ATTIC_CLOUD_SYNC and it must do so without ATTIC_LOCAL_ONLY.
+%w[AtticMobile AtticMobileTests AtticMobileUITests AtticMobileFakeSyncTests].each do |name|
   target = project.targets.find { |candidate| candidate.name == name } or abort "Missing #{name}"
   target.build_configurations.each do |config|
     settings = config.build_settings
     abort "Unexpected identity: #{name}/#{config.name}" unless settings['PRODUCT_BUNDLE_IDENTIFIER'] == "com.taha.#{name}"
     abort "Wrong deployment target: #{name}" unless settings['IPHONEOS_DEPLOYMENT_TARGET'] == '26.0'
     flags = settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS', '').split
-    abort "Unsafe phone configuration: #{name}/#{config.name}" unless flags.include?('ATTIC_LOCAL_ONLY') && !flags.include?('ATTIC_CLOUD_SYNC') && settings['CODE_SIGN_ENTITLEMENTS'].to_s.empty? && settings['CODE_SIGNING_ALLOWED'] == 'NO'
+    fake_sync = config.name == 'FakeSync'
+    abort "Unexpected fake sync target: #{name}" if fake_sync && !%w[AtticMobile AtticMobileFakeSyncTests].include?(name)
+    expected = fake_sync ? 'ATTIC_CLOUD_SYNC' : 'ATTIC_LOCAL_ONLY'
+    forbidden = fake_sync ? 'ATTIC_LOCAL_ONLY' : 'ATTIC_CLOUD_SYNC'
+    abort "Unsafe phone configuration: #{name}/#{config.name}" unless flags.include?(expected) && !flags.include?(forbidden) && settings['CODE_SIGN_ENTITLEMENTS'].to_s.empty? && settings['CODE_SIGNING_ALLOWED'] == 'NO'
   end
 end
+
+fake_scheme = File.read(File.join(CHECKED_PROJECT, 'xcshareddata/xcschemes/AtticMobileFakeSync.xcscheme'))
+abort 'Missing FakeSync-only test gate' unless fake_scheme.include?('AtticMobileFakeSyncTests') && fake_scheme.include?('buildConfiguration = "FakeSync"')
 
 puts 'Project generation is repeatable and Attic.xcodeproj is current'

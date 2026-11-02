@@ -55,6 +55,11 @@ ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '26.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '26.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '26.0')
+# Stage 5a is an isolated compile/test configuration. Neither the shipping
+# Local scheme nor macOS targets acquire sync flags or CloudKit capabilities.
+mobile_sync_tests = project.new_target(:unit_test_bundle, 'AtticMobileFakeSyncTests', :ios, '26.0')
+project.add_build_configuration('FakeSync', :debug)
+[mobile_app, mobile_sync_tests].each { |target| target.add_build_configuration('FakeSync', :debug) }
 # Isolated, store-free Canvas measurement lab; no shipping target dependency.
 canvas_lab = project.new_target(:application, 'CanvasLab', :osx, '26.0')
 canvas_driver = project.new_target(:command_line_tool, 'CanvasLabDriver', :osx, '26.0')
@@ -82,6 +87,7 @@ unit_host.add_dependency(crash_helper)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
+mobile_sync_tests.add_dependency(mobile_app)
 
 def add_swift_sources(project, target, group_name, directory)
   group = project.main_group.new_group(group_name, group_name)
@@ -173,6 +179,9 @@ end
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 mobile_tests_group = add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+fake_sync_tests_source = mobile_tests_group.files.find { |file| file.path == 'PhoneFakeSyncEngineTests.swift' }
+abort 'Missing isolated fake sync test source' unless fake_sync_tests_source
+mobile_sync_tests.source_build_phase.add_file_reference(fake_sync_tests_source)
 # Explicit, synthetic interchange resources are test-only on both platforms.
 %w[exchange-note.json exchange-file.txt].each do |name|
   fixture = mobile_tests_group.new_file("Fixtures/Synthetic/#{name}")
@@ -383,7 +392,7 @@ ui_tests.build_configurations.each do |config|
 end
 
 # The phone shares source membership, not the Mac's signing or capabilities.
-[mobile_app, mobile_tests, mobile_ui_tests].each do |target|
+[mobile_app, mobile_tests, mobile_ui_tests, mobile_sync_tests].each do |target|
   target.build_configurations.each do |config|
     settings = config.build_settings
     settings['PRODUCT_BUNDLE_IDENTIFIER'] = "com.taha.#{target.name}"
@@ -392,7 +401,8 @@ end
     settings['CODE_SIGNING_ALLOWED'] = 'NO'
     settings['SWIFT_VERSION'] = '5.0'
     settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-    settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_LOCAL_ONLY'
+    sync_build = config.name == 'FakeSync'
+    settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = "$(inherited) #{sync_build ? 'ATTIC_CLOUD_SYNC' : 'ATTIC_LOCAL_ONLY'}"
     settings['IPHONEOS_DEPLOYMENT_TARGET'] = '26.0'
     settings['SDKROOT'] = 'iphoneos'
     settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
@@ -407,7 +417,7 @@ end
       settings['ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME'] = 'AccentColor'
       settings['MARKETING_VERSION'] = '1.0'
       settings['CURRENT_PROJECT_VERSION'] = '10'
-    elsif target == mobile_tests
+    elsif target == mobile_tests || target == mobile_sync_tests
       settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticMobile.app/AtticMobile'
       settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
     else
@@ -490,6 +500,19 @@ mobile_scheme.test_action.environment_variables = Xcodeproj::XCScheme::Environme
 ])
 mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 
+# Compiles and tests the deterministic transport with cloud-mode sources,
+# without CloudKit access, entitlements, signing or a shipping sync app.
+fake_sync_scheme = Xcodeproj::XCScheme.new
+fake_sync_scheme.add_build_target(mobile_app)
+fake_sync_scheme.set_launch_target(mobile_app)
+fake_sync_scheme.launch_action.build_configuration = 'FakeSync'
+fake_sync_scheme.add_test_target(mobile_sync_tests)
+fake_sync_scheme.test_action.build_configuration = 'FakeSync'
+fake_sync_scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
+])
+fake_sync_scheme.save_as(staged_project_path, 'AtticMobileFakeSync', true)
+
 lab_scheme = Xcodeproj::XCScheme.new
 [canvas_lab, canvas_driver, canvas_recorder, canvas_tests].each { |target| lab_scheme.add_build_target(target) }
 lab_scheme.set_launch_target(canvas_lab)
@@ -509,6 +532,7 @@ stable_target_uuids = {
   mobile_app => '6F18DA86261F48A4AE00000000000001',
   mobile_tests => '6F18DA86261F48A4AE00000000000002',
   mobile_ui_tests => '6F18DA86261F48A4AE00000000000003',
+  mobile_sync_tests => '6F18DA86261F48A4AE00000000000004',
   canvas_lab => 'CA440000000000000000000000000001',
   canvas_driver => 'CA440000000000000000000000000002',
   canvas_recorder => 'CA440000000000000000000000000003',
@@ -527,7 +551,7 @@ project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
 
-['Attic', 'AtticUI', 'AtticMobile', 'AtticRoundTrips', 'CanvasLab'].each do |scheme_name|
+['Attic', 'AtticUI', 'AtticMobile', 'AtticMobileFakeSync', 'AtticRoundTrips', 'CanvasLab'].each do |scheme_name|
   scheme_file = File.join(
     staged_project_path,
     'xcshareddata',
