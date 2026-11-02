@@ -289,6 +289,14 @@ final class FirstClickActivationTests: XCTestCase {
 
     func testOnePressActivatesTheAppAndActsOnDockedIslandAndFloatingSurfaces() throws {
         try requireKeyWindowTests()
+        try XCTSkipUnless(Host.current().localizedName?.contains("Air") == true,
+                          "Real activation needs an Air window-server click")
+        XCTAssertEqual(try String(contentsOfFile: "/tmp/attic-air-screen.lockdir/owner", encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), "zoom-for-good")
+        let modifiers: CGEventFlags = [.maskCommand, .maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]
+        guard CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
+              NSEvent.pressedMouseButtons == 0 else { throw XCTSkip("Input already held; leave it alone") }
+        defer { XCTAssertTrue(CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty) }
         let finder = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first)
         func giveFocusBack() {
             NSApp.yieldActivation(to: finder)
@@ -329,18 +337,25 @@ final class FirstClickActivationTests: XCTestCase {
                 let location = target.convert(CGPoint(x: 10, y: 10), to: nil)
                 XCTAssertTrue(window.contentView?.superview?.hitTest(location) === target,
                               "the first press must actually hit the counter")
-                func event(_ type: NSEvent.EventType) throws -> NSEvent {
-                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                let screenPoint = window.convertPoint(toScreen: location)
+                let global = CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y)
+                func post(_ type: CGEventType) throws {
+                    guard NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0) == window.windowNumber else {
+                        XCTFail("Another window covers the test target; no input posted")
+                        throw XCTSkip("Own-window input guard")
+                    }
+                    let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type,
+                        mouseCursorPosition: global, mouseButton: .left))
+                    event.flags = []
+                    event.post(tap: .cghidEventTap) // ordinary mouse only; no gesture construction
                 }
-                window.sendEvent(try event(.mouseMoved))
+                try post(.mouseMoved)
                 harness.spin(0.1)
                 XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): pointing must not activate the app")
-                window.sendEvent(try event(.leftMouseDown))
+                try post(.leftMouseDown)
                 harness.spin(0.1)
                 XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): active glass waits for release")
-                window.sendEvent(try event(.leftMouseUp))
+                try post(.leftMouseUp)
                 harness.spin(0.3)
                 XCTAssertEqual(target.presses, 1, "\(name): the first press still acts")
                 XCTAssertTrue(NSRunningApplication.current.isActive, "\(name): one click must activate the app, not only its panel")
