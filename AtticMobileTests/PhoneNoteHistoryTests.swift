@@ -266,4 +266,58 @@ final class PhoneNoteHistoryTests: XCTestCase {
         }
     }
 
+    /// Expected to FAIL until circle-removed restoration validates the complete
+    /// physical preservation family, as the Mac's normalization path does.
+    func testCircleRemovedRestoreRejectsConflictingPreservationLifecycleCopies() throws {
+        let db = try database(), c = ModelContext(db)
+        let id = UUID(), formerTask = UUID(), preservationID = UUID()
+        note(c, id: id, revisionID: UUID())
+
+        let encoder = JSONEncoder()
+        let memberFields: [String: Data] = try [
+            "title": encoder.encode("Former task"),
+            "parentID": encoder.encode(Optional<UUID>.none),
+            "statusRaw": encoder.encode("todo"),
+            "manualOrder": encoder.encode(Int64(1)),
+            "createdAt": encoder.encode(t),
+            "deletedAt": encoder.encode(t)
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "rootID": formerTask.uuidString,
+            "title": "Former task",
+            "members": [["id": formerTask.uuidString,
+                          "fields": memberFields.mapValues { $0.base64EncodedString() }]],
+            "originals": []
+        ])
+        let active = TaskDeletionPreservation(id: preservationID, rootID: formerTask,
+            deletedAt: t, capturedAt: t, provenance: "circle removed", snapshot: payload)
+        let retired = TaskDeletionPreservation(id: preservationID, rootID: formerTask,
+            deletedAt: t, capturedAt: t, provenance: "circle removed", snapshot: payload)
+        active.purgedAt = t
+        retired.purgedAt = t
+        retired.retiredAt = t.addingTimeInterval(1) // Same UUID, conflicting recovery ownership.
+        c.insert(active); c.insert(retired)
+
+        let link = TaskNoteAssociation(taskID: formerTask, noteID: id)
+        link.detachedAt = t
+        link.detachedPreservationID = preservationID
+        c.insert(link)
+        let past = NoteDocument(blocks: [.text("Former task"), .text("Earlier writing")], requires: ["taskNote"])
+        version(c, noteID: id, bytes: try NoteContentCodec.encode(past))
+        try c.save()
+
+        let history = PhoneNoteHistory(container: db)
+        let opened = try history.load(noteID: id)
+        let selected = try XCTUnwrap(opened.versions.first)
+        // Currently fails: PhoneNoteHistory.normalized omits retiredAt from its family check
+        // and overwrites the note although one record says preservation is retired.
+        XCTAssertThrowsError(try history.restore(selected, against: opened.head))
+        let read = ModelContext(db)
+        XCTAssertTrue(try read.fetch(FetchDescriptor<NoteItem>()).allSatisfy {
+            $0.content == raw && $0.revision == 3
+        })
+        XCTAssertEqual(try read.fetchCount(FetchDescriptor<NoteVersion>()), 1,
+            "A rejected restore must not create its safety checkpoint")
+    }
+
 }
