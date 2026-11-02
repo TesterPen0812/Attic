@@ -13,6 +13,10 @@ and clear margins stay non-activating. Hide motions cannot be superseded by
 activation. The board releases its cursor on exit and hide. Motion timings
 are unchanged.
 
+Draw takes its window's keyboard focus when the page becomes visible, so
+the zoom shortcuts work after a page switch. Background cursor permission
+and the resting tool cursor are restored after process focus changes.
+
 ## 2026-11-01 · Adaptive Priority, Calendar and island
 
 Priority widens into four 26 pt choices in the composer. Calendar event
