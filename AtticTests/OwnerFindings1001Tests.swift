@@ -514,7 +514,7 @@ final class OwnerFindingsDemoDataTests: XCTestCase {
         XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: nil))
         XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.preview."))
         XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.dira"))
-        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.emanueledipietro.Attic"))
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "org.example.unrelated.Attic"))
         XCTAssertTrue(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.preview.main"))
 
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)

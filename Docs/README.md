@@ -4,6 +4,7 @@ These documents still describe current behaviour or tooling.
 
 | File | What it covers |
 |---|---|
+| [iPhone/activation-plan.md](iPhone/activation-plan.md) | The isolated iPhone activation stages, evidence gates, and owner-only release steps. |
 | [DailyApp.md](DailyApp.md) | How the everyday app is installed from a reviewed commit, and how it differs from development previews. |
 | [Native-Verification-Playbook.md](Native-Verification-Playbook.md) | How an on-screen verification pass launches a preview, proves which build is running, and reports results. |
 | [Appearance-Model-2026-09.md](Appearance-Model-2026-09.md) | The appearance settings model and Tint calibration. Source comments point here. |

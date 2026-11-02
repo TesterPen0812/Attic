@@ -5,8 +5,8 @@ shows a floating panel when the pointer rests in a chosen screen corner, or
 when you press `Control–Option–Space`.
 
 Attic is macOS-first and local-first. Your data stays in a local SwiftData
-store on the Mac. An iPhone app and CloudKit sync exist in the source but are
-switched off (see [What is not active](#what-is-not-active)).
+store on the Mac. This branch develops a separate, local-only iPhone target under
+the [activation plan](Docs/iPhone/activation-plan.md). Real CloudKit sync is off.
 
 <p align="center">
   <img src="Media/attic-panel.png" width="375" alt="The Attic panel on the Notes page: a note titled “Woah” that says “This app is dope”, with a large image of a cigar-smoking emoji, and the pin, Notes, Aa and new-note buttons at the panel’s corners.">
@@ -82,11 +82,11 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ## What is not active
 
-- **iPhone app and CloudKit sync.** Builds compile with `ATTIC_LOCAL_ONLY`
-  and request no CloudKit or APNs entitlements. The sync code stays dormant
-  until a separate, planned activation. A local build or test passing is not
-  evidence that sync works. The rules are in the Development Contract in
-  [`AGENTS.md`](AGENTS.md).
+- **Live sync.** The Mac and phone builds use `ATTIC_LOCAL_ONLY` and request no
+  CloudKit or APNs entitlements. An iPhone target or passing unit test does
+  not establish a verified phone release or working sync. The activation
+  stages, including owner-only device and cloud checks, are in the
+  [plan](Docs/iPhone/activation-plan.md) and [Development Contract](AGENTS.md).
 - **Canvas.** The Canvas page is the pre-redesign implementation. It is kept as
   it is until it is rebuilt.
 
@@ -252,7 +252,7 @@ the same check against a test server when `TEST_RUNNER_ATTIC_MCP_NODE` and
 | `AtticTests/` | Unit tests, and the sources of the generated round-trip bundle. |
 | `AtticUITests/` | macOS UI tests. |
 | `AtticUnitTestHost/` | The invisible host app that unit tests run in. |
-| `AtticMobile*/` | The dormant iPhone app and its tests. |
+| `AtticMobile*/` | The local-only iPhone target and its tests. |
 | `Scripts/` | Project generation, the preview launcher, test and CI helpers, and performance tools. |
 | `script/build_and_run.sh` | One-step preview build and launch. |
 | `Docs/` | The few documents that still govern current work; see [Docs/README.md](Docs/README.md). |

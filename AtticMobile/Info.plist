@@ -26,12 +26,6 @@
 	<string>public.app-category.productivity</string>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
-	<key>AtticCloudKitEnvironment</key>
-	<string>$(ICLOUD_CONTAINER_ENVIRONMENT)</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

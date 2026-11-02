@@ -52,9 +52,9 @@ crash_helper = project.new_target(:command_line_tool, 'AtticOperationCrashHelper
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
 round_trip_tests = project.new_target(:unit_test_bundle, 'AtticRoundTripTests', :osx, '26.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
-mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
-mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
-mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
+mobile_app = project.new_target(:application, 'AtticMobile', :ios, '26.0')
+mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '26.0')
+mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '26.0')
 # Isolated, store-free Canvas measurement lab; no shipping target dependency.
 canvas_lab = project.new_target(:application, 'CanvasLab', :osx, '26.0')
 canvas_driver = project.new_target(:command_line_tool, 'CanvasLabDriver', :osx, '26.0')
@@ -175,44 +175,43 @@ mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobil
 add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
 add_swift_sources(project, mobile_ui_tests, 'AtticMobileUITests', 'AtticMobileUITests')
 
-shared_mobile_sources = [
-  'Canvas/CanvasControls.swift',
-  'Canvas/CanvasImageImporter.swift',
-  'Canvas/CanvasImageTypes.swift',
-  'Canvas/CanvasInputStateMachine.swift',
-  'Canvas/CanvasSendable.swift',
-  'Canvas/CanvasSession.swift',
-  'Canvas/CanvasStrokeCodec.swift',
-  'Canvas/CanvasSurface.swift',
-  'Canvas/CanvasSurfaceIOS.swift',
-  'Canvas/CanvasSurfaceInteraction.swift',
-  'Canvas/CanvasSurfaceRenderer.swift',
-  'Canvas/CanvasTypes.swift',
-  'Canvas/CanvasViewport.swift',
-  'Design/AtticTheme.swift',
-  'Models/CanvasBoardItem.swift',
-  'Models/CanvasImageItem.swift',
-  'Models/CanvasStrokeItem.swift',
-  'Models/AtticItem.swift',
-  'Models/AtticTag.swift',
-  'Models/DueDay.swift',
-  'Models/ItemLink.swift',
-  'Models/TaskItem.swift',
-  'Models/TaskTypes.swift',
-  'Models/NoteItem.swift',
-  'Services/CanvasStore.swift',
-  'Services/CanvasStoreBoards.swift',
-  'Services/CanvasStoreCloudSync.swift',
-  'Services/CanvasStoreImages.swift',
-  'Services/CanvasStoreLifecycle.swift',
-  'Services/CanvasStorePersistence.swift',
-  'Services/CanvasStoreReplicaResolution.swift',
-  'Services/CanvasStoreStrokes.swift',
-  'Services/PersistenceController.swift',
-  'Services/NoteStore.swift',
-  'Services/TaskDrafts.swift',
-  'Services/TaskStore.swift',
-  'Services/TaskTextParser.swift'
+# Shared by file reference: never move a Mac source to add phone membership.
+shared_mobile_sources = %w[
+  Calendar/CalendarEventSource.swift
+  Calendar/CalendarEventWriter.swift
+  Calendar/Data/EventKitCalendarEventSource.swift
+  DesignSystem/Tokens/AtticTagHue.swift
+  Draw/DrawPersistentStore.swift
+  Draw/DrawRecords.swift
+  Draw/DrawRepository.swift
+  Draw/DrawStore.swift
+  Draw/DrawTypes.swift
+  Draw/Engine/DrawGeometry.swift
+  Draw/Engine/DrawViewport.swift
+  Models/AtticItem.swift
+  Models/AtticTag.swift
+  Models/DueDay.swift
+  Models/ItemLink.swift
+  Models/NoteAttachment.swift
+  Models/NoteItem.swift
+  Models/NoteTextReplacement.swift
+  Models/NoteVersion.swift
+  Models/OperationReceipt.swift
+  Models/TagColour.swift
+  Models/TaskImageReference.swift
+  Models/TaskItem.swift
+  Models/TaskTypes.swift
+  Notes/Format/NoteContentCodec.swift
+  Notes/Format/NoteDocument.swift
+  Notes/Format/NoteJSON.swift
+  Notes/Format/NoteMarkdownExport.swift
+  Notes/Format/NoteTable.swift
+  Notes/Format/NoteTableAgent.swift
+  Notes/Format/NoteTableText.swift
+  Notes/Format/NoteTextExport.swift
+  Services/PersistenceController.swift
+  Services/TaskDrafts.swift
+  Services/TaskTextParser.swift
 ]
 shared_mobile_sources.each do |path|
   reference = app_group.files.find { |file| file.path == path }
@@ -229,17 +228,13 @@ notice = app_group.new_file('Resources/ThirdPartyNotices.txt')
 privacy_manifest = app_group.new_file('Resources/PrivacyInfo.xcprivacy')
 app.resources_build_phase.add_file_reference(privacy_manifest)
 mobile_app.resources_build_phase.add_file_reference(privacy_manifest)
-app_group.new_file('Attic.entitlements')
-app_group.new_file('AtticDebug.entitlements')
-app_group.new_file('AtticLocal.entitlements')
 app_group.new_file('AtticNotesLocal.entitlements')
 app_group.new_file('Info.plist')
-mobile_group.new_file('AtticMobile.entitlements')
 mobile_group.new_file('Info.plist')
 
 project.build_configurations.each do |config|
   config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '26.0'
-  config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
+  config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '26.0'
 end
 
 app.build_configurations.each do |config|
@@ -372,64 +367,49 @@ ui_tests.build_configurations.each do |config|
   settings['TEST_TARGET_NAME'] = 'Attic'
 end
 
-mobile_app.build_configurations.each do |config|
-  settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Attic'
-  settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
-  settings['PRODUCT_MODULE_NAME'] = 'AtticMobile'
-  settings['GENERATE_INFOPLIST_FILE'] = 'NO'
-  settings['INFOPLIST_FILE'] = 'AtticMobile/Info.plist'
-  settings['CODE_SIGN_ENTITLEMENTS'] = 'AtticMobile/AtticMobile.entitlements'
-  settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
-  settings['ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME'] = 'AccentColor'
-  settings['SWIFT_VERSION'] = '5.0'
-  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['SWIFT_EMIT_LOC_STRINGS'] = 'YES'
-  settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
-  settings['SDKROOT'] = 'iphoneos'
-  settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
-  settings['TARGETED_DEVICE_FAMILY'] = '1'
-  settings['SUPPORTS_MACCATALYST'] = 'NO'
-  settings['MARKETING_VERSION'] = '1.0'
-  settings['CURRENT_PROJECT_VERSION'] = '9'
-  settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
-  settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
-  abort "Mismatched AtticMobile CloudKit/APNs environment for #{config.name}" unless
-    (settings['ICLOUD_CONTAINER_ENVIRONMENT'] == 'Production') ==
-      (settings['APS_ENVIRONMENT'] == 'production')
+# The phone shares source membership, not the Mac's signing or capabilities.
+[mobile_app, mobile_tests, mobile_ui_tests].each do |target|
+  target.build_configurations.each do |config|
+    settings = config.build_settings
+    settings['PRODUCT_BUNDLE_IDENTIFIER'] = "com.taha.#{target.name}"
+    settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+    settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
+    settings['CODE_SIGNING_ALLOWED'] = 'NO'
+    settings['SWIFT_VERSION'] = '5.0'
+    settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+    settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_LOCAL_ONLY'
+    settings['IPHONEOS_DEPLOYMENT_TARGET'] = '26.0'
+    settings['SDKROOT'] = 'iphoneos'
+    settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
+    settings['TARGETED_DEVICE_FAMILY'] = '1'
+    settings['SUPPORTS_MACCATALYST'] = 'NO'
+    if target == mobile_app
+      settings['PRODUCT_NAME'] = 'AtticMobile'
+      settings['PRODUCT_MODULE_NAME'] = 'AtticMobile'
+      settings['GENERATE_INFOPLIST_FILE'] = 'NO'
+      settings['INFOPLIST_FILE'] = 'AtticMobile/Info.plist'
+      settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
+      settings['ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME'] = 'AccentColor'
+      settings['MARKETING_VERSION'] = '1.0'
+      settings['CURRENT_PROJECT_VERSION'] = '10'
+    elsif target == mobile_tests
+      settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticMobile.app/AtticMobile'
+      settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
+    else
+      settings['TEST_TARGET_NAME'] = 'AtticMobile'
+    end
+  end
 end
 
-mobile_tests.build_configurations.each do |config|
-  settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticMobileTests'
-  settings['GENERATE_INFOPLIST_FILE'] = 'YES'
-  settings['SWIFT_VERSION'] = '5.0'
-  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
-  settings['SDKROOT'] = 'iphoneos'
-  settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
-  settings['TARGETED_DEVICE_FAMILY'] = '1'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticMobile.app/AtticMobile'
-  settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
-end
-
-mobile_ui_tests.build_configurations.each do |config|
-  settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticMobileUITests'
-  settings['GENERATE_INFOPLIST_FILE'] = 'YES'
-  settings['SWIFT_VERSION'] = '5.0'
-  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
-  settings['SDKROOT'] = 'iphoneos'
-  settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
-  settings['TARGETED_DEVICE_FAMILY'] = '1'
-  settings['TEST_TARGET_NAME'] = 'AtticMobile'
+project.targets.each do |target|
+  target.build_configurations.each do |config|
+    flags = %w[SWIFT_ACTIVE_COMPILATION_CONDITIONS OTHER_SWIFT_FLAGS].flat_map do |key|
+      [project.build_configurations.find { |candidate| candidate.name == config.name }, config].compact.flat_map do |scope|
+        Array(scope.build_settings[key]).flat_map { |entry| entry.split.map { |flag| flag.delete_prefix('-D') } }
+      end
+    end
+    abort "Conflicting sync modes: #{target.name}/#{config.name}" if %w[ATTIC_LOCAL_ONLY ATTIC_CLOUD_SYNC].all? { |flag| flags.include?(flag) }
+  end
 end
 
 # xcodeproj includes the current random project/target UUIDs in proxy paths when
@@ -451,15 +431,6 @@ proxy_targets.each do |proxy, target|
   proxy.container_portal = project.root_object.uuid
   proxy.remote_global_id_string = target.uuid
 end
-
-target_attributes = project.root_object.attributes['TargetAttributes'] ||= {}
-target_attributes[mobile_app.uuid] = {
-  'SystemCapabilities' => {
-    'com.apple.BackgroundModes' => { 'enabled' => 1 },
-    'com.apple.iCloud' => { 'enabled' => 1 },
-    'com.apple.Push' => { 'enabled' => 1 }
-  }
-}
 
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
@@ -520,9 +491,9 @@ stable_target_uuids = {
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
   round_trip_tests => 'F3330000000000000000000000000001',
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
-  mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
-  mobile_tests => 'A7E2FBB4FDEEC93FE643B32D6940915E',
-  mobile_ui_tests => '1BD194A0EE08899209C8473CFFD68DA0',
+  mobile_app => '6F18DA86261F48A4AE00000000000001',
+  mobile_tests => '6F18DA86261F48A4AE00000000000002',
+  mobile_ui_tests => '6F18DA86261F48A4AE00000000000003',
   canvas_lab => 'CA440000000000000000000000000001',
   canvas_driver => 'CA440000000000000000000000000002',
   canvas_recorder => 'CA440000000000000000000000000003',

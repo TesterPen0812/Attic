@@ -79,4 +79,16 @@ abort 'Shipping app must not enable crash hooks' if app.build_configurations.any
   config.build_settings.fetch('OTHER_SWIFT_FLAGS', '').include?('ATTIC_OPERATION_CRASH_TESTS')
 }
 
+# Phone builds must fail closed until a separately gated sync configuration exists.
+%w[AtticMobile AtticMobileTests AtticMobileUITests].each do |name|
+  target = project.targets.find { |candidate| candidate.name == name } or abort "Missing #{name}"
+  target.build_configurations.each do |config|
+    settings = config.build_settings
+    abort "Unexpected identity: #{name}/#{config.name}" unless settings['PRODUCT_BUNDLE_IDENTIFIER'] == "com.taha.#{name}"
+    abort "Wrong deployment target: #{name}" unless settings['IPHONEOS_DEPLOYMENT_TARGET'] == '26.0'
+    flags = settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS', '').split
+    abort "Unsafe phone configuration: #{name}/#{config.name}" unless flags.include?('ATTIC_LOCAL_ONLY') && !flags.include?('ATTIC_CLOUD_SYNC') && settings['CODE_SIGN_ENTITLEMENTS'].to_s.empty? && settings['CODE_SIGNING_ALLOWED'] == 'NO'
+  end
+end
+
 puts 'Project generation is repeatable and Attic.xcodeproj is current'

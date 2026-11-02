@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6A9C0775F09BF19B3C70496EEC4AF237"
+               BlueprintIdentifier = "6F18DA86261F48A4AE00000000000001"
                BuildableName = "AtticMobile.app"
                BlueprintName = "AtticMobile"
                ReferencedContainer = "container:Attic.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6A9C0775F09BF19B3C70496EEC4AF237"
+            BlueprintIdentifier = "6F18DA86261F48A4AE00000000000001"
             BuildableName = "AtticMobile.app"
             BlueprintName = "AtticMobile"
             ReferencedContainer = "container:Attic.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A7E2FBB4FDEEC93FE643B32D6940915E"
+               BlueprintIdentifier = "6F18DA86261F48A4AE00000000000002"
                BuildableName = "AtticMobileTests.xctest"
                BlueprintName = "AtticMobileTests"
                ReferencedContainer = "container:Attic.xcodeproj">
@@ -51,7 +51,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "1BD194A0EE08899209C8473CFFD68DA0"
+               BlueprintIdentifier = "6F18DA86261F48A4AE00000000000003"
                BuildableName = "AtticMobileUITests.xctest"
                BlueprintName = "AtticMobileUITests"
                ReferencedContainer = "container:Attic.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6A9C0775F09BF19B3C70496EEC4AF237"
+            BlueprintIdentifier = "6F18DA86261F48A4AE00000000000001"
             BuildableName = "AtticMobile.app"
             BlueprintName = "AtticMobile"
             ReferencedContainer = "container:Attic.xcodeproj">
@@ -97,7 +97,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6A9C0775F09BF19B3C70496EEC4AF237"
+            BlueprintIdentifier = "6F18DA86261F48A4AE00000000000001"
             BuildableName = "AtticMobile.app"
             BlueprintName = "AtticMobile"
             ReferencedContainer = "container:Attic.xcodeproj">

@@ -1,34 +1,22 @@
+import SwiftData
 import SwiftUI
-import UIKit
 
-final class MobileAppDelegate: NSObject, UIApplicationDelegate {
-    func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
-    ) -> Bool {
-        // CloudKit imports are triggered by silent APNs pushes while the app
-        // is suspended. Register explicitly so delivery does not depend on a
-        // previous foreground launch path.
-        application.registerForRemoteNotifications()
-        return true
-    }
-
-    func application(
-        _ application: UIApplication,
-        didFailToRegisterForRemoteNotificationsWithError error: Error
-    ) {
-        NSLog("Remote notification registration failed: %@", error.localizedDescription)
-    }
-}
-
+// This stage links the actual shared schema into the new local phone target.
+// The synthetic library and interactive shell are introduced at the next gate.
 @main
 struct AtticMobileApp: App {
-    @UIApplicationDelegateAdaptor(MobileAppDelegate.self) private var appDelegate
-    @StateObject private var appModel = MobileAppModel()
+    private let database: Result<ModelContainer, Error> = Result {
+        try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+    }
 
     var body: some Scene {
         WindowGroup {
-            MobileAppRoot(appModel: appModel)
+            switch database {
+            case .success(let container):
+                Text("Attic").modelContainer(container)
+            case .failure(let error):
+                ContentUnavailableView("Library unavailable", systemImage: "exclamationmark.triangle", description: Text(error.localizedDescription))
+            }
         }
     }
 }
