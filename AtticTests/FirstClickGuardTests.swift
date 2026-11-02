@@ -200,7 +200,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
             AtticMotionPreference.systemReduceMotionOverride = nil
             AtticTransparencySeam.systemOverride = nil
         }
-        let method = try XCTUnwrap(class_getInstanceMethod(NSApplication.self, #selector(NSApplication.activate)))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSApplication.self, NSSelectorFromString("activate")))
         let original = method_getImplementation(method)
         var requests = 0
         let spy: @convention(block) (NSApplication) -> Void = { _ in
