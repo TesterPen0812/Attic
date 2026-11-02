@@ -182,6 +182,72 @@ final class FirstClickFirstMouseTests: XCTestCase {
     }
 }
 
+/// Safe in the invisible host: observe activation requests without enabling
+/// activation, making a window key, or posting input outside this process.
+@MainActor
+final class FirstClickActivationRequestTests: XCTestCase {
+    private final class PressCounter: NSView {
+        var presses = 0
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override func mouseDown(with event: NSEvent) { presses += 1 }
+    }
+
+    func testOnlyTheFirstPressRequestsActivationAndStillReachesEverySurface() throws {
+        guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Invisible-host activation spy") }
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let method = try XCTUnwrap(class_getInstanceMethod(NSApplication.self, #selector(NSApplication.activate)))
+        let original = method_getImplementation(method)
+        var requests = 0
+        let spy: @convention(block) (NSApplication) -> Void = { _ in
+            MainActor.assumeIsolated { requests += 1 }
+        }
+        let implementation = imp_implementationWithBlock(spy)
+        method_setImplementation(method, implementation)
+        defer { method_setImplementation(method, original); imp_removeBlock(implementation) }
+
+        for surface in ["docked", "island", "floating"] {
+            let frame = CGRect(x: -4_000, y: -4_000, width: 200, height: 200)
+            let window: NSPanel = surface == "island"
+                ? PanelIslandWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                : AtticPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
+            let target = PressCounter(frame: CGRect(x: 50, y: 50, width: 80, height: 80))
+            root.addSubview(target)
+            window.contentView = root
+            requests = 0
+            window.orderFrontRegardless()
+            XCTAssertEqual(requests, 0, "\(surface): reveal cannot activate")
+            func send(_ type: NSEvent.EventType, at point: CGPoint) throws {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                window.sendEvent(event)
+            }
+            let point = target.convert(CGPoint(x: 40, y: 40), to: nil)
+            try send(.mouseMoved, at: point)
+            XCTAssertEqual(requests, 0, "\(surface): hover cannot activate")
+            try send(.leftMouseDown, at: point)
+            XCTAssertEqual(requests, 1, "\(surface): activation belongs to the first press")
+            XCTAssertEqual(target.presses, 1, "\(surface): activation cannot spend the press")
+            try send(.leftMouseUp, at: point)
+            XCTAssertEqual(requests, 1, "\(surface): release cannot request activation again")
+            // Empty glass has no first-mouse-refusing subview to install on.
+            try send(.leftMouseDown, at: CGPoint(x: 10, y: 10))
+            try send(.leftMouseUp, at: CGPoint(x: 10, y: 10))
+            XCTAssertEqual(requests, 2, "\(surface): empty glass activates too")
+            XCTAssertFalse(NSApp.isActive, "the spy must never activate the host")
+            XCTAssertFalse(window.isKeyWindow, "the host must never take the keyboard")
+        }
+    }
+}
+
 /// App activation is distinct from a non-activating panel becoming key.
 /// These opt-in tests exercise the application's real activation state;
 /// the HID/SCK check covers delivery and the resulting glass pixels.
