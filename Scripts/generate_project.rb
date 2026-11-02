@@ -215,6 +215,7 @@ shared_mobile_sources = %w[
   Notes/Format/NoteTableAgent.swift
   Notes/Format/NoteTableText.swift
   Notes/Format/NoteTextExport.swift
+  Services/LinkStore.swift
   Services/PersistenceController.swift
   Services/TagColourStore.swift
   Services/TaskDrafts.swift
