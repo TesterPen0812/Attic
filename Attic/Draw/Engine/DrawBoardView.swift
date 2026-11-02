@@ -721,7 +721,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityLabel() -> String? { String(localized: "Drawing board") }
     override func accessibilityValue() -> Any? {
-        String(localized: "\(model.objects.count) objects, \(model.selection.count) selected")
+        let percent = Int((model.viewport.zoom * 100).rounded())
+        return String(localized: "\(model.objects.count) objects, \(model.selection.count) selected, \(percent) % zoom")
     }
 
     /// The handles' resize, for VoiceOver.

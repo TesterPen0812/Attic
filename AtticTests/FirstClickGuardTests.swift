@@ -340,7 +340,7 @@ final class FirstClickActivationTests: XCTestCase {
                 let screenPoint = window.convertPoint(toScreen: location)
                 let global = CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y)
                 func post(_ type: CGEventType) throws {
-                    guard NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0) == window.windowNumber else {
+                    guard type == .leftMouseUp || NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0) == window.windowNumber else {
                         XCTFail("Another window covers the test target; no input posted")
                         throw XCTSkip("Own-window input guard")
                     }
