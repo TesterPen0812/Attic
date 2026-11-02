@@ -594,6 +594,24 @@ final class DrawInputTests: XCTestCase {
         }
     }
 
+    func testWorkspaceFocusChangeRefreshesTheRestingCursorAfterBackgroundPolicyRestoration() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.model.setTool(.eraser)
+        rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
+        spin(0.6)
+        rig.board.refreshCursor()
+        assertCursor(.eraser, rig, "before focus change")
+        // A process activation change need not emit another AppKit active
+        // notification. The policy repair must refresh a stationary pointer,
+        // even when the last mouse-moved event preceded that repair.
+        NSCursor.arrow.set()
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification,
+                                                   object: nil)
+        spin(0.2)
+        assertCursor(.eraser, rig, "after workspace-only focus change")
+    }
+
     func testTheCursorResetsOnExitAndWhenTheWindowHidesWithoutPointerMotion() throws {
         let rig = try makeRig()
         defer { close(rig) }
