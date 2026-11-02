@@ -38,7 +38,16 @@ final class PanelBackgroundInputTests: XCTestCase {
             defer { window.close() }
             for reveal in 1...2 {
                 window.orderFrontRegardless()
-                let value = try tags(of: window)
+                // Window ordering/tags commit asynchronously. Poll the real
+                // server value with a deadline, never infer it from the API's
+                // success return or the window's cached properties.
+                let required: UInt64 = (1 << 42) | (1 << 5)
+                let deadline = Date().addingTimeInterval(2)
+                var value = try tags(of: window)
+                while value & required != required, Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                    value = try tags(of: window)
+                }
                 print("BACKGROUND_INPUT \(surface) reveal=\(reveal) tags=\(String(value, radix: 16))")
                 XCTAssertNotEqual(value & (UInt64(1) << 42), 0, "\(surface): WindowServer must route background gestures")
                 XCTAssertNotEqual(value & (UInt64(1) << 5), 0, "\(surface): background cursor changes must be allowed")
