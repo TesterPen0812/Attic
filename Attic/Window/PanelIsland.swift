@@ -605,6 +605,8 @@ final class PanelIslandWindow: NSPanel {
 
     override func sendEvent(_ event: NSEvent) {
         let point = convertPoint(toScreen: event.locationInWindow)
+        // Whatever view a press hits takes it (one click always registers).
+        if AtticPanel.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }
         switch event.type {
         case .leftMouseDown: onPointer?(.down(point))
         case .leftMouseDragged: onPointer?(.dragged(point))
@@ -630,7 +632,30 @@ final class PanelIslandWindow: NSPanel {
     /// attached (`show(attachedTo:)` attaches before it orders in).
     @objc func _hasActiveAppearance() -> Bool { parent?.isKeyWindow ?? false }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+
+    // Clicks are routed by the island's own passthrough, never by its
+    // drawn alpha: its content is see-through while the panel's motion
+    // draws the island (`AtticMousePolicy`).
+    private var mousePolicy = AtticMousePolicy()
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place == .out { mousePolicy.orderedOut() }
+        super.order(place, relativeTo: otherWin)
+        if place != .out { mousePolicy.orderedIn(self) }
+    }
+
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        mousePolicy.orderedIn(self)
+    }
+
+    override func orderOut(_ sender: Any?) {
+        mousePolicy.orderedOut()
+        super.orderOut(sender)
+    }
 }
+
+extension PanelIslandWindow: AtticFirstPressWindow {}
 
 enum PanelIslandPointer: Equatable {
     case down(CGPoint), dragged(CGPoint), up(CGPoint)
