@@ -11,20 +11,22 @@ final class PanelActivation {
         var frontmost: () -> NSRunningApplication?
         var windows: () -> [NSWindow]
         var prepare: (NSWindow) -> Void
-        var activate: () -> Void
+        var activate: () -> Bool
         var yield: (NSRunningApplication) -> Void
         var restore: (NSRunningApplication) -> Bool
         var terminated: (NSRunningApplication) -> Bool
         var deactivate: () -> Void
 
         static var live: System {
-            System(isActive: { NSApp.isActive }, frontmost: {
+            // A nonactivating panel can give AppKit key focus while another
+            // process still owns activation. Use the workspace's process state.
+            System(isActive: { NSRunningApplication.current.isActive }, frontmost: {
                 let app = NSWorkspace.shared.frontmostApplication
                 return app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
             }, windows: { NSApp.windows }, prepare: { window in
                 window.makeKey()
                 window.makeMain()
-            }, activate: { NSApp.activate() }, yield: { NSApp.yieldActivation(to: $0) },
+            }, activate: { NSRunningApplication.current.activate(options: []) }, yield: { NSApp.yieldActivation(to: $0) },
             restore: { $0.activate(from: .current, options: []) },
             terminated: { $0.isTerminated }, deactivate: { NSApp.deactivate() })
         }
@@ -38,6 +40,7 @@ final class PanelActivation {
     private var borrowedActivation = false
     private let system: System
     private var observers: [NSObjectProtocol] = []
+    private var workspaceObserver: NSObjectProtocol?
 
     init(system: System = .live) {
         self.system = system
@@ -45,9 +48,20 @@ final class PanelActivation {
             object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.didBecomeActive() }
             })
+        // AppKit may already consider a nonactivating panel active before
+        // this process becomes frontmost. Its notification need not repeat.
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      app.processIdentifier == ProcessInfo.processInfo.processIdentifier else { return }
+                MainActor.assumeIsolated { self?.didBecomeActive() }
+            }
     }
 
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
+    }
 
     func pressed(_ event: NSEvent, in window: NSWindow) {
         guard AtticPanel.takesFirstPress(event.type), window.isVisible else { return }
@@ -73,7 +87,7 @@ final class PanelActivation {
         let surface = (window as? PanelIslandWindow)?.parent ?? window
         activationWindow = surface
         system.prepare(surface)
-        system.activate()
+        if !system.activate() { clearBorrowedActivation() }
     }
 
     func isActivationWindow(_ window: NSWindow) -> Bool { activationWindow === window }

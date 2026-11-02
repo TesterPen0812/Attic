@@ -21,7 +21,7 @@ final class PanelActivationTests: XCTestCase {
         var system: PanelActivation.System {
             .init(isActive: { self.active }, frontmost: { self.app }, windows: { self.windows },
                 prepare: { self.prepared = $0; self.events.append("prepare") },
-                activate: { self.events.append("activate") },
+                activate: { self.events.append("activate"); return true },
                 yield: { app in XCTAssertTrue(app === self.app); self.events.append("yield") },
                 restore: { app in XCTAssertTrue(app === self.app); self.events.append("restore"); return self.allowRestore },
                 terminated: { _ in self.quit }, deactivate: { self.active = false; self.events.append("deactivate") })
