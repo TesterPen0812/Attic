@@ -5,6 +5,11 @@ ring outside it (7.2 pt image, centred hot spot). Stroke width and canvas
 zoom no longer resize it. The eraser stays 12 pt; text, shape and select
 retain the native I-beam, crosshair and arrow.
 
+Panel, island and floating-panel presses now activate Attic as well as
+acting on their target, allowing native glass to use the active app state.
+Reveal and hover stay non-activating. The existing release-based key-look
+state and all motion timings are unchanged.
+
 ## 2026-11-01 · Adaptive Priority, Calendar and island
 
 Priority widens into four 26 pt choices in the composer. Calendar event

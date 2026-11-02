@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import ObjectiveC
 import QuartzCore
 import SwiftUI
@@ -2645,6 +2646,45 @@ struct AtticMousePolicy {
         // window server.
         window.ignoresMouseEvents = !ignores
         window.ignoresMouseEvents = ignores
+        AtticBackgroundInput.enable(in: window)
+    }
+}
+
+/// WindowServer normally sends gestures to the active app, even when a
+/// non-activating panel under the pointer is key. Opt these windows into
+/// background input instead of activating on hover or forwarding global
+/// events. The same window policy permits its cursor while Attic is inactive.
+///
+/// CGSInternal documents these two tags and the 64-bit tag-mask ABI:
+/// https://github.com/NUIKit/CGSInternal/blob/master/CGSWindow.h
+/// This is a window-policy call, not construction of private event payloads.
+/// Missing symbols leave the window's existing policy intact. The Air replay
+/// check remains the delivery-level guard, including across OS updates.
+@MainActor
+enum AtticBackgroundInput {
+    private typealias Connection = @convention(c) () -> Int32
+    private typealias SetTags = @convention(c) (Int32, UInt32, UnsafePointer<UInt64>, Int) -> Int32
+
+    private struct API {
+        let connection: Connection
+        let setTags: SetTags
+    }
+
+    private static let api: API? = {
+        let symbols = UnsafeMutableRawPointer(bitPattern: -2) // Darwin RTLD_DEFAULT
+        guard let connection = dlsym(symbols, "CGSMainConnectionID"),
+              let setTags = dlsym(symbols, "CGSSetWindowTags") else { return nil }
+        return API(connection: unsafeBitCast(connection, to: Connection.self),
+                   setTags: unsafeBitCast(setTags, to: SetTags.self))
+    }()
+
+    @discardableResult
+    static func enable(in window: NSWindow) -> Bool {
+        guard let api, window.windowNumber > 0 else { return false }
+        // Set only these bits; CGSSetWindowTags adds them to the existing
+        // policy. It does not replace activation, transparency or space tags.
+        var tags: UInt64 = (1 << 42) | (1 << 5)
+        return api.setTags(api.connection(), UInt32(window.windowNumber), &tags, 64) == 0
     }
 }
 
