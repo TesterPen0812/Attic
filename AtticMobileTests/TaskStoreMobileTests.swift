@@ -43,7 +43,8 @@ final class TaskStoreMobileTests: XCTestCase {
         XCTAssertEqual(result.priority, .high)
         XCTAssertEqual(result.status, .inProgress)
         XCTAssertEqual(try store.tasks().map(\.id), [task.id])
-        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        let verificationContext = ModelContext(container)
+        let rows = try verificationContext.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(rows.map(\.title), ["Renamed", "Renamed"])
         XCTAssertEqual(Set(rows.map(\.priority)), [.high, .medium])
         XCTAssertEqual(Set(rows.map(\.status)), [.inProgress, .backlog])
@@ -94,7 +95,8 @@ final class TaskStoreMobileTests: XCTestCase {
         XCTAssertThrowsError(try store.updateTask(id: id, patch: patch)) { XCTAssertTrue($0 is Injected) }
         XCTAssertEqual(failedContext?.hasChanges, false)
         XCTAssertTrue(unrelated.hasChanges)
-        let untouched = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        let verificationContext = ModelContext(container)
+        let untouched = try verificationContext.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(Set(untouched.map(\.title)), ["One", "Two"])
         XCTAssertTrue(untouched.allSatisfy { $0.priority == .none })
         fail = false
@@ -118,7 +120,8 @@ final class TaskStoreMobileTests: XCTestCase {
         seed.insert(old)
         try seed.save()
         try store.updateTask(id: task.id, patch: .init(title: nil, priority: nil, status: .backlog))
-        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        let verificationContext = ModelContext(container)
+        let rows = try verificationContext.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(rows.count, 2)
         XCTAssertTrue(rows.allSatisfy { $0.status == .backlog && $0.dueDayRaw == nil && $0.dueTimeMinutesRaw == nil })
         XCTAssertTrue(try store.tasks(status: .todo).isEmpty)
@@ -134,11 +137,34 @@ final class TaskStoreMobileTests: XCTestCase {
         try seed.save()
         let store = PhoneLibrary(container: container)
         XCTAssertEqual(try store.tasks(status: .todo).map(\.id), [legacy.id])
-        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first?.status, .backlog)
+        let beforeEditContext = ModelContext(container)
+        XCTAssertEqual(try beforeEditContext.fetch(FetchDescriptor<TaskItem>()).first?.status, .backlog)
         try store.updateTask(id: legacy.id, tags: ["#DAY"])
-        let saved = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first)
+        let verificationContext = ModelContext(container)
+        let saved = try XCTUnwrap(verificationContext.fetch(FetchDescriptor<TaskItem>()).first)
         XCTAssertEqual(saved.status, .todo)
         XCTAssertEqual(saved.dueDayRaw, "2028-02-29")
         XCTAssertEqual(saved.tags, ["day"])
+    }
+
+    func testDeletedWinnerCannotBeExposedOrResurrectedThroughOlderReplica() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let id = UUID()
+        let old = TaskItem(id: id, title: "Older visible", createdAt: .distantPast)
+        let deleted = TaskItem(id: id, title: "Hidden")
+        deleted.deletedAt = deleted.updatedAt
+        seed.insert(old); seed.insert(deleted)
+        try seed.save()
+        let store = PhoneLibrary(container: container)
+        XCTAssertTrue(try store.tasks().isEmpty)
+        XCTAssertThrowsError(try store.updateTask(id: id, tags: ["edit"])) {
+            XCTAssertEqual($0 as? PhoneLibrary.Failure, .inactiveReplica)
+        }
+        let reader = ModelContext(container)
+        let rows = try reader.fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.filter { $0.deletedAt != nil }.count, 1)
+        XCTAssertTrue(rows.allSatisfy { $0.tagsRaw.isEmpty })
     }
 }

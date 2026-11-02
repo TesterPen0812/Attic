@@ -16,7 +16,8 @@ final class NoteStoreMobileTests: XCTestCase {
         XCTAssertEqual(updated.note.body, "updated")
         XCTAssertEqual(updated.revision, opened.revision + 1)
         XCTAssertNotEqual(updated.revisionID, opened.revisionID)
-        let row = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first)
+        let verificationContext = ModelContext(container)
+        let row = try XCTUnwrap(verificationContext.fetch(FetchDescriptor<NoteItem>()).first)
         let bytes = try XCTUnwrap(row.content)
         guard case let .editable(document) = NoteContentCodec.decode(bytes) else { return XCTFail("Not a native note") }
         XCTAssertEqual(document.blocks.map(\.text), ["From iPhone", "updated"])
@@ -69,7 +70,8 @@ final class NoteStoreMobileTests: XCTestCase {
             XCTAssertEqual(fresh.note.tags, ["trip-planner", "work"])
             XCTAssertNotNil(fresh.note.pinnedAt)
         }
-        let saved = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).first)
+        let verificationContext = ModelContext(container)
+        let saved = try XCTUnwrap(verificationContext.fetch(FetchDescriptor<NoteAttachment>()).first)
         XCTAssertEqual(saved.id, assetID)
         XCTAssertEqual(saved.payload, payload)
     }
@@ -132,13 +134,63 @@ final class NoteStoreMobileTests: XCTestCase {
         other.body = base.note.body
         try seed.save()
         let edited = try store.updateNote(base, body: "New")
-        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+        let verificationContext = ModelContext(container)
+        let rows = try verificationContext.fetch(FetchDescriptor<NoteItem>())
         XCTAssertEqual(rows.count, 2)
         XCTAssertTrue(rows.allSatisfy { $0.body == "New" && $0.content == edited.content && $0.revisionID == edited.revisionID })
         XCTAssertEqual(Set(rows.map(\.tagsRaw)), ["original", "replica"])
         XCTAssertEqual(rows.filter(\.isPinned).count, 1)
         try store.updateNoteMetadata(id: base.note.id, tags: ["every copy"], pinned: false)
-        let after = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+        let metadataContext = ModelContext(container)
+        let after = try metadataContext.fetch(FetchDescriptor<NoteItem>())
         XCTAssertTrue(after.allSatisfy { $0.tags == ["every-copy"] && !$0.isPinned && $0.revisionID == edited.revisionID })
+    }
+
+    func testRevisionAndFormatChangesAreStaleEvenWhenBytesAgree() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = PhoneLibrary(container: container)
+        let base = try store.createNote(title: "Same bytes")
+        let writer = ModelContext(container)
+        let row = try XCTUnwrap(writer.fetch(FetchDescriptor<NoteItem>()).first)
+        row.revisionID = UUID()
+        try writer.save()
+        XCTAssertThrowsError(try store.updateNote(base, title: "Overwrite")) {
+            XCTAssertEqual($0 as? PhoneLibrary.Failure, .staleNote)
+        }
+        row.revisionID = base.revisionID
+        row.revision += 1
+        try writer.save()
+        XCTAssertThrowsError(try store.updateNote(base, title: "Overwrite")) {
+            XCTAssertEqual($0 as? PhoneLibrary.Failure, .staleNote)
+        }
+        row.revision = base.revision
+        row.contentFormat += 1
+        try writer.save()
+        XCTAssertThrowsError(try store.updateNote(base, title: "Overwrite")) {
+            XCTAssertEqual($0 as? PhoneLibrary.Failure, .staleNote)
+        }
+        XCTAssertEqual(try store.openNote(id: base.note.id).content, base.content)
+    }
+
+    func testNoteSaveFailureRetainsOriginalRevisionBytesAndMetadata() throws {
+        enum Injected: Error { case save }
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let reader = PhoneLibrary(container: container)
+        let base = try reader.createNote(title: "Original", body: "Still here", tags: ["Kept"], pinned: true)
+        let failing = PhoneLibrary(container: container, save: { context in
+            let staged = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first)
+            XCTAssertEqual(staged.body, "Attempted")
+            XCTAssertNotEqual(staged.revisionID, base.revisionID)
+            throw Injected.save
+        })
+        XCTAssertThrowsError(try failing.updateNote(base, body: "Attempted")) { XCTAssertTrue($0 is Injected) }
+        let after = try reader.openNote(id: base.note.id)
+        XCTAssertEqual(after.content, base.content)
+        XCTAssertEqual(after.contentFingerprint, base.contentFingerprint)
+        XCTAssertEqual(after.revisionID, base.revisionID)
+        XCTAssertEqual(after.revision, base.revision)
+        XCTAssertEqual(after.note.body, "Still here")
+        XCTAssertEqual(after.note.pinnedAt, base.note.pinnedAt)
+        XCTAssertEqual(after.note.tags, ["kept"])
     }
 }
