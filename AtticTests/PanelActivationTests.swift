@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import XCTest
 @testable import Attic
 
@@ -64,6 +65,30 @@ final class PanelActivationTests: XCTestCase {
     private func active() {
         fixture.active = true
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+    }
+
+    func testLiveActivityUsesRunningApplicationOwnershipInsteadOfAppKitFocus() throws {
+        // On the Air a nonactivating panel made NSApp.isActive true while
+        // Finder remained WindowServer's active app. Keep the invisible host's
+        // NSApplication guard intact and vary only the read-only OS boundary.
+        let method = try XCTUnwrap(class_getInstanceMethod(NSRunningApplication.self,
+            NSSelectorFromString("isActive")))
+        let original = method_getImplementation(method)
+        typealias Read = @convention(c) (AnyObject, Selector) -> Bool
+        let read = unsafeBitCast(original, to: Read.self)
+        var ownsActivation = false
+        let spy: @convention(block) (NSRunningApplication) -> Bool = { app in
+            if app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return ownsActivation }
+            return read(app, NSSelectorFromString("isActive"))
+        }
+        let implementation = imp_implementationWithBlock(spy)
+        method_setImplementation(method, implementation)
+        defer { method_setImplementation(method, original); imp_removeBlock(implementation) }
+        for active in [false, true, false] {
+            ownsActivation = active
+            XCTAssertEqual(PanelActivation.System.live.isActive(), active,
+                           "AppKit's key-focus bookkeeping is not WindowServer activation")
+        }
     }
 
     func testReleasePreparesOnlyTheClickedSurfaceBeforeRequestingActivation() throws {

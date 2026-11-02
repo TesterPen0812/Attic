@@ -200,7 +200,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
             AtticMotionPreference.systemReduceMotionOverride = nil
             AtticTransparencySeam.systemOverride = nil
         }
-        let method = try XCTUnwrap(class_getInstanceMethod(NSApplication.self, NSSelectorFromString("activate")))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSRunningApplication.self, NSSelectorFromString("activateWithOptions:")))
         let original = method_getImplementation(method)
         var requests = 0
         var expectedSurface: NSWindow?
@@ -213,11 +213,14 @@ final class FirstClickActivationRequestTests: XCTestCase {
         let mainImplementation = imp_implementationWithBlock(mainSpy)
         method_setImplementation(mainMethod, mainImplementation)
         defer { method_setImplementation(mainMethod, originalMain); imp_removeBlock(mainImplementation) }
-        let spy: @convention(block) (NSApplication) -> Void = { _ in
+        let spy: @convention(block) (NSRunningApplication, UInt) -> Bool = { app, options in
             MainActor.assumeIsolated {
+                XCTAssertEqual(app.processIdentifier, ProcessInfo.processInfo.processIdentifier)
+                XCTAssertEqual(options, 0, "activation must not raise every Attic window")
                 requests += 1
                 XCTAssertTrue(mainSurface === expectedSurface, "only the clicked surface may be raised by activation")
             }
+            return true
         }
         let implementation = imp_implementationWithBlock(spy)
         method_setImplementation(method, implementation)
