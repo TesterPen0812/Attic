@@ -330,6 +330,48 @@ extension PhoneLibrary {
         }
     }
 
+    func openDocument(id: UUID) throws -> PhoneNoteDocument {
+        try read { reader in
+            let (_, shown) = try noteFamily(id, in: reader)
+            return PhoneNoteDocument(.init(shown))
+        }
+    }
+
+    /// Validate every physical copy in the same transaction that installs the patched wire bytes.
+    @discardableResult
+    func saveDocument(_ opened: PhoneNoteDocument, edits: [PhoneNoteDocument.Edit]) throws -> OpenNote {
+        try write { writer in
+            let (rows, shown) = try noteFamily(opened.source.noteID, in: writer)
+            guard rows.allSatisfy({ $0.deletedAt == nil }) else { throw Failure.inactiveReplica }
+            guard rows.allSatisfy({ PhoneNoteDocument.Snapshot($0) == opened.source }) else {
+                throw PhoneNoteDocument.Failure.stale
+            }
+            switch try opened.saving(edits, against: .init(shown)) {
+            case .unchanged:
+                return OpenNote(shown)
+            case let .changed(bytes):
+                guard case let .editable(document) = NoteContentCodec.decode(bytes) else { throw Failure.readOnlyNote }
+                guard !document.isEmpty else { throw Failure.emptyNote }
+                let stamp = max(now(), shown.updatedAt), token = UUID()
+                let title = Self.title(document.title), body = NoteTextExport.plainBody(document)
+                let search = NoteTextExport.plainText(document)
+                let images = document.blocks.filter { $0.kind == .image }.count
+                let files = document.blocks.filter { $0.kind == .file }
+                for row in rows {
+                    row.content = bytes; row.contentFormat = document.format
+                    row.revision = opened.source.revision + 1; row.revisionID = token
+                    row.title = title; row.body = body; row.plainText = search
+                    row.imageCount = images; row.fileCount = files.count; row.firstFileName = files.first?.filename
+                    row.updatedAt = stamp
+                }
+                if rows.contains(where: { $0 !== shown && Self.noteLess(shown, $0) }) {
+                    shown.updatedAt = Self.nextClock(stamp)
+                }
+                return OpenNote(shown)
+            }
+        }
+    }
+
     /// Convenience API for the retired phone facade's title/body form. It may
     /// change only unadorned paragraphs. In particular a list preview is never
     /// parsed back into rich writing. Rich editor commands have their own boundary.

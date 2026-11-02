@@ -44,6 +44,13 @@ final class PhoneNoteDocumentTests: XCTestCase {
         writer.insert(seed); writer.insert(asset)
         try writer.save()
 
+        let library = PhoneLibrary(container: container, save: { _ in
+            XCTFail("Opening and saving this Mac fixture without changes must not write")
+        })
+        let opened = try library.openDocument(id: seed.id)
+        let saved = try library.saveDocument(opened, edits: [])
+        XCTAssertEqual(saved.content, raw)
+        XCTAssertNil(saved.contentFingerprint)
         let reader = ModelContext(container)
         let stored = try XCTUnwrap(reader.fetch(FetchDescriptor<NoteItem>()).first)
         let assets = try reader.fetch(FetchDescriptor<NoteAttachment>())
@@ -56,7 +63,8 @@ final class PhoneNoteDocumentTests: XCTestCase {
         XCTAssertNil(stored.revisionID)
         XCTAssertEqual(stored.revision, 12)
         XCTAssertFalse(reader.hasChanges)
-        let returned = try XCTUnwrap(bytes)
+        XCTAssertEqual(bytes, stored.content)
+        let returned = try XCTUnwrap(stored.content)
         let returnedFile = try XCTUnwrap(storedFile.payload)
         XCTAssertEqual(returned, raw)
         XCTAssertEqual(returnedFile, Data("Synthetic file: Attic exchange v1.\n".utf8))

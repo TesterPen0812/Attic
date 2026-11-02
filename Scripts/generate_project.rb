@@ -172,7 +172,12 @@ generated_routes = JSON.parse(File.read(File.join(ROOT, 'Scripts/generated_test_
 end
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
-add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+mobile_tests_group = add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+# Explicit, synthetic interchange resources are test-only on both platforms.
+%w[exchange-note.json exchange-file.txt].each do |name|
+  fixture = mobile_tests_group.new_file("Fixtures/Synthetic/#{name}")
+  [unit_tests, mobile_tests].each { |target| target.resources_build_phase.add_file_reference(fixture) }
+end
 shared_schema_test = project.main_group['AtticTests'].files.find { |file| file.path == 'SharedPersistenceParityTests.swift' }
 abort 'Missing shared schema parity test' unless shared_schema_test
 mobile_tests.source_build_phase.add_file_reference(shared_schema_test)
