@@ -172,7 +172,9 @@ extension PhoneLibrary {
         let byRank = SortDescriptor<TaskItem>(\TaskItem.manualOrder, order: .reverse)
         var query = FetchDescriptor<TaskItem>(predicate: roots, sortBy: [byRank])
         query.propertiesToFetch = [\.id, \.deletedAt, \.doneLoggedAt, \.manualOrder]
-        let candidates = try context.fetch(query, batchSize: 32)
+        // Pending changes in this transaction must remain visible; SwiftData
+        // does not support batchSize when includePendingChanges is enabled.
+        let candidates = try context.fetch(query)
         let maximum: Int64 = candidates.first(where: { row in
             row.id != id && row.deletedAt == nil && row.doneLoggedAt == nil && row.manualOrder != nil
         })?.manualOrder ?? 0
