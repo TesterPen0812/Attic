@@ -351,7 +351,6 @@ extension PhoneLibrary {
                 return OpenNote(shown)
             case let .changed(bytes):
                 guard case let .editable(document) = NoteContentCodec.decode(bytes) else { throw Failure.readOnlyNote }
-                guard !document.isEmpty else { throw Failure.emptyNote }
                 let stamp = max(now(), shown.updatedAt), token = UUID()
                 let title = Self.title(document.title), body = NoteTextExport.plainBody(document)
                 let search = NoteTextExport.plainText(document)
