@@ -203,8 +203,21 @@ final class FirstClickActivationRequestTests: XCTestCase {
         let method = try XCTUnwrap(class_getInstanceMethod(NSApplication.self, NSSelectorFromString("activate")))
         let original = method_getImplementation(method)
         var requests = 0
+        var expectedSurface: NSWindow?
+        var mainSurface: NSWindow?
+        let mainMethod = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, NSSelectorFromString("makeMainWindow")))
+        let originalMain = method_getImplementation(mainMethod)
+        let mainSpy: @convention(block) (NSWindow) -> Void = { window in
+            MainActor.assumeIsolated { mainSurface = window }
+        }
+        let mainImplementation = imp_implementationWithBlock(mainSpy)
+        method_setImplementation(mainMethod, mainImplementation)
+        defer { method_setImplementation(mainMethod, originalMain); imp_removeBlock(mainImplementation) }
         let spy: @convention(block) (NSApplication) -> Void = { _ in
-            MainActor.assumeIsolated { requests += 1 }
+            MainActor.assumeIsolated {
+                requests += 1
+                XCTAssertTrue(mainSurface === expectedSurface, "only the clicked surface may be raised by activation")
+            }
         }
         let implementation = imp_implementationWithBlock(spy)
         method_setImplementation(method, implementation)
@@ -223,6 +236,8 @@ final class FirstClickActivationRequestTests: XCTestCase {
             root.addSubview(target)
             window.contentView = root
             requests = 0
+            expectedSurface = window
+            mainSurface = nil
             window.orderFrontRegardless()
             XCTAssertEqual(requests, 0, "\(surface): reveal cannot activate")
             func send(_ type: NSEvent.EventType, at point: CGPoint) throws {

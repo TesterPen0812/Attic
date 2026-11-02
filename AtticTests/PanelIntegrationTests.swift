@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import SwiftData
 import SwiftUI
 import XCTest
@@ -88,6 +89,33 @@ final class PanelIntegrationTests: XCTestCase {
         _ = panel.controller.requestHide { hidden = $0 == .hidden }
         spin(until: { hidden })
         XCTAssertTrue(hidden)
+    }
+
+    func testNativePanelAndIslandAppearanceFollowTheReleasedKeyLook() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+        spin(0.3)
+        let panel = rig.controller.panelForTesting
+        let island = rig.controller.islandWindowsForTesting.island
+        func appearance(_ window: NSWindow) throws -> Bool {
+            let selector = NSSelectorFromString("_hasActiveAppearance")
+            let method = try XCTUnwrap(class_getInstanceMethod(type(of: window), selector))
+            typealias Read = @convention(c) (AnyObject, Selector) -> Bool
+            return unsafeBitCast(method_getImplementation(method), to: Read.self)(window, selector)
+        }
+        // The controller's published key look is the release-delayed state;
+        // AppKit's raw key state is deliberately false in the invisible host.
+        for releasedLook in [false, true, false] {
+            rig.uiState.setPanelKey(releasedLook)
+            XCTAssertEqual(try appearance(panel), releasedLook, "native panel follows the published key look")
+            XCTAssertEqual(try appearance(island), releasedLook, "island and panel agree, even before native key state catches up")
+        }
     }
 
     func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
