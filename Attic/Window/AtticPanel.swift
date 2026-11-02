@@ -347,8 +347,9 @@ final class AtticPanel: NSPanel {
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
-        // own views in a list do not accept the first mouse). The panel is
-        // non-activating, so Attic stays where it is.
+        // own views in a list do not accept the first mouse). The shared
+        // first-press boundary also activates the app for native glass;
+        // ordering and hover remain non-activating.
         if Self.takesFirstPress(event.type) { isPressing = true; trackingConsumedRelease = false }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
@@ -2607,6 +2608,13 @@ extension AtticPanel: AtticFirstPressWindow {}
 @MainActor
 enum AtticFirstPress {
     static func prepare(_ event: NSEvent, in window: NSWindow) {
+        // A non-activating panel can be key while another app stays active.
+        // Native glass and foreground gesture routing need app activation
+        // too. Request it only for a delivered press, before dispatching that
+        // same press; never on reveal, hover, or gesture arrival.
+        if AtticPanel.takesFirstPress(event.type), window.isVisible, !NSApp.isActive {
+            NSApp.activate()
+        }
         guard let root = window.contentView?.superview ?? window.contentView,
               let hit = root.hitTest(event.locationInWindow), hit !== root else { return }
         AtticPanelFirstMouseHooks.install(on: hit)
