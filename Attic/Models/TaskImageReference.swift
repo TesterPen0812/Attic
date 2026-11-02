@@ -1,5 +1,4 @@
 import Foundation
-import ImageIO
 import UniformTypeIdentifiers
 
 /// A task attachment: an image or a general file. The type name and its
@@ -26,6 +25,9 @@ struct TaskAttachmentSource: Equatable, Sendable {
     let reference: TaskImageReference
     let ownerID: UUID
 }
+
+#if os(macOS)
+import ImageIO
 
 /// Private local attachment files are separate from the Notes cache so its
 /// reconciliation cannot delete task attachments. File work stays off the UI
@@ -196,3 +198,4 @@ actor TaskImageFiles {
         }
     }
 }
+#endif

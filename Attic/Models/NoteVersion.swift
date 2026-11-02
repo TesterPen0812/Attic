@@ -17,8 +17,13 @@ final class NoteVersion {
     /// The note's content at that time (format ≥ 1), byte for byte.
     @Attribute(.externalStorage, originalName: "content") private var contentStorage: Data? = nil
     var content: Data? {
-        get { WorkspacePayloadAccess.note("version", model: self); return contentStorage }
-        set { contentFingerprint = WorkspaceModelFields.digest(newValue); contentStorage = newValue }
+        get {
+            #if os(macOS)
+            WorkspacePayloadAccess.note("version", model: self)
+            #endif
+            return contentStorage
+        }
+        set { contentFingerprint = NoteItem.fingerprint(newValue); contentStorage = newValue }
     }
     var contentFingerprint: String? = nil
     var contentFormat: Int = 0
@@ -94,8 +99,13 @@ final class NotePendingEdit {
     var baseRevisionToken: String = ""
     @Attribute(.externalStorage, originalName: "proposedContent") private var proposedContentStorage: Data? = nil
     var proposedContent: Data? {
-        get { WorkspacePayloadAccess.note("proposal", model: self); return proposedContentStorage }
-        set { proposalFingerprint = WorkspaceModelFields.digest(newValue); proposedContentStorage = newValue }
+        get {
+            #if os(macOS)
+            WorkspacePayloadAccess.note("proposal", model: self)
+            #endif
+            return proposedContentStorage
+        }
+        set { proposalFingerprint = NoteItem.fingerprint(newValue); proposedContentStorage = newValue }
     }
     var proposalFingerprint: String? = nil
     /// The version inserted in the same transaction as this proposal.

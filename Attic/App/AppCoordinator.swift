@@ -445,18 +445,6 @@ final class AppCoordinator: ObservableObject {
         let inMemoryStore = runtime.usesInMemoryStore
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
-        #if DEBUG && !ATTIC_LOCAL_ONLY
-        if !inMemoryStore {
-            do {
-                try PersistenceController.initializeCloudKitDevelopmentSchemaIfNeeded()
-            } catch {
-                let nsError = error as NSError
-                let diagnostic = "\(nsError.domain) (\(nsError.code)): \(nsError.userInfo)"
-                NSLog("CloudKit schema initialization failed: %@", diagnostic)
-                settings.reportCloudSyncStartupFailure(diagnostic)
-            }
-        }
-        #endif
         let container: ModelContainer
         if let openStore {
             container = try PerformanceSignposts.storeOpen(openStore)
@@ -485,32 +473,9 @@ final class AppCoordinator: ObservableObject {
                 throw error
             }
         } else {
-            #if ATTIC_LOCAL_ONLY
-            do {
-                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
-                    inMemory: inMemoryStore,
-                    cloudSyncEnabled: false
-                ) }
-            } catch {
-                throw error
+            container = try PerformanceSignposts.storeOpen {
+                try PersistenceController.makeContainer(inMemory: inMemoryStore)
             }
-            #else
-            do {
-                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
-                    inMemory: inMemoryStore
-                ) }
-            } catch let cloudError {
-                do {
-                    container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
-                        inMemory: inMemoryStore,
-                        cloudSyncEnabled: false
-                    ) }
-                    settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
-                } catch {
-                    throw error
-                }
-            }
-            #endif
         }
 
         // While Draw has Canvas's place, the old Canvas rows in this store

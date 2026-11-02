@@ -1,5 +1,4 @@
 import Foundation
-import CoreData
 import SwiftData
 
 enum AtticCloudKitEnvironment: String {
@@ -8,88 +7,70 @@ enum AtticCloudKitEnvironment: String {
 }
 
 enum PersistenceController {
-    static let cloudKitContainerIdentifier = "iCloud.com.emanueledipietro.Attic"
     private static let cloudKitEnvironmentInfoKey = "AtticCloudKitEnvironment"
 
-    #if DEBUG && !ATTIC_LOCAL_ONLY
-    /// Kept alive for the rest of the process because Core Data may finish
-    /// CloudKit bookkeeping after `initializeCloudKitSchema` returns.
-    @MainActor private static var retainedSchemaContainers: [NSPersistentCloudKitContainer] = []
-    #endif
+    private enum Scope: Equatable { case shared, deviceLocal }
+    private typealias Entry = (model: any PersistentModel.Type, scope: Scope)
 
-    /// Every model the app stores, registered identically in the normal and
-    /// the UI-test containers so the two can never drift apart. New models are
-    /// added here once. The schema changes only additively (new entities and
-    /// optional or defaulted attributes), which Core Data migrates in place
-    /// with an inferred lightweight mapping; see `SchemaMigrationTests`.
-    static var appModelTypes: [any PersistentModel.Type] {
-        #if os(macOS)
-        [
-            TaskItem.self,
-            NoteItem.self,
-            NoteAttachment.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            CanvasSemanticObjectItem.self,
-            // Draw rebuild: additive, independent of the retained Canvas rows.
-            DrawCanvasRecord.self,
-            DrawObjectRecord.self,
-            DrawPayloadRecord.self,
-            ItemLink.self,
-            // Phase 2: note versions and agents' pending note edits.
-            NoteVersion.self,
-            NotePendingEdit.self,
-            StoreMaintenance.self,
-            // Colour pass (2026-10-10): each tag's stored colour.
-            TagColour.self,
-            OperationReceipt.self,
-            TaskNoteAssociation.self,
-            TaskDeletionPreservation.self,
-            // Phase 3 slice 2: task attachment migration records (§ 13).
-            TaskAttachmentMigrationRecord.self
+    // Keep the existing Mac registration order. Shared means eligible for future
+    // explicit records, not that every row/field is exportable or mirroring is on.
+    private static var registry: [Entry] {
+        var entries: [Entry] = [
+            (TaskItem.self, .shared), (NoteItem.self, .shared), (NoteAttachment.self, .shared)
         ]
-        #else
-        [
-            TaskItem.self,
-            NoteItem.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            ItemLink.self
+        #if os(macOS)
+        entries += [
+            (CanvasBoardItem.self, .deviceLocal), (CanvasStrokeItem.self, .deviceLocal),
+            (CanvasImageItem.self, .deviceLocal), (CanvasSemanticObjectItem.self, .deviceLocal)
         ]
         #endif
+        entries += [
+            (DrawCanvasRecord.self, .shared), (DrawObjectRecord.self, .shared),
+            (DrawPayloadRecord.self, .shared), (ItemLink.self, .shared),
+            (NoteVersion.self, .shared), (NotePendingEdit.self, .shared)
+        ]
+        #if os(macOS)
+        entries.append((StoreMaintenance.self, .deviceLocal))
+        #endif
+        entries.append((TagColour.self, .shared))
+        #if os(macOS)
+        entries.append((OperationReceipt.self, .deviceLocal))
+        #endif
+        entries += [(TaskNoteAssociation.self, .shared), (TaskDeletionPreservation.self, .shared)]
+        #if os(macOS)
+        entries.append((TaskAttachmentMigrationRecord.self, .deviceLocal))
+        #endif
+        return entries
+    }
+
+    static var appModelTypes: [any PersistentModel.Type] { registry.map { $0.model } }
+    static var syncedModelTypes: [any PersistentModel.Type] {
+        registry.filter { $0.scope == .shared }.map { $0.model }
+    }
+    static var deviceLocalModelTypes: [any PersistentModel.Type] {
+        registry.filter { $0.scope == .deviceLocal }.map { $0.model }
     }
 
     static func makeConfiguration(
         inMemory: Bool = false,
-        cloudSyncEnabled: Bool = true,
+        cloudSyncEnabled _: Bool = false,
         environment: AtticCloudKitEnvironment? = nil,
         storeDirectory: URL? = nil
     ) -> ModelConfiguration {
-        #if ATTIC_LOCAL_ONLY
-        // The compiled mode owns this boundary; a caller cannot opt a
-        // local-only build into the deferred cloud infrastructure.
-        let cloudDatabase: ModelConfiguration.CloudKitDatabase = .none
-        #else
-        let cloudDatabase: ModelConfiguration.CloudKitDatabase =
-            inMemory || !cloudSyncEnabled
-                ? .none
-                : .private(cloudKitContainerIdentifier)
-        #endif
-
+        // Keep the legacy argument label for existing callers. SwiftData is always
+        // local; explicit-record sync must never enable framework mirroring.
         // `storeDirectory` relocates the store (tests open copies of
         // fixture stores through this exact path); nil is the app's default
         // Application Support location.
         let defaultConfiguration = if let storeDirectory, !inMemory {
             ModelConfiguration(
                 url: storeDirectory.appendingPathComponent("default.store"),
-                cloudKitDatabase: cloudDatabase
+                cloudKitDatabase: .none
             )
         } else {
             ModelConfiguration(
                 isStoredInMemoryOnly: inMemory,
-                cloudKitDatabase: cloudDatabase
+                cloudKitDatabase: .none
             )
         }
         let resolvedEnvironment = environment ?? currentCloudKitEnvironment
@@ -98,23 +79,20 @@ enum PersistenceController {
             return defaultConfiguration
         }
 
-        // Never attach Development and Production CloudKit metadata to the
-        // same SQLite store. Core Data persists scheduler activity identifiers
-        // in the store; reusing it across environments can make a Sandbox push
-        // execute against Production (or vice versa) and stall live sync.
+        // Keep the existing Development and Production store locations disjoint.
         let developmentURL = defaultConfiguration.url
             .deletingLastPathComponent()
             .appendingPathComponent("development.store")
         return ModelConfiguration(
             "development",
             url: developmentURL,
-            cloudKitDatabase: cloudDatabase
+            cloudKitDatabase: .none
         )
     }
 
     static func makeContainer(
         inMemory: Bool = false,
-        cloudSyncEnabled: Bool = true,
+        cloudSyncEnabled: Bool = false,
         storeDirectory: URL? = nil
     ) throws -> ModelContainer {
         let configuration = makeConfiguration(
@@ -122,11 +100,6 @@ enum PersistenceController {
             cloudSyncEnabled: cloudSyncEnabled,
             storeDirectory: storeDirectory
         )
-        #if !ATTIC_LOCAL_ONLY
-        if !inMemory && cloudSyncEnabled {
-            try createPreCloudKitBackupIfNeeded(for: configuration)
-        }
-        #endif
         #if os(macOS)
         let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
         #endif
@@ -138,6 +111,7 @@ enum PersistenceController {
         return container
     }
 
+    #if os(macOS)
     /// A durable, CloudKit-free store used only by controlled UI tests that
     /// need to terminate and relaunch the app. Its path is disjoint from every
     /// normal Attic store, and reset removes only this store family.
@@ -170,77 +144,11 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        #if os(macOS)
         let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
-        #endif
         let container = try ModelContainer(for: Schema(appModelTypes), configurations: configuration)
-        #if os(macOS)
         if let lease { WorkspaceWriterLease.attach(lease, to: container) }
         _ = try OldNotesPurge.run(in: container)
-        #endif
         return container
-    }
-
-    #if DEBUG && !ATTIC_LOCAL_ONLY
-    /// Creates the Core Data record types in CloudKit's Development
-    /// environment before SwiftData starts using the same store. Apple
-    /// requires this schema bootstrap to happen only in development builds.
-    @MainActor static func initializeCloudKitDevelopmentSchemaIfNeeded(
-        defaults: UserDefaults = .standard
-    ) throws {
-        guard currentCloudKitEnvironment == .development else { return }
-        let marker = "didInitializeCloudKitDevelopmentSchemaV4"
-        guard !defaults.bool(forKey: marker) else { return }
-
-        try autoreleasepool {
-            let fileManager = FileManager.default
-            let directory = fileManager.urls(
-                for: .cachesDirectory,
-                in: .userDomainMask
-            )[0].appendingPathComponent(
-                "CloudKitSchemaBootstrap",
-                isDirectory: true
-            )
-            try fileManager.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            let storeURL = directory.appendingPathComponent("schema.store")
-            let description = NSPersistentStoreDescription(url: storeURL)
-            description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-                containerIdentifier: cloudKitContainerIdentifier
-            )
-            description.shouldAddStoreAsynchronously = false
-
-            guard let managedObjectModel = NSManagedObjectModel.makeManagedObjectModel(
-                for: [
-                    TaskItem.self,
-                    NoteItem.self,
-                    CanvasBoardItem.self,
-                    CanvasStrokeItem.self,
-                    CanvasImageItem.self
-                ]
-            ) else {
-                throw CloudKitSchemaInitializationError.unableToCreateManagedObjectModel
-            }
-
-            let container = NSPersistentCloudKitContainer(
-                name: "AtticCloudKitSchema",
-                managedObjectModel: managedObjectModel
-            )
-            container.persistentStoreDescriptions = [description]
-
-            var loadError: Error?
-            container.loadPersistentStores { _, error in
-                loadError = error
-            }
-            if let loadError { throw loadError }
-
-            try container.initializeCloudKitSchema(options: [])
-            retainedSchemaContainers.append(container)
-        }
-
-        defaults.set(true, forKey: marker)
     }
     #endif
 
@@ -259,6 +167,7 @@ enum PersistenceController {
         #endif
     }
 
+    #if os(macOS)
     private static func removeStoreFamily(
         at storeURL: URL,
         fileManager: FileManager
@@ -269,45 +178,5 @@ enum PersistenceController {
             try fileManager.removeItem(at: url)
         }
     }
-
-    /// Copies the unopened legacy SQLite store once before CloudKit first
-    /// attaches to it. The app continues to use the original files.
-    private static func createPreCloudKitBackupIfNeeded(
-        for configuration: ModelConfiguration,
-        defaults: UserDefaults = .standard,
-        fileManager: FileManager = .default
-    ) throws {
-        let marker = "didCreatePreCloudKitStoreBackupV2.\(configuration.url.standardizedFileURL.path)"
-        guard !defaults.bool(forKey: marker) else { return }
-
-        let storeURL = configuration.url
-        guard fileManager.fileExists(atPath: storeURL.path) else {
-            defaults.set(true, forKey: marker)
-            return
-        }
-
-        for suffix in ["", "-wal", "-shm"] {
-            let source = URL(fileURLWithPath: storeURL.path + suffix)
-            guard fileManager.fileExists(atPath: source.path) else { continue }
-
-            let destination = URL(
-                fileURLWithPath: storeURL.path + ".pre-cloudkit" + suffix
-            )
-            if !fileManager.fileExists(atPath: destination.path) {
-                try fileManager.copyItem(at: source, to: destination)
-            }
-        }
-
-        defaults.set(true, forKey: marker)
-    }
+    #endif
 }
-
-#if DEBUG && !ATTIC_LOCAL_ONLY
-private enum CloudKitSchemaInitializationError: LocalizedError {
-    case unableToCreateManagedObjectModel
-
-    var errorDescription: String? {
-        "Unable to create the Core Data model required to initialize CloudKit."
-    }
-}
-#endif

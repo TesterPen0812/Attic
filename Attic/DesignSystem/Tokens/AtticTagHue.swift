@@ -1,6 +1,8 @@
-import AppKit
 import Foundation
+#if os(macOS)
+import AppKit
 import SwiftUI
+#endif
 
 /// A tag's colour. Since N-2 (owner 2026-10-11) the tags use the
 /// highlighter's clear hues, one palette for the app: yellow, green, blue,
@@ -37,6 +39,7 @@ enum AtticTagHue: String, CaseIterable, Sendable {
         }
     }
 
+    #if os(macOS)
     /// The ink that draws this hue's text and dot.
     var ink: AtticInk {
         switch canonical {
@@ -48,6 +51,7 @@ enum AtticTagHue: String, CaseIterable, Sendable {
         default: .tagBlue
         }
     }
+    #endif
 
     /// The colour's name in the tag menu.
     var title: String {
@@ -120,6 +124,7 @@ struct AtticTagPalette: Equatable, Sendable {
     }
 }
 
+#if os(macOS)
 /// What a view needs to draw a tag in its colour and to change it: the
 /// palette, and the tag menu's Colour action (nil where tags can't change,
 /// such as the gallery, which then shows each tag's hashed hue).
@@ -201,3 +206,4 @@ extension View {
         modifier(AtticTagColourOrigin(origin: origin))
     }
 }
+#endif
