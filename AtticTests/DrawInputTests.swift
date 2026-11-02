@@ -594,6 +594,24 @@ final class DrawInputTests: XCTestCase {
         }
     }
 
+    func testReturningToDrawGivesTheBoardItsZoomShortcutsWithoutAnotherClick() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.uiState.selectSection(.tasks)
+        spin(0.2)
+        rig.model.magnify(by: -0.5, at: boardCentre(rig))
+        rig.uiState.selectSection(.canvas)
+        spin(0.3)
+        XCTAssertTrue(rig.panel.firstResponder === rig.board,
+                      "the shell clears old-page focus; the new Draw page must claim it")
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .shift, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: rig.panel.windowNumber, context: nil, characters: ")",
+            charactersIgnoringModifiers: ")", isARepeat: false, keyCode: DrawKey.zeroCode))
+        rig.panel.sendEvent(event)
+        XCTAssertEqual(rig.model.viewport.zoom, 1, accuracy: 0.001)
+    }
+
     func testWorkspaceFocusChangeRefreshesTheRestingCursorAfterBackgroundPolicyRestoration() throws {
         let rig = try makeRig()
         defer { close(rig) }
