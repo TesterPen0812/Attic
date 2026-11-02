@@ -173,6 +173,9 @@ end
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+shared_schema_test = project.main_group['AtticTests'].files.find { |file| file.path == 'SharedPersistenceParityTests.swift' }
+abort 'Missing shared schema parity test' unless shared_schema_test
+mobile_tests.source_build_phase.add_file_reference(shared_schema_test)
 add_swift_sources(project, mobile_ui_tests, 'AtticMobileUITests', 'AtticMobileUITests')
 
 # Shared by file reference: never move a Mac source to add phone membership.
