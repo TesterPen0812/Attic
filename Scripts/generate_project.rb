@@ -216,6 +216,7 @@ shared_mobile_sources = %w[
   Notes/Format/NoteTableText.swift
   Notes/Format/NoteTextExport.swift
   Services/PersistenceController.swift
+  Services/TagColourStore.swift
   Services/TaskDrafts.swift
   Services/TaskTextParser.swift
 ]

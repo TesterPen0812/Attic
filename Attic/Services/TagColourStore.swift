@@ -166,7 +166,9 @@ final class TagColourStore: ObservableObject {
         if existing.isEmpty {
             context.insert(TagColour(name: name, hue: hue, at: date))
         }
+        #if os(macOS)
         WorkspaceLegacyBridge.prepareMutations(existing, in: context)
+        #endif
         for row in existing {
             row.colourKey = hue.rawValue
             row.modifiedAt = date
@@ -186,6 +188,7 @@ final class TagColourStore: ObservableObject {
     }
 }
 
+#if os(macOS)
 // MARK: - Environment
 
 /// Puts the library's tag colours in the environment, observed, with the
@@ -220,3 +223,4 @@ extension View {
         modifier(AtticTagColourEnvironment(library: library))
     }
 }
+#endif
