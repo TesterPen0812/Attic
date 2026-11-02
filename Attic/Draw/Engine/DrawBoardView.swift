@@ -686,7 +686,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     /// The pen's dot: the pen colour, a white ring, the hot spot at its centre.
     static func penCursor(colour: CGColor) -> NSCursor {
         let d = penDotDiameter
-        if let cached = penCursors.first(where: { CGColorEqualToColor($0.colour, colour) }) { return cached.cursor }
+        if let cached = penCursors.first(where: { $0.colour == colour }) { return cached.cursor }
         let side: CGFloat = 8
         let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
             let outer = d + cursorRing * 2

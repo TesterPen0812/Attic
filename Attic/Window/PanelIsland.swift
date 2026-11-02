@@ -613,6 +613,7 @@ final class PanelIslandWindow: NSPanel {
         case .leftMouseUp:
             super.sendEvent(event)
             onPointer?(.up(point))
+            PanelActivation.shared.released(in: self)
             return
         default: break
         }

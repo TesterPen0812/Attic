@@ -127,6 +127,7 @@ final class AtticPanel: NSPanel {
         NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
         mousePolicy.orderedOut()
         super.orderOut(sender)
+        PanelActivation.shared.hidden(self)
     }
 
     /// Esc reaches the window only when no responder in it handled the key:
@@ -381,6 +382,7 @@ final class AtticPanel: NSPanel {
                 isPressing = false
                 trackingConsumedRelease = false
                 onPressEnded?()
+                PanelActivation.shared.released(in: self)
             }
             return
         }
@@ -2618,9 +2620,7 @@ enum AtticFirstPress {
         // Native glass and foreground gesture routing need app activation
         // too. Request it only for a delivered press, before dispatching that
         // same press; never on reveal, hover, or gesture arrival.
-        if AtticPanel.takesFirstPress(event.type), window.isVisible, !NSApp.isActive {
-            NSApp.activate()
-        }
+        PanelActivation.shared.pressed(event, in: window)
         guard let root = window.contentView?.superview ?? window.contentView,
               let hit = root.hitTest(event.locationInWindow), hit !== root else { return }
         AtticPanelFirstMouseHooks.install(on: hit)
