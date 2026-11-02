@@ -833,6 +833,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     hostingView.cancelActiveInteraction(reason: .screenChanged)
                     recoverPanelInsideUsableArea()
                 case .applicationActivated:
+                    // Activation is asynchronous and is not a placement change.
+                    // It must never supersede a hide/reveal or revive a hidden panel.
+                    guard panel.isVisible, !isPanelMotionActive, !isInteractiveDismissal else { return }
                     recoverPanelInsideUsableArea(preservingPlacement: true)
                 case .applicationDeactivated:
                     panel.cancelTrackpadSwipe()

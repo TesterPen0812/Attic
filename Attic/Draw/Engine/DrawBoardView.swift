@@ -234,7 +234,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawSelectionChanged() { updateSelection() }
 
     func drawVisibilityChanged() {
-        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil }
+        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
         queueCursorRefresh()
     }
 
@@ -549,6 +549,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func viewDidMoveToWindow() {
+        releaseCursor()
         super.viewDidMoveToWindow()
         for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
         stateObservers = []
@@ -556,10 +557,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         let names: [(Notification.Name, AnyObject?)] = [
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSApplication.didBecomeActiveNotification, nil), (NSApplication.didResignActiveNotification, nil),
+            (AtticPanel.willOrderOutNotification, window), (NSWindow.willCloseNotification, window),
         ]
         for (name, object) in names {
             stateObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.queueCursorRefresh() }
+                MainActor.assumeIsolated {
+                    if name == AtticPanel.willOrderOutNotification || name == NSWindow.willCloseNotification {
+                        self?.releaseCursor()
+                    } else { self?.queueCursorRefresh() }
+                }
             })
         }
         queueCursorRefresh()
@@ -567,7 +573,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func mouseEntered(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
     override func mouseMoved(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
-    override func mouseExited(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { releaseCursor() }
     override func cursorUpdate(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
 
     /// Sets the cursor for the pointer where it rests, on the next turn of
@@ -636,10 +642,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         } else if showsBoardCursor {
             // Off the board: the normal cursor, then whatever the panel's
             // own cursor rects (the drag region, the edges) say.
-            showsBoardCursor = false
-            NSCursor.arrow.set()
+            releaseCursor()
             window?.resetCursorRects()
         }
+    }
+
+    private func releaseCursor() {
+        guard showsBoardCursor else { return }
+        showsBoardCursor = false
+        NSCursor.arrow.set()
     }
 
     /// The board's cursor at a window point, or nil where the board isn't
@@ -669,26 +680,25 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         }
     }
 
-    private static var penCursors: [String: NSCursor] = [:]
+    // CGColor equality includes its colour space, including unnamed spaces.
+    private static var penCursors: [(colour: CGColor, cursor: NSCursor)] = []
 
     /// The pen's dot: the pen colour, a white ring, the hot spot at its centre.
     static func penCursor(colour: CGColor) -> NSCursor {
         let d = penDotDiameter
-        let key = "\(colour.components ?? [])"
-        if let cursor = penCursors[key] { return cursor }
-        let side = d + cursorRing * 2
+        if let cached = penCursors.first(where: { CGColorEqualToColor($0.colour, colour) }) { return cached.cursor }
+        let side: CGFloat = 8
         let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
-            let dot = NSBezierPath(ovalIn: CGRect(x: cursorRing, y: cursorRing, width: d, height: d))
+            let outer = d + cursorRing * 2
+            NSColor.white.setFill()
+            NSBezierPath(ovalIn: CGRect(x: (side - outer) / 2, y: (side - outer) / 2, width: outer, height: outer)).fill()
             (NSColor(cgColor: colour) ?? .labelColor).setFill()
-            dot.fill()
-            NSColor.white.setStroke()
-            dot.lineWidth = cursorRing * 2
-            dot.stroke()
+            NSBezierPath(ovalIn: CGRect(x: (side - d) / 2, y: (side - d) / 2, width: d, height: d)).fill()
             return true
         }
         let cursor = NSCursor(image: image, hotSpot: CGPoint(x: side / 2, y: side / 2))
         if penCursors.count > 64 { penCursors.removeAll() }
-        penCursors[key] = cursor
+        penCursors.append((colour, cursor))
         return cursor
     }
 

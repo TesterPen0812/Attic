@@ -101,10 +101,14 @@ final class AtticPanel: NSPanel {
 
     // MARK: Clicks reach the panel (one click always registers)
 
+    static let willOrderOutNotification = Notification.Name("AtticPanelWillOrderOut")
     private var mousePolicy = AtticMousePolicy()
 
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
-        if place == .out { mousePolicy.orderedOut() }
+        if place == .out {
+            NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
+            mousePolicy.orderedOut()
+        }
         super.order(place, relativeTo: otherWin)
         if place != .out { mousePolicy.orderedIn(self) }
     }
@@ -120,6 +124,7 @@ final class AtticPanel: NSPanel {
     }
 
     override func orderOut(_ sender: Any?) {
+        NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
         mousePolicy.orderedOut()
         super.orderOut(sender)
     }
