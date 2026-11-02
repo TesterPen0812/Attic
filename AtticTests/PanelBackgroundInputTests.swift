@@ -22,18 +22,51 @@ final class PanelBackgroundInputTests: XCTestCase {
 
     private let required: UInt64 = (1 << 42) | (1 << 5)
 
-    private func clearPolicy(_ window: NSWindow) throws {
+    private func clearPolicy(_ window: NSWindow, bits: UInt64? = nil) throws {
         typealias Connection = @convention(c) () -> Int32
         typealias Clear = @convention(c) (Int32, UInt32, UnsafePointer<UInt64>, Int) -> Int32
         let connection = unsafeBitCast(try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSMainConnectionID")), to: Connection.self)
         let clear = unsafeBitCast(try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSClearWindowTags")), to: Clear.self)
-        var mask = required
+        var mask = bits ?? required
         XCTAssertEqual(clear(connection(), UInt32(window.windowNumber), &mask, 64), 0)
         let deadline = Date().addingTimeInterval(2)
-        while try tags(of: window) & required != 0, Date() < deadline {
+        while try tags(of: window) & mask != 0, Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
-        XCTAssertEqual(try tags(of: window) & required, 0, "prove the next reveal must actually reinstall the policy")
+        XCTAssertEqual(try tags(of: window) & mask, 0, "prove the next reveal must actually reinstall the policy")
+    }
+
+    func testAppKitCursorPolicyInvalidationIsRepairedAfterFocusTransitions() throws {
+        guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Invisible host required") }
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        for surface in ["docked", "island", "floating"] {
+            let frame = CGRect(x: -4000, y: -4000, width: 200, height: 200)
+            let window: NSPanel = surface == "island"
+                ? PanelIslandWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                : AtticPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSView(frame: CGRect(origin: .zero, size: frame.size))
+            window.orderFrontRegardless()
+            defer { window.close() }
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                         NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+                // Observed on the Air: AppKit clears bit 5 while retaining
+                // the gesture tag and every other window-policy bit.
+                try clearPolicy(window, bits: 1 << 5)
+                let before = try tags(of: window)
+                NotificationCenter.default.post(name: name, object: window)
+                let deadline = Date().addingTimeInterval(0.5)
+                while try tags(of: window) & (1 << 5) == 0, Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                }
+                XCTAssertEqual(try tags(of: window), before | (1 << 5), "\(surface) after \(name)")
+            }
+        }
     }
 
     func testAFailedPolicyWriteIsReportedOnceAndStillReturnsFailure() throws {
