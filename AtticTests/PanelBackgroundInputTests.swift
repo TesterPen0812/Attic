@@ -52,6 +52,8 @@ final class PanelBackgroundInputTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.contentView = NSView(frame: CGRect(origin: .zero, size: frame.size))
             window.orderFrontRegardless()
+            // Let native order-in finish before measuring additive tag writes.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             defer { window.close() }
             for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
                          NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
