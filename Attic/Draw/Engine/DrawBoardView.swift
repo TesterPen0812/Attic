@@ -789,21 +789,45 @@ final class DrawLiveInk {
 @MainActor
 struct DrawDots {
     private var tiles: [Int: CGColor] = [:]
+    /// The panel's design (surface, mode), from SwiftUI.
+    var design: AtticDesignContext?
+    /// Tiles drawn so far (a pan draws none).
+    private(set) var tilesRendered = 0
 
     /// The working file's 32 px grid and 1.7 px dots at rgba(0,0,0,0.13).
     static let spacing: CGFloat = 16
     static let alpha: CGFloat = 0.13
+    /// Dots closer than this on screen crowd the board.
+    static let minimumStep: CGFloat = 8
+
+    /// The grid on screen at a zoom: the distance between the dots shown,
+    /// and how many grid points that is.
+    static func grid(zoom: CGFloat) -> (step: CGFloat, every: Int)? {
+        let step = spacing * zoom
+        return step >= 2 ? (step, 1) : nil
+    }
+
+    /// The dot's diameter on screen.
+    static func dotDiameter(zoom: CGFloat) -> CGFloat { 1.7 * zoom / max(0.5, zoom) }
+
+    /// The dot's ink on the board's surface.
+    static func ink(design: AtticDesignContext?, dark: Bool) -> AtticRGBA {
+        dark ? .white(alpha) : .black(alpha)
+    }
 
     mutating func place(in layer: CALayer, viewport: DrawViewport, size: CGSize, dark: Bool) {
-        let step = Self.spacing * viewport.zoom
-        guard step >= 2, size.width > 0 else { layer.backgroundColor = nil; return }
+        guard let grid = Self.grid(zoom: viewport.zoom), size.width > 0 else { layer.backgroundColor = nil; return }
+        let step = grid.step
         let bucket = Int((step * 4).rounded())
         let colour: CGColor
         if let cached = tiles[bucket] {
             colour = cached
         } else {
-            colour = Self.tile(step: CGFloat(bucket) / 4, zoom: viewport.zoom, dark: dark)
+            let image = Self.tileImage(step: CGFloat(bucket) / 4, diameter: Self.dotDiameter(zoom: viewport.zoom),
+                                       ink: Self.ink(design: design, dark: dark))
+            colour = NSColor(patternImage: image).cgColor
             tiles[bucket] = colour
+            tilesRendered += 1
         }
         let tileStep = CGFloat(bucket) / 4
         func positiveMod(_ a: CGFloat, _ b: CGFloat) -> CGFloat { let r = a.truncatingRemainder(dividingBy: b); return r < 0 ? r + b : r }
@@ -813,14 +837,14 @@ struct DrawDots {
                                  y: positiveMod(size.height - viewport.y, tileStep) - tileStep)
     }
 
-    private static func tile(step: CGFloat, zoom: CGFloat, dark: Bool) -> CGColor {
-        let radius = 0.85 * zoom / max(0.5, zoom)
-        let image = NSImage(size: CGSize(width: step, height: step), flipped: false) { rect in
-            NSColor(white: dark ? 1 : 0, alpha: alpha).setFill()
+    /// One tile: a dot in the middle of a `step` square.
+    static func tileImage(step: CGFloat, diameter: CGFloat, ink: AtticRGBA) -> NSImage {
+        let radius = diameter / 2
+        return NSImage(size: CGSize(width: step, height: step), flipped: false) { rect in
+            ink.nsColor.setFill()
             NSBezierPath(ovalIn: CGRect(x: rect.midX - radius, y: rect.midY - radius, width: radius * 2, height: radius * 2)).fill()
             return true
         }
-        return NSColor(patternImage: image).cgColor
     }
 }
 
