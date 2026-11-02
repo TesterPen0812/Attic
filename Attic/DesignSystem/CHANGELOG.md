@@ -1,3 +1,10 @@
+## 2026-11-02 · Draw cursors keep their screen size
+
+The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white
+ring outside it (7.2 pt image, centred hot spot). Stroke width and canvas
+zoom no longer resize it. The eraser stays 12 pt; text, shape and select
+retain the native I-beam, crosshair and arrow.
+
 ## 2026-11-01 · Adaptive Priority, Calendar and island
 
 Priority widens into four 26 pt choices in the composer. Calendar event

@@ -50,13 +50,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private(set) var cursorLog: [String] = []
     #endif
 
-    /// The drawing's pen cursor: a dot in the pen colour, sized to the
-    /// stroke on screen (its 16 px image, r = width ÷ 2 + 1 px, at most
-    /// 6 px: halved, the stroke plus 1 pt, at most 6 pt), in a white ring.
+    /// Screen points, independent of the canvas transform and stroke size.
+    /// The 2 Nov brief supersedes the drawing's stroke-sized pen cursor.
     static let cursorRing: CGFloat = 0.6
-    static func penDotDiameter(strokeWidth: Double, zoom: CGFloat) -> CGFloat {
-        min(6, max(2, CGFloat(strokeWidth) * zoom + 1))
-    }
+    static let penDotDiameter: CGFloat = 6
     /// The eraser's 24 px ring, halved: 12 pt, its 10 pt circle the
     /// eraser's own reach (5 pt either side of the pointer).
     static let eraserCursorSize: CGFloat = 12
@@ -667,8 +664,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         case .text: .iBeam
         case .shape: .crosshair
         case .pen:
-            Self.penCursor(diameter: Self.penDotDiameter(strokeWidth: model.strokeSize.strokeWidth, zoom: model.viewport.zoom),
-                           colour: DrawPalette(dark: isDark).cgColor(model.colour))
+            Self.penCursor(colour: DrawPalette(dark: isDark).cgColor(model.colour))
         case .eraser: Self.eraserCursor
         }
     }
@@ -676,9 +672,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private static var penCursors: [String: NSCursor] = [:]
 
     /// The pen's dot: the pen colour, a white ring, the hot spot at its centre.
-    static func penCursor(diameter: CGFloat, colour: CGColor) -> NSCursor {
-        let d = (diameter * 4).rounded() / 4
-        let key = "\(d) \(colour.components ?? [])"
+    static func penCursor(colour: CGColor) -> NSCursor {
+        let d = penDotDiameter
+        let key = "\(colour.components ?? [])"
         if let cursor = penCursors[key] { return cursor }
         let side = d + cursorRing * 2
         let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
