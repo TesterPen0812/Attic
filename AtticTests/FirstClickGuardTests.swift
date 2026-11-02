@@ -203,6 +203,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
         let method = try XCTUnwrap(class_getInstanceMethod(NSRunningApplication.self, NSSelectorFromString("activateWithOptions:")))
         let original = method_getImplementation(method)
         var requests = 0
+        var acceptsRequest = true
         var expectedSurface: NSWindow?
         var mainSurface: NSWindow?
         let mainMethod = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, NSSelectorFromString("makeMainWindow")))
@@ -220,7 +221,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
                 requests += 1
                 XCTAssertTrue(mainSurface === expectedSurface, "only the clicked surface may be raised by activation")
             }
-            return true
+            return acceptsRequest
         }
         let implementation = imp_implementationWithBlock(spy)
         method_setImplementation(method, implementation)
@@ -239,6 +240,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
             root.addSubview(target)
             window.contentView = root
             requests = 0
+            acceptsRequest = true
             expectedSurface = window
             mainSurface = nil
             window.orderFrontRegardless()
@@ -264,6 +266,10 @@ final class FirstClickActivationRequestTests: XCTestCase {
             try send(.leftMouseDown, at: CGPoint(x: 1, y: 1))
             try send(.leftMouseUp, at: CGPoint(x: 1, y: 1))
             XCTAssertEqual(requests, 2, "\(surface): clear margins never activate")
+            acceptsRequest = false
+            try send(.leftMouseDown, at: point)
+            try send(.leftMouseUp, at: point)
+            XCTAssertFalse(PanelActivation.shared.isActivationWindow(window), "rejection must release the main-window lease")
             XCTAssertFalse(NSApp.isActive, "the spy must never activate the host")
             XCTAssertFalse(window.isKeyWindow, "the host must never take the keyboard")
         }
@@ -299,10 +305,10 @@ final class FirstClickActivationTests: XCTestCase {
             for (name, window) in [("docked", harness.panel as NSWindow), ("island", island), ("floating", floating)] {
                 NSApp.deactivate()
                 harness.spin(0.3)
-                XCTAssertFalse(NSApp.isActive, "\(name): inactive starting state")
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): inactive starting state")
                 window.orderFrontRegardless()
                 harness.spin(0.2)
-                XCTAssertFalse(NSApp.isActive, "\(name): showing must not activate the app")
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): showing must not activate the app")
                 let root = try XCTUnwrap(window.contentView)
                 let target = PressCounter(frame: CGRect(x: root.bounds.midX - 10, y: root.bounds.midY - 10,
                                                         width: 20, height: 20))
@@ -316,14 +322,14 @@ final class FirstClickActivationTests: XCTestCase {
                 }
                 window.sendEvent(try event(.mouseMoved))
                 harness.spin(0.1)
-                XCTAssertFalse(NSApp.isActive, "\(name): pointing must not activate the app")
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): pointing must not activate the app")
                 window.sendEvent(try event(.leftMouseDown))
                 harness.spin(0.1)
-                XCTAssertFalse(NSApp.isActive, "\(name): active glass waits for release")
+                XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): active glass waits for release")
                 window.sendEvent(try event(.leftMouseUp))
                 harness.spin(0.3)
                 XCTAssertEqual(target.presses, 1, "\(name): the first press still acts")
-                XCTAssertTrue(NSApp.isActive, "\(name): one click must activate the app, not only its panel")
+                XCTAssertTrue(NSRunningApplication.current.isActive, "\(name): one click must activate the app, not only its panel")
             }
         }
     }

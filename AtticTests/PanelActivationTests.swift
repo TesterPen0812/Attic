@@ -155,6 +155,22 @@ final class PanelActivationTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
+    func testWorkspaceActivationCompletesAfterEarlyAppKitNotificationAndHide() throws {
+        let window = panel()
+        try click(window)
+        // AppKit acquired nonactivating key focus before process activation.
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        XCTAssertTrue(PanelActivation.shared.isActivationWindow(window))
+        window.orderOut(nil)
+        fixture.events = []
+        fixture.active = true
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification,
+            object: NSWorkspace.shared, userInfo: [NSWorkspace.applicationUserInfoKey: fixture.app])
+        XCTAssertFalse(PanelActivation.shared.isActivationWindow(window))
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"])
+        XCTAssertFalse(window.isVisible)
+    }
+
     func testAcceptedRestorationRelinquishesActivationBeforeTheOtherAppResponds() throws {
         let window = panel()
         try click(window); active(); fixture.events = []
