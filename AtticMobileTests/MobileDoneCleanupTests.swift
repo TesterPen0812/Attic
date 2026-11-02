@@ -25,7 +25,8 @@ final class MobileDoneCleanupTests: XCTestCase {
 
     private func seed(_ rows: [TaskItem]) throws -> ModelContainer {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let writer = ModelContext(container)
+        let writer = container.mainContext
+        writer.autosaveEnabled = false
         for row in rows { writer.insert(row) }
         try writer.save()
         return container
@@ -109,7 +110,9 @@ final class MobileDoneCleanupTests: XCTestCase {
         let deleted = done("Independently deleted", parent: root.id); deleted.deletedAt = old
         let orphan = done("Missing parent", parent: UUID())
         let replica = done("Earlier child", id: first.id, parent: root.id)
-        let container = try seed([root, first, replica, last, deleted, orphan])
+        let open = done("Open parent"); open.status = .todo; open.completedAt = nil
+        let waiting = done("Done under open parent", parent: open.id)
+        let container = try seed([root, first, replica, last, deleted, orphan, open, waiting])
         let service = PhoneDoneCleanup(container: container), utc = try calendar()
         XCTAssertEqual(try service.perform(at: now, calendar: utc), 0)
         let writer = ModelContext(container), id = last.id
@@ -124,6 +127,7 @@ final class MobileDoneCleanupTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.id == deleted.id }?.deletedAt, old)
         XCTAssertNil(rows.first { $0.id == deleted.id }?.doneLoggedAt)
         XCTAssertNil(rows.first { $0.id == orphan.id }?.doneLoggedAt)
+        XCTAssertEqual(Set(try PhoneLibrary(container: container).tasks().map(\.id)), [open.id, waiting.id, orphan.id])
     }
 
     func testReparentedAndPartlyDeletedReplicasBlockTheirFamilies() throws {
@@ -146,14 +150,16 @@ final class MobileDoneCleanupTests: XCTestCase {
         let bID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
         let a = done("A", id: aID), b = done("B", id: bID), twin = done("A", id: aID)
         let legacy = done("No completion date"); legacy.completedAt = nil; legacy.updatedAt = now
+        let recent = done("More recent finish"); recent.completedAt = old.addingTimeInterval(60)
+        b.updatedAt = now.addingTimeInterval(60) // A late rename must not reorder a completion.
         let stale = done("Logged"), newer = done("Now live", id: stale.id); newer.updatedAt = now
         let staleDeleted = done("Before deletion"), deleted = done("Deleted", id: staleDeleted.id)
         deleted.updatedAt = now; deleted.deletedAt = now
         let tie = done("A logged"), winningLive = done("Z live", id: tie.id)
-        for task in [b, legacy, a, twin, stale, staleDeleted, tie] { task.doneLoggedAt = old }
-        let container = try seed([b, legacy, a, twin, stale, newer, staleDeleted, deleted, tie, winningLive])
+        for task in [b, legacy, a, twin, recent, stale, staleDeleted, tie] { task.doneLoggedAt = old }
+        let container = try seed([b, legacy, a, twin, recent, stale, newer, staleDeleted, deleted, tie, winningLive])
         let service = PhoneDoneCleanup(container: container)
-        XCTAssertEqual(try service.history().map(\.id), [legacy.id, aID, bID])
+        XCTAssertEqual(try service.history().map(\.id), [legacy.id, recent.id, aID, bID])
         XCTAssertEqual(Set(try PhoneLibrary(container: container).tasks().map(\.id)), [newer.id, winningLive.id])
     }
 
