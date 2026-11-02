@@ -14,10 +14,12 @@ final class PhoneAppState: ObservableObject {
 
     let library: PhoneLibrary
     let draw: DrawPersistentStore
+    let taskSubtasks: PhoneTaskSubtasks
 
     init(container: ModelContainer) {
         library = PhoneLibrary(container: container)
         draw = DrawPersistentStore(container: container)
+        taskSubtasks = PhoneTaskSubtasks(container: container)
         refresh()
     }
 

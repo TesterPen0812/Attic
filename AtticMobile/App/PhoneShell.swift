@@ -83,7 +83,7 @@ struct PhoneShell: View {
         }
         .background(Color(uiColor: .systemBackground))
         .sheet(isPresented: $searchPresented) {
-            PhoneSearchSheet(state: state) { route in
+            PhoneSearchWaveSheet(state: state) { route in
                 searchPresented = false
                 DispatchQueue.main.async { path.append(route) }
             }
@@ -181,7 +181,9 @@ struct PhoneShell: View {
         switch route {
         case let .allNotes(tag): notesList(tag: tag)
         case let .note(id): PhoneNotePage(state: state, noteID: id)
-        case let .task(id): PhoneTaskPage(state: state, taskID: id)
+        case let .task(id): PhoneTaskPage(state: state, taskID: id) { noteID in
+            path.append(.note(noteID))
+        }
         case .canvases: canvasesList
         case let .canvas(id): PhoneDrawEditor(state: state, canvasID: id) {
             if !path.isEmpty { path.removeLast() }
@@ -642,67 +644,6 @@ struct PhoneShell: View {
                 }
             }.padding(.bottom, 110)
         }
-    }
-}
-
-/// Searches the same local library snapshots as the tabs. No network lookup
-/// and no implicit reads of note attachments or owner files.
-private struct PhoneSearchSheet: View {
-    @ObservedObject var state: PhoneAppState
-    var open: (PhoneRoute) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @FocusState private var focused: Bool
-    @State private var query = ""
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let tasks = state.tasks.filter { $0.title.localizedStandardContains(query) }
-                        let notes = state.notes.filter { $0.title.localizedStandardContains(query) || $0.body.localizedStandardContains(query) }
-                        let canvases = state.canvases.filter { $0.name.localizedStandardContains(query) || $0.textIndex.localizedStandardContains(query) }
-                        searchGroup("Tasks", count: tasks.count, symbol: "checkmark.circle")
-                        ForEach(tasks) { task in searchRow(task.title, symbol: "circle") { open(.task(task.id)) } }
-                        searchGroup("Notes", count: notes.count, symbol: "note.text")
-                        ForEach(notes) { note in searchRow(note.title, symbol: "note.text") { open(.note(note.id)) } }
-                        searchGroup("Canvases", count: canvases.count, symbol: "scribble.variable")
-                        ForEach(canvases, id: \.id) { canvas in searchRow(canvas.name, symbol: "scribble.variable") { open(.canvas(canvas.id)) } }
-                        if tasks.isEmpty && notes.isEmpty && canvases.isEmpty {
-                            ContentUnavailableView.search(text: query).padding(.top, 25)
-                        }
-                    }
-                }.padding(.top, 12)
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
-            .safeAreaInset(edge: .top) {
-                TextField("Search tasks, notes and canvases", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal, 16).padding(.bottom, 8)
-                    .focused($focused)
-                    .accessibilityIdentifier("phone-search-field")
-            }
-        }
-        .onAppear { focused = true }
-    }
-
-    private func searchGroup(_ title: String, count: Int, symbol: String) -> some View {
-        HStack {
-            Label(title, systemImage: symbol).font(.headline)
-            Text(count, format: .number).foregroundStyle(.secondary)
-        }.padding(.horizontal, 20).frame(minHeight: 50).accessibilityAddTraits(.isHeader)
-    }
-    private func searchRow(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: symbol).frame(width: 26)
-                Text(title.isEmpty ? "Untitled" : title).lineLimit(2)
-                Spacer()
-                Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
-            }.padding(.horizontal, 20).frame(minHeight: 44)
-        }.buttonStyle(.plain).foregroundStyle(.primary)
     }
 }
 

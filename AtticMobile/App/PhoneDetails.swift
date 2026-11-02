@@ -144,6 +144,7 @@ private struct PhoneTextKitEditor: UIViewRepresentable {
 struct PhoneTaskPage: View {
     @ObservedObject var state: PhoneAppState
     let taskID: UUID
+    let onOpenNote: (UUID) -> Void
     @State private var title = ""
     @State private var status: TaskStatus = .todo
     @State private var priority: TaskPriority = .none
@@ -151,6 +152,13 @@ struct PhoneTaskPage: View {
     @State private var dueEnabled = false
     @State private var dueDate = Date()
     @State private var current: PhoneLibrary.TaskRow?
+    @State private var steps: [PhoneTaskSubtasks.Subtask] = []
+    @State private var taskNote: PhoneTaskSubtasks.TaskNote?
+    @State private var newStep = ""
+    @State private var newWriting = ""
+    @State private var editingStepID: UUID?
+    @State private var editingStepTitle = ""
+    @State private var editingStep = false
 
     var body: some View {
         ScrollView {
@@ -162,9 +170,22 @@ struct PhoneTaskPage: View {
                         Button("Done") { save(current) }.fontWeight(.semibold)
                             .accessibilityIdentifier("phone-task-save")
                     }
-                    TextField("Task title", text: $title, axis: .vertical)
-                        .font(.system(size: 30, weight: .bold))
-                        .lineLimit(1...4)
+                    HStack(alignment: .top, spacing: 12) {
+                        Button {
+                            status = status == .done ? .todo : .done
+                            save(current)
+                        } label: {
+                            Image(systemName: current.listedStatus == .done ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 26))
+                                .frame(width: 32, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(current.listedStatus == .done ? "Reopen task" : "Complete task")
+                        TextField("Task title", text: $title, axis: .vertical)
+                            .font(.system(size: 30, weight: .bold))
+                            .lineLimit(1...4)
+                            .accessibilityIdentifier("phone-task-title")
+                    }
                     Picker("List", selection: $status) {
                         Text("Now").tag(TaskStatus.todo)
                         Text("In progress").tag(TaskStatus.inProgress)
@@ -192,6 +213,8 @@ struct PhoneTaskPage: View {
                             .autocorrectionDisabled()
                     }
                     .padding(.vertical, 7)
+                    writingSection
+                    checklistSection
                     Divider()
                     Text("Created " + current.createdAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.footnote).foregroundStyle(.secondary)
@@ -203,6 +226,163 @@ struct PhoneTaskPage: View {
             .padding(.top, 16)
         }
         .task(id: taskID) { load() }
+        .alert("Edit subtask", isPresented: $editingStep) {
+            TextField("Subtask", text: $editingStepTitle)
+            Button("Cancel", role: .cancel) { editingStepID = nil }
+            Button("Save") {
+                if let id = editingStepID {
+                    performStep { _ = try state.taskSubtasks.editSubtask(id: id, title: editingStepTitle) }
+                }
+                editingStepID = nil
+            }
+        }
+    }
+
+    private var writingSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Writing").font(.system(size: 17, weight: .semibold))
+            if let taskNote {
+                Button { onOpenNote(taskNote.id) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.text").foregroundStyle(.secondary)
+                        Text(taskNote.body.isEmpty ? taskNote.title : taskNote.body)
+                            .lineLimit(3).multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open task writing")
+                .accessibilityIdentifier("phone-task-open-writing")
+            } else {
+                TextEditor(text: $newWriting)
+                    .font(.body)
+                    .frame(minHeight: 100)
+                    .scrollContentBackground(.hidden)
+                    .accessibilityLabel("Task writing")
+                    .accessibilityIdentifier("phone-task-writing-draft")
+                if !newWriting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Save writing") {
+                        let draft = newWriting
+                        if state.change({ _ = try state.taskSubtasks.createTaskNoteIfNeeded(
+                            taskID: taskID, initialWriting: draft) }) {
+                            newWriting = ""
+                            reloadSupportingContent()
+                        }
+                    }
+                    .fontWeight(.semibold)
+                    .accessibilityIdentifier("phone-task-save-writing")
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private var checklistSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Checklist").font(.system(size: 17, weight: .semibold))
+                Spacer()
+                if !steps.isEmpty {
+                    Text("\(steps.filter(\.isDone).count)/\(steps.count)")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.bottom, 4)
+            ForEach(steps) { step in
+                HStack(spacing: 12) {
+                    Button {
+                        performStep { _ = try state.taskSubtasks.toggleSubtask(id: step.id) }
+                    } label: {
+                        Image(systemName: step.isDone ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .frame(width: 32, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(step.isDone ? "Reopen \(step.title)" : "Complete \(step.title)")
+                    .accessibilityIdentifier("phone-step-toggle-\(step.id)")
+                    Text(step.title)
+                        .foregroundStyle(step.isDone ? .secondary : .primary)
+                        .strikethrough(step.isDone)
+                        .lineLimit(2)
+                    Spacer(minLength: 2)
+                    Menu {
+                        Button("Edit", systemImage: "pencil") {
+                            editingStepID = step.id
+                            editingStepTitle = step.title
+                            editingStep = true
+                        }
+                        Button("Move up", systemImage: "arrow.up") { reorder(step, by: -1) }
+                        Button("Move down", systemImage: "arrow.down") { reorder(step, by: 1) }
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            performStep { try state.taskSubtasks.deleteSubtask(id: step.id) }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Options for \(step.title)")
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .draggable(step.id.uuidString)
+                .dropDestination(for: String.self) { identifiers, _ in
+                    guard let dragged = identifiers.first.flatMap(UUID.init(uuidString:)),
+                          let from = steps.first(where: { $0.id == dragged }),
+                          from.isDone == step.isDone else { return false }
+                    let group = steps.filter { $0.isDone == step.isDone }
+                    guard let target = group.firstIndex(where: { $0.id == step.id }) else { return false }
+                    return performStep { _ = try state.taskSubtasks.reorderSubtask(id: dragged, toIndex: target) }
+                }
+            }
+            if current?.listedStatus != .done {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus").font(.system(size: 20))
+                        .foregroundStyle(.secondary).frame(width: 32)
+                    TextField("Add subtask", text: $newStep)
+                        .submitLabel(.done)
+                        .onSubmit(addStep)
+                        .accessibilityIdentifier("phone-add-step-field")
+                    if !newStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button("Add") { addStep() }
+                            .accessibilityIdentifier("phone-add-step-button")
+                    }
+                }
+                .frame(minHeight: 44)
+            }
+        }
+        .padding(.top, 10)
+    }
+
+    @discardableResult
+    private func performStep(_ mutation: () throws -> Void) -> Bool {
+        guard state.change(mutation) else { return false }
+        reloadSupportingContent()
+        return true
+    }
+
+    private func addStep() {
+        let draft = newStep
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if performStep({ _ = try state.taskSubtasks.addSubtask(to: taskID, title: draft) }) {
+            newStep = ""
+        }
+    }
+
+    private func reorder(_ step: PhoneTaskSubtasks.Subtask, by amount: Int) {
+        let group = steps.filter { $0.isDone == step.isDone }
+        guard let index = group.firstIndex(where: { $0.id == step.id }),
+              group.indices.contains(index + amount) else { return }
+        performStep { _ = try state.taskSubtasks.reorderSubtask(id: step.id, toIndex: index + amount) }
+    }
+
+    private func reloadSupportingContent() {
+        do {
+            steps = try state.taskSubtasks.subtasks(of: taskID)
+            taskNote = try state.taskSubtasks.loadTaskNote(taskID: taskID)
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
     }
 
     private func load() {
@@ -214,6 +394,7 @@ struct PhoneTaskPage: View {
         tags = row.tags.map { "#" + $0 }.joined(separator: " ")
         dueEnabled = row.dueDay != nil
         dueDate = row.dueDay?.startDate(in: .autoupdatingCurrent) ?? Date()
+        reloadSupportingContent()
     }
 
     private func save(_ previous: PhoneLibrary.TaskRow) {

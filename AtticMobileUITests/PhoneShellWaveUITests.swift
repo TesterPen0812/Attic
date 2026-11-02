@@ -122,6 +122,49 @@ final class PhoneShellWaveUITests: XCTestCase {
         screenshot("Canvas in library")
     }
 
+    func testTaskChecklistPersistsAcrossNavigation() throws {
+        app.buttons["Tasks"].tap()
+        let row = app.buttons["Review the prototype"]
+        XCTAssertTrue(row.waitForExistence(timeout: 6))
+        row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["phone-task-title"].waitForExistence(timeout: 6))
+        let list = app.scrollViews.firstMatch
+        let field = app.textFields["phone-add-step-field"]
+        for _ in 0..<4 where !field.isHittable { list.swipeUp() }
+        XCTAssertTrue(field.isHittable, "The checklist composer should remain reachable")
+        let unique = "Review sample " + UUID().uuidString.prefix(8)
+        field.tap()
+        field.typeText(unique)
+        let add = app.buttons["phone-add-step-button"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let toggle = app.buttons["Complete " + unique]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 6), "A new step must appear after saving")
+        toggle.tap()
+        XCTAssertTrue(app.buttons["Reopen " + unique].waitForExistence(timeout: 6))
+        screenshot("Task checklist")
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.staticTexts["Tasks"].waitForExistence(timeout: 6))
+        row.tap()
+        XCTAssertTrue(app.buttons["Reopen " + unique].waitForExistence(timeout: 6),
+                      "The completed step must be durable after leaving the task")
+    }
+
+    func testSearchMatchesTaskAndNavigatesToDetail() throws {
+        app.buttons["Search"].firstMatch.tap()
+        let search = app.textFields["phone-search-field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 6))
+        search.tap()
+        search.typeText("prototype")
+        let result = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "Review the prototype")
+        ).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 6))
+        screenshot("Search matching task")
+        result.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["phone-task-title"].waitForExistence(timeout: 6))
+    }
+
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Phone wave · " + name
