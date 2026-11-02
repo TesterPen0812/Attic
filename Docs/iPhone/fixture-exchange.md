@@ -26,7 +26,7 @@ test ! -e "$EXPORT"
 xcrun xcresulttool export attachments --path "$RESULT" --output-path "$EXPORT"
 python3 - "$EXPORT" <<'PY'
 from pathlib import Path
-import hashlib, json, sys
+import hashlib, json, re, sys
 
 export = Path(sys.argv[1]).resolve()
 fixtures = Path('AtticMobileTests/Fixtures/Synthetic')
@@ -36,8 +36,12 @@ for name, pinned in {
     'exchange-note.json': '24f53a2533c181f9d6b7959b175baee16a1af32f57c35c4574e019cc22a47276',
     'exchange-file.txt': 'cf6f50a5a60235e304a608aa91f882a282972c42c73b50105477aae17d0848f1',
 }.items():
+    # Xcode may insert the attachment index and UUID *before* the filename extension.
+    file = Path(name)
+    suffix = r'(?:_[0-9]+_[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12})?'
+    pattern = re.escape(file.stem) + suffix + re.escape(file.suffix)
     matches = [a['exportedFileName'] for test in manifest for a in test['attachments']
-               if a['suggestedHumanReadableName'].startswith(name)]
+               if not a.get('isAssociatedWithFailure') and re.fullmatch(pattern, a['suggestedHumanReadableName'])]
     if len(matches) != 1 or Path(matches[0]).name != matches[0]:
         raise SystemExit(f'{name}: expected one named attachment; inspect manifest.json')
     payload = (export / matches[0]).read_bytes()

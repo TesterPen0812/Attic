@@ -197,7 +197,9 @@ shared_mobile_sources = %w[
   Draw/DrawRepository.swift
   Draw/DrawStore.swift
   Draw/DrawTypes.swift
+  Draw/Engine/DrawExport.swift
   Draw/Engine/DrawGeometry.swift
+  Draw/Engine/DrawRenderer.swift
   Draw/Engine/DrawViewport.swift
   Models/AtticItem.swift
   Models/AtticTag.swift
