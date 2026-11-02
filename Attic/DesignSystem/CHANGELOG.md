@@ -1,14 +1,17 @@
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white
-ring outside it (7.2 pt image, centred hot spot). Stroke width and canvas
+ring outside it (8 pt image, hot spot at 4, 4). Stroke width and canvas
 zoom no longer resize it. The eraser stays 12 pt; text, shape and select
 retain the native I-beam, crosshair and arrow.
 
-Panel, island and floating-panel presses now activate Attic as well as
-acting on their target, allowing native glass to use the active app state.
-Reveal and hover stay non-activating. The existing release-based key-look
-state and all motion timings are unchanged.
+Panel, island and floating-panel presses act immediately, then activate
+Attic on release. Native panel and island glass follow the same released
+key look. Only the clicked surface becomes main during activation; hiding
+the last visible surface returns focus to the previous app. Reveal, hover
+and clear margins stay non-activating. Hide motions cannot be superseded by
+activation. The board releases its cursor on exit and hide. Motion timings
+are unchanged.
 
 ## 2026-11-01 · Adaptive Priority, Calendar and island
 

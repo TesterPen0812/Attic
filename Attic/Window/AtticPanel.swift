@@ -97,7 +97,18 @@ final class AtticPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
+    /// The same release-delayed state drives native glass and SwiftUI chrome.
+    var activeAppearance: (() -> Bool)?
+    @objc func _hasActiveAppearance() -> Bool { activeAppearance?() ?? (isKeyWindow && !isPressing) }
+
+    func beginFirstPress() { isPressing = true; trackingConsumedRelease = false }
+    func finishFirstPress() {
+        guard isPressing else { return }
+        isPressing = false
+        trackingConsumedRelease = false
+        onPressEnded?()
+    }
 
     // MARK: Clicks reach the panel (one click always registers)
 
@@ -111,6 +122,7 @@ final class AtticPanel: NSPanel {
         }
         super.order(place, relativeTo: otherWin)
         if place != .out { mousePolicy.orderedIn(self) }
+        else { PanelActivation.shared.hidden(self) }
     }
 
     override func orderFrontRegardless() {
@@ -357,7 +369,7 @@ final class AtticPanel: NSPanel {
         // own views in a list do not accept the first mouse). The shared
         // first-press boundary also activates the app for native glass;
         // ordering and hover remain non-activating.
-        if Self.takesFirstPress(event.type) { isPressing = true; trackingConsumedRelease = false }
+        if Self.takesFirstPress(event.type) { beginFirstPress() }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()
@@ -379,9 +391,7 @@ final class AtticPanel: NSPanel {
             if isPressing, NSEvent.pressedMouseButtons == 0,
                (Self.takesFirstPress(event.type) && trackingConsumedRelease)
                 || [.leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .keyDown].contains(event.type) {
-                isPressing = false
-                trackingConsumedRelease = false
-                onPressEnded?()
+                finishFirstPress()
                 PanelActivation.shared.released(in: self)
             }
             return
@@ -2617,9 +2627,9 @@ extension AtticPanel: AtticFirstPressWindow {}
 enum AtticFirstPress {
     static func prepare(_ event: NSEvent, in window: NSWindow) {
         // A non-activating panel can be key while another app stays active.
-        // Native glass and foreground gesture routing need app activation
-        // too. Request it only for a delivered press, before dispatching that
-        // same press; never on reveal, hover, or gesture arrival.
+        // Capture this delivered press; activation is requested after its
+        // release so native glass cannot redraw a control under the press.
+        // Reveal, hover, and gesture arrival never activate.
         PanelActivation.shared.pressed(event, in: window)
         guard let root = window.contentView?.superview ?? window.contentView,
               let hit = root.hitTest(event.locationInWindow), hit !== root else { return }

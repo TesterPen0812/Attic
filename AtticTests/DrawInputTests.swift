@@ -478,9 +478,8 @@ final class DrawInputTests: XCTestCase {
         let when = "\(when) [now \(named); \(rig.board.cursorLog.suffix(3).joined(separator: " | "))]"
         switch tool {
         case .pen:
-            let diameter: CGFloat = 6
             XCTAssertEqual(cursor.hotSpot.x, cursor.image.size.width / 2, accuracy: 0.01, "\(when): pen hot spot centred", file: file, line: line)
-            XCTAssertEqual(cursor.image.size.width, diameter + DrawBoardView.cursorRing * 2, accuracy: 0.6,
+            XCTAssertEqual(cursor.image.size.width, 8, accuracy: 0.01,
                            "\(when): the pen's dot (\(cursor.image.size))", file: file, line: line)
         case .eraser:
             XCTAssertEqual(cursor.image.size.width, DrawBoardView.eraserCursorSize, accuracy: 0.01,

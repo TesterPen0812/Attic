@@ -30,6 +30,12 @@ final class PanelActivation {
         }
     }
 
+    private weak var pressWindow: NSWindow?
+    private var beforePress: NSRunningApplication?
+    private var previousApp: NSRunningApplication?
+    private weak var activationWindow: NSWindow?
+    private var awaitingActivation = false
+    private var borrowedActivation = false
     private let system: System
     private var observers: [NSObjectProtocol] = []
 
@@ -44,10 +50,78 @@ final class PanelActivation {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     func pressed(_ event: NSEvent, in window: NSWindow) {
-        if AtticPanel.takesFirstPress(event.type), window.isVisible, !system.isActive() { system.activate() }
+        guard AtticPanel.takesFirstPress(event.type), window.isVisible else { return }
+        let point = window.convertPoint(toScreen: event.locationInWindow)
+        let content = (window as? AtticPanel)?.visibleContentFrame
+            ?? window.frame.insetBy(dx: PanelIslandLayout.windowMargin, dy: PanelIslandLayout.windowMargin)
+        guard content.contains(point) else { pressWindow = nil; beforePress = nil; return }
+        pressWindow = window
+        beforePress = system.isActive() ? nil : system.frontmost()
     }
-    func released(in window: NSWindow) {}
-    func hidden(_ window: NSWindow) {}
-    func didBecomeActive() {}
-    func isActivationWindow(_ window: NSWindow) -> Bool { false }
+
+    func released(in window: NSWindow) {
+        guard pressWindow === window else { return }
+        pressWindow = nil
+        defer { beforePress = nil }
+        guard window.isVisible, !system.isActive() else { return }
+        previousApp = beforePress
+        borrowedActivation = true
+        awaitingActivation = true
+        // Activation raises both key and main windows. Temporarily make the
+        // clicked panel both, so a document/Settings window cannot be raised
+        // (or pull us to its Space). Island clicks belong to their parent.
+        let surface = (window as? PanelIslandWindow)?.parent ?? window
+        activationWindow = surface
+        system.prepare(surface)
+        system.activate()
+    }
+
+    func isActivationWindow(_ window: NSWindow) -> Bool { activationWindow === window }
+
+    func hidden(_ window: NSWindow) {
+        if pressWindow === window { pressWindow = nil; beforePress = nil }
+        guard borrowedActivation else { return }
+        if system.isActive() { returnFocusIfUnoccupied() }
+        else if !awaitingActivation { clearBorrowedActivation() }
+        // An asynchronous activation can still land after orderOut. Keep
+        // its ownership until didBecomeActive, which returns it immediately.
+    }
+
+    func didBecomeActive() {
+        guard awaitingActivation, system.isActive() else { return }
+        awaitingActivation = false
+        finishMainLease()
+        returnFocusIfUnoccupied()
+    }
+
+    private func returnFocusIfUnoccupied() {
+        guard borrowedActivation, system.isActive() else { return }
+        let occupied = system.windows().contains { window in
+            guard window.isVisible, !window.isMiniaturized,
+                  !(window is PanelIslandWindow), !(window is AtticGlassMenuWindow) else { return false }
+            return window is AtticPanel || window.styleMask.contains(.titled)
+                || window.canBecomeKey || window.canBecomeMain
+        }
+        guard !occupied else { return }
+        let previous = previousApp
+        clearBorrowedActivation()
+        guard let previous, !system.terminated(previous) else { system.deactivate(); return }
+        // Cooperative activation requires the current app to yield before
+        // the destination requests activation from it. Do not raise all windows.
+        system.yield(previous)
+        if !system.restore(previous) { system.deactivate() }
+    }
+
+    private func finishMainLease() {
+        let window = activationWindow
+        activationWindow = nil
+        if window?.isMainWindow == true { window?.resignMain() }
+    }
+
+    private func clearBorrowedActivation() {
+        borrowedActivation = false
+        awaitingActivation = false
+        previousApp = nil
+        finishMainLease()
+    }
 }

@@ -315,6 +315,8 @@ final class FirstClickActivationTests: XCTestCase {
                 harness.spin(0.1)
                 XCTAssertFalse(NSApp.isActive, "\(name): pointing must not activate the app")
                 window.sendEvent(try event(.leftMouseDown))
+                harness.spin(0.1)
+                XCTAssertFalse(NSApp.isActive, "\(name): active glass waits for release")
                 window.sendEvent(try event(.leftMouseUp))
                 harness.spin(0.3)
                 XCTAssertEqual(target.presses, 1, "\(name): the first press still acts")

@@ -740,6 +740,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }
             return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
         }
+        panel.activeAppearance = { [weak uiState] in uiState?.isPanelKey ?? false }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
