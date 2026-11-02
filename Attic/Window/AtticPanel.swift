@@ -2705,8 +2705,39 @@ enum AtticBackgroundInput {
     }
     static var failureLogged = false
 
+    private static var refreshQueued = false
+    private static let focusObservers: [NSObjectProtocol] = {
+        let names = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification]
+        var observers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { refreshAfterFocusChange() }
+            }
+        }
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { refreshAfterFocusChange() }
+            })
+        return observers
+    }()
+
+    private static func refreshAfterFocusChange() {
+        guard !refreshQueued else { return }
+        refreshQueued = true
+        // AppKit rewrites its cursor policy during key/activation changes.
+        // Reinstall once after that transaction, including process activation
+        // changes that do not produce another AppKit activation notification.
+        DispatchQueue.main.async {
+            refreshQueued = false
+            for window in NSApp.windows where window is any AtticFirstPressWindow && window.isVisible {
+                enable(in: window)
+            }
+        }
+    }
+
     @discardableResult
     static func enable(in window: NSWindow) -> Bool {
+        _ = focusObservers
         // Set only these bits; CGSSetWindowTags adds them to the existing
         // policy. It does not replace activation, transparency or space tags.
         let status = installTags(window, (1 << 42) | (1 << 5))
