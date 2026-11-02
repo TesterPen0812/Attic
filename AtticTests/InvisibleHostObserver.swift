@@ -58,7 +58,7 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
             if let window = NSApp.keyWindow {
                 violations.insert("key window: \(type(of: window)) frame=\(window.frame)")
             }
-            if NSApp.isActive { violations.insert("application is active") }
+            if NSApp.isActive || NSRunningApplication.current.isActive { violations.insert("application is active") }
             // CG and NSScreen use opposite Y axes. Query CG displays as well
             // as CG windows so mixed/negative display origins stay correct.
             var count: UInt32 = 0

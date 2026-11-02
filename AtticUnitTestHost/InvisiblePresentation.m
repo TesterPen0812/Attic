@@ -160,6 +160,11 @@ void AtticInstallInvisiblePresentation(void) {
     }
     Replace(NSApplication.class, @selector(activate), ^(NSApplication *app) {});
     Replace(NSApplication.class, @selector(activateIgnoringOtherApps:), ^(NSApplication *app, BOOL ignore) {});
+    // Panel activation uses the process API because AppKit's key-focus
+    // bookkeeping can differ from real activation. Keep both entry points
+    // inside the invisible host's existing no-focus boundary.
+    Replace(NSRunningApplication.class, @selector(activateWithOptions:), ^BOOL(NSRunningApplication *app, NSApplicationActivationOptions options) { return NO; });
+    Replace(NSRunningApplication.class, @selector(activateFromApplication:options:), ^BOOL(NSRunningApplication *app, NSRunningApplication *source, NSApplicationActivationOptions options) { return NO; });
     Replace(NSApplication.class, @selector(setActivationPolicy:), ^BOOL(NSApplication *app, NSApplicationActivationPolicy policy) { return policy == NSApplicationActivationPolicyProhibited; });
     Replace(NSApplication.class, @selector(orderFrontCharacterPalette:), ^(NSApplication *app, id sender) {});
     Replace(NSMenu.class, @selector(popUpMenuPositioningItem:atLocation:inView:), ^BOOL(NSMenu *menu, NSMenuItem *item, NSPoint point, NSView *view) { return NO; });
