@@ -2677,6 +2677,7 @@ struct AtticMousePolicy {
 /// check remains the delivery-level guard, including across OS updates.
 @MainActor
 enum AtticBackgroundInput {
+    static let didRestorePolicyNotification = Notification.Name("AtticBackgroundInputDidRestorePolicy")
     private typealias Connection = @convention(c) () -> Int32
     private typealias SetTags = @convention(c) (Int32, UInt32, UnsafePointer<UInt64>, Int) -> Int32
 
@@ -2730,7 +2731,9 @@ enum AtticBackgroundInput {
         DispatchQueue.main.async {
             refreshQueued = false
             for window in NSApp.windows where window is any AtticFirstPressWindow && window.isVisible {
-                enable(in: window)
+                if enable(in: window) {
+                    NotificationCenter.default.post(name: didRestorePolicyNotification, object: window)
+                }
             }
         }
     }

@@ -557,6 +557,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         let names: [(Notification.Name, AnyObject?)] = [
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSApplication.didBecomeActiveNotification, nil), (NSApplication.didResignActiveNotification, nil),
+            (AtticBackgroundInput.didRestorePolicyNotification, window),
             (AtticPanel.willOrderOutNotification, window), (NSWindow.willCloseNotification, window),
         ]
         for (name, object) in names {
