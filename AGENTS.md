@@ -3,11 +3,13 @@
 <!-- BEGIN ATTIC DEVELOPMENT CONTRACT -->
 ## Development Contract — macOS-first and local-first
 
-Attic is currently developed and evaluated as a macOS-first, local-first app.
-The iPhone companion and CloudKit synchronization are deferred work, not gates
-for ordinary feature development, local previews, branch integration, or a
-macOS-only release. Do not claim that deferred functionality works until it is
-explicitly re-enabled and validated.
+Attic is developed as a macOS-first, local-first app. The iPhone app and
+CloudKit synchronization are current scope under the written activation and
+validation plan (`Docs/iPhone/activation-plan.md`). They are
+built in that plan's stages and gates, and are not gates for ordinary Mac
+feature development, local previews, branch integration, or a macOS-only
+release. Do not claim that iPhone or sync functionality works beyond the last
+stage whose gate has passed and been recorded.
 
 ### Current product identity
 
@@ -49,33 +51,86 @@ explicitly re-enabled and validated.
 5. Do not present source review, compilation, unit tests, or a local-only preview
    as proof of CloudKit, APNs, iPhone, TestFlight, or Production behavior.
 
-### Deferred iPhone and CloudKit work
+### iPhone and CloudKit work
 
-The existing sync implementation may remain in source for future work, but it
-must stay dormant in current local-only builds. Re-enabling it is a separate,
-explicit project requiring all of the following before release:
+The iPhone app and CloudKit synchronization are current scope, activated under
+the written plan `Docs/iPhone/activation-plan.md`. Work follows
+its stages in order; a stage starts only when the previous stage's "done when"
+check has passed and been recorded with branch, commit, identities and devices.
 
-- a CloudKit container owned by Taha's Apple developer account;
+Identities:
+
+- The iOS app is `com.taha.AtticMobile` (previews `com.taha.AtticMobile.<preview>`)
+  on team `ZGZWS73268`.
+- The only CloudKit container is `iCloud.com.taha.Attic`, created in Taha's own
+  Apple developer account. Development sync testing on the Mac uses the isolated
+  identity `com.taha.Attic.syncdev`, never the official app or an owner-data
+  preview.
+- Never restore or reference the former owner's bundle identifiers, team, or
+  CloudKit container, in build settings, entitlements, or source.
+
+Builds:
+
+- Local-only Mac builds keep `ATTIC_LOCAL_ONLY`, `cloudKitDatabase: .none`, and
+  sandbox/network entitlements without CloudKit or APNs, exactly as described
+  above. Ordinary Mac work never requires sync, an iPhone build, or signing
+  with Taha's account.
+- Sync code compiles only under `ATTIC_CLOUD_SYNC`, in separate build
+  configurations; a configuration never sets both flags. Removing
+  `ATTIC_LOCAL_ONLY` is not a way to enable sync.
+- The iPhone app builds local-only, without CloudKit or APNs entitlements,
+  until the plan's Development sync stage.
+- Add CloudKit or APNs entitlements only for the Taha-owned container, after it
+  exists, and only to the configurations the plan names. Never add speculative
+  entitlements to make signing errors disappear.
+
+Sync rules:
+
+- Synchronization uses `CKSyncEngine` with explicit private-database records
+  over local SwiftData. SwiftData's built-in CloudKit mirroring stays off, and
+  the two never run over the same data.
+- Local saves stay durable and roll back cleanly whether or not the network is
+  available; outgoing sync work is recorded in the same transaction as the save.
+- Imports are transactional and idempotent, never echo back as local edits,
+  and replace stale `ModelContext` instances before presentation.
+- Note conflicts preserve every competing revision for review; no silent
+  last-writer-wins on note content. Absence of a record or asset is never
+  treated as deletion; deletions are explicit tombstones.
+- The UUID duplicate-safety and Done-cleanup rules above apply across devices:
+  record names derive from type and UUID, imports apply to every physical
+  replica, divergent replicas block destructive cleanup, and a device runs
+  destructive cleanup only after a completed fetch.
+- Development and Production each have separate stores, engine state, queues
+  and change tokens. Development CloudKit pairs only with development APNs,
+  and Production CloudKit only with production APNs.
+- Models stay CloudKit-compatible: optional or defaulted attributes, no
+  uniqueness constraints, and an explicit list of synced and device-local
+  model types shared by the Mac and iPhone.
+
+Validation before release (each item mapped to a check in the plan):
+
+- the Taha-owned container, verified in CloudKit Console and in installed-app
+  entitlements;
 - deliberate Mac/iPhone scope and model parity;
-- matching Development CloudKit/development APNs and Production
-  CloudKit/production APNs;
+- matching Development/development APNs and Production/production APNs;
 - separate Development and Production stores;
-- CloudKit-compatible models with defaults or optionality and no unsupported
-  uniqueness constraints;
-- remote-notification registration, remote-change and CloudKit-event
-  observation, fresh-context import refresh, and bounded event-driven activity
-  assertions;
+- CloudKit-compatible models;
+- remote-notification registration, sync-engine event observation, fresh-context
+  import refresh, and bounded event-driven activity assertions;
 - Development schema inspection, Production schema deployment, installed-app
   entitlement inspection, and real-device two-way synchronization validation.
 
-Never restore the former owner's bundle identifier, team, or CloudKit container
-as a shortcut. Never add speculative CloudKit/APNs entitlements to make signing
-errors disappear.
+Simulator runs, unit tests, fake-transport tests, and local-only previews are
+not proof of CloudKit, APNs, real-device, TestFlight, or Production behavior.
+Creating the container, signing with Taha's account, registering devices,
+deploying the Production schema, TestFlight, and turning on sync for the
+official app's existing library are Taha's actions or need Taha's explicit go.
+Never delete, reset, or replace user data, or sync a real library for the
+first time, without explicit approval and a backup.
 
 Keep this Development Contract synchronized verbatim between root `AGENTS.md`
-and `claude.md`. A future decision to make iPhone or CloudKit current product
-scope must update both files and include a written activation and validation
-plan.
+and `claude.md`. Changing the iPhone or CloudKit scope, identities, or sync
+approach requires updating both files and the activation plan together.
 <!-- END ATTIC DEVELOPMENT CONTRACT -->
 
 ## Working in this repository
