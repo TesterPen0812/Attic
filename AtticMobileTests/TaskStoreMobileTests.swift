@@ -76,7 +76,7 @@ final class TaskStoreMobileTests: XCTestCase {
             let task = try store.createTask(title: "Kept")
             let note = try store.createNote(title: "Stored", body: "Line 1\nLine 2")
             XCTAssertTrue(unrelated.hasChanges)
-            return [task.id, note.id]
+            return [task.id, note.note.id]
         }
         let reopened = PhoneLibrary(container: try PersistenceController.makeContainer(storeDirectory: root))
         XCTAssertEqual(try reopened.tasks().map(\.id), [ids[0]])
