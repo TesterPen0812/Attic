@@ -23,7 +23,7 @@ final class PanelActivationTests: XCTestCase {
                 activate: { self.events.append("activate") },
                 yield: { app in XCTAssertTrue(app === self.app); self.events.append("yield") },
                 restore: { app in XCTAssertTrue(app === self.app); self.events.append("restore"); return self.allowRestore },
-                terminated: { _ in self.quit }, deactivate: { self.events.append("deactivate") })
+                terminated: { _ in self.quit }, deactivate: { self.active = false; self.events.append("deactivate") })
         }
     }
 
@@ -83,9 +83,9 @@ final class PanelActivationTests: XCTestCase {
         let window = panel()
         try click(window); active(); fixture.events = []
         window.orderOut(nil)
-        XCTAssertEqual(fixture.events, ["yield", "restore"], "cooperative activation: permission before request")
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"], "cooperative activation: permission before request")
         window.orderOut(nil)
-        XCTAssertEqual(fixture.events, ["yield", "restore"], "focus is returned once")
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"], "focus is returned once")
     }
 
     func testVisibleSettingsOrTaskNotePreventsFocusReturn() throws {
@@ -126,8 +126,18 @@ final class PanelActivationTests: XCTestCase {
         window.orderOut(nil)
         XCTAssertTrue(fixture.events.isEmpty, "request is still pending")
         active()
-        XCTAssertEqual(fixture.events, ["yield", "restore"])
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"])
         XCTAssertFalse(window.isVisible)
+    }
+
+    func testAcceptedRestorationRelinquishesActivationBeforeTheOtherAppResponds() throws {
+        let window = panel()
+        try click(window); active(); fixture.events = []
+        // A true return from activate(from:) means accepted, not completed.
+        // The fake destination deliberately never becomes active.
+        window.orderOut(nil)
+        XCTAssertFalse(fixture.active, "a hidden Attic must not retain typing while a permitted handoff is pending")
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"])
     }
 
     func testAnAlreadyActiveAppDoesNotBorrowFocus() throws {

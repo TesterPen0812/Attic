@@ -2693,13 +2693,24 @@ enum AtticBackgroundInput {
                    setTags: unsafeBitCast(setTags, to: SetTags.self))
     }()
 
+    // These request/diagnostic boundaries let tests force an SPI failure
+    // without passing malformed values to WindowServer.
+    static var installTags: (NSWindow, UInt64) -> Int32 = { window, mask in
+        guard let api, window.windowNumber > 0 else { return -1 }
+        var tags = mask
+        return api.setTags(api.connection(), UInt32(window.windowNumber), &tags, 64)
+    }
+    static var logFailure: (Int32) -> Void = { status in
+        NSLog("Attic: background gesture/cursor window policy failed (%d)", status)
+    }
+    static var failureLogged = false
+
     @discardableResult
     static func enable(in window: NSWindow) -> Bool {
-        guard let api, window.windowNumber > 0 else { return false }
         // Set only these bits; CGSSetWindowTags adds them to the existing
         // policy. It does not replace activation, transparency or space tags.
-        var tags: UInt64 = (1 << 42) | (1 << 5)
-        return api.setTags(api.connection(), UInt32(window.windowNumber), &tags, 64) == 0
+        let status = installTags(window, (1 << 42) | (1 << 5))
+        return status == 0
     }
 }
 
