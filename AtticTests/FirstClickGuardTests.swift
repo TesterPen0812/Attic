@@ -293,6 +293,8 @@ final class FirstClickActivationTests: XCTestCase {
                           "Real activation needs an Air window-server click")
         XCTAssertEqual(try String(contentsOfFile: "/tmp/attic-air-screen.lockdir/owner", encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), "zoom-for-good")
+        try XCTSkipUnless(CGPreflightPostEventAccess(),
+                          "The test host lacks input-posting permission; do not request it or answer a prompt")
         let modifiers: CGEventFlags = [.maskCommand, .maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]
         guard CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
               NSEvent.pressedMouseButtons == 0 else { throw XCTSkip("Input already held; leave it alone") }
