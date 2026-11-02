@@ -100,8 +100,8 @@ final class PanelBackgroundInputTests: XCTestCase {
                 try clearPolicy(window)
                 let before = try tags(of: window)
                 XCTAssertTrue(AtticBackgroundInput.enable(in: window))
-                let deadline = Date().addingTimeInterval(2)
-                while try tags(of: window) & required != required, Date() < deadline {
+                let installDeadline = Date().addingTimeInterval(2)
+                while try tags(of: window) & required != required, Date() < installDeadline {
                     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
                 }
                 XCTAssertEqual(try tags(of: window), before | required, "unrelated native tag bits are unchanged")
