@@ -2710,6 +2710,10 @@ enum AtticBackgroundInput {
         // Set only these bits; CGSSetWindowTags adds them to the existing
         // policy. It does not replace activation, transparency or space tags.
         let status = installTags(window, (1 << 42) | (1 << 5))
+        if status != 0, !failureLogged {
+            failureLogged = true
+            logFailure(status)
+        }
         return status == 0
     }
 }

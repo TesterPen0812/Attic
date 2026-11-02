@@ -109,13 +109,16 @@ final class PanelActivation {
         // Cooperative activation requires the current app to yield before
         // the destination requests activation from it. Do not raise all windows.
         system.yield(previous)
-        if !system.restore(previous) { system.deactivate() }
+        _ = system.restore(previous)
+        // Acceptance is not completion. Relinquish our own activation even
+        // if the destination is delayed or exits while accepting the request.
+        system.deactivate()
     }
 
     private func finishMainLease() {
-        let window = activationWindow
+        // End eligibility only. AppKit owns main-window bookkeeping and
+        // sends resignMain on hide/deactivation or another makeMain request.
         activationWindow = nil
-        if window?.isMainWindow == true { window?.resignMain() }
     }
 
     private func clearBorrowedActivation() {
