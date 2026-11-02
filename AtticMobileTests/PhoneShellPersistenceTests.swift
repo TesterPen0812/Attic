@@ -51,4 +51,25 @@ final class PhoneShellPersistenceTests: XCTestCase {
         XCTAssertTrue(try existing.tasks().isEmpty)
         XCTAssertTrue(defaults.bool(forKey: PhoneSampleSeed.markerKey))
     }
+
+    func testCaptureTagCanonicalizationAndLaterCreateWithFailedDraftRetained() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let state = PhoneAppState(container: container)
+        var draft = PhoneCaptureDraft()
+        draft.title = "Saved for later"
+        draft.later = true
+        draft.tags = "#Design, #team #DESIGN"
+        XCTAssertEqual(draft.normalizedTags, ["design", "team"])
+        XCTAssertFalse(state.createTask(" ", status: .backlog, tags: draft.normalizedTags))
+        XCTAssertEqual(draft.title, "Saved for later")
+        XCTAssertEqual(state.tasks.count, 0)
+        XCTAssertTrue(state.createTask(draft.title, status: .backlog, tags: draft.normalizedTags))
+        let stored = try XCTUnwrap(state.tasks.first)
+        XCTAssertEqual(stored.listedStatus, .backlog)
+        XCTAssertNil(stored.dueDay)
+        XCTAssertEqual(stored.tags, ["design", "team"])
+        XCTAssertTrue(state.createNote("Tagged", body: "Writing", tags: draft.normalizedTags))
+        XCTAssertEqual(state.notes.first?.tags, ["design", "team"])
+    }
+
 }

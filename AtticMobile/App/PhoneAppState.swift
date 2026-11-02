@@ -49,13 +49,15 @@ final class PhoneAppState: ObservableObject {
     }
 
     @discardableResult
-    func createTask(_ title: String, priority: TaskPriority = .none, dueDay: DueDay? = nil) -> Bool {
-        change { _ = try library.createTask(title: title, priority: priority, dueDay: dueDay) }
+    func createTask(_ title: String, priority: TaskPriority = .none, dueDay: DueDay? = nil,
+                    status: TaskStatus = .todo, tags: [String] = []) -> Bool {
+        change { _ = try library.createTask(title: title, priority: priority, status: status,
+                                            dueDay: dueDay, tags: tags) }
     }
 
     @discardableResult
-    func createNote(_ title: String, body: String, pinned: Bool = false) -> Bool {
-        change { _ = try library.createNote(title: title, body: body, pinned: pinned) }
+    func createNote(_ title: String, body: String, pinned: Bool = false, tags: [String] = []) -> Bool {
+        change { _ = try library.createNote(title: title, body: body, tags: tags, pinned: pinned) }
     }
 }
 

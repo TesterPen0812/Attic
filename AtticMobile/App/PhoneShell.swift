@@ -12,6 +12,14 @@ enum PhoneTab: String, CaseIterable, Identifiable {
         case .calendar: "calendar"
         }
     }
+    var selectedSymbol: String {
+        switch self {
+        case .home: "house.fill"
+        case .tasks: "checkmark.circle.fill"
+        // SF Symbols has a calendar glyph but no calendar.fill variant.
+        case .calendar: "calendar"
+        }
+    }
 }
 
 enum PhoneRoute: Hashable {
@@ -48,6 +56,8 @@ struct PhoneShell: View {
     @State private var expandedTags: Set<String> = []
     @State private var searchPresented = false
     @State private var capturePresented = false
+    @State private var captureDraft = PhoneCaptureDraft()
+    @State private var captureCommitted = false
     @ScaledMetric(relativeTo: .largeTitle) private var pageTitleSize: CGFloat = 34
 
     init(container: ModelContainer, syntheticCalendar: Bool) {
@@ -70,8 +80,18 @@ struct PhoneShell: View {
                 DispatchQueue.main.async { path.append(route) }
             }
         }
-        .sheet(isPresented: $capturePresented) {
-            PhoneCaptureSheet(state: state)
+        .sheet(isPresented: $capturePresented, onDismiss: {
+            if captureCommitted {
+                captureDraft = PhoneCaptureDraft()
+                captureCommitted = false
+            }
+        }) {
+            PhoneCaptureSheet(state: state, draft: $captureDraft) {
+                // Drive the presentation binding explicitly after a successful
+                // transaction; the draft resets only when the sheet has closed.
+                captureCommitted = true
+                capturePresented = false
+            }
         }
         .alert("Could not save", isPresented: Binding(
             get: { state.errorMessage != nil },
@@ -161,7 +181,7 @@ struct PhoneShell: View {
                         if !path.isEmpty { path.removeAll() }
                         withAnimation(.easeInOut(duration: 0.22)) { tab = option }
                     } label: {
-                        Image(systemName: tab == option ? option.symbol + ".fill" : option.symbol)
+                        Image(systemName: tab == option ? option.selectedSymbol : option.symbol)
                             .font(.system(size: 22))
                             .frame(width: 48, height: 44)
                             .foregroundStyle(tab == option ? Color.accentColor : Color.primary)
@@ -195,7 +215,9 @@ struct PhoneShell: View {
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .padding(.bottom, 5)
-        .background(Color(uiColor: .systemBackground).opacity(0.90))
+        // Keep scroll content from ghosting through the hit targets at the
+        // bottom edge; the capsules themselves retain their native material.
+        .background(Color(uiColor: .systemBackground))
     }
 
     private func pageTitle(_ text: String) -> some View {
@@ -299,10 +321,14 @@ struct PhoneShell: View {
                                     .foregroundStyle(.secondary)
                                 Image(systemName: expandedTags.contains(tag) ? "chevron.up" : "chevron.down")
                                     .foregroundStyle(.tertiary)
-                            }.padding(.horizontal, 20).frame(minHeight: 44)
+                            }
+                            .padding(.horizontal, 20)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("#\(tag)")
+                        .accessibilityValue(expandedTags.contains(tag) ? "Expanded" : "Collapsed")
                         if expandedTags.contains(tag) {
                             ForEach(state.notes.filter { $0.tags.contains(tag) }) { note in
                                 noteRow(note) { path.append(.note(note.id)) }.padding(.leading, 20)
@@ -311,7 +337,7 @@ struct PhoneShell: View {
                     }
                 }
             }
-            .padding(.bottom, 35)
+            .padding(.bottom, 110)
         }
     }
 
@@ -322,7 +348,10 @@ struct PhoneShell: View {
                 Text(title).font(.body).foregroundStyle(.primary)
                 Spacer()
                 Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
-            }.padding(.horizontal, 20).frame(minHeight: 48)
+            }
+            .padding(.horizontal, 20)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 
@@ -385,7 +414,7 @@ struct PhoneShell: View {
                         }
                     }
                 }
-            }.padding(.bottom, 35)
+            }.padding(.bottom, 110)
         }
     }
 
@@ -529,7 +558,7 @@ struct PhoneShell: View {
     private func notesList(tag: String?) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                pageTitle("All notes")
+                pageTitle("All notes").accessibilityIdentifier("phone-all-notes-title")
                 if let tag {
                     Button { path.removeLast() } label: {
                         Label("#" + tag, systemImage: "xmark.circle.fill")
@@ -557,14 +586,14 @@ struct PhoneShell: View {
                     }
                 }
             }
-            .padding(.bottom, 35)
+            .padding(.bottom, 110)
         }
     }
 
     private var canvasesList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                pageTitle("Canvases")
+                pageTitle("Canvases").accessibilityIdentifier("phone-canvases-title")
                 if state.canvases.isEmpty {
                     ContentUnavailableView("No canvases", systemImage: "scribble.variable")
                         .frame(maxWidth: .infinity).padding(.top, 35)
@@ -581,7 +610,7 @@ struct PhoneShell: View {
                         }.buttonStyle(.plain)
                     }
                 }
-            }
+            }.padding(.bottom, 110)
         }
     }
 }
@@ -647,62 +676,106 @@ private struct PhoneSearchSheet: View {
     }
 }
 
+/// The shell owns this value so tapping outside a half-height capture card
+/// preserves the draft for the next presentation. Only a successful create
+/// resets it; a rejected save never throws the entered writing away.
+struct PhoneCaptureDraft {
+    enum Kind: String, CaseIterable { case task = "Task", note = "Note" }
+    var kind: Kind = .task
+    var title = ""
+    var bodyText = ""
+    var priority: TaskPriority = .none
+    var dueEnabled = false
+    var dueDate = Date()
+    var pinned = false
+    var later = false
+    var tags = ""
+
+    var normalizedTags: [String] {
+        AtticTag.normalizedSet(tags.split(whereSeparator: { $0.isWhitespace || $0 == "," })
+            .map(String.init))
+    }
+}
+
 private struct PhoneCaptureSheet: View {
     @ObservedObject var state: PhoneAppState
+    @Binding var draft: PhoneCaptureDraft
+    let onCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var titleFocused: Bool
-    @State private var kind: Kind = .task
-    @State private var title = ""
-    @State private var bodyText = ""
-    @State private var priority: TaskPriority = .none
-    @State private var dueEnabled = false
-    @State private var dueDate = Date()
-    @State private var pinned = false
-    private enum Kind: String, CaseIterable { case task = "Task", note = "Note" }
+    @State private var saveError: String?
 
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Create", selection: $kind) {
-                    ForEach(Kind.allCases, id: \.self) { kind in Text(kind.rawValue).tag(kind) }
+                Picker("Create", selection: $draft.kind) {
+                    ForEach(PhoneCaptureDraft.Kind.allCases, id: \.self) { kind in Text(kind.rawValue).tag(kind) }
                 }.pickerStyle(.segmented)
-                TextField("Title", text: $title).focused($titleFocused)
+                TextField("Title", text: $draft.title).focused($titleFocused)
                     .accessibilityIdentifier("phone-capture-title")
-                if kind == .note {
-                    TextEditor(text: $bodyText).frame(minHeight: 105)
-                    Toggle("Pin", isOn: $pinned)
+                if draft.kind == .note {
+                    TextEditor(text: $draft.bodyText).frame(minHeight: 105)
+                    Toggle("Pin", isOn: $draft.pinned)
                 } else {
-                    Picker("Priority", selection: $priority) {
+                    Picker("Priority", selection: $draft.priority) {
                         ForEach(TaskPriority.allCases) { level in Text(level.title).tag(level) }
                     }
-                    Toggle("Set date", isOn: $dueEnabled)
-                    if dueEnabled { DatePicker("Due", selection: $dueDate, displayedComponents: .date) }
+                    Toggle("Later", isOn: $draft.later)
+                        .onChange(of: draft.later) { _, later in
+                            if later { draft.dueEnabled = false }
+                        }
+                    Toggle("Set date", isOn: $draft.dueEnabled)
+                        .onChange(of: draft.dueEnabled) { _, enabled in
+                            if enabled { draft.later = false }
+                        }
+                    if draft.dueEnabled { DatePicker("Due", selection: $draft.dueDate, displayedComponents: .date) }
                 }
+                TextField("Tags", text: $draft.tags)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
             }
-            .navigationTitle("New \(kind.rawValue.lowercased())")
+            .navigationTitle("New \(draft.kind.rawValue.lowercased())")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Create") {
                         let ok: Bool
-                        switch kind {
+                        switch draft.kind {
                         case .task:
-                            let day = dueEnabled ? DueDay(date: dueDate, calendar: .autoupdatingCurrent) : nil
-                            ok = state.createTask(title, priority: priority, dueDay: day)
+                            let day = draft.dueEnabled ? DueDay(date: draft.dueDate, calendar: .autoupdatingCurrent) : nil
+                            ok = state.createTask(draft.title, priority: draft.priority, dueDay: day,
+                                                  status: draft.later ? .backlog : .todo, tags: draft.normalizedTags)
                         case .note:
-                            ok = state.createNote(title, body: bodyText, pinned: pinned)
+                            ok = state.createNote(draft.title, body: draft.bodyText, pinned: draft.pinned,
+                                                  tags: draft.normalizedTags)
                         }
-                        if ok { dismiss() }
+                        if ok {
+                            titleFocused = false
+                            onCreated()
+                        } else {
+                            // An alert attached to the obscured parent cannot
+                            // reliably surface over this sheet.
+                            saveError = state.errorMessage ?? "The operation could not be completed."
+                            state.errorMessage = nil
+                        }
                     }
                     .fontWeight(.semibold)
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                              (kind == .task || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                              (draft.kind == .task || draft.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                     .accessibilityIdentifier("phone-capture-create")
                 }
             }
         }
         .presentationDetents([.medium, .large])
         .onAppear { titleFocused = true }
+        .alert("Could not save", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "The operation could not be completed.")
+        }
     }
 }

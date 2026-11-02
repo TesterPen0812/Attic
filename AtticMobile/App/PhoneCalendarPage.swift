@@ -124,7 +124,7 @@ struct PhoneCalendarPage: View {
                     }
                 }
             }
-            .padding(.bottom, 35)
+            .padding(.bottom, 110)
         }
         .task(id: taskKey) {
             do {
