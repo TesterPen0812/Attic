@@ -182,7 +182,10 @@ add_swift_sources(project, mobile_ui_tests, 'AtticMobileUITests', 'AtticMobileUI
 shared_mobile_sources = %w[
   Calendar/CalendarEventSource.swift
   Calendar/CalendarEventWriter.swift
+  Calendar/Data/CalendarOwnershipRecord.swift
   Calendar/Data/EventKitCalendarEventSource.swift
+  Calendar/Data/EventKitCalendarEventWriter.swift
+  Calendar/Data/FakeCalendarEventWriteStore.swift
   DesignSystem/Tokens/AtticTagHue.swift
   Draw/DrawPersistentStore.swift
   Draw/DrawRecords.swift

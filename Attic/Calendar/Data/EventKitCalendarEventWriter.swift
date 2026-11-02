@@ -1,6 +1,7 @@
-import AppKit
 import EventKit
 import Foundation
+#if os(macOS)
+import AppKit
 
 /// One queue across engines: the same ownership file must never have two
 /// transactions staged at once. No EventKit object leaves this queue.
@@ -259,6 +260,8 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
         } catch { return .failed }
     }
 }
+
+#endif
 
 /// A complete ownership transaction is synchronous and confined to one owner.
 /// Live instances run ONLY on CalendarEventWriteWorker.queue; injected unit
