@@ -192,7 +192,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
         override func mouseDown(with event: NSEvent) { presses += 1 }
     }
 
-    func testOnlyTheFirstPressRequestsActivationAndStillReachesEverySurface() throws {
+    func testOnlyTheReleasedPressRequestsActivationAndStillReachesEverySurface() throws {
         guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Invisible-host activation spy") }
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
@@ -216,6 +216,7 @@ final class FirstClickActivationRequestTests: XCTestCase {
                 ? PanelIslandWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                 : AtticPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            (window as? AtticPanel)?.surfaceMargin = 12
             defer { window.close() }
             let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
             let target = PressCounter(frame: CGRect(x: 50, y: 50, width: 80, height: 80))
@@ -234,14 +235,17 @@ final class FirstClickActivationRequestTests: XCTestCase {
             try send(.mouseMoved, at: point)
             XCTAssertEqual(requests, 0, "\(surface): hover cannot activate")
             try send(.leftMouseDown, at: point)
-            XCTAssertEqual(requests, 1, "\(surface): activation belongs to the first press")
+            XCTAssertEqual(requests, 0, "\(surface): native appearance must wait for release")
             XCTAssertEqual(target.presses, 1, "\(surface): activation cannot spend the press")
             try send(.leftMouseUp, at: point)
-            XCTAssertEqual(requests, 1, "\(surface): release cannot request activation again")
+            XCTAssertEqual(requests, 1, "\(surface): the release activates exactly once")
             // Empty glass has no first-mouse-refusing subview to install on.
-            try send(.leftMouseDown, at: CGPoint(x: 10, y: 10))
-            try send(.leftMouseUp, at: CGPoint(x: 10, y: 10))
+            try send(.leftMouseDown, at: CGPoint(x: 20, y: 20))
+            try send(.leftMouseUp, at: CGPoint(x: 20, y: 20))
             XCTAssertEqual(requests, 2, "\(surface): empty glass activates too")
+            try send(.leftMouseDown, at: CGPoint(x: 1, y: 1))
+            try send(.leftMouseUp, at: CGPoint(x: 1, y: 1))
+            XCTAssertEqual(requests, 2, "\(surface): clear margins never activate")
             XCTAssertFalse(NSApp.isActive, "the spy must never activate the host")
             XCTAssertFalse(window.isKeyWindow, "the host must never take the keyboard")
         }

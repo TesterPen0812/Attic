@@ -90,6 +90,33 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(hidden)
     }
 
+    func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        for pinned in [false, true] {
+            let rig = try makePanel()
+            XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+            spin(0.8)
+            rig.uiState.isPanelPinned = pinned
+            var result: PanelHideCompletion?
+            let hides = rig.uiState.hideCount
+            _ = rig.controller.requestHide { result = $0 }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            spin(until: { result != nil })
+            XCTAssertEqual(result, .hidden, "activation must not invalidate the accepted hide")
+            XCTAssertFalse(rig.controller.isPanelVisible)
+            XCTAssertEqual(rig.uiState.hideCount, hides + 1)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            spin(0.1)
+            XCTAssertFalse(rig.controller.isPanelVisible, "late activation cannot restore hidden presentation")
+            XCTAssertEqual(rig.uiState.hideCount, hides + 1)
+        }
+    }
+
     // MARK: Agent `show` over the real panel
 
     /// A canvas text editor sets no interaction lock; `show` must still see

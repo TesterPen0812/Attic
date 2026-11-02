@@ -595,6 +595,57 @@ final class DrawInputTests: XCTestCase {
         }
     }
 
+    func testTheCursorResetsOnExitAndWhenTheWindowHidesWithoutPointerMotion() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        rig.board.pointerOverride = point
+        rig.model.setTool(.pen)
+        rig.board.refreshCursor()
+        XCTAssertFalse(NSCursor.current === NSCursor.arrow)
+        // Exit can arrive with the last in-bounds point when a view is clipped.
+        let exit = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseExited, location: point,
+            modifierFlags: [], timestamp: 0, windowNumber: rig.panel.windowNumber,
+            context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+        rig.board.mouseExited(with: exit)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "exit releases the board cursor immediately")
+        rig.board.refreshCursor()
+        XCTAssertFalse(NSCursor.current === NSCursor.arrow)
+        rig.panel.orderOut(nil)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "hiding under a stationary pointer releases the cursor")
+        spin(0.5)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "a queued refresh cannot restore a hidden cursor")
+    }
+
+    func testPenCursorHasSixPointColourAndAnOuterRingOnAnEightPointImage() throws {
+        let colour = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!, components: [1, 0, 0, 1])!
+        let cursor = DrawBoardView.penCursor(colour: colour)
+        XCTAssertEqual(cursor.image.size, CGSize(width: 8, height: 8))
+        XCTAssertEqual(cursor.hotSpot, CGPoint(x: 4, y: 4))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 160, pixelsHigh: 160,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: 20, y: 20)
+        cursor.image.draw(at: .zero, from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let red = try XCTUnwrap(bitmap.colorAt(x: 132, y: 80)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(red.redComponent, 0.95)
+        XCTAssertLessThan(red.greenComponent, 0.1, "2.6 pt from centre is inside the coloured dot")
+        let ring = try XCTUnwrap(bitmap.colorAt(x: 146, y: 80)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(ring.greenComponent, 0.9, "3.3 pt from centre is the outside white ring")
+        XCTAssertGreaterThan(ring.alphaComponent, 0.9)
+    }
+
+    func testPenCursorCacheDistinguishesColourSpacesWithTheSameComponents() {
+        let components: [CGFloat] = [0.7, 0.3, 0.2, 1]
+        let srgb = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!, components: components)!
+        let p3 = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.displayP3)!, components: components)!
+        XCTAssertFalse(DrawBoardView.penCursor(colour: srgb) === DrawBoardView.penCursor(colour: p3))
+    }
+
     func testOffTheBoardTheCursorIsTheNormalOneAndHandlesWin() throws {
         let rig = try makeRig()
         defer { close(rig) }
