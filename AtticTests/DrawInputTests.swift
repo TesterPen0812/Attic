@@ -479,7 +479,7 @@ final class DrawInputTests: XCTestCase {
         }
     }
 
-    func testThePensCursorFollowsItsColourAndSize() throws {
+    func testThePensCursorFollowsItsColourButKeepsItsScreenSize() throws {
         let rig = try makeRig()
         defer { close(rig) }
         rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
@@ -488,13 +488,34 @@ final class DrawInputTests: XCTestCase {
         let medium = NSCursor.current
         rig.model.pickSize(.large, for: .pen)
         spin(0.2)
-        XCTAssertFalse(NSCursor.current === medium, "a new size, a new dot")
+        // 2 Nov zoom-for-good brief: stroke width no longer sizes the cursor.
+        XCTAssertEqual(NSCursor.current.image.size, medium.image.size, "stroke width must not resize the dot")
         assertCursor(.pen, rig, "large")
         let large = NSCursor.current
         rig.model.pickColour(.red)
         spin(0.2)
         XCTAssertFalse(NSCursor.current === large, "a new colour, a new dot [\(rig.board.cursorLog.suffix(5).joined(separator: " | "))]")
         assertCursor(.pen, rig, "red")
+    }
+
+    func testEveryToolCursorHasTheSameImageAndHotSpotAtEveryZoom() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
+        for tool in [DrawTool.pen, .eraser, .text, .shape, .select] {
+            rig.model.setTool(tool)
+            rig.model.setViewport(DrawViewport(zoom: 1), byUser: false)
+            spin(0.2)
+            let reference = try XCTUnwrap(rig.board.cursor(atWindowPoint: rig.board.pointerOverride!))
+            for zoom in [CGFloat(0.1), 0.25, 0.5, 1, 2, 4] {
+                rig.model.setViewport(DrawViewport(zoom: zoom), byUser: false)
+                spin(0.1)
+                let cursor = try XCTUnwrap(rig.board.cursor(atWindowPoint: rig.board.pointerOverride!))
+                XCTAssertEqual(cursor.image.size, reference.image.size, "\(tool) at \(zoom)")
+                XCTAssertEqual(cursor.hotSpot, reference.hotSpot, "\(tool) at \(zoom)")
+                XCTAssertEqual(cursor.image.tiffRepresentation, reference.image.tiffRepresentation, "\(tool) at \(zoom)")
+            }
+        }
     }
 
     func testOffTheBoardTheCursorIsTheNormalOneAndHandlesWin() throws {
