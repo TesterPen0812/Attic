@@ -235,7 +235,20 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     func drawVisibilityChanged() {
         if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
+        if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
+    }
+
+    private func queueInitialKeyboardFocus() {
+        // The shell clears the previous page's responder when switching.
+        // Claim this window's responder after the new page is installed;
+        // this never makes the window key or activates the application.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.model.isShown, !self.isHiddenOrHasHiddenAncestor,
+                  !self.model.isSearching, !self.model.isFiltering, self.model.editing == nil,
+                  let window = self.window, !(window.firstResponder is NSTextView) else { return }
+            window.makeFirstResponder(self)
+        }
     }
 
     func drawLiveChanged() {
@@ -554,6 +567,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
         stateObservers = []
         guard let window else { return }
+        if model.isShown { queueInitialKeyboardFocus() }
         let names: [(Notification.Name, AnyObject?)] = [
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSApplication.didBecomeActiveNotification, nil), (NSApplication.didResignActiveNotification, nil),
