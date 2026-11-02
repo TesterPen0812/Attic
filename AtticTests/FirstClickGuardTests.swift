@@ -182,6 +182,63 @@ final class FirstClickFirstMouseTests: XCTestCase {
     }
 }
 
+/// App activation is distinct from a non-activating panel becoming key.
+/// These opt-in tests exercise the application's real activation state;
+/// the HID/SCK check covers delivery and the resulting glass pixels.
+@MainActor
+final class FirstClickActivationTests: XCTestCase {
+    private final class PressCounter: NSView {
+        var presses = 0
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override func mouseDown(with event: NSEvent) { presses += 1 }
+    }
+
+    func testOnePressActivatesTheAppAndActsOnDockedIslandAndFloatingSurfaces() throws {
+        try requireKeyWindowTests()
+        let previousPolicy = NSApp.activationPolicy()
+        XCTAssertTrue(NSApp.setActivationPolicy(.accessory))
+        defer {
+            NSApp.deactivate()
+            _ = NSApp.setActivationPolicy(previousPolicy)
+        }
+        try FirstClickHarness.withController(self, reduceMotion: true) { harness in
+            let floating = AtticPanel(contentRect: CGRect(x: 200, y: 200, width: 200, height: 200),
+                                      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            floating.isReleasedWhenClosed = false
+            floating.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+            defer { floating.close() }
+            let island = harness.controller.islandWindowsForTesting.island
+            for (name, window) in [("docked", harness.panel as NSWindow), ("island", island), ("floating", floating)] {
+                NSApp.deactivate()
+                harness.spin(0.3)
+                XCTAssertFalse(NSApp.isActive, "\(name): inactive starting state")
+                window.orderFrontRegardless()
+                harness.spin(0.2)
+                XCTAssertFalse(NSApp.isActive, "\(name): showing must not activate the app")
+                let root = try XCTUnwrap(window.contentView)
+                let target = PressCounter(frame: CGRect(x: root.bounds.midX - 10, y: root.bounds.midY - 10,
+                                                        width: 20, height: 20))
+                root.addSubview(target)
+                defer { target.removeFromSuperview() }
+                let location = target.convert(CGPoint(x: 10, y: 10), to: nil)
+                func event(_ type: NSEvent.EventType) throws -> NSEvent {
+                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                }
+                window.sendEvent(try event(.mouseMoved))
+                harness.spin(0.1)
+                XCTAssertFalse(NSApp.isActive, "\(name): pointing must not activate the app")
+                window.sendEvent(try event(.leftMouseDown))
+                window.sendEvent(try event(.leftMouseUp))
+                harness.spin(0.3)
+                XCTAssertEqual(target.presses, 1, "\(name): the first press still acts")
+                XCTAssertTrue(NSApp.isActive, "\(name): one click must activate the app, not only its panel")
+            }
+        }
+    }
+}
+
 /// A panel controller on screen (key-window runs), its island, and the
 /// window server's view of where clicks go.
 @MainActor
