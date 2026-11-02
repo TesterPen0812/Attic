@@ -60,13 +60,13 @@ final class DrawDotsTests: XCTestCase {
                 XCTAssertEqual(tile / 2, grid.step, accuracy: 0.13)
                 // A dot is in the middle of each tile; grid points sit half a
                 // grid step in from the world origin.
-                let dotX = layer.position.x + grid.step / 2
+                let dotX = layer.position.x + tile / 4
                 let worldX = (dotX - viewport.x) / base - 0.5
-                XCTAssertEqual(worldX, worldX.rounded(), accuracy: 0.02, "x off the grid at \(zoom * 100) %")
+                XCTAssertEqual(worldX * base, worldX.rounded() * base, accuracy: 0.15, "x off the grid at \(zoom * 100) %")
                 XCTAssertEqual(Int(worldX.rounded()) % grid.every, 0, "x not a kept grid point at \(zoom * 100) %")
-                let dotY = layer.position.y + grid.step / 2
+                let dotY = layer.position.y + tile / 4
                 let worldY = (size.height - viewport.y - dotY) / base - 0.5
-                XCTAssertEqual(worldY, worldY.rounded(), accuracy: 0.02, "y off the grid at \(zoom * 100) %")
+                XCTAssertEqual(worldY * base, worldY.rounded() * base, accuracy: 0.15, "y off the grid at \(zoom * 100) %")
                 XCTAssertEqual(Int(worldY.rounded()) % grid.every, 0, "y not a kept grid point at \(zoom * 100) %")
             }
         }
@@ -159,10 +159,9 @@ final class DrawDotsTests: XCTestCase {
                                          samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                          bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: rep) else { return 0 }
-        rep.size = image.size
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        image.draw(in: NSRect(origin: .zero, size: image.size))
+        image.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
         NSGraphicsContext.restoreGraphicsState()
         guard let data = rep.bitmapData else { return 0 }
         var alpha = 0.0
