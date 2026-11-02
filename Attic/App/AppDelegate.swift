@@ -20,9 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         }
         #endif
-        #if !ATTIC_LOCAL_ONLY
-        NSApplication.shared.registerForRemoteNotifications()
-        #endif
         AppCoordinator.shared?.start()
         PerformanceSignposts.menuReady()
     }

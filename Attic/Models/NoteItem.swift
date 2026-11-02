@@ -65,10 +65,13 @@ final class NoteItem {
         contentStorage = source.contentStorage
         contentFingerprint = source.contentFingerprint
     }
+    #if os(macOS)
     func installPreparedContent(_ projection: PreparedNoteDocument) {
         contentStorage = projection.content
         contentFingerprint = projection.contentFingerprint
     }
+    #endif
+
     /// 0 historical format (purged once), 1 `attic.note/1`, higher = written by a newer Attic.
     var contentFormat: Int = 0
     /// Derived search and agent text (title, then one line per block).
@@ -98,13 +101,11 @@ final class NoteItem {
         self.body = body
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
-        #if os(macOS)
         let document = NoteDocument(blocks: [.text(title)] + body.components(separatedBy: "\n").map { .text($0) })
         do { self.content = try NoteContentCodec.encode(document) }
         catch { preconditionFailure("Plain-text note encoding failed") }
         self.contentFormat = NoteDocument.currentFormat
         self.plainText = NoteTextExport.plainText(document)
-        #endif
     }
 
     /// The recorded attachment family, or nil when none was recorded or

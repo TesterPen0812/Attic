@@ -417,7 +417,11 @@ extension NoteDocument {
     }
     private func replacingCompatibilityTitle(_ title: String) throws -> NoteDocument {
         guard isWritableByThisBuild, let old = blocks.first, old.kind == .text else {
+            #if os(macOS)
             throw NoteDocumentStoreError.readOnly
+            #else
+            throw NoteContentCodec.EncodingError.invalidStructure
+            #endif
         }
         var candidate = self
         var head = NoteBlock.text(title)

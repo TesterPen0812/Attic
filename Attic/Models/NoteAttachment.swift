@@ -22,8 +22,13 @@ final class NoteAttachment {
     var deletedAt: Date? = nil
     @Attribute(.externalStorage, originalName: "payload") private var payloadStorage: Data? = nil
     var payload: Data? {
-        get { WorkspacePayloadAccess.note("attachment", model: self); return payloadStorage }
-        set { payloadFingerprint = WorkspaceModelFields.digest(newValue); payloadStorage = newValue }
+        get {
+            #if os(macOS)
+            WorkspacePayloadAccess.note("attachment", model: self)
+            #endif
+            return payloadStorage
+        }
+        set { payloadFingerprint = NoteItem.fingerprint(newValue); payloadStorage = newValue }
     }
     var payloadFingerprint: String? = nil
 
