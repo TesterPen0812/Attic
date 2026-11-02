@@ -289,10 +289,19 @@ final class FirstClickActivationTests: XCTestCase {
 
     func testOnePressActivatesTheAppAndActsOnDockedIslandAndFloatingSurfaces() throws {
         try requireKeyWindowTests()
+        let finder = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first)
+        func giveFocusBack() {
+            NSApp.yieldActivation(to: finder)
+            XCTAssertTrue(finder.activate(from: .current, options: []))
+            let deadline = Date().addingTimeInterval(2)
+            while NSRunningApplication.current.isActive, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+        }
         let previousPolicy = NSApp.activationPolicy()
         XCTAssertTrue(NSApp.setActivationPolicy(.accessory))
         defer {
-            NSApp.deactivate()
+            giveFocusBack()
             _ = NSApp.setActivationPolicy(previousPolicy)
         }
         try FirstClickHarness.withController(self, reduceMotion: true) { harness in
@@ -303,18 +312,23 @@ final class FirstClickActivationTests: XCTestCase {
             defer { floating.close() }
             let island = harness.controller.islandWindowsForTesting.island
             for (name, window) in [("docked", harness.panel as NSWindow), ("island", island), ("floating", floating)] {
-                NSApp.deactivate()
+                giveFocusBack()
                 harness.spin(0.3)
                 XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): inactive starting state")
                 window.orderFrontRegardless()
                 harness.spin(0.2)
                 XCTAssertFalse(NSRunningApplication.current.isActive, "\(name): showing must not activate the app")
-                let root = try XCTUnwrap(window.contentView)
+                let content = try XCTUnwrap(window.contentView)
+                // The panel's content container intentionally hit-tests only
+                // its hosting view and overlay layer, not arbitrary siblings.
+                let root = (content as? AtticPanelContentContainer)?.overlayLayer ?? content
                 let target = PressCounter(frame: CGRect(x: root.bounds.midX - 10, y: root.bounds.midY - 10,
                                                         width: 20, height: 20))
                 root.addSubview(target)
                 defer { target.removeFromSuperview() }
                 let location = target.convert(CGPoint(x: 10, y: 10), to: nil)
+                XCTAssertTrue(window.contentView?.superview?.hitTest(location) === target,
+                              "the first press must actually hit the counter")
                 func event(_ type: NSEvent.EventType) throws -> NSEvent {
                     try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
