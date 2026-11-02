@@ -18,6 +18,11 @@ magnification phases. CG timestamps can move backwards between the paired
 scroll and gesture events; preserve callback order and wait until each
 relative deadline rather than sorting the stream.
 
+The scroll slices end before the physical Command key-up. Session replay can
+leave that flag in the combined input state. After replay, the Air driver sends
+an ordinary Command key-up only when Command is the sole held modifier and the
+recording introduced it; its before/after modifier guards remain in force.
+
 Hosted tests retarget the events to their own panel and dispatch in-process;
 they do not prove WindowServer delivery. The separate Air replay check posts
 these recordings at the session event tap. Never post them on the Pro or

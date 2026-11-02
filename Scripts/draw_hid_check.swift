@@ -231,6 +231,17 @@ case "replay", "check":
         event.post(tap: .cgSessionEventTap)
     }
     pause(0.15)
+    // The recorded scroll slice contains Command on every sample, but not
+    // the later physical key-up. Session replay updates combined flags too.
+    // Release only the modifier this stream introduced, with an ordinary
+    // key-up; never fabricate a gesture or clear somebody else's modifiers.
+    if events.contains(where: { $0.flags.contains(.maskCommand) }),
+       CGEventSource.flagsState(.combinedSessionState).intersection(modifierMask) == .maskCommand {
+        let release = CGEvent(keyboardEventSource: nil, virtualKey: 55, keyDown: false)!
+        release.flags = []
+        release.post(tap: .cgSessionEventTap)
+        pause(0.1)
+    }
     if args[1] == "check", let before {
         guard let after = zoom() else { abort("zoom disappeared from accessibility") }
         let increasing = args[2].hasSuffix("out")
