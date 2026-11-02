@@ -216,6 +216,7 @@ struct DrawZoomPill: View {
 struct DrawBoardRepresentable: NSViewRepresentable {
     let model: DrawPageModel
     let clearInsets: NSEdgeInsets
+    @Environment(\.atticDesign) private var design
 
     func makeNSView(context: Context) -> DrawBoardView {
         let view = DrawBoardView(model: model)
@@ -226,6 +227,7 @@ struct DrawBoardRepresentable: NSViewRepresentable {
     func updateNSView(_ view: DrawBoardView, context: Context) {
         model.setBoard(size: view.bounds.size == .zero ? model.boardSize : view.bounds.size, clearInsets: clearInsets)
         view.queueCursorRefresh()
+        view.setDotsDesign(design)
     }
 }
 

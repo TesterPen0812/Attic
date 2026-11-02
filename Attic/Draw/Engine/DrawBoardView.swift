@@ -149,7 +149,6 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        dots = DrawDots()
         layoutLayers()
         requestRaster()
     }
@@ -788,11 +787,24 @@ final class DrawLiveInk {
 /// shifted by the pan modulo a tile, so panning never draws anything.
 @MainActor
 struct DrawDots {
-    private var tiles: [Int: CGColor] = [:]
+    private struct TileKey: Hashable {
+        let bucket: Int
+        let ink: AtticRGBA
+    }
+
+    private struct InkKey: Hashable {
+        let colours: AtticDesignContext.ColourKey?
+        let dark: Bool
+    }
+
+    private var tiles: [TileKey: CGColor] = [:]
+    private static var inks: [InkKey: AtticRGBA] = [:]
     /// The panel's design (surface, mode), from SwiftUI.
     var design: AtticDesignContext?
     /// Tiles drawn so far (a pan draws none).
     private(set) var tilesRendered = 0
+    /// The grid point (world) the pattern is laid from, at a zoom.
+    private var anchor: (zoom: CGFloat, x: CGFloat, y: CGFloat)?
 
     /// The working file's 32 px grid and 1.7 px dots at rgba(0,0,0,0.13).
     static let spacing: CGFloat = 16
@@ -801,40 +813,88 @@ struct DrawDots {
     static let minimumStep: CGFloat = 8
 
     /// The grid on screen at a zoom: the distance between the dots shown,
-    /// and how many grid points that is.
+    /// and how many grid points that is. Zoomed out past 50 %, every second
+    /// dot goes, then every fourth (every eighth at 10 %), so the grid thins
+    /// out rather than crowding or vanishing.
     static func grid(zoom: CGFloat) -> (step: CGFloat, every: Int)? {
-        let step = spacing * zoom
-        return step >= 2 ? (step, 1) : nil
+        guard zoom > 0 else { return nil }
+        var every = 1
+        while spacing * zoom * CGFloat(every) < minimumStep - 0.0001 { every *= 2 }
+        return (spacing * zoom * CGFloat(every), every)
     }
 
-    /// The dot's diameter on screen.
-    static func dotDiameter(zoom: CGFloat) -> CGFloat { 1.7 * zoom / max(0.5, zoom) }
+    /// The dot's diameter on screen: the working file's 1.7 pt at 100 %,
+    /// the same at every zoom.
+    static func dotDiameter(zoom: CGFloat) -> CGFloat { 1.7 }
 
-    /// The dot's ink on the board's surface.
+    /// The dot's ink on the board's surface. Solid (and glass made solid by
+    /// Reduce Transparency) keeps the working file's black, or white, at
+    /// 0.13. Glass and Frosted take the panel's own ink made see-through, as
+    /// the greys on glass do (`TasksPanelDesign.toneInk`), at the alpha
+    /// that keeps, over each desktop the glass is judged on (black, mid grey,
+    /// white), at least the contrast the working file's dot has on the solid
+    /// panel: as readable wherever the panel sits.
     static func ink(design: AtticDesignContext?, dark: Bool) -> AtticRGBA {
-        dark ? .white(alpha) : .black(alpha)
+        let drawn: AtticRGBA = dark ? .white(alpha) : .black(alpha)
+        guard var context = design else { return drawn }
+        context.mode = dark ? .dark : .light
+        let key = InkKey(colours: context.colourKey, dark: dark)
+        if let cached = inks[key] { return cached }
+        let tokens = context.tokens
+        var value = drawn
+        if TasksPanelDesign.seeThrough(tokens) {
+            var solid = context
+            solid.surface = .solid
+            let target = drawn.contrast(on: solid.tokens.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop))
+            let ink = tokens.ink(.heading).withAlpha(1)
+            let needed = AtticSurfaceModel.Desktop.allCases.map { desktop -> Double in
+                let base = tokens.panel.composite(desktop, at: AtticSurfaceModel.contentTop)
+                var low = 0.0, high = 1.0
+                for _ in 0..<30 {
+                    let mid = (low + high) / 2
+                    if ink.withAlpha(mid).contrast(on: base) < target { low = mid } else { high = mid }
+                }
+                return high
+            }
+            value = ink.withAlpha(min(1, needed.max() ?? Double(alpha)))
+        }
+        inks[key] = value
+        return value
     }
 
     mutating func place(in layer: CALayer, viewport: DrawViewport, size: CGSize, dark: Bool) {
         guard let grid = Self.grid(zoom: viewport.zoom), size.width > 0 else { layer.backgroundColor = nil; return }
-        let step = grid.step
-        let bucket = Int((step * 4).rounded())
+        let ink = Self.ink(design: design, dark: dark)
+        let key = TileKey(bucket: Int((grid.step * 4).rounded()), ink: ink)
         let colour: CGColor
-        if let cached = tiles[bucket] {
+        if let cached = tiles[key] {
             colour = cached
         } else {
-            let image = Self.tileImage(step: CGFloat(bucket) / 4, diameter: Self.dotDiameter(zoom: viewport.zoom),
-                                       ink: Self.ink(design: design, dark: dark))
+            let image = Self.tileImage(step: CGFloat(key.bucket) / 4, diameter: Self.dotDiameter(zoom: viewport.zoom), ink: ink)
             colour = NSColor(patternImage: image).cgColor
-            tiles[bucket] = colour
+            tiles[key] = colour
             tilesRendered += 1
         }
-        let tileStep = CGFloat(bucket) / 4
+        let tileStep = CGFloat(key.bucket) / 4
+        // One kept grid point, picked by the board's bottom left (where the
+        // pattern starts) when the zoom changes, carries the pattern; a pan
+        // moves it with the board and wraps the layer by whole tiles, so the
+        // dots near it are grid points.
+        if anchor?.zoom != viewport.zoom {
+            let period = Self.spacing * CGFloat(grid.every)
+            func kept(before edge: CGFloat) -> CGFloat {
+                ((edge - Self.spacing / 2) / period).rounded(.down) * period + Self.spacing / 2
+            }
+            anchor = (viewport.zoom, kept(before: -viewport.x / viewport.zoom), kept(before: (size.height - viewport.y) / viewport.zoom))
+        }
+        guard let anchor else { return }
+        let x = viewport.x + anchor.x * viewport.zoom
+        let y = size.height - viewport.y - anchor.y * viewport.zoom
         func positiveMod(_ a: CGFloat, _ b: CGFloat) -> CGFloat { let r = a.truncatingRemainder(dividingBy: b); return r < 0 ? r + b : r }
         layer.backgroundColor = colour
         layer.bounds = CGRect(x: 0, y: 0, width: size.width + tileStep * 2, height: size.height + tileStep * 2)
-        layer.position = CGPoint(x: positiveMod(viewport.x, tileStep) - tileStep,
-                                 y: positiveMod(size.height - viewport.y, tileStep) - tileStep)
+        layer.position = CGPoint(x: positiveMod(x - tileStep / 2, tileStep) - tileStep,
+                                 y: positiveMod(y - tileStep / 2, tileStep) - tileStep)
     }
 
     /// One tile: a dot in the middle of a `step` square.
@@ -845,6 +905,15 @@ struct DrawDots {
             NSBezierPath(ovalIn: CGRect(x: rect.midX - radius, y: rect.midY - radius, width: radius * 2, height: radius * 2)).fill()
             return true
         }
+    }
+}
+
+extension DrawBoardView {
+    /// The panel's surface and mode for the dots (Glass, Frosted, Solid).
+    func setDotsDesign(_ design: AtticDesignContext) {
+        guard dots.design?.colourKey != design.colourKey else { return }
+        dots.design = design
+        layoutLayers()
     }
 }
 
