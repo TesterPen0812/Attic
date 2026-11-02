@@ -156,10 +156,14 @@ final class O14FirstMouseTests: XCTestCase {
             for x in stride(from: bounds.minX + 4, to: bounds.maxX - 4, by: 6) {
                 for y in stride(from: bounds.minY + 4, to: bounds.maxY - 4, by: 6) {
                     let point = CGPoint(x: x, y: y)
-                    guard let hit = content.hitTest(point) else { continue }
-                    let event = NSEvent.mouseEvent(with: .leftMouseDown, location: content.convert(point, to: nil), modifierFlags: [],
+                    let location = content.convert(point, to: nil)
+                    let event = NSEvent.mouseEvent(with: .leftMouseDown, location: location, modifierFlags: [],
                                                    timestamp: 0, windowNumber: panel.windowNumber, context: nil,
                                                    eventNumber: 0, clickCount: 1, pressure: 1)
+                    // As the window takes a press: its first-press choke
+                    // point, then AppKit's hit test from the frame view.
+                    if let event { AtticFirstPress.prepare(event, in: panel) }
+                    guard let hit = content.superview?.hitTest(location) ?? content.hitTest(point) else { continue }
                     if !hit.acceptsFirstMouse(for: event) { refusing[String(describing: type(of: hit)), default: 0] += 1 }
                 }
             }
@@ -204,6 +208,14 @@ final class O14FirstMouseTests: XCTestCase {
         assertEveryViewAccepts("Calendar")
         try press("calendar-search-button")
         assertEveryViewAccepts("Calendar search")
+
+        // Draw (2 Nov): the board, and its canvas menu open.
+        host.cancelActiveInteraction(reason: .lostWindow)
+        state.selectSection(.canvas)
+        spin(1.5)
+        assertEveryViewAccepts("Draw")
+        try press("draw-title")
+        assertEveryViewAccepts("Draw's canvas menu")
     }
 }
 

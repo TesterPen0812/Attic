@@ -94,7 +94,7 @@ final class FirstClickWindowServerTests: XCTestCase {
             for x in stride(from: frame.minX + 10, to: frame.maxX - 10, by: 20) {
                 for y in stride(from: frame.minY + 10, to: frame.maxY - 10, by: 20) {
                     let number = NSWindow.windowNumber(at: CGPoint(x: x, y: y), belowWindowWithWindowNumber: 0)
-                    guard number != floating.windowNumber else { continue }
+                    guard FirstClickHarness.passesThrough(to: number, past: [floating.windowNumber]) else { continue }
                     let window = NSApp.windows.first { $0.windowNumber == number }
                     missed.append("(\(Int(x - frame.minX)), \(Int(y - frame.minY))) → \(window.map { String(describing: type(of: $0)) } ?? "another app's window")")
                 }
@@ -263,6 +263,18 @@ final class FirstClickHarness {
         return window
     }
 
+    /// Whether the window server's choice at a point, `hit`, lies behind
+    /// the windows meant to take the click there (`expected`): the click
+    /// passed through them. Another app's window in front of them (a
+    /// notification, a screen tool on the test Mac) is not a pass-through.
+    static func passesThrough(to hit: Int, past expected: Set<Int>) -> Bool {
+        guard !expected.contains(hit) else { return false }
+        let order = NSWindow.windowNumbers(options: [.allApplications])?.map(\.intValue) ?? []
+        guard let hitIndex = order.firstIndex(of: hit),
+              let ownIndex = order.firstIndex(where: { expected.contains($0) }) else { return true }
+        return hitIndex > ownIndex
+    }
+
     func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
     func reveal() throws {
@@ -311,7 +323,7 @@ final class FirstClickHarness {
         let ours = Set([panel.windowNumber, windows.island.windowNumber]
             + NSApp.windows.filter { $0 is AtticGlassMenuWindow && $0.isVisible }.map(\.windowNumber))
         let missed = (points + islandPoints).filter {
-            !ours.contains(NSWindow.windowNumber(at: $0, belowWindowWithWindowNumber: 0))
+            Self.passesThrough(to: NSWindow.windowNumber(at: $0, belowWindowWithWindowNumber: 0), past: ours)
         }
         guard let first = missed.first else { return [] }
         return ["\(name): \(missed.count) of \(points.count + islandPoints.count) points, first at \(first)"]
