@@ -206,6 +206,20 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
     }
 
+    func testASpaceChangeDoesNotCancelAnAcceptedHide() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        var hidden = false
+        _ = rig.controller.requestHide { hidden = $0 == .hidden }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        let deadline = Date().addingTimeInterval(3)
+        while !hidden, Date() < deadline { spin(0.02) }
+        XCTAssertTrue(hidden, "Space repair must not supersede the accepted hide")
+        XCTAssertFalse(rig.controller.isPanelVisible)
+    }
+
     /// The monitor reads the rule as it changes: hover off, a key, chosen
     /// displays. Corners that don't answer are not even sampled closely.
     /// Explicit opens show the panel whatever the rule says.
