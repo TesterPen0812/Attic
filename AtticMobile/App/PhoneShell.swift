@@ -89,6 +89,17 @@ struct PhoneShell: View {
             if !isCanvasOpen { dock }
         }
         .background(Color(uiColor: .systemBackground))
+        // A selection belongs to the visible Tasks scope. Never let a hidden
+        // selection mutate tasks from another tab, tag, or refreshed result.
+        .onChange(of: tasksTab) { _, _ in selectedTaskIDs.removeAll() }
+        .onChange(of: selectedTag) { _, _ in selectedTaskIDs.removeAll() }
+        .onChange(of: tab) { _, _ in selectedTaskIDs.removeAll() }
+        .onChange(of: path) { _, newPath in
+            if !newPath.isEmpty { selectedTaskIDs.removeAll() }
+        }
+        .onChange(of: taskGroups.flatMap(\.rows).map(\.id)) { _, visibleIDs in
+            selectedTaskIDs.formIntersection(visibleIDs)
+        }
         .sheet(isPresented: $searchPresented) {
             PhoneSearchWaveSheet(state: state) { route in
                 searchPresented = false
@@ -284,12 +295,21 @@ struct PhoneShell: View {
                             .frame(width: 44, height: 44)
                     }
                     .accessibilityLabel("Close selection")
-                    Text("\(selectedTaskIDs.count) selected")
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("phone-task-selection-count")
+                    HStack(spacing: 5) {
+                        Text("\(selectedTaskIDs.count) selected")
+                            .font(.body.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                            .accessibilityIdentifier("phone-task-selection-count")
+                        if let firstTag = selectedTaskCommonTags.first {
+                            Text("·").foregroundStyle(.secondary)
+                            Text("#" + firstTag)
+                                .foregroundStyle(.purple)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Menu {
                         Menu("Date…", systemImage: "calendar") {
                             Button("Today") { bulkEditTasks(.dueDay(DueDay(date: Date(), calendar: .autoupdatingCurrent))) }
@@ -664,7 +684,12 @@ struct PhoneShell: View {
                     .foregroundStyle((row.dueDay.map { $0 < DueDay(date: Date(), calendar: .autoupdatingCurrent) } ?? false)
                                      ? Color.red : Color.secondary)
                     .frame(width: 28, height: 44)
-            }.accessibilityLabel(row.listedStatus == .done ? "Mark not done" : "Mark done")
+            }
+            .accessibilityLabel(selectedTaskIDs.isEmpty
+                                ? (row.listedStatus == .done ? "Mark not done" : "Mark done")
+                                : (selectedTaskIDs.contains(row.id) ? "Deselect " : "Select ") + row.title)
+            .accessibilityValue(selectedTaskIDs.isEmpty ? "" :
+                                (selectedTaskIDs.contains(row.id) ? "Selected" : "Not selected"))
             Button {
                 if selectedTaskIDs.isEmpty { path.append(.task(row.id)) }
                 else { selectTask(row.id) }
@@ -685,7 +710,11 @@ struct PhoneShell: View {
                 .contentShape(Rectangle())
             }
             .accessibilityLabel(row.title)
-            .accessibilityValue(selectedTaskIDs.contains(row.id) ? "Selected" : "Not selected")
+            .accessibilityValue(selectedTaskIDs.isEmpty ? "" :
+                                (selectedTaskIDs.contains(row.id) ? "Selected" : "Not selected"))
+            .accessibilityAction(named: selectedTaskIDs.contains(row.id) ? "Deselect task" : "Select task") {
+                selectTask(row.id)
+            }
             .highPriorityGesture(LongPressGesture(minimumDuration: 0.42).onEnded { _ in
                 if !selectedTaskIDs.contains(row.id) { selectTask(row.id) }
             })
@@ -694,9 +723,6 @@ struct PhoneShell: View {
         .padding(.horizontal, 18)
         .background(selectedTaskIDs.contains(row.id) ? Color(uiColor: .secondarySystemFill) : Color.clear)
         .contentShape(Rectangle())
-        .accessibilityAction(named: "Select task") {
-            if !selectedTaskIDs.contains(row.id) { selectTask(row.id) }
-        }
     }
 
     private func chip(_ text: String, overdue: Bool = false) -> some View {

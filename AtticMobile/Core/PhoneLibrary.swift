@@ -220,6 +220,10 @@ extension PhoneLibrary {
         case removeTag(String)
     }
 
+    private enum TaskTagDelta {
+        case add(String), remove(String)
+    }
+
     /// The selection bar is a single user command. Every selected task, including
     /// all its physical replicas, must pass validation before any change saves.
     /// An invalid family or failed disk save rolls the whole command back.
@@ -240,10 +244,10 @@ extension PhoneLibrary {
                     return try updateTask(id: id, dueDay: .some(day), in: context)
                 case let .addTag(tag):
                     guard let tag = AtticTag.normalize(tag) else { throw Failure.emptyTask }
-                    return try updateTask(id: id, tags: AtticTag.normalizedSet(shown.tags + [tag]), in: context)
+                    return try updateTask(id: id, tagDelta: .add(tag), in: context)
                 case let .removeTag(tag):
                     guard let tag = AtticTag.normalize(tag) else { throw Failure.emptyTask }
-                    return try updateTask(id: id, tags: shown.tags.filter { $0 != tag }, in: context)
+                    return try updateTask(id: id, tagDelta: .remove(tag), in: context)
                 }
             }
         }
@@ -252,11 +256,12 @@ extension PhoneLibrary {
     private func updateTask(id: UUID,
                             patch: MobileTaskEditPatch = .init(title: nil, priority: nil, status: nil),
                             dueDay: DueDay?? = nil, dueTimeMinutes: Int?? = nil, tags: [String]? = nil,
+                            tagDelta: TaskTagDelta? = nil,
                             in context: ModelContext) throws -> TaskRow {
         let clean = patch.title.map(Self.title)
         if clean?.isEmpty == true { throw Failure.emptyTask }
             let (rows, shown) = try taskFamily(id, in: context)
-            guard clean != nil || patch.priority != nil || patch.status != nil || dueDay != nil || dueTimeMinutes != nil || tags != nil else {
+            guard clean != nil || patch.priority != nil || patch.status != nil || dueDay != nil || dueTimeMinutes != nil || tags != nil || tagDelta != nil else {
                 return TaskRow(shown)
             }
             let stamp = now(), encodedTags = tags.map { AtticTag.encode($0) }
@@ -282,7 +287,15 @@ extension PhoneLibrary {
                 }
                 if let clean, clean != row.title { row.title = clean }
                 if let priority = patch.priority, priority != row.priority { row.priority = priority }
-                if let encodedTags, encodedTags != row.tagsRaw { row.tagsRaw = encodedTags }
+                // Bulk add/remove is a delta on EACH physical replica. A full
+                // replacement based on the displayed winner would silently
+                // erase tags unique to divergent copies of this UUID.
+                let rowTags: String? = switch tagDelta {
+                case let .add(tag): AtticTag.encode(AtticTag.normalizedSet(row.tags + [tag]))
+                case let .remove(tag): AtticTag.encode(row.tags.filter { $0 != tag })
+                case nil: encodedTags
+                }
+                if let rowTags, rowTags != row.tagsRaw { row.tagsRaw = rowTags }
                 if toLater || dueDay != nil {
                     let raw = toLater ? nil : day?.rawValue
                     if row.dueDayRaw != raw { row.dueDayRaw = raw }

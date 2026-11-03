@@ -57,6 +57,51 @@ final class PhoneTaskSelectionTests: XCTestCase {
         XCTAssertEqual(try library.tasks().filter { $0.parentID == nil && $0.listedStatus == .backlog }.count, 2)
     }
 
+    func testBulkTagDeltaPreservesDivergentReplicaTags() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let library = PhoneLibrary(container: container)
+        let root = try library.createTask(title: "Shared identity", tags: ["work"])
+        let other = try library.createTask(title: "Second task", tags: ["personal"])
+        let writer = ModelContext(container)
+        let replica = TaskItem(id: root.id, title: root.title, status: .todo,
+                               createdAt: root.createdAt.addingTimeInterval(-40))
+        replica.tags = ["home"]
+        writer.insert(replica)
+        try writer.save()
+
+        _ = try library.editSelectedTasks(ids: [root.id, other.id], change: .addTag("urgent"))
+        let added = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(Set(added.filter { $0.id == root.id }.map { Set($0.tags) }),
+                       Set([Set(["work", "urgent"]), Set(["home", "urgent"])]))
+        XCTAssertEqual(added.first { $0.id == other.id }?.tags, ["personal", "urgent"])
+
+        _ = try library.editSelectedTasks(ids: [root.id, other.id], change: .removeTag("urgent"))
+        let removed = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(Set(removed.filter { $0.id == root.id }.map { Set($0.tags) }),
+                       Set([Set(["work"]), Set(["home"])]))
+        XCTAssertEqual(removed.first { $0.id == other.id }?.tags, ["personal"])
+    }
+
+    func testInactiveDuplicateRejectsWholeBulkTagMutation() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let library = PhoneLibrary(container: container)
+        let valid = try library.createTask(title: "Must stay unchanged", tags: ["work"])
+        let blocked = try library.createTask(title: "Has inactive replica", tags: ["home"])
+        let writer = ModelContext(container)
+        let inactive = TaskItem(id: blocked.id, title: blocked.title, status: .todo)
+        inactive.deletedAt = Date()
+        writer.insert(inactive)
+        try writer.save()
+
+        XCTAssertThrowsError(try library.editSelectedTasks(ids: [valid.id, blocked.id], change: .addTag("new"))) {
+            XCTAssertEqual($0 as? PhoneLibrary.Failure, .inactiveReplica)
+        }
+        let items = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(items.first { $0.id == valid.id }?.tags, ["work"])
+        XCTAssertEqual(items.filter { $0.id == blocked.id }.count, 2)
+        XCTAssertEqual(items.first { $0.id == blocked.id && $0.deletedAt == nil }?.tags, ["home"])
+    }
+
     func testSaveFailureRollsBackEverySelectedTask() throws {
         enum SaveFailure: Error { case rejected }
         let container = try PersistenceController.makeContainer(inMemory: true)

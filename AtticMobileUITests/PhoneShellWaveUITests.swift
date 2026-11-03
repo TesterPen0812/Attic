@@ -169,6 +169,10 @@ final class PhoneShellWaveUITests: XCTestCase {
         app.buttons["Create"].tap()
         let expanded = app.buttons["phone-priority-expand"]
         XCTAssertTrue(expanded.waitForExistence(timeout: 5))
+        // Quick Capture focuses the title, causing the keyboard to expand the
+        // sheet. Wait for that layout transition before targeting Priority.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 6))
+        XCTAssertTrue(expanded.isHittable)
         expanded.tap()
         XCTAssertTrue(app.buttons["phone-priority-high"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.switches["Later"].exists, "Priority takes the date and Later controls' place")
@@ -239,6 +243,33 @@ final class PhoneShellWaveUITests: XCTestCase {
         XCTAssertTrue(close.waitForExistence(timeout: 5))
         close.tap()
         XCTAssertTrue(app.buttons["Home"].waitForExistence(timeout: 5))
+    }
+
+    func testSelectedTasksAreClearedWhenTheirVisibleScopeChanges() throws {
+        app.buttons["Tasks"].tap()
+        let review = app.buttons["Review the prototype"]
+        XCTAssertTrue(review.waitForExistence(timeout: 6))
+        review.press(forDuration: 0.8)
+        let count = app.staticTexts["phone-task-selection-count"]
+        XCTAssertEqual(count.label, "1 selected")
+        app.buttons["Later"].tap()
+        XCTAssertFalse(count.exists, "Hidden Now tasks must not remain selected in Later")
+        XCTAssertTrue(app.buttons["Home"].exists)
+
+        app.buttons["Now"].tap()
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        review.press(forDuration: 0.8)
+        XCTAssertEqual(count.label, "1 selected")
+        let menu = app.buttons["phone-page-actions-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.tap()
+        let allTags = app.buttons["All tags"]
+        XCTAssertTrue(allTags.waitForExistence(timeout: 5))
+        let otherTag = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#")).firstMatch
+        XCTAssertTrue(otherTag.exists)
+        otherTag.tap()
+        XCTAssertFalse(count.exists, "Changing the tag filter must clear the selection")
+        XCTAssertTrue(app.buttons["Home"].exists)
     }
 
     private func screenshot(_ name: String) {
