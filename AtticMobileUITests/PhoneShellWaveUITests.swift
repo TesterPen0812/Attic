@@ -210,6 +210,37 @@ final class PhoneShellWaveUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Home"].waitForExistence(timeout: 6))
     }
 
+    func testLongPressTaskSelectsSeveralAndReplacesTabCapsule() throws {
+        app.buttons["Tasks"].tap()
+        let first = app.buttons["Review the prototype"]
+        XCTAssertTrue(first.waitForExistence(timeout: 6))
+        first.press(forDuration: 0.8)
+
+        let count = app.staticTexts["phone-task-selection-count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 6), "Holding a task must enter selection mode")
+        XCTAssertEqual(count.label, "1 selected")
+        XCTAssertFalse(app.buttons["Home"].exists, "Selection bar takes the tab capsule's place")
+        XCTAssertTrue(app.buttons["Create"].exists, "Create remains beside the selection bar")
+
+        let second = app.buttons["Check the iPhone layout"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        second.tap()
+        XCTAssertEqual(count.label, "2 selected")
+        XCTAssertEqual(second.value as? String, "Selected")
+        screenshot("Two tasks selected")
+
+        let actions = app.buttons["phone-task-selection-more"]
+        XCTAssertTrue(actions.isHittable)
+        actions.tap()
+        XCTAssertTrue(app.buttons["Move to Later"].waitForExistence(timeout: 5))
+        screenshot("Selected task actions")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.4)).tap()
+        let close = app.buttons["Close selection"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        XCTAssertTrue(app.buttons["Home"].waitForExistence(timeout: 5))
+    }
+
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Phone wave · " + name

@@ -53,6 +53,11 @@ struct PhoneShell: View {
     @State private var path: [PhoneRoute] = []
     @State private var tasksTab: PhoneTasksTab = .now
     @State private var selectedTag: String?
+    @State private var selectedTaskIDs: Set<UUID> = []
+    @State private var taskBulkDatePresented = false
+    @State private var taskBulkTagPresented = false
+    @State private var taskBulkDate = Date()
+    @State private var taskBulkTag = ""
     @State private var collapsed: Set<String> = []
     @State private var expandedTags: Set<String> = []
     @State private var searchPresented = false
@@ -89,6 +94,51 @@ struct PhoneShell: View {
                 searchPresented = false
                 DispatchQueue.main.async { path.append(route) }
             }
+        }
+        .sheet(isPresented: $taskBulkDatePresented) {
+            NavigationStack {
+                DatePicker("Date", selection: $taskBulkDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .padding(16)
+                    .navigationTitle("Move to day")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { taskBulkDatePresented = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Set date") {
+                                bulkEditTasks(.dueDay(DueDay(date: taskBulkDate, calendar: .autoupdatingCurrent)))
+                                taskBulkDatePresented = false
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $taskBulkTagPresented) {
+            NavigationStack {
+                Form {
+                    TextField("Tag", text: $taskBulkTag)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                .navigationTitle("Add a tag")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { taskBulkTagPresented = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Add") {
+                            bulkEditTasks(.addTag(taskBulkTag))
+                            taskBulkTagPresented = false
+                        }
+                        .disabled(AtticTag.normalize(taskBulkTag) == nil)
+                    }
+                }
+            }
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $capturePresented, onDismiss: {
             if captureCommitted {
@@ -226,26 +276,83 @@ struct PhoneShell: View {
 
     private var dock: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 0) {
-                ForEach(PhoneTab.allCases) { option in
-                    Button {
-                        if !path.isEmpty { path.removeAll() }
-                        withAnimation(.easeInOut(duration: 0.22)) { tab = option }
-                    } label: {
-                        Image(systemName: tab == option ? option.selectedSymbol : option.symbol)
-                            .font(.system(size: 22))
-                            .frame(width: 48, height: 44)
-                            .foregroundStyle(tab == option ? Color.accentColor : Color.primary)
-                            .background {
-                                if tab == option { Capsule().fill(Color.accentColor.opacity(0.11)) }
-                            }
+            if tab == .tasks && !selectedTaskIDs.isEmpty && path.isEmpty {
+                HStack(spacing: 0) {
+                    Button { withAnimation { selectedTaskIDs.removeAll() } } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 44, height: 44)
                     }
-                    .accessibilityLabel(option.title)
-                    .accessibilityAddTraits(tab == option ? .isSelected : [])
+                    .accessibilityLabel("Close selection")
+                    Text("\(selectedTaskIDs.count) selected")
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("phone-task-selection-count")
+                    Menu {
+                        Menu("Date…", systemImage: "calendar") {
+                            Button("Today") { bulkEditTasks(.dueDay(DueDay(date: Date(), calendar: .autoupdatingCurrent))) }
+                            Button("Tomorrow") {
+                                let calendar = Calendar.autoupdatingCurrent
+                                let day = calendar.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+                                bulkEditTasks(.dueDay(DueDay(date: day, calendar: calendar)))
+                            }
+                            Button("Choose date…") { taskBulkDate = Date(); taskBulkDatePresented = true }
+                            Button("Clear date") { bulkEditTasks(.dueDay(nil)) }
+                        }
+                        Menu("Tags…", systemImage: "number") {
+                            Button("Add new tag…") { taskBulkTag = ""; taskBulkTagPresented = true }
+                            ForEach(taskTags, id: \.self) { tag in
+                                Button("Add #" + tag) { bulkEditTasks(.addTag(tag)) }
+                            }
+                            if !selectedTaskCommonTags.isEmpty {
+                                Divider()
+                                ForEach(selectedTaskCommonTags, id: \.self) { tag in
+                                    Button("Remove #" + tag) { bulkEditTasks(.removeTag(tag)) }
+                                }
+                            }
+                        }
+                        Menu("Priority…", systemImage: "exclamationmark") {
+                            ForEach(TaskPriority.allCases) { priority in
+                                Button(priority.title) { bulkEditTasks(.priority(priority)) }
+                            }
+                        }
+                        Divider()
+                        Button("Move to Later", systemImage: "clock") { bulkEditTasks(.status(.backlog)) }
+                        Button("Mark as Done", systemImage: "checkmark") { bulkEditTasks(.status(.done)) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 20, weight: .medium))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Selected task actions")
+                    .accessibilityIdentifier("phone-task-selection-more")
                 }
+                .padding(4)
+                .background(.regularMaterial, in: Capsule())
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(PhoneTab.allCases) { option in
+                        Button {
+                            if !path.isEmpty { path.removeAll() }
+                            withAnimation(.easeInOut(duration: 0.22)) { tab = option }
+                        } label: {
+                            Image(systemName: tab == option ? option.selectedSymbol : option.symbol)
+                                .font(.system(size: 22))
+                                .frame(width: 48, height: 44)
+                                .foregroundStyle(tab == option ? Color.accentColor : Color.primary)
+                                .background {
+                                    if tab == option { Capsule().fill(Color.accentColor.opacity(0.11)) }
+                                }
+                        }
+                        .accessibilityLabel(option.title)
+                        .accessibilityAddTraits(tab == option ? .isSelected : [])
+                    }
+                }
+                .padding(4)
+                .background(.regularMaterial, in: Capsule())
             }
-            .padding(4)
-            .background(.regularMaterial, in: Capsule())
             Spacer(minLength: 8)
             HStack(spacing: 0) {
                 if let captureConfirmation {
@@ -259,11 +366,13 @@ struct PhoneShell: View {
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("phone-capture-confirmation")
                 } else {
-                    Button { searchPresented = true } label: {
-                        Image(systemName: "magnifyingglass").font(.system(size: 21))
-                            .frame(width: 44, height: 44)
+                    if selectedTaskIDs.isEmpty || tab != .tasks {
+                        Button { searchPresented = true } label: {
+                            Image(systemName: "magnifyingglass").font(.system(size: 21))
+                                .frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("Search")
                     }
-                    .accessibilityLabel("Search")
                     Button { capturePresented = true } label: {
                         Image(systemName: "plus").font(.system(size: 24, weight: .regular))
                             .frame(width: 44, height: 44)
@@ -425,6 +534,26 @@ struct PhoneShell: View {
         Array(Set(state.tasks.flatMap(\.tags))).sorted()
     }
 
+    private var selectedTaskCommonTags: [String] {
+        let selected = state.tasks.filter { selectedTaskIDs.contains($0.id) }
+        guard let first = selected.first else { return [] }
+        return selected.dropFirst().reduce(Set(first.tags)) { $0.intersection($1.tags) }.sorted()
+    }
+
+    private func selectTask(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if !selectedTaskIDs.insert(id).inserted { selectedTaskIDs.remove(id) }
+        }
+    }
+
+    private func bulkEditTasks(_ change: PhoneLibrary.BulkTaskChange) {
+        let ids = Array(selectedTaskIDs)
+        guard !ids.isEmpty else { return }
+        if state.change({ _ = try state.library.editSelectedTasks(ids: ids, change: change) }) {
+            withAnimation(.easeInOut(duration: 0.18)) { selectedTaskIDs.removeAll() }
+        }
+    }
+
     private var tasks: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -521,9 +650,12 @@ struct PhoneShell: View {
     private func taskRow(_ row: PhoneLibrary.TaskRow) -> some View {
         HStack(spacing: 12) {
             Button {
-                let destination: TaskStatus = row.listedStatus == .done ? .todo : .done
-                state.change { _ = try state.library.updateTask(
-                    id: row.id, patch: .init(title: nil, priority: nil, status: destination)) }
+                if !selectedTaskIDs.isEmpty { selectTask(row.id) }
+                else {
+                    let destination: TaskStatus = row.listedStatus == .done ? .todo : .done
+                    state.change { _ = try state.library.updateTask(
+                        id: row.id, patch: .init(title: nil, priority: nil, status: destination)) }
+                }
             } label: {
                 Image(systemName: row.listedStatus == .done ? "checkmark.circle.fill" :
                         row.listedStatus == .backlog ? "circle.dashed" :
@@ -533,7 +665,10 @@ struct PhoneShell: View {
                                      ? Color.red : Color.secondary)
                     .frame(width: 28, height: 44)
             }.accessibilityLabel(row.listedStatus == .done ? "Mark not done" : "Mark done")
-            Button { path.append(.task(row.id)) } label: {
+            Button {
+                if selectedTaskIDs.isEmpty { path.append(.task(row.id)) }
+                else { selectTask(row.id) }
+            } label: {
                 HStack(spacing: 6) {
                     Text(row.title).font(.body).lineLimit(1)
                         .foregroundStyle(row.listedStatus == .done ? Color.secondary : Color.primary)
@@ -550,19 +685,17 @@ struct PhoneShell: View {
                 .contentShape(Rectangle())
             }
             .accessibilityLabel(row.title)
-            .accessibilityHint("Open task")
+            .accessibilityValue(selectedTaskIDs.contains(row.id) ? "Selected" : "Not selected")
+            .highPriorityGesture(LongPressGesture(minimumDuration: 0.42).onEnded { _ in
+                if !selectedTaskIDs.contains(row.id) { selectTask(row.id) }
+            })
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 18)
-        .contextMenu {
-            Button("Edit", systemImage: "pencil") { path.append(.task(row.id)) }
-            Button("Move to Later", systemImage: "clock") {
-                state.change { _ = try state.library.updateTask(id: row.id, patch: .init(title: nil, priority: nil, status: .backlog)) }
-            }
-            Button(row.listedStatus == .done ? "Move to Now" : "Mark Done", systemImage: "checkmark") {
-                state.change { _ = try state.library.updateTask(id: row.id, patch: .init(title: nil, priority: nil,
-                                                                                         status: row.listedStatus == .done ? .todo : .done)) }
-            }
+        .background(selectedTaskIDs.contains(row.id) ? Color(uiColor: .secondarySystemFill) : Color.clear)
+        .contentShape(Rectangle())
+        .accessibilityAction(named: "Select task") {
+            if !selectedTaskIDs.contains(row.id) { selectTask(row.id) }
         }
     }
 

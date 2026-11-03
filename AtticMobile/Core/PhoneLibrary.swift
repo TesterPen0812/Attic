@@ -206,9 +206,55 @@ extension PhoneLibrary {
     @discardableResult
     func updateTask(id: UUID, patch: MobileTaskEditPatch = .init(title: nil, priority: nil, status: nil),
                     dueDay: DueDay?? = nil, dueTimeMinutes: Int?? = nil, tags: [String]? = nil) throws -> TaskRow {
+        try write { context in
+            try updateTask(id: id, patch: patch, dueDay: dueDay,
+                           dueTimeMinutes: dueTimeMinutes, tags: tags, in: context)
+        }
+    }
+
+    enum BulkTaskChange {
+        case status(TaskStatus)
+        case priority(TaskPriority)
+        case dueDay(DueDay?)
+        case addTag(String)
+        case removeTag(String)
+    }
+
+    /// The selection bar is a single user command. Every selected task, including
+    /// all its physical replicas, must pass validation before any change saves.
+    /// An invalid family or failed disk save rolls the whole command back.
+    @discardableResult
+    func editSelectedTasks(ids: [UUID], change: BulkTaskChange) throws -> [TaskRow] {
+        let distinct = Array(Set(ids)).sorted { $0.uuidString < $1.uuidString }
+        guard !distinct.isEmpty else { return [] }
+        return try write { context in
+            try distinct.map { id in
+                let (_, shown) = try taskFamily(id, in: context)
+                guard shown.parentID == nil else { throw Failure.taskFamily }
+                switch change {
+                case let .status(status):
+                    return try updateTask(id: id, patch: .init(title: nil, priority: nil, status: status), in: context)
+                case let .priority(priority):
+                    return try updateTask(id: id, patch: .init(title: nil, priority: priority, status: nil), in: context)
+                case let .dueDay(day):
+                    return try updateTask(id: id, dueDay: .some(day), in: context)
+                case let .addTag(tag):
+                    guard let tag = AtticTag.normalize(tag) else { throw Failure.emptyTask }
+                    return try updateTask(id: id, tags: AtticTag.normalizedSet(shown.tags + [tag]), in: context)
+                case let .removeTag(tag):
+                    guard let tag = AtticTag.normalize(tag) else { throw Failure.emptyTask }
+                    return try updateTask(id: id, tags: shown.tags.filter { $0 != tag }, in: context)
+                }
+            }
+        }
+    }
+
+    private func updateTask(id: UUID,
+                            patch: MobileTaskEditPatch = .init(title: nil, priority: nil, status: nil),
+                            dueDay: DueDay?? = nil, dueTimeMinutes: Int?? = nil, tags: [String]? = nil,
+                            in context: ModelContext) throws -> TaskRow {
         let clean = patch.title.map(Self.title)
         if clean?.isEmpty == true { throw Failure.emptyTask }
-        return try write { context in
             let (rows, shown) = try taskFamily(id, in: context)
             guard clean != nil || patch.priority != nil || patch.status != nil || dueDay != nil || dueTimeMinutes != nil || tags != nil else {
                 return TaskRow(shown)
@@ -253,7 +299,6 @@ extension PhoneLibrary {
                 }
             }
             return TaskRow(shown)
-        }
     }
 
     private func validateTransition(of row: TaskItem, to status: TaskStatus, in context: ModelContext) throws {
