@@ -63,7 +63,36 @@ private final class HeldCalendarReader: CalendarEventSource, AsyncCalendarEventR
 }
 
 @MainActor
+private final class HeldCalendarSearchSource: CalendarEventSource, AsyncCalendarEventSearching {
+    var accessState: CalendarAccessState = .granted
+    var onChange: (@MainActor () -> Void)?
+    var streams: [AsyncStream<[CalendarEvent]>.Continuation] = []
+    private(set) var terminated = 0
+    func requestAccess() async -> CalendarAccessState { accessState }
+    func events(in interval: DateInterval) -> [CalendarEvent] { [] }
+    func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { XCTFail("streaming search used sync I/O"); return [] }
+    func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
+        AsyncStream { continuation in
+            streams.append(continuation)
+            continuation.onTermination = { [weak self] _ in Task { @MainActor in self?.terminated += 1 } }
+        }
+    }
+    func finish() { streams.forEach { $0.finish() } }
+}
+
+@MainActor
 final class EventKitCalendarEventSourceTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+    }
+    override func tearDown() {
+        AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
+        super.tearDown()
+    }
+
     private func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(3)
         while !predicate(), Date() < deadline { try? await Task.sleep(for: .milliseconds(5)) }
@@ -403,6 +432,58 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertTrue(store.queries.allSatisfy { $0.duration <= fourYears })
         XCTAssertLessThanOrEqual(store.queries.first!.start, window.start)
         XCTAssertGreaterThanOrEqual(store.queries.last!.end, window.end)
+    }
+
+    func testAuditA9StreamingSearchCoversDistantDatesOffMainAndDeduplicates() async {
+        let backend = FakeCalendarEventStore()
+        let interval = DateInterval(start: date(1990, 1, 1), end: date(2060, 1, 1))
+        let boundary = EventKitCalendarEventSource.fetchSpans(for: interval)[0].end
+        backend.stored = [
+            occurrence("old", "Audit old", date(1992, 1, 1), date(1992, 1, 2)),
+            occurrence("cross", "Audit cross", boundary.addingTimeInterval(-3600), boundary.addingTimeInterval(3600)),
+            occurrence("future", "Audit future", date(2052, 1, 1), date(2052, 1, 2))
+        ]
+        backend.onFetch = { XCTAssertFalse(Thread.isMainThread) }
+        let reader = source(backend)
+        var matches: [CalendarEvent] = []
+        for await batch in reader.searchEvents("audit", in: interval, around: date(2026, 10, 29)) { matches += batch }
+        XCTAssertEqual(matches.sortedForAgenda().map(\.title), ["Audit old", "Audit cross", "Audit future"])
+        XCTAssertEqual(Set(matches.map(\.id)).count, 3)
+        XCTAssertTrue(backend.queries.allSatisfy { $0.duration <= 4 * 365 * 86400 })
+    }
+
+    func testAuditA9CanceledPartialSearchRestartsWhenItsQueryReturns() async throws {
+        let backend = HeldCalendarSearchSource()
+        defer { backend.finish() }
+        let model = CalendarPageModel(store: try makeTestStore(), source: backend, now: { self.date(2026, 10, 29) })
+        model.setQuery("audit"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 1 })
+        let event = source(FakeCalendarEventStore()).event(from: occurrence("a", "Audit", date(2026, 10, 29), date(2026, 10, 30)))
+        backend.streams[0].yield([event])
+        await XCTAssertTrueAsync(await waitUntil { model.snapshot.groups.count == 1 })
+        model.setQuery("other"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 2 })
+        model.setQuery("audit"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 3 })
+        backend.streams[2].yield([event])
+        backend.streams[2].finish()
+        await model.waitForEventReadsForTesting()
+        XCTAssertEqual(model.snapshot.groups.count, 1)
+    }
+
+    func testAuditA9ClearingSearchAndReleasingTheModelCancelItsScans() async throws {
+        let backend = HeldCalendarSearchSource()
+        defer { backend.finish() }
+        var model: CalendarPageModel? = CalendarPageModel(store: try makeTestStore(), source: backend)
+        weak var released = model
+        model?.setQuery("audit"); model?.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 1 })
+        model?.setQuery("")
+        await XCTAssertTrueAsync(await waitUntil { backend.terminated == 1 })
+        model?.setQuery("again"); model?.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 2 })
+        model = nil
+        await XCTAssertTrueAsync(await waitUntil { released == nil && backend.terminated == 2 })
     }
 
     // MARK: Factory

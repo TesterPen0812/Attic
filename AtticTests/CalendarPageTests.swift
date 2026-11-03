@@ -232,8 +232,8 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertTrue(CalendarAgenda.searchGroups(query: "  ", clock: clock, matchingEvents: matching, tasks: [open],
                                                   calendar: calendar).isEmpty)
         let window = CalendarAgenda.searchInterval(today: today, calendar: calendar)!
-        XCTAssertEqual(window.start, date(2025, 10, 29))
-        XCTAssertEqual(window.end, date(2028, 10, 29))
+        XCTAssertEqual(window.start, date(1, 1, 1))
+        XCTAssertEqual(window.end, date(10000, 1, 1))
     }
 
     func testAuditA9SearchIncludesEventsOutsideTheOldThreeYearWindow() throws {
