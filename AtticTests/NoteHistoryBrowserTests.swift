@@ -24,6 +24,34 @@ final class NoteHistoryBrowserTests: XCTestCase {
         XCTAssertNil(store.note(withID: session.noteID), store.lastErrorMessage ?? "deleted")
     }
 
+    func testAuditA3FailedDeleteKeepsStandaloneRedoAndRetryRestoresTheRightWriting() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try type("Audit title\nAudit writing")
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let session = try XCTUnwrap(controller.active)
+        _ = session.engine.makeView()
+        XCTAssertTrue(session.engine.perform(.mark(.bold), selection: NSRange(location: 12, length: 5)))
+        XCTAssertTrue(session.engine.undoCommand())
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        let expected = session.engine.document()
+        let redoCount = session.engine.history.redoOps.count
+        XCTAssertGreaterThan(redoCount, 0)
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertEqual(session.engine.document(), expected)
+        XCTAssertEqual(session.engine.history.redoOps.count, redoCount)
+        XCTAssertNil(session.engine.history.workspace, "failed deletion keeps the standalone editor's history")
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertTrue(store.restoreDeleted(noteID: session.noteID))
+        XCTAssertEqual(try store.loadDocument(noteID: session.noteID).get().document, expected)
+    }
+
     func testU17PermanentPurgeReleasesDisplacedVersionRestoreSession() async throws {
         weak var displaced: NoteSession?
         var noteID: UUID!
