@@ -247,7 +247,7 @@ final class UXAuditFixTests: XCTestCase {
         try withHost(CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)),
             taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in })) { host in
             let year = try XCTUnwrap(find("calendar-search-year-1992", in: host))
-            XCTAssertEqual(year.accessibilityValue?() as? String ?? year.accessibilityLabel?(), "1992")
+            XCTAssertEqual(year.accessibilityLabel?(), "1992")
         }
     }
 
