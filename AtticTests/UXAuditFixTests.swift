@@ -245,6 +245,20 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAuditA11FittingCanvasRowsDoNotCreateAScrollViewButOverflowStillScrolls() {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        model.start()
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        withHost(DrawLibraryMenu(model: model.library, maxListHeight: 1000)) { host in
+            XCTAssertTrue(scrolls(host).isEmpty, "a fitting list reveals its already-prepared rows directly")
+        }
+        withHost(DrawLibraryMenu(model: model.library, maxListHeight: 60)) { host in
+            XCTAssertEqual(scrolls(host).count, 1, "overflow retains its native scroll container")
+        }
+    }
+
     func testAuditB7IdenticalHistoryCannotRestoreButDifferentWritingCan() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditB7")))
