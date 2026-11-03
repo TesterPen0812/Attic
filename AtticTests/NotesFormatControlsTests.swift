@@ -1047,6 +1047,9 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks[1].marks.first?.url, url)
         let saved = try NoteContentCodec.encode(engine.document())
         XCTAssertEqual(NoteContentCodec.decode(saved).document?.blocks[1].marks.first?.url, url)
+        controls.cardModel.openLink(url: url)
+        XCTAssertEqual(controls.cardModel.linkText, "Pricing launch", "editing shows the note name")
+        controls.cancelCard()
         engine.history.undo()
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
     }
@@ -1060,6 +1063,8 @@ final class NotesFormatControlsTests: XCTestCase {
         let selection = range("Student pricing", textView)
         textView.setSelectedRange(selection)
         let before = engine.document()
+        let generation = engine.documentEditGeneration
+        let historyCount = engine.history.undoOps.count
         let upper = textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil)
         let selected = textView.firstRect(forCharacterRange: selection, actualRange: nil)
         controls.router.run(.mark(.link), from: .shortcut)
@@ -1070,9 +1075,114 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertGreaterThan(raised.minY, upper.minY + 30, "screen coordinates: earlier text moves up for the list")
         XCTAssertEqual(textView.firstRect(forCharacterRange: selection, actualRange: nil).minY, selected.minY, accuracy: 1)
         XCTAssertEqual(engine.document(), before, "making room is transient layout, never a document edit")
+        XCTAssertEqual(engine.documentEditGeneration, generation)
+        XCTAssertEqual(engine.history.undoOps.count, historyCount)
         controls.cancelCard()
         spin()
         XCTAssertEqual(textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil).minY, upper.minY, accuracy: 1)
+    }
+
+    func testAuditB6ArrowSelectionWebAddressesAndStaleNotes() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        let first = UUID(), second = UUID()
+        var candidates: [NoteLinkCandidate] = [.init(id: first, title: "Pricing research"), .init(id: second, title: "Pricing launch")]
+        engine.linkableNotes = { candidates }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "pricing"
+        settle { controls.cardHasKeyboard }
+        let window = try XCTUnwrap(textView.window)
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{f701}", "\u{f701}", keyCode: 125, [], window: window)))
+        XCTAssertEqual(controls.cardModel.linkSuggestionIndex, 1)
+        XCTAssertFalse(controls.handleKey(keyEvent("\u{f700}", "\u{f700}", keyCode: 126, [.shift], window: window)))
+        XCTAssertEqual(controls.cardModel.linkSuggestionIndex, 1)
+        candidates.removeLast()
+        let unchanged = engine.document()
+        controls.cardModel.submitLink()
+        XCTAssertEqual(engine.document(), unchanged, "a deleted candidate cannot become a stale link")
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [first])
+        controls.cardModel.linkText = "example.com"
+        XCTAssertTrue(controls.cardModel.linkSuggestions.isEmpty)
+        controls.cardModel.submitLink()
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, "https://example.com")
+        var dispatched: UUID?
+        engine.onOpenNoteLink = { dispatched = $0 }
+        engine.openLink(NoteLinkPolicy.noteURL(first))
+        XCTAssertEqual(dispatched, first)
+        var externalCalls = 0
+        XCTAssertFalse(NoteLinkPolicy.open(NoteLinkPolicy.noteURL(first), using: { _ in externalCalls += 1; return true }))
+        XCTAssertEqual(externalCalls, 0)
+        XCTAssertNil(NoteLinkPolicy.url("attic://note/not-a-uuid"))
+        XCTAssertNil(NoteLinkPolicy.url("attic://note/" + first.uuidString + "?redirect=https://example.com"))
+    }
+
+    func testAuditB6TableLinkKeepsItsBarByTheSelectedCell() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let doc = NoteDocument(blocks: [.text("Table links"), .text("Before the table"),
+            .table(NoteTable(texts: [["Heading", "Other"], ["Link me", "Value"]])), .text("After the table")])
+        let (controls, engine, textView) = make(doc)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        spin()
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let table = try XCTUnwrap(attachment.hostedView)
+        table.activate(.init(row: 1, column: 0), caret: .range(NSRange(location: 0, length: 7)))
+        engine.linkableNotes = { [.init(id: UUID(), title: "Research notes")] }
+        XCTAssertTrue(controls.router.run(.mark(.link), from: .shortcut))
+        let before = engine.document()
+        controls.cardModel.linkText = "research"
+        spin()
+        let rects = try XCTUnwrap(engine.cellTextRects(NSRange(location: 0, length: 7), in: table, textView: textView))
+        let bar = controls.barFrame
+        XCTAssertTrue(bar.maxY <= rects.first.minY + 1 || bar.minY >= rects.last.maxY - 1)
+        XCTAssertEqual(engine.document(), before)
+        controls.cancelCard()
+        XCTAssertNil(engine.linkSuggestionGap)
+    }
+
+    func testAuditB6FallbackCardDisplaysEveryOfferedNote() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let document = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(document, topInset: 60)
+        textView.window?.orderFront(nil)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let candidate = UUID()
+        engine.linkableNotes = { [.init(id: candidate, title: "Research notes")] }
+        let start = range("Lead", textView).location
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: first.minY + 20))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        textView.setSelectedRange(NSRange(location: start, length: engine.textStorage.length - start))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertFalse(controls.linkInBar, "fixture opens the fallback card")
+        controls.cardModel.linkText = "research"
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        func contains(_ node: AnyObject, depth: Int = 0) -> Bool {
+            guard depth < 50 else { return false }
+            if (node.accessibilityIdentifier?() ?? nil) == "notes-link-suggestion-\(candidate)" { return true }
+            return ((node.accessibilityChildren?() ?? nil) ?? []).contains { contains($0 as AnyObject, depth: depth + 1) }
+        }
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [candidate])
+        // Outside the panel, dropdowns attach beside contentView in its
+        // common parent (AtticDropdownSpace), so include that overlay layer.
+        let overlay = try XCTUnwrap(textView.window?.contentView?.superview)
+        func nativeContains(_ view: NSView) -> Bool {
+            if !view.isHidden, contains(view) { return true }
+            return view.subviews.contains { nativeContains($0) }
+        }
+        XCTAssertTrue(nativeContains(overlay), "Return never chooses an invisible match")
     }
 
     func testTheLinkCardAddsEditsAndRemovesALink() throws {

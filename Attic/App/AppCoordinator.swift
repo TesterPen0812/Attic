@@ -577,6 +577,7 @@ final class AppCoordinator: ObservableObject {
             recoveryURL: runtime.noteRecoveryURL
         )
         let uiState = PanelUIState(resumeDefaults: isRunningTests ? nil : runtime.makeSettingsDefaults())
+        noteDraft.pages.didFollowNoteLink = { [weak uiState] in uiState?.selectSection(.notes) }
         // The Tasks page's page and views across relaunch (L7), in the
         // identity's own defaults; a UI test starts from none.
         let tasksMemory = runtime.isUnitTestHost ? nil : TasksPageMemory(defaults: runtime.makeSettingsDefaults())

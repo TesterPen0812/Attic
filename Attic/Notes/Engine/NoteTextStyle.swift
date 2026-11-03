@@ -1,8 +1,19 @@
 import AppKit
 
-/// Typed and imported destinations share one explicit web-link policy.
+/// Typed and imported destinations share one explicit web/internal-note policy.
 enum NoteLinkPolicy {
+    static func noteID(_ value: String) -> UUID? {
+        guard let url = URL(string: value), url.scheme?.lowercased() == "attic",
+              url.host == "note", url.query == nil, url.fragment == nil,
+              url.user == nil, url.password == nil, url.port == nil,
+              url.pathComponents.count == 2 else { return nil }
+        return UUID(uuidString: url.lastPathComponent)
+    }
+
+    static func noteURL(_ id: UUID) -> String { "attic://note/" + id.uuidString }
+
     static func url(_ value: String) -> URL? {
+        if noteID(value) != nil { return URL(string: value) }
         guard let url = URL(string: value), let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http", url.host?.isEmpty == false else { return nil }
         return url
@@ -11,7 +22,7 @@ enum NoteLinkPolicy {
     @MainActor
     @discardableResult
     static func open(_ value: String, using opener: (URL) -> Bool = { NSWorkspace.shared.open($0) }) -> Bool {
-        guard let url = url(value) else { return false }
+        guard noteID(value) == nil, let url = url(value) else { return false }
         return opener(url)
     }
 }

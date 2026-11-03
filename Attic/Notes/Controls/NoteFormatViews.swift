@@ -1437,6 +1437,13 @@ struct NoteLinkCardView: View {
         let empty = model.linkText.trimmingCharacters(in: .whitespaces).isEmpty
         let count = hasLink ? 2 : 1
         AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
+            ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, note in
+                AtticDropdownRow(title: note.title, systemName: "note.text", isHighlighted: model.linkSuggestionIndex == index,
+                    onHover: { if $0 { model.linkSuggestionIndex = index } }, position: index + 1, itemCount: model.linkSuggestions.count) {
+                    model.chooseNote(index)
+                }
+                .accessibilityIdentifier("notes-link-suggestion-\(note.id)")
+            }
             AtticDropdownFieldHeader {
                 AtticDropdownField(text: $model.linkText, placeholder: String(localized: "Paste or type a link"), systemName: "link",
                                    focus: $fieldFocused, label: String(localized: "Link address"), identifier: "notes-link-field",
@@ -1557,5 +1564,46 @@ struct NoteSlashHintView: View {
             .fixedSize()
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The existing Link field grows upward into matching note titles (B6).
+struct NoteLinkSuggestionsView: View {
+    @ObservedObject var model: NoteFormatCardModel
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let style = AtticGlassMenuStyle(design: design)
+        VStack(spacing: 0) {
+            ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, candidate in
+                Button { model.chooseNote(index) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "note.text").font(.system(size: 10))
+                        Text(verbatim: candidate.title).font(.system(size: 11)).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Color(nsColor: style.title))
+                    .padding(.horizontal, 9)
+                    .frame(height: 23)
+                    .background {
+                        if model.linkSuggestionIndex == index {
+                            Squircle(cornerRadius: AtticGlassMenuShape.rowRadius).fill(Color(nsColor: style.highlight))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { if $0 { model.linkSuggestionIndex = index } }
+                .accessibilityLabel(Text(verbatim: candidate.title))
+                .accessibilityAddTraits(model.linkSuggestionIndex == index ? .isSelected : [])
+                .accessibilityIdentifier("notes-link-suggestion-\(candidate.id)")
+            }
+        }
+        .padding(.vertical, 1)
+        .background(AtticGlassMenuSurface(style: style))
+        .clipShape(Squircle(cornerRadius: AtticGlassMenuShape.radius))
+        .padding(AtticNoteFormatMetrics.shadowRoom)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Notes"))
     }
 }

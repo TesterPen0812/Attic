@@ -6,6 +6,24 @@ import XCTest
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testAuditB6InternalLinkOpensTheRealTargetWithoutLosingCurrentWriting() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        try type("Source\nUnpublished writing")
+        let source = try XCTUnwrap(controller.active)
+        let target = UUID()
+        _ = try store.createDocumentNote(id: target, document: NoteDocument(blocks: [.text("Target"), .text("Actual target writing")])).get()
+        var navigations = 0
+        controller.didFollowNoteLink = { navigations += 1 }
+        source.engine.openLink(NoteLinkPolicy.noteURL(target))
+        for _ in 0..<100 where controller.active?.noteID != target { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(controller.active?.noteID, target)
+        XCTAssertEqual(controller.active?.engine.document().title, "Target")
+        XCTAssertEqual(navigations, 1)
+        XCTAssertEqual(store.loadDocument(noteID: source.noteID)?.content.document?.blocks.last?.text, "Unpublished writing")
+    }
+
     func testAuditA3DeleteAfterBoldUndoAndHistoryDoesNotConflictWithOwnSave() async throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false

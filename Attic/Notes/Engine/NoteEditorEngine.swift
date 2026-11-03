@@ -219,6 +219,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onSlashSessionChange: ((NoteSlashSession?) -> Void)?
     var onSlashDateRequest: (() -> Void)?
     var onSlashFileRequest: ((NoteSlashFileRequest) -> Void)?
+    var linkSuggestionGap: (offset: Int, height: CGFloat)?
     var linkableNotes: (() -> [NoteLinkCandidate])?
     var onOpenNoteLink: ((UUID) -> Void)?
     var onLinkRequest: ((NoteLinkTarget) -> Void)?
@@ -2201,10 +2202,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.willChange(ranges: [recorded], strings: [replacement as String])
     }
 
+    func openLink(_ value: String) {
+        if let id = NoteLinkPolicy.noteID(value) { onOpenNoteLink?(id) }
+        else { NoteLinkPolicy.open(value) }
+    }
+
     /// Handle even refused destinations so AppKit cannot fall back to its
     /// own scheme dispatcher for imported content or read-only previews.
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-        if let value = (link as? URL)?.absoluteString ?? link as? String { NoteLinkPolicy.open(value) }
+        if let value = (link as? URL)?.absoluteString ?? link as? String { openLink(value) }
         return true
     }
 

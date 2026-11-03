@@ -15,7 +15,7 @@ import QuartzCore
 @MainActor
 final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-        if let value = (link as? URL)?.absoluteString ?? link as? String { NoteLinkPolicy.open(value) }
+        if let value = (link as? URL)?.absoluteString ?? link as? String { table?.engine?.openLink(value) }
         return true
     }
 

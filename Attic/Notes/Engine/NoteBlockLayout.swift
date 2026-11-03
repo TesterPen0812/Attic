@@ -59,6 +59,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     var reviewMark: NoteReviewMark?
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
+    var linkSuggestionRoom: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
     /// `NoteTextStyle.baselineShift`): the quote's bar follows the draft's.
     var boxShift: CGFloat = 0
@@ -95,9 +96,11 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     // line's baseline shift, the bottom one takes it). A callout's sides
     // are its paragraph's indents; its top and bottom padding work as code's.
     override var topMargin: CGFloat {
-        if let mono { return mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
-        if let callout { return callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
-        return super.topMargin
+        let own: CGFloat
+        if let mono { own = mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
+        else if let callout { own = callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
+        else { own = super.topMargin }
+        return own + linkSuggestionRoom
     }
     override var bottomMargin: CGFloat {
         let own: CGFloat
@@ -651,6 +654,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
                            textLayoutFragmentFor location: any NSTextLocation,
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
+        let linkRoom = linkSuggestionGap?.offset == offset ? linkSuggestionGap?.height ?? 0 : 0
         let changed = historyDifferenceOffsets.contains(offset)
         let review = reviewMarkOffsets[offset]
         let inStorage = offset > 0 && offset < textStorage.length
@@ -658,10 +662,11 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
         let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil ? .plain : nil)) else {
+              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil || linkRoom > 0 ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
+        fragment.linkSuggestionRoom = linkRoom
         if let lastLine {
             fragment.lastLine = lastLine
             let kind = pendingParagraphStyle.map { NoteParagraphKind.of(

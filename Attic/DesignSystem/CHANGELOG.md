@@ -1,3 +1,10 @@
+## 2026-11-03 · Link to a note
+
+The existing Link field offers up to four matching note titles, in 23 pt rows.
+The text above moves up by the list's height and returns on dismissal.
+Arrows choose a note; Return or a click links to its stable identity. Editing
+shows its title, and following it opens the note through the existing save route.
+
 ## 2026-11-03 · Reading width and helper removal
 
 Panel width stops at 600 pt, including restored and manually resized widths.
