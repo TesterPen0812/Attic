@@ -274,7 +274,7 @@ struct AtticNoteImageFailure: View {
     var body: some View {
         let m = AtticNoteObjectMetrics.self
         let placement = AtticNoteObjectLayout.placement(of: face, in: size)
-        let shape = Squircle(cornerRadius: AtticRadius.image)
+        let shape = Squircle(cornerRadius: AtticRadius.image, exponent: AtticShape.surfaceExponent)
         ZStack(alignment: .topLeading) {
             shape.fill(design.tokens.recessed.color)
             shape.strokeBorder(design.tokens.contentCardRim.color, lineWidth: AtticHairline.width)

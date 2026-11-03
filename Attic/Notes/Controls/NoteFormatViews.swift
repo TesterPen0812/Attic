@@ -405,7 +405,7 @@ struct NoteHighlightSwatchFace: View {
 
     var body: some View {
         let side = NoteHighlightSwatch.size
-        let shape = Squircle(cornerRadius: 3)
+        let shape = Squircle(cornerRadius: 3, exponent: AtticShape.surfaceExponent)
         let dark = design.tokens.context.mode == .dark
         shape.fill(design.tokens.highlightMarker(colour).color)
             .overlay(shape.strokeBorder(Color(white: dark ? 1 : 0, opacity: 0.18), lineWidth: 0.5))

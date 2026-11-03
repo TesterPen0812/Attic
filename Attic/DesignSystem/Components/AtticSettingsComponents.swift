@@ -444,7 +444,7 @@ struct AtticModeTile: View {
             VStack(spacing: m.labelGap) {
                 AtticModePreview(choice: choice)
                     .frame(width: m.previewSize.width, height: m.previewSize.height)
-                    .clipShape(Squircle(cornerRadius: AtticRadius.small))
+                    .clipShape(Squircle(cornerRadius: AtticRadius.small, exponent: AtticShape.surfaceExponent))
                     .modifier(AtticTileRing(isSelected: isSelected, radius: AtticRadius.small))
                     .atticControlProbe("Mode tile", id: probeID, expectedSize: m.previewSize, radius: AtticRadius.small, expectedRadius: AtticRadius.small)
                 AtticText(
@@ -575,7 +575,7 @@ struct AtticPaletteTile: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = Squircle(cornerRadius: AtticRadius.card)
+        let shape = Squircle(cornerRadius: AtticRadius.card, exponent: AtticShape.surfaceExponent)
         let m = AtticPaletteTileMetrics.self
         Button(action: action) {
             VStack(alignment: .leading, spacing: m.nameGap) {
@@ -606,7 +606,7 @@ struct AtticPaletteTile: View {
     private func swatch(_ mode: AtticDesignContext.Mode) -> some View {
         let m = AtticPaletteTileMetrics.self
         let tokens = AtticDesignContext(mode: mode, palette: palette).tokens
-        let shape = Squircle(cornerRadius: m.swatchRadius)
+        let shape = Squircle(cornerRadius: m.swatchRadius, exponent: AtticShape.surfaceExponent)
         return shape
             .fill(tokens.panel.base.color)
             .overlay(shape.strokeBorder((mode == .light ? m.swatchRimLight : m.swatchRimDark).color, lineWidth: m.swatchRimWidth))

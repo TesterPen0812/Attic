@@ -340,7 +340,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
             // Draft N5 B: rgba(52,168,83,0.1) / rgba(214,52,58,0.07) on a 6 pt
             // squircle, a 1.5 pt bar; the system colours keep dark mode.
             let tint: NSColor = mark == .added ? .systemGreen : .systemRed
-            let path = Squircle(cornerRadius: AtticRadius.small).path(in: band).cgPath
+            let path = Squircle(cornerRadius: AtticRadius.small, exponent: AtticShape.surfaceExponent).path(in: band).cgPath
             context.saveGState()
             context.addPath(path)
             context.clip()
@@ -488,7 +488,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                 let origin = line.typographicBounds.origin
                 let rect = CGRect(x: point.x + origin.x + startX - padding, y: point.y + centreY - T.inlineCodeChipHeight / 2,
                                   width: width + 2 * padding, height: T.inlineCodeChipHeight)
-                context.addPath(Squircle(cornerRadius: T.inlineCodeChipRadius).path(in: rect).cgPath)
+                context.addPath(Squircle(cornerRadius: T.inlineCodeChipRadius, exponent: AtticShape.surfaceExponent).path(in: rect).cgPath)
             }
         }
         context.fillPath()
@@ -514,7 +514,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                           height: slice.height + (joinsAbove ? radius * 2 : 0) + (joinsBelow ? radius * 2 : 0))
         context.saveGState()
         context.clip(to: slice)
-        context.addPath(Squircle(cornerRadius: radius).path(in: full).cgPath)
+        context.addPath(Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: full).cgPath)
         context.setFillColor(ink.cgColor)
         context.fillPath()
         context.restoreGState()
@@ -1474,7 +1474,7 @@ final class NoteDragLiftView: NSView {
         layer = card
         wantsLayer = true
         card.fillColor = tokens.popoverFill.nsColor.cgColor
-        card.path = Squircle(cornerRadius: Self.cornerRadius).path(in: bounds).cgPath
+        card.path = Squircle(cornerRadius: Self.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: bounds).cgPath
         card.lineWidth = AtticHairline.width
         card.strokeColor = tokens.popoverOuterRim.nsColor.cgColor
         card.shadowPath = card.path
@@ -1499,7 +1499,7 @@ final class NoteDragLiftView: NSView {
         guard let card = layer as? CAShapeLayer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        card.path = Squircle(cornerRadius: Self.cornerRadius).path(in: bounds).cgPath
+        card.path = Squircle(cornerRadius: Self.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: bounds).cgPath
         card.shadowPath = card.path
         CATransaction.commit()
     }

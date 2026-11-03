@@ -80,7 +80,7 @@ struct NoteHistoryPage: View {
                         .font(.system(size: 11))
                         .foregroundStyle(design.tokens.color(.body))
                         .padding(8)
-                        .background(.regularMaterial, in: Squircle(cornerRadius: AtticRadius.noteBlock))
+                        .background(.regularMaterial, in: Squircle(cornerRadius: AtticRadius.noteBlock, exponent: AtticShape.surfaceExponent))
                         .accessibilityIdentifier("notes-history-restore-error")
                 }
                 HStack(spacing: 6) {

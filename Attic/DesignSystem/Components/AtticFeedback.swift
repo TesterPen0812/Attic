@@ -325,7 +325,7 @@ struct AtticDropOutline: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = Squircle(cornerRadius: cornerRadius)
+        let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.surfaceExponent)
         ZStack {
             shape.fill(tokens.hover.color)
             shape.strokeBorder(tokens.focusRing.color, lineWidth: AtticRingMetrics.dropOutlineWidth)
@@ -421,7 +421,7 @@ struct AtticThumbnailPlaceholder: View {
         let t = AtticThumbnailTokens.self
         let dark = design.mode == .dark
         let gradient = dark ? t.darkGradient : t.lightGradient
-        Squircle(cornerRadius: AtticRadius.image)
+        Squircle(cornerRadius: AtticRadius.image, exponent: AtticShape.surfaceExponent)
             .fill(LinearGradient(colors: [gradient.top.color, gradient.bottom.color], startPoint: .top, endPoint: .bottom))
             .overlay(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: t.barRadius, style: .continuous)

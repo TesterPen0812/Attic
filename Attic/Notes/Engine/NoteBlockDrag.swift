@@ -152,7 +152,7 @@ final class NoteBlockDragStage: NSView {
         let cardSize = CGSize(width: size.width + padding.width * 2, height: size.height + padding.height * 2)
         card.bounds = CGRect(origin: .zero, size: cardSize)
         card.fillColor = tokens.popoverFill.nsColor.cgColor
-        card.path = Squircle(cornerRadius: NoteDragLiftView.cornerRadius).path(in: card.bounds).cgPath
+        card.path = Squircle(cornerRadius: NoteDragLiftView.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: card.bounds).cgPath
         card.lineWidth = AtticHairline.width
         card.strokeColor = tokens.popoverOuterRim.nsColor.cgColor
         card.shadowColor = tokens.dropdownShadow.nsColor.withAlphaComponent(1).cgColor

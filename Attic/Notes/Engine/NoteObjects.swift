@@ -182,7 +182,7 @@ final class NoteImageAttachment: NoteObjectAttachment {
         // The radius in the image's own units: TextKit scales it to `bounds`.
         let radius = AtticRadius.image * source.size.width / bounds.width
         let image = NSImage(size: source.size, flipped: false) { rect in
-            NSBezierPath(cgPath: Squircle(cornerRadius: radius).path(in: rect).cgPath).addClip()
+            NSBezierPath(cgPath: Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: rect).cgPath).addClip()
             source.draw(in: rect)
             return true
         }

@@ -50,7 +50,7 @@ enum NoteTableDrawing {
         let contrast = design.colourKey.increaseContrast
         let hairline = contrast ? M.contrastHairline : M.hairline
         let bounds = CGRect(origin: .zero, size: layout.size)
-        let card = NSBezierPath(cgPath: Squircle(cornerRadius: M.radius).inset(by: hairline / 2).path(in: bounds).cgPath)
+        let card = NSBezierPath(cgPath: Squircle(cornerRadius: M.radius, exponent: AtticShape.surfaceExponent).inset(by: hairline / 2).path(in: bounds).cgPath)
         NSGraphicsContext.saveGraphicsState()
         card.addClip()
         if table.headerRow, !layout.rowHeights.isEmpty {
@@ -433,7 +433,7 @@ final class NoteTableView: NSView {
     private func updateFade() {
         if cornerMask.frame != scrollView.bounds || cornerMask.path == nil {
             cornerMask.frame = scrollView.bounds
-            cornerMask.path = Squircle(cornerRadius: M.radius).path(in: scrollView.bounds).cgPath
+            cornerMask.path = Squircle(cornerRadius: M.radius, exponent: AtticShape.surfaceExponent).path(in: scrollView.bounds).cgPath
         }
         guard grid.scrolls, bounds.width > 2 * M.edgeFade else {
             cornerMask.mask = nil
@@ -732,7 +732,7 @@ final class NoteTableFrameView: NSView {
         guard let attachment = table?.attachment else { return }
         let design = attachment.engine?.objectDesign ?? attachment.style.design
         let hairline = design.colourKey.increaseContrast ? NoteTableView.M.contrastHairline : NoteTableView.M.hairline
-        let card = NSBezierPath(cgPath: Squircle(cornerRadius: NoteTableView.M.radius).inset(by: hairline / 2).path(in: bounds).cgPath)
+        let card = NSBezierPath(cgPath: Squircle(cornerRadius: NoteTableView.M.radius, exponent: AtticShape.surfaceExponent).inset(by: hairline / 2).path(in: bounds).cgPath)
         AtticColorTokens.resolve(design).tableGrid.nsColor.setStroke()
         card.lineWidth = hairline
         card.stroke()
