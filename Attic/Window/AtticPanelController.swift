@@ -1459,7 +1459,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             slideMotionRun = spring.map {
                 PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, spring: $0, velocity: 0)
             } ?? PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, duration: duration,
-                                    timing: UnitBezier(0.22, 0.8, 0.28, 1))
+                                    timing: collapseProgress >= 1 ? PanelHideMotionTuning.slideHideTiming
+                                        : UnitBezier(0.22, 0.8, 0.28, 1))
         }
         contentContainer?.setCollapseProgress(
             collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,

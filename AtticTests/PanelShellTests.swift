@@ -137,7 +137,9 @@ final class PanelShellTests: XCTestCase {
             XCTAssertGreaterThan(spring.bounce, 0, "\(feel): never a plain fade")
             for (index, record) in used.enumerated() {
                 XCTAssertEqual(record.motion, PanelPageMotion(spring: spring), "\(feel) switch \(index) to \(record.to)")
-                XCTAssertEqual(record.motion.animation, .spring(duration: spring.response, bounce: spring.bounce))
+                // Option A: the spring starts once the old page has faded.
+                XCTAssertEqual(record.motion.animation,
+                               .spring(duration: spring.response, bounce: spring.bounce).delay(PanelPageMotion.fadeInDelay))
                 XCTAssertNotEqual(record.motion.animation, .spring(duration: 0.18, bounce: 0), "the old crossfade")
             }
             // First and repeated visits to Notes are the same switch.

@@ -556,6 +556,8 @@ struct TaskNotePage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, layout.chromeInsets.top)
+        // The top row changes in place on a page switch (option A).
+        .panelChangesInPlace()
     }
 
     private var bottomRow: some View {

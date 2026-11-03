@@ -117,9 +117,9 @@ struct AtticPanelView: View {
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
-                                // current one, so it travels in from there.
-                                restingOffset: pageMotion.travels
-                                    ? page.side(from: currentPage) * panelSize.width : 0,
+                                // current one, so it moves in from there.
+                                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage)),
+                                motion: pageMotion,
                                 // Canvas has single-key tool shortcuts (V, P, E);
                                 // hidden, they must not fire. Tasks has none
                                 // outside its menus, and disabling it would
@@ -670,8 +670,8 @@ struct AtticPanelView: View {
     /// scale: they hold AppKit scroll views, which a SwiftUI scale would
     /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.
     private func pageTransition(_ page: PanelPage) -> AnyTransition {
-        .modifier(active: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: true),
-                  identity: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: false))
+        .modifier(active: PanelPageTravel(page: page, uiState: uiState, isAway: true),
+                  identity: PanelPageTravel(page: page, uiState: uiState, isAway: false))
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their
@@ -743,6 +743,8 @@ struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
     /// Where the page rests while hidden (0 when it is current).
     let restingOffset: CGFloat
+    /// The switch's motion: the page's own fade (option A) reads it.
+    var motion: PanelPageMotion = .instant
     let disablesWhenHidden: Bool
 
     func body(content: Content) -> some View {
@@ -750,7 +752,8 @@ struct PanelPageVisibility: ViewModifier {
             .environment(\.atticPanelPageIsCurrent, isCurrent)
             .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
             .offset(x: isCurrent ? 0 : restingOffset)
-            .opacity(isCurrent ? 1 : 0)
+            // Out at once, in once the old page has gone: never two pages.
+            .animation(motion.opacityAnimation(incoming: isCurrent)) { $0.opacity(isCurrent ? 1 : 0) }
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
             .accessibilityHidden(!isCurrent)
@@ -769,15 +772,16 @@ struct PanelPageVisibility: ViewModifier {
 private struct PanelPageTravel: ViewModifier {
     let page: PanelPage
     let uiState: PanelUIState
-    let width: CGFloat
     let isAway: Bool
 
     func body(content: Content) -> some View {
-        let travel = isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0
+        let motion = uiState.lastPageSwitch?.motion ?? .instant
+        let travel = isAway ? motion.restingOffset(side: uiState.lastPageSwitch?.restingSide(of: page) ?? 0) : 0
         content
             .transformEnvironment(\.panelPageTravel) { $0 += travel }
             .offset(x: travel)
-            .opacity(isAway ? 0 : 1)
+            // Away is the end of a removal and the start of an insertion.
+            .animation(motion.opacityAnimation(incoming: !isAway)) { $0.opacity(isAway ? 0 : 1) }
     }
 }
 

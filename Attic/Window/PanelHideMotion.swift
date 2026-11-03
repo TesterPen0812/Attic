@@ -118,6 +118,12 @@ enum PanelHideMotionTuning {
     /// panel is drawn into the corner); a reveal decelerates like Slide.
     static let hideTiming = UnitBezier(0.42, 0.0, 0.58, 1.0)
     static let showTiming = UnitBezier(0.22, 0.8, 0.28, 1.0)
+    /// Slide's hide ("Motion: page switch and hide", Accepted 2026-11-02):
+    /// `hideTiming`'s slow start, accelerating to the end instead of
+    /// settling, so no small box sits in the corner…
+    static let slideHideTiming = UnitBezier(0.42, 0.0, 1.0, 1.0)
+    /// …and its last part (from this share of the time) fades out.
+    static let slideFadeStart: Double = 0.6
 
     // Genie
     /// The funnel forms over this first share of the progress…

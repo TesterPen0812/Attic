@@ -503,6 +503,8 @@ final class PanelIslandTests: XCTestCase {
             let (layer, animation) = try XCTUnwrap(running, "a timed Slide hide")
             var samples: [(fraction: Double, progress: Double, opacity: Float)] = []
             layer.speed = 0
+            layer.timeOffset = animation.beginTime
+            CATransaction.flush()
             for fraction in [0.25, 0.5, 0.6, 0.8, 0.95] {
                 layer.timeOffset = animation.beginTime + animation.duration * fraction
                 CATransaction.flush()
