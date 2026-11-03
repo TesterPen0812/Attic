@@ -852,12 +852,9 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Active glass (owner, 1 Nov: the island drew inactive glass while Attic was focused)
 
-    /// The island windows draw active exactly while their parent is key,
-    /// whatever their own key state (they are never key).
-    /// Key-window lane only: the invisible host freezes every window's
-    /// `isKeyWindow` override to false.
-    func testTheIslandWindowsDrawActiveExactlyWhileTheirParentIsKey() throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
+    /// Native glass reads its initial appearance before child attachment.
+    /// That answer must already be active, independently of keyboard state.
+    func testTheIslandWindowsRequestActiveGlassEvenBeforeParentAttachment() throws {
         final class ReportsKey: NSWindow { var key = true; override var isKeyWindow: Bool { key } }
         let parent = ReportsKey(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: 0, y: 0, width: 80, height: 80)),
                                 styleMask: [.borderless], backing: .buffered, defer: true)
@@ -866,12 +863,12 @@ final class PanelIslandTests: XCTestCase {
                                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         island.isReleasedWhenClosed = false
         func active() -> Bool? { (island.value(forKey: "_hasActiveAppearance") as? NSNumber)?.boolValue }
-        XCTAssertEqual(active(), false, "alone: inactive")
+        XCTAssertEqual(active(), true, "glass initializes before attachment; it must not cache the inactive appearance")
         parent.addChildWindow(island, ordered: .above)
         defer { parent.removeChildWindow(island) }
         XCTAssertEqual(active(), true, "the parent is key: active")
         parent.key = false
-        XCTAssertEqual(active(), false, "the parent resigned: inactive")
+        XCTAssertEqual(active(), true, "the parent resigned: glass remains active")
         XCTAssertFalse(island.isKeyWindow)
         XCTAssertFalse(island.canBecomeMain)
     }
