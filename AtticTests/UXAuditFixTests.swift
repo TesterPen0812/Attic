@@ -27,6 +27,10 @@ final class UXAuditFixTests: XCTestCase {
     }
 
     func testAuditA8HistoryRestoreClearsTheSharedPlusAt320Points() async throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousAX = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previousAX, forAttribute: enhanced) }
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store,
             journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditHistory")))
@@ -44,6 +48,7 @@ final class UXAuditFixTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { controller.closeHistory(); window.close() }
+        window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(200))
         let restore = try XCTUnwrap(find("notes-history-restore", in: host))

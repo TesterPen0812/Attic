@@ -57,6 +57,10 @@ final class TasksGoingInTests: XCTestCase {
             AtticMotionPreference.systemReduceMotionOverride = nil
             AtticTransparencySeam.systemOverride = nil
         }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousAX = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previousAX, forAttribute: enhanced) }
         let id = try add("Audit original", due: -1)
         let size = CGSize(width: 320, height: 460)
         let window = NSPanel(contentRect: CGRect(origin: .zero, size: size),
@@ -70,6 +74,7 @@ final class TasksGoingInTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertTrue(labels(host).contains { $0.contains("Audit original") }, "the original row is mounted before the edit")
         do {
             self.model.beginEditingTitle(id)
             self.model.editingTitle = "Audit revised"
