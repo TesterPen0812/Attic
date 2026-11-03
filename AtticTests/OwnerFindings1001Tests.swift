@@ -319,6 +319,9 @@ final class O14FirstClickKeyLookTests: XCTestCase {
                                                                in: island.islandFrame)
                         window = island.island
                         screenPoint = CGPoint(x: item.midX, y: item.midY)
+                        // The pointer arrives first and wakes the resting island (D4).
+                        harness.controller.updateMousePassthrough(at: screenPoint)
+                        harness.spin(0.3)
                     }
                     let location = window.convertPoint(fromScreen: screenPoint)
                     func send(_ type: NSEvent.EventType) throws {

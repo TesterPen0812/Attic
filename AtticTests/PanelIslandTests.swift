@@ -883,7 +883,10 @@ final class PanelIslandTests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         try withController { controller, _, panel in
             let windows = controller.islandWindowsForTesting
+            // Awake, the first name shows after 400 ms (D4, L8).
+            windows.model.wake()
             windows.model.point(at: PanelIslandLayout.pages[0])
+            spin(PanelIslandLayout.labelDelay + 0.1)
             let other = makeOtherKeyWindow()
             defer { other.orderOut(nil) }
             @MainActor func assertGlass(active: Bool, _ note: String, file: StaticString = #filePath, line: UInt = #line) throws {
@@ -922,7 +925,10 @@ final class PanelIslandTests: XCTestCase {
             let screen = try XCTUnwrap(controller.currentScreen)
             XCTAssertTrue(controller.show(on: screen, corner: .topRight, makeKey: true))
             spin(until: { panel.isKeyWindow && !((try? self.content(panel).isIslandStandInShown) ?? true) })
+            // The hide settled it: the pointer wakes it again.
+            windows.model.wake()
             windows.model.point(at: PanelIslandLayout.pages[0])
+            spin(PanelIslandLayout.labelDelay + 0.1)
             try assertGlass(active: true, "shown again, key")
             XCTAssertTrue(NSApp.keyWindow === panel, "the keyboard stays with the panel")
 

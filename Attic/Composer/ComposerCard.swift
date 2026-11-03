@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The design's numbers for the "+" card (P4 in `plus-inline-drafts.html`,
@@ -359,11 +360,10 @@ struct ComposerCard: View {
             .lineLimit(1...ComposerMetrics.writingMaxLines)
             .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
             .focused($writingFocused)
-            // Tab and ⇧Tab (backtab) go back to the title, never out of the card.
-            .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")], phases: .down) { _ in
-                moveKeyboard(toWriting: false)
-                return .handled
-            }
+            // Tab and ⇧Tab go back to the title, never out of the card. The
+            // field editor moves to the next key view before `onKeyPress`
+            // hears Tab, so the card catches it first (A4).
+            .background(ComposerTabTrap(active: writingFocused && model.isOpen) { moveKeyboard(toWriting: false) })
             .onKeyPress(.return, phases: .down) { press in
                 if press.modifiers.contains(.shift) && !press.modifiers.contains(.command) { return .ignored }
                 model.submit(openingPage: press.modifiers.contains(.command))
@@ -615,6 +615,49 @@ extension TaskPriority {
         case .medium: String(localized: "Medium")
         case .low: String(localized: "Low")
         case .none: String(localized: "Priority")
+        }
+    }
+}
+
+/// Catches Tab and ⇧Tab in this view's window while `active` (the writing
+/// line has the keyboard), before the field editor moves the keyboard out
+/// of the card.
+private struct ComposerTabTrap: NSViewRepresentable {
+    let active: Bool
+    let onTab: () -> Void
+
+    func makeNSView(context: Context) -> TrapView { TrapView() }
+
+    func updateNSView(_ view: TrapView, context: Context) {
+        view.onTab = onTab
+        view.active = active
+    }
+
+    final class TrapView: NSView {
+        var onTab: () -> Void = {}
+        private var monitor: Any?
+        var active = false {
+            didSet {
+                guard active != oldValue else { return }
+                if active {
+                    monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                        guard let self, event.keyCode == 48, event.window === self.window,
+                              event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
+                        self.onTab()
+                        return nil
+                    }
+                } else if let monitor {
+                    NSEvent.removeMonitor(monitor)
+                    self.monitor = nil
+                }
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { active = false }
         }
     }
 }
