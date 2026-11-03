@@ -43,30 +43,40 @@ final class PanelIslandPositionTests: XCTestCase {
         func eq(_ a: CGFloat, _ b: CGFloat, _ note: String) {
             XCTAssertEqual(a, b, accuracy: 0.01, "\(what): \(note)", file: file, line: line)
         }
-        // The panel: 43 pt in on the screen side, else 12; 12 from the top or bottom.
+        // The panel: 43 pt in on the screen side (and, across the screen's
+        // bottom edge, from the bottom), else 12; 12 from the top or bottom.
+        let screenEnd = spot == .bottomEdge && !top
         let sideInset = right ? visible.maxX - panel.maxX : panel.minX - visible.minX
         eq(sideInset, spot.side == .screen ? 43 : PanelGeometry.screenInset, "the panel's side edge")
-        eq(top ? visible.maxY - panel.maxY : panel.minY - visible.minY, PanelGeometry.screenInset, "the panel's end")
+        eq(top ? visible.maxY - panel.maxY : panel.minY - visible.minY, screenEnd ? 43 : PanelGeometry.screenInset, "the panel's end")
         eq(panel.width, size.width, "the panel keeps its size")
-        // The island: 27 × 99, or 99 × 27 lying flat.
-        eq(island.width, spot.isFlat ? 99 : 27, "width")
+        // The island: 27 × 99, or 115 × 27 lying flat (L12: 25 pt items).
+        eq(island.width, spot.isFlat ? 115 : 27, "width")
         eq(island.height, spot.isFlat ? 27 : 99, "height")
+        // L2: 6 pt from the panel, 10 pt from the screen's edge.
         switch spot.side {
         case .screen:
-            eq(right ? island.minX - panel.maxX : panel.minX - island.maxX, 8, "8 pt from the panel")
-            eq(right ? visible.maxX - island.maxX : island.minX - visible.minX, 8, "8 pt from the edge")
+            eq(right ? island.minX - panel.maxX : panel.minX - island.maxX, 6, "6 pt from the panel")
+            eq(right ? visible.maxX - island.maxX : island.minX - visible.minX, 10, "10 pt from the edge")
         case .open:
-            eq(right ? panel.minX - island.maxX : island.minX - panel.maxX, 8, "8 pt from the panel, on its open side")
+            eq(right ? panel.minX - island.maxX : island.minX - panel.maxX, 6, "6 pt from the panel, on its open side")
         case .across:
             XCTAssertEqual(island.midX, panel.midX, accuracy: 0.5, "\(what): centred, on whole points", file: file, line: line)
             XCTAssertEqual(island.minX, island.minX.rounded(), "\(what)", file: file, line: line)
-            if top { eq(panel.minY - island.maxY, 8, "8 pt below the panel") } else { eq(island.minY - panel.maxY, 8, "8 pt above") }
+            if top || screenEnd { eq(panel.minY - island.maxY, 6, "6 pt below the panel") } else { eq(island.minY - panel.maxY, 6, "6 pt above") }
+            if screenEnd { eq(island.minY - visible.minY, 10, "10 pt above the screen's bottom edge") }
         }
+        // L3: standing at an end, the first item's centre is level with the
+        // top row's controls, 29 pt below the panel's top (mirrored at the
+        // bottom: the last item with the bottom bar).
         if !spot.isFlat {
+            let first = L.itemFrame(0, in: island), last = L.itemFrame(L.pages.count - 1, in: island)
+            let atTop = { eq(panel.maxY - first.midY, 29, "the first item level with the top row") }
+            let atBottom = { eq(last.midY - panel.minY, 29, "the last item level with the bottom bar") }
             switch spot.position {
-            case .cornerEnd: top ? eq(island.maxY, panel.maxY, "at the top") : eq(island.minY, panel.minY, "at the bottom")
+            case .cornerEnd: top ? atTop() : atBottom()
             case .middle: XCTAssertEqual(island.midY, panel.midY, accuracy: 0.5, "\(what): at the middle", file: file, line: line)
-            case .farEnd: top ? eq(island.minY, panel.minY, "at the bottom") : eq(island.maxY, panel.maxY, "at the top")
+            case .farEnd: top ? atBottom() : atTop()
             }
         }
         XCTAssertTrue(visible.contains(island), "\(what): on screen", file: file, line: line)
@@ -83,7 +93,8 @@ final class PanelIslandPositionTests: XCTestCase {
         let items = L.pages.indices.map { L.itemFrame($0, in: island) }
         for (index, item) in items.enumerated() {
             XCTAssertTrue(island.contains(item), "\(what): item \(index) in the capsule", file: file, line: line)
-            eq(item.width, 21, "item size")
+            eq(item.width, spot.isFlat ? 25 : 21, "item size")
+            eq(item.height, 21, "item size")
             if index > 0 {
                 if spot.isFlat { eq(item.minX - items[index - 1].maxX, 3, "left to right") }
                 else { eq(items[index - 1].minY - item.maxY, 3, "top to bottom") }
@@ -100,12 +111,12 @@ final class PanelIslandPositionTests: XCTestCase {
             XCTAssertGreaterThan(panel.midX, island.midX, "\(what): the panel is right", file: file, line: line)
             eq(label.minX - island.maxX, 6, "the label, right")
         case .above:
-            XCTAssertTrue(spot.isFlat && top, "\(what)", file: file, line: line)
+            XCTAssertTrue(spot.isFlat && (top || screenEnd), "\(what)", file: file, line: line)
             eq(label.minY - island.maxY, 6, "the label, above")
             eq(label.midX, island.midX, "the labels over their items")
             XCTAssertTrue(label.intersects(panel), "\(what): over the panel", file: file, line: line)
         case .below:
-            XCTAssertTrue(spot.isFlat && !top, "\(what)", file: file, line: line)
+            XCTAssertTrue(spot.isFlat && !top && !screenEnd, "\(what)", file: file, line: line)
             eq(island.minY - label.maxY, 6, "the label, below")
             eq(label.midX, island.midX, "the labels over their items")
             XCTAssertTrue(label.intersects(panel), "\(what): over the panel", file: file, line: line)
@@ -114,7 +125,7 @@ final class PanelIslandPositionTests: XCTestCase {
         let area = L.panelArea(in: visible, corner: corner, spot: spot)
         let largest = PanelGeometry.workAreaPlacement(preferredSize: CGSize(width: 9999, height: 9999), in: area, corner: corner).frame
         let farthest = L.islandFrame(panelFrame: largest, corner: corner, spot: spot)
-        XCTAssertTrue(visible.insetBy(dx: 7.99, dy: 7.99).contains(farthest),
+        XCTAssertTrue(visible.insetBy(dx: 9.99, dy: 9.99).contains(farthest),
                       "\(what): the largest panel keeps the island 8 pt on screen (\(farthest) in \(visible))", file: file, line: line)
         // They hide into the corner of the two together nearest the screen corner.
         let anchor = L.collapseAnchor(panelFrame: panel, corner: corner, spot: spot)
@@ -128,7 +139,19 @@ final class PanelIslandPositionTests: XCTestCase {
     /// bottom corners.
     func testTheSpotsMirrorWithTheCorner() {
         let visible = CGRect(x: 0, y: 0, width: 1440, height: 875)
-        for spot in PanelIslandSpot.allCases {
+        // The screen's bottom edge is the one spot that does not mirror: in
+        // the top corners it is "across the open end".
+        for corner in [ScreenCorner.topRight, .topLeft] {
+            XCTAssertEqual(placed(in: visible, corner: corner, spot: .bottomEdge).island,
+                           placed(in: visible, corner: corner, spot: .acrossOpenEnd).island)
+            XCTAssertEqual(PanelIslandSpot.bottomEdge.shown(in: corner), .acrossOpenEnd)
+            XCTAssertEqual(PanelIslandSpot.spots(in: corner).count, 7)
+        }
+        XCTAssertEqual(PanelIslandSpot.spots(in: .bottomLeft).count, 8)
+        XCTAssertEqual(placed(in: visible, corner: .bottomLeft, spot: .bottomEdge).island,
+                       { var r = placed(in: visible, corner: .bottomRight, spot: .bottomEdge).island
+                         r.origin.x = visible.maxX - r.maxX + visible.minX; return r }(), "left and right mirror")
+        for spot in PanelIslandSpot.allCases where spot != .bottomEdge {
             let tr = placed(in: visible, corner: .topRight, spot: spot)
             for corner in ScreenCorner.allCases {
                 let other = placed(in: visible, corner: corner, spot: spot)
@@ -151,16 +174,20 @@ final class PanelIslandPositionTests: XCTestCase {
         let suite = "PanelIslandPosition.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .screenSideCornerEnd, "today's place")
+        // "The bottom default", reading (a): the panel's bottom edge.
+        XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .bottomEdge, "the new default")
+        XCTAssertEqual(PanelIslandSpot.defaultSpot, .bottomEdge)
         let settings = AppSettings(defaults: defaults)
         settings.islandSpot = .openSideMiddle
         XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .openSideMiddle, "kept")
         settings.corner = .bottomLeft
         XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .openSideMiddle, "a corner change keeps the spot")
         defaults.set("leftish", forKey: "panelIslandSpot")
-        XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .screenSideCornerEnd, "an unknown value is today's place")
+        XCTAssertEqual(AppSettings(defaults: defaults).islandSpot, .bottomEdge, "an unknown value is the default")
         XCTAssertEqual(PanelIslandSpot.openSideMiddle.title, "Open side, middle")
-        XCTAssertEqual(Set(PanelIslandSpot.allCases.map(\.title)).count, 7)
+        XCTAssertEqual(PanelIslandSpot.bottomEdge.title, "Across the screen's bottom edge")
+        XCTAssertEqual(PanelIslandSpot.bottomEdge.title(in: .topRight), PanelIslandSpot.acrossOpenEnd.title)
+        XCTAssertEqual(Set(PanelIslandSpot.allCases.map(\.title)).count, 8)
     }
 
     // MARK: In the app
@@ -479,8 +506,9 @@ final class PanelIslandPositionTests: XCTestCase {
             let right = L.isOnRight(corner), top = L.isTop(corner)
             XCTAssertEqual(right ? panel.maxX > bounds.midX : panel.minX < bounds.midX, true, "\(corner)")
             XCTAssertEqual(top ? panel.minY < bounds.midY : panel.maxY > bounds.midY, true, "\(corner): top-left origin")
-            let hits = PanelIslandSpot.allCases.map { D.hitFrame($0, corner: corner) }
-            for (index, spot) in PanelIslandSpot.allCases.enumerated() {
+            let spots = PanelIslandSpot.spots(in: corner)
+            let hits = spots.map { D.hitFrame($0, corner: corner) }
+            for (index, spot) in spots.enumerated() {
                 let frame = D.spotFrame(spot, corner: corner)
                 XCTAssertTrue(bounds.contains(hits[index]), "\(corner) \(spot): in the diagram")
                 XCTAssertFalse(frame.intersects(panel), "\(corner) \(spot): beside the panel")
@@ -493,7 +521,8 @@ final class PanelIslandPositionTests: XCTestCase {
                 case .open: XCTAssertEqual(right ? frame.maxX < panel.minX : frame.minX > panel.maxX, true, "\(corner) \(spot)")
                 case .across:
                     XCTAssertEqual(frame.midX, panel.midX, accuracy: 0.01)
-                    XCTAssertEqual(top ? frame.minY > panel.maxY : frame.maxY < panel.minY, true, "\(corner) \(spot)")
+                    let below = top || spot == .bottomEdge
+                    XCTAssertEqual(below ? frame.minY > panel.maxY : frame.maxY < panel.minY, true, "\(corner) \(spot)")
                 }
             }
         }
@@ -526,7 +555,7 @@ final class PanelIslandPositionTests: XCTestCase {
                     }
                 }
             }
-            XCTAssertEqual(reached.count, 7, "\(corner)")
+            XCTAssertEqual(reached, Set(PanelIslandSpot.spots(in: corner)), "\(corner)")
         }
     }
 
