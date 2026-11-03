@@ -901,6 +901,27 @@ final class PanelIslandTests: XCTestCase {
     }
 
     /// Native glass stays active as keyboard focus and app activation change.
+    func testTheColdNonKeyIslandActuallyDrawsActiveGlassBeforeAnyClick() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "native glass layer check on the Air")
+        NSApp.deactivate()
+        spin(0.2)
+        try withController(configure: { $0.appearance = .light; $0.panelSurfaceStyle = .glass }) { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            state.island.wake()
+            state.island.point(at: .tasks)
+            spin(PanelIslandLayout.labelDelay + 0.4)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertTrue(panel._hasActiveAppearance())
+            let own = glassStates(in: try XCTUnwrap(panel.contentView))
+            let island = glassStates(in: try XCTUnwrap(windows.island.contentView))
+            let label = glassStates(in: try XCTUnwrap(windows.label.contentView))
+            print("COLD_GLASS own=\(own) island=\(island) label=\(label)")
+            XCTAssertTrue(own.contains(true))
+            XCTAssertEqual(Set(island), [true], "actual native glass, before a key transition, not just the window's getter")
+            XCTAssertEqual(Set(label), [true])
+        }
+    }
+
     func testTheIslandsGlassStaysActiveWithAndWithoutThePanelsKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         try withController { controller, _, panel in
