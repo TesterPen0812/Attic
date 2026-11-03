@@ -494,6 +494,13 @@ struct AtticPanelView: View {
 
     private var storeObservedPanel: some View {
         surfacedPanel
+            #if DEBUG
+            // The capture bench (`ATTIC_PAGE_BENCH`): opens or folds the "+" card.
+            .onReceive(NotificationCenter.default.publisher(for: .atticBenchToggleComposer)) { _ in
+                guard let model = composerState.model else { return }
+                if model.isOpen { model.close() } else { model.open(on: .tasks(.now)) }
+            }
+            #endif
             .onChange(of: uiState.selectedSection) { _, _ in
                 composerState.model?.close()
                 syncBottomControlsHeight()
@@ -983,3 +990,10 @@ extension AtticPanelView {
         }
     }
 }
+
+#if DEBUG
+extension Notification.Name {
+    /// The capture bench: open or fold the "+" card.
+    static let atticBenchToggleComposer = Notification.Name("AtticBenchToggleComposer")
+}
+#endif

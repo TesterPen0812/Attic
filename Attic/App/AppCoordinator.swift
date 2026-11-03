@@ -406,6 +406,7 @@ final class AppCoordinator: ObservableObject {
     #if DEBUG
     private var hideMotionBench: PanelHideMotionBench?
     private var pageSwitchBench: (any DispatchSourceSignal)?
+    private var benchSources: [any DispatchSourceSignal] = []
     #endif
     private var performancePhaseIndex = 0
 
@@ -963,7 +964,34 @@ final class AppCoordinator: ObservableObject {
                     }
                 }
                 source.resume()
+                // SIGWINCH wakes the island and lets it settle as when the
+                // pointer leaves 1.2 s later; SIGPROF opens or folds the card.
+                signal(SIGWINCH, SIG_IGN)
+                let island = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
+                island.setEventHandler { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let model = self?.uiState.island else { return }
+                        print(String(format: "ATTIC_ISLAND_WAKE %.4f", CACurrentMediaTime()))
+                        model.wake()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            MainActor.assumeIsolated {
+                                model.track(pointer: CGPoint(x: -100_000, y: -100_000), rest: .zero, awake: .zero)
+                            }
+                        }
+                    }
+                }
+                island.resume()
+                signal(SIGPROF, SIG_IGN)
+                let card = DispatchSource.makeSignalSource(signal: SIGPROF, queue: .main)
+                card.setEventHandler {
+                    MainActor.assumeIsolated {
+                        print(String(format: "ATTIC_CARD_TOGGLE %.4f", CACurrentMediaTime()))
+                        NotificationCenter.default.post(name: .atticBenchToggleComposer, object: nil)
+                    }
+                }
+                card.resume()
                 pageSwitchBench = source
+                benchSources = [island, card]
             }
             hideMotionBench = PanelHideMotionBench.installIfRequested(
                 isVisible: { [weak self] in self?.panelController.isPanelVisible ?? false },
