@@ -37,8 +37,11 @@ backdrop.contentView = view
     if NSWorkspace.shared.frontmostApplication?.processIdentifier != getpid() {
         // macOS may decline a programmatic activation by an inactive app.
         // A real HID click on our own backdrop is the user path instead.
+        let point = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
+        // Never click a system alert or another app's window during setup.
+        guard NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0) == backdrop.windowNumber else { return }
         let old = NSEvent.mouseLocation
-        click(CGPoint(x: screen.frame.midX, y: screen.frame.midY),
+        click(point,
               returning: CGPoint(x: old.x, y: screen.frame.maxY - old.y))
     }
     _ = NSRunningApplication.current.activate(options: [])
@@ -46,6 +49,14 @@ backdrop.contentView = view
 var preview: NSRunningApplication!
 var failures = 0
 func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
+@MainActor func prepareBackdrop() async throws {
+    for _ in 0..<5 {
+        activateBackdrop()
+        await pause(0.3)
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() { return }
+    }
+    throw NSError(domain: "test backdrop could not establish activation", code: 1)
+}
 func postInput(_ script: String) {
     let id = "// " + UUID().uuidString
     try! (id + "\n" + script).write(toFile: output + "/input-request", atomically: true, encoding: .utf8)
@@ -109,8 +120,7 @@ func capture(_ name: String, checksPresence: Bool = false) async throws {
     record("\(pass ? "PASS" : "FAIL") \(name) windows=\(count) front=\(front ?? -1) expectedFront=\(getpid()) fullscreen=\(backdrop.styleMask.contains(.fullScreen)) pointer=\(NSEvent.mouseLocation)")
 }
 @MainActor func corner(_ name: String) async throws {
-    activateBackdrop()
-    await pause(0.3)
+    try await prepareBackdrop()
     move(CGPoint(x: screen.frame.midX, y: screen.frame.midY))
     await pause(2)
     record("HIDDEN \(name) windows=\(windows().count)")
@@ -144,7 +154,7 @@ Task { @MainActor in
         record("BUNDLE \(preview.bundleURL?.path ?? "unknown")")
         record("PERMISSIONS post=\(CGPreflightPostEventAccess()) capture=\(CGPreflightScreenCaptureAccess())")
         await pause(4)
-        activateBackdrop()
+        try await prepareBackdrop()
         await pause(1)
         try await corner("desktop-first")
         if args.count < 4 || args[3] != "glass" {
@@ -205,7 +215,7 @@ Task { @MainActor in
         view.light = false
         await pause(0.5)
         try await capture("dark-active-key")
-        activateBackdrop()
+        try await prepareBackdrop()
         await pause(0.5)
         try await capture("dark-after-page-switch-inactive")
         view.light = true
