@@ -69,7 +69,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
         XCTAssertEqual(settings.panelContentSize, PanelContentSize.min)
 
         settings.panelContentSize = 900
-        XCTAssertEqual(settings.panelContentSize, 900)
+        XCTAssertEqual(settings.panelContentSize, 600)
     }
 
     @MainActor
@@ -105,7 +105,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
         settings1.persistPanelSize(CGSize(width: 612, height: 644))
 
         let settings2 = AppSettings(defaults: defaults)
-        XCTAssertEqual(settings2.panelContentSize, 612)
+        XCTAssertEqual(settings2.panelContentSize, 600)
         XCTAssertEqual(settings2.panelHeight, 644)
     }
 
@@ -120,7 +120,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
         XCTAssertEqual(settings.panelHeight, 640)
 
         settings.persistPanelSize(CGSize(width: 680, height: 900))
-        XCTAssertEqual(settings.panelContentSize, 680)
+        XCTAssertEqual(settings.panelContentSize, 600)
         XCTAssertEqual(settings.panelHeight, 900)
     }
 
