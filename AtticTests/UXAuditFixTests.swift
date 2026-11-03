@@ -193,6 +193,27 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertNotEqual(defaults.data(forKey: "AtticDraw.viewports"), before)
     }
 
+    func testAuditA11CanvasMenuIsPreparedWithoutTakingFocusOrAccessibility() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 320, height: 460)
+        try withHost(DrawPageHost(model: model, uiState: state,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
+            func fields(_ view: NSView) -> [NSTextField] {
+                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            }
+            let field = try XCTUnwrap(fields(host).first { $0.accessibilityIdentifier() == "draw-library-search" },
+                "prepare native menu layout before the first click")
+            XCTAssertFalse(field.isEnabled)
+            XCTAssertNil(find("draw-library-menu", in: host), "the prepared menu is absent from VoiceOver until opened")
+            XCTAssertFalse(host.window?.firstResponder === field)
+            model.openFilter()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            XCTAssertTrue(field.isEnabled)
+            XCTAssertNotNil(find("draw-library-menu", in: host))
+        }
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
