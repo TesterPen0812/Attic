@@ -1045,8 +1045,8 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.cardModel.submitLink()
         let url = "attic://note/" + second.uuidString
         XCTAssertEqual(engine.document().blocks[1].marks.first?.url, url)
-        let saved = try JSONEncoder().encode(engine.document())
-        XCTAssertEqual(try JSONDecoder().decode(NoteDocument.self, from: saved).blocks[1].marks.first?.url, url)
+        let saved = try NoteContentCodec.encode(engine.document())
+        XCTAssertEqual(NoteContentCodec.decode(saved).document?.blocks[1].marks.first?.url, url)
         engine.history.undo()
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
     }
