@@ -348,7 +348,7 @@ final class UXAuditFixTests: XCTestCase {
     }
 
     func testAcceptedShapesDetailCountHoverKeepsItsIconContrast() {
-        for mode in [AtticDesignMode.light, .dark] {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
             var context = AtticDesignContext(mode: mode, surface: .solid)
             context.reduceMotion = true
             context.reduceTransparency = false
