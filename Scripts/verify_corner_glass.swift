@@ -5,7 +5,9 @@ import ScreenCaptureKit
 let args = CommandLine.arguments
 guard args.count == 3 || args.count == 4 else { fatalError("usage: check <preview executable> <evidence directory> [glass|solid]") }
 let executable = args[1], output = args[2]
-let surface = args.last == "solid" ? "solid" : "glass"
+guard args.count == 3 || ["glass", "solid"].contains(args[3]) else { fatalError("unknown check mode") }
+// Default: full Glass matrix. `glass`: appearance only. `solid`: full Solid matrix.
+let surface = args.count == 4 && args[3] == "solid" ? "solid" : "glass"
 guard executable.contains("AtticBugsTwo.app/Contents/MacOS/AtticBugsTwo") else { fatalError("test identity only") }
 try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
 let app = NSApplication.shared

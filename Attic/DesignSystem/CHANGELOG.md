@@ -3,8 +3,9 @@
 The docked panel and its island request active native Liquid Glass from
 creation, even before child attachment and while another app owns the
 keyboard. Corner reveal and pointer wake keep
-focus with that app. Solid controls retain their release-delayed key look;
-Reduce Transparency and the selected surface still apply.
+focus with that app. Controls over Solid also keep native glass before a
+click; keyboard state still follows release. Reduce Transparency and the
+selected panel/island surface still apply.
 
 Space changes reconcile a live reveal with WindowServer's presentation,
 including entering another app's full-screen Space with a stationary
