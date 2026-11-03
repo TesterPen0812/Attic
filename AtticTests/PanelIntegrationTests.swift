@@ -91,7 +91,7 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(hidden)
     }
 
-    func testNativePanelAndIslandAppearanceFollowTheReleasedKeyLook() throws {
+    func testNativePanelAndIslandStayActiveWithoutChangingKeyboardOwnership() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
         defer {
@@ -109,12 +109,19 @@ final class PanelIntegrationTests: XCTestCase {
             typealias Read = @convention(c) (AnyObject, Selector) -> Bool
             return unsafeBitCast(method_getImplementation(method), to: Read.self)(window, selector)
         }
-        // The controller's published key look is the release-delayed state;
-        // AppKit's raw key state is deliberately false in the invisible host.
+        // The released keyboard state still changes. Native appearance must
+        // stay active through it without acquiring or moving the keyboard.
+        let key = panel.isKeyWindow, islandKey = island.isKeyWindow
+        let responder = panel.firstResponder
+        let active = NSRunningApplication.current.isActive
         for releasedLook in [false, true, false] {
             rig.uiState.setPanelKey(releasedLook)
-            XCTAssertEqual(try appearance(panel), releasedLook, "native panel follows the published key look")
-            XCTAssertEqual(try appearance(island), releasedLook, "island and panel agree, even before native key state catches up")
+            XCTAssertTrue(try appearance(panel), "glass stays active before and after release")
+            XCTAssertTrue(try appearance(island), "the island agrees independently of keyboard state")
+            XCTAssertEqual(panel.isKeyWindow, key)
+            XCTAssertEqual(island.isKeyWindow, islandKey)
+            XCTAssertTrue(panel.firstResponder === responder)
+            XCTAssertEqual(NSRunningApplication.current.isActive, active)
         }
     }
 
