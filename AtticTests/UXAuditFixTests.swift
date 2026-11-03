@@ -217,6 +217,7 @@ final class UXAuditFixTests: XCTestCase {
         let state = PanelUIState()
         let size = CGSize(width: 320, height: 460)
         let wasActive = NSApp.isActive
+        let inputContext = NSTextInputContext.current
         try withHost(DrawPageHost(model: model, uiState: state,
             layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
             func fields(_ view: NSView) -> [NSTextField] {
@@ -228,6 +229,7 @@ final class UXAuditFixTests: XCTestCase {
             XCTAssertFalse(field.isEnabled)
             XCTAssertFalse(window.firstResponder === field || window.firstResponder === editor)
             XCTAssertEqual(NSApp.isActive, wasActive)
+            XCTAssertTrue(NSTextInputContext.current === inputContext, "preparation cannot activate an input context")
             XCTAssertNil(find("draw-title-filter", in: host))
             model.openFilter()
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
