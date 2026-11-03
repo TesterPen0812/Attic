@@ -122,6 +122,8 @@ struct NoteHistoryPage: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.control(height: AtticControlSize.panelButton.height)))
                 .frame(height: AtticControlSize.panelButton.height)
+                // The shared + stays on an open note, including History.
+                .padding(.trailing, AtticControlSize.panelButton.height + AtticSpacing.s8)
             }
             .padding(.horizontal, layout.chromeInsets.leading)
             .padding(.bottom, layout.chromeInsets.bottom)

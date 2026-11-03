@@ -1,3 +1,8 @@
+## 2026-11-03 · History footer clearance
+
+The History row reserves the shared + button's width plus 8 pt, keeping
+Restore fully visible at the 320 pt panel width.
+
 ## 2026-11-03 · Draw field focus
 
 Draw Search and canvas Tags claim their own native fields after attachment.
