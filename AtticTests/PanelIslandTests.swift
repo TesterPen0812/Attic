@@ -876,10 +876,31 @@ final class PanelIslandTests: XCTestCase {
         XCTAssertFalse(island.canBecomeMain)
     }
 
-    /// With the panel key, the island's and its label's glass draw as active
-    /// as the panel's own; when the panel resigns key or Attic deactivates,
-    /// inactive with it; and the island never takes the keyboard.
-    func testTheIslandsGlassIsActiveExactlyWhileThePanelIsKey() throws {
+    /// Owner, 3 Nov: a corner reveal and pointer wake must have active glass
+    /// before any click, including while another app owns the keyboard.
+    func testCornerRevealRequestsActiveGlassWithoutTakingTheKeyboard() throws {
+        try withController { controller, state, panel in
+            XCTAssertFalse(state.isPanelKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            let responder = panel.firstResponder
+            let active = NSRunningApplication.current.isActive
+            for page in PanelPage.allCases {
+                state.selectSection(page.section)
+                state.island.wake()
+                spin(0.3)
+                XCTAssertTrue(panel._hasActiveAppearance(), "\(page): native glass must be active before a click")
+                XCTAssertTrue(controller.islandWindowsForTesting.island._hasActiveAppearance())
+                XCTAssertTrue(controller.islandWindowsForTesting.label._hasActiveAppearance())
+                XCTAssertFalse(panel.isKeyWindow)
+                XCTAssertFalse(state.isPanelKey, "solid/glass chrome's key policy is independent")
+                XCTAssertTrue(panel.firstResponder === responder)
+                XCTAssertEqual(NSRunningApplication.current.isActive, active)
+            }
+        }
+    }
+
+    /// Native glass stays active as keyboard focus and app activation change.
+    func testTheIslandsGlassStaysActiveWithAndWithoutThePanelsKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         try withController { controller, _, panel in
             let windows = controller.islandWindowsForTesting
@@ -913,7 +934,7 @@ final class PanelIslandTests: XCTestCase {
 
             other.makeKey()
             spin(until: { !panel.isKeyWindow })
-            try assertGlass(active: false, "another window is key")
+            try assertGlass(active: true, "another window is key")
 
             panel.makeKey()
             spin(until: { panel.isKeyWindow })
@@ -934,7 +955,7 @@ final class PanelIslandTests: XCTestCase {
 
             NSApp.deactivate()
             spin(until: { !panel.isKeyWindow })
-            try assertGlass(active: false, "Attic deactivated")
+            try assertGlass(active: true, "Attic deactivated")
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKey()
             spin(until: { panel.isKeyWindow })
@@ -975,8 +996,7 @@ final class PanelIslandTests: XCTestCase {
             }
             XCTAssertEqual(seen.count, 8, "\(seen)")
             for (index, entry) in seen.enumerated() {
-                let key = index < 4
-                XCTAssertTrue(entry.hasSuffix("island=[\"\(key)\"] standIn=[\"\(key)\"]"), "swap \(index): \(entry)")
+                XCTAssertTrue(entry.hasSuffix("island=[\"true\"] standIn=[\"true\"]"), "swap \(index): \(entry)")
             }
         }
     }
