@@ -405,6 +405,7 @@ final class AppCoordinator: ObservableObject {
     private var performanceSignalSource: (any DispatchSourceSignal)?
     #if DEBUG
     private var hideMotionBench: PanelHideMotionBench?
+    private var pageSwitchBench: (any DispatchSourceSignal)?
     #endif
     private var performancePhaseIndex = 0
 
@@ -942,6 +943,27 @@ final class AppCoordinator: ObservableObject {
             // only): signal-driven hides, reveals and swipes.
             if let mode = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_MODE"].flatMap(PanelHideAnimation.init(storedValue:)) {
                 settings.hideAnimation = mode
+            }
+            // The page-switch bench (preview identities only): with
+            // `ATTIC_PAGE_BENCH=1`, SIGINFO switches to the next page in
+            // order as any route does, and prints when, for the frame
+            // monitor's log (`ATTIC_FRAME_MONITOR`).
+            if ProcessInfo.processInfo.environment["ATTIC_PAGE_BENCH"] == "1",
+               Bundle.main.bundleIdentifier?.hasPrefix("com.taha.Attic.preview.") == true {
+                signal(SIGINFO, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: SIGINFO, queue: .main)
+                source.setEventHandler { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        let pages = PanelPage.allCases
+                        let index = pages.firstIndex(of: PanelPage(self.uiState.selectedSection)) ?? 0
+                        let next = pages[(index + 1) % pages.count]
+                        print(String(format: "ATTIC_PAGE_SWITCH %.4f %@", CACurrentMediaTime(), next.rawValue))
+                        self.hoverMonitor.revealForPerformanceProbe(section: next.section)
+                    }
+                }
+                source.resume()
+                pageSwitchBench = source
             }
             hideMotionBench = PanelHideMotionBench.installIfRequested(
                 isVisible: { [weak self] in self?.panelController.isPanelVisible ?? false },
