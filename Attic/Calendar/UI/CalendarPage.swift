@@ -92,52 +92,56 @@ struct CalendarPage: View {
         let weeks = snapshot.weeks
         let pinnedIndex = snapshot.pinnedWeekIndex.flatMap { weeks.indices.contains($0) ? $0 : nil }
         let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
-        return ScrollView(.vertical) {
-            VStack(spacing: 0) {
-                // Flat days (Accepted 2026-10-30): no glass in the grid.
+        return PanelComposerClearance { extra in
+            ScrollView(.vertical) {
                 VStack(spacing: 0) {
-                    ForEach(weeks) { week in
-                        CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
+                    // Flat days (Accepted 2026-10-30): no glass in the grid.
+                    VStack(spacing: 0) {
+                        ForEach(weeks) { week in
+                            CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
+                                .equatable()
+                                // The selected week is drawn once, by its held row.
+                                .accessibilityHidden(week.containsSelection)
+                        }
+                    }
+                    agenda(snapshot)
+                        .frame(minHeight: viewport, alignment: .top)
+                }
+                .padding(.bottom, CalendarDesign.agendaBottom)
+                .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
+                .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
+                // What scrolls under the selected week is hidden behind it and
+                // fades in below it once it is held (item 14, owner 2026-10-31).
+                // Both the cut and the held row follow the scroll in the same
+                // frame, so each frame draws the week once.
+                .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
+                .overlay(alignment: .top) {
+                    if let pinnedIndex, let rowTop {
+                        CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
                             .equatable()
-                            // The selected week is drawn once, by its held row.
-                            .accessibilityHidden(week.containsSelection)
+                            .visualEffect { content, proxy in
+                                content.offset(y: CalendarMonthMath.heldRowTop(
+                                    rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
+                            }
                     }
                 }
-                agenda(snapshot)
-                    .frame(minHeight: viewport, alignment: .top)
             }
-            .padding(.bottom, CalendarDesign.agendaBottom)
-            .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
-            // What scrolls under the selected week is hidden behind it and
-            // fades in below it once it is held (item 14, owner 2026-10-31).
-            // Both the cut and the held row follow the scroll in the same
-            // frame, so each frame draws the week once.
-            .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
-            .overlay(alignment: .top) {
-                if let pinnedIndex, let rowTop {
-                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
-                        .equatable()
-                        .visualEffect { content, proxy in
-                            content.offset(y: CalendarMonthMath.heldRowTop(
-                                rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
-                        }
-                }
+            .contentMargins(.bottom, extra, for: .scrollContent)
+            .scrollIndicators(.never)
+            // Clean cut (3 Oct): the native soft scroll edge stays off.
+            .atticScrollEdgeEffect()
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
+                let offset = geometry.contentOffset.y + geometry.contentInsets.top
+                return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
+                                   weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
+            } action: { _, new in
+                if flags != new { flags = new }
             }
+            // The grid is cut at the weekday letters: nothing scrolls up under them.
+            .clipped()
+            .accessibilityIdentifier("calendar-scroll")
         }
-        .scrollIndicators(.never)
-        // Clean cut (3 Oct): the native soft scroll edge stays off.
-        .atticScrollEdgeEffect()
-        .scrollPosition($scrollPosition)
-        .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
-            let offset = geometry.contentOffset.y + geometry.contentInsets.top
-            return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
-                               weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
-        } action: { _, new in
-            if flags != new { flags = new }
-        }
-        // The grid is cut at the weekday letters: nothing scrolls up under them.
-        .clipped()
-        .accessibilityIdentifier("calendar-scroll")
     }
 
     @ViewBuilder

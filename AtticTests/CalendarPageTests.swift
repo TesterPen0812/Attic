@@ -474,6 +474,10 @@ final class CalendarPageTests: XCTestCase {
     // MARK: - Hosted: bounded updates, no layout loop
 
     func testFollowupCalendarMakesRoomForTheMeasuredCardHeight() throws {
+        // Invisible windows receive no display-link frames; check the same end anchor under Reduce Motion.
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
         let room = PanelComposerRoom()
         let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
             calendar: calendar, now: { self.date(2026, 10, 29, 12) })
