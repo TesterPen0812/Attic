@@ -347,13 +347,26 @@ final class UXAuditFixTests: XCTestCase {
         assertCornerAlpha(bitmap, expected, extent: 2.5)
     }
 
-    func testAcceptedShapesDetailCountHoverKeepsItsIconContrast() {
+    func testAcceptedShapesDetailCountHoverKeepsItsIconContrast() throws {
         for mode in [AtticDesignContext.Mode.light, .dark] {
             var context = AtticDesignContext(mode: mode, surface: .solid)
             context.reduceMotion = true
             context.reduceTransparency = false
             let report = AtticAppearanceCheck.run(families: [.taskRows], contexts: [context], scale: 2)
             XCTAssertGreaterThan(report.glyphsMeasured, 0)
+            let collector = AtticProbeCollector()
+            XCTAssertNotNil(AtticAppearanceCheck.render(family: .taskRows, context: context,
+                backdrop: .desktop(.midGrey), collector: collector, scale: 2))
+            let icon = try XCTUnwrap(collector.all.first { probe in
+                guard AtticAppearanceCheck.displayName(probe.specimen) == "Hover",
+                      case let .icon(name) = probe.kind else { return false }
+                return name == "checkmark.square"
+            })
+            let ink = try XCTUnwrap(icon.foreground)
+            let tokens = context.tokens
+            let hoveredBackground = tokens.chipHover.over(tokens.hover.over(TasksPanelDesign.reference(tokens)))
+            XCTAssertGreaterThanOrEqual(ink.contrast(on: hoveredBackground), 3,
+                "the drawn icon must keep its floor over both the row and its own hover fill")
             let problems = report.failures.filter { failure, _ in
                 failure.family == AtticGalleryFamily.taskRows.title && failure.specimen == "Hover"
                     && failure.detail.hasPrefix("checkmark.square")
