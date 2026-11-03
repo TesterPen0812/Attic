@@ -882,10 +882,11 @@ final class PanelIslandTests: XCTestCase {
         try withController { controller, state, panel in
             XCTAssertFalse(state.isPanelKey)
             XCTAssertFalse(panel.isKeyWindow)
-            let responder = panel.firstResponder
             let active = NSRunningApplication.current.isActive
             for page in PanelPage.allCases {
                 state.selectSection(page.section)
+                spin(0.3)
+                let responder = panel.firstResponder
                 state.island.wake()
                 spin(0.3)
                 XCTAssertTrue(panel._hasActiveAppearance(), "\(page): native glass must be active before a click")
