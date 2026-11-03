@@ -51,11 +51,7 @@ enum PanelContentSize: Double, CaseIterable, Identifiable {
 
 
     static let min = PanelContentSize.standard.rawValue
-    static var max: Double {
-        NSScreen.screens
-            .map { Swift.max(min, $0.visibleFrame.width - (PanelGeometry.screenInset * 2)) }
-            .max() ?? min
-    }
+    static let max = Double(PanelPageLayout.readingWidth)
     static let defaultValue = PanelContentSize.standard.rawValue
 }
 
@@ -288,11 +284,7 @@ final class AppSettings: ObservableObject {
 
     @Published var panelContentSize: Double {
         didSet {
-            let clamped = Self.clampMinimum(
-                panelContentSize,
-                minimum: PanelContentSize.min,
-                fallback: PanelContentSize.defaultValue
-            )
+            let clamped = Self.clampWidth(panelContentSize)
             if panelContentSize != clamped {
                 panelContentSize = clamped
             } else {
@@ -443,10 +435,8 @@ final class AppSettings: ObservableObject {
             to: PanelCornerSize.min...PanelCornerSize.max,
             fallback: PanelCornerSize.defaultValue
         )
-        let resolvedPanelWidth = Self.clampMinimum(
-            defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
-            minimum: PanelContentSize.min,
-            fallback: PanelContentSize.defaultValue
+        let resolvedPanelWidth = Self.clampWidth(
+            defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue
         )
         panelContentSize = resolvedPanelWidth
         panelHeight = Self.clampMinimum(
@@ -524,13 +514,17 @@ final class AppSettings: ObservableObject {
         return min(max(value, range.lowerBound), range.upperBound)
     }
 
-    /// Panel width and height have no fixed upper bound: the user may have
-    /// sized the panel on a display that is not attached right now, and
-    /// shrinking a valid preference to fit the current screen would lose it.
+    /// Height remains independent of the attached display; width is capped
+    /// at the reading width above.
     /// A value beyond any display's plausible size is a corrupt preference
     /// rather than a choice, though, and previously survived validation as a
     /// finite magnitude that layout and numeric formatting could not use.
     static let maximumRestorableDimension: Double = 50_000
+
+    private static func clampWidth(_ value: Double) -> Double {
+        min(PanelContentSize.max, clampMinimum(value, minimum: PanelContentSize.min,
+                                              fallback: PanelContentSize.defaultValue))
+    }
 
     private static func clampMinimum(
         _ value: Double,
