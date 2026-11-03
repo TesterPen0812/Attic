@@ -927,7 +927,7 @@ final class NoteMonoCopyButton: NSView {
     private var resetWork: DispatchWorkItem?
 
     static var size: CGFloat { T.monoCopySize }
-    static var radius: CGFloat { size / 3 }
+    static var radius: CGFloat { AtticRadius.control(height: size) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
