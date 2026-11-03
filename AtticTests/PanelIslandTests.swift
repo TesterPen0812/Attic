@@ -481,6 +481,57 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// "Motion: page switch and hide" (Accepted 2026-11-02): Slide hides on
+    /// an accelerating curve (`hideTiming`'s start, ending fast) and its
+    /// last part fades out, so nothing sits in the corner. The reveal
+    /// keeps its curve and comes back fully opaque. Reduce Motion is off
+    /// here (`withController` states it).
+    func testSlideHidesOnAnAcceleratingCurveAndItsLastPartFades() throws {
+        try withController(configure: { $0.hideAnimation = .slide }) { controller, _, panel in
+            let container = try content(panel)
+            var hidden = false
+            _ = controller.requestHide { hidden = $0 == .hidden }
+            let key = "attic.panel.collapse"
+            var running: (CALayer, CAAnimation)?
+            let deadline = Date().addingTimeInterval(1)
+            while running == nil, Date() < deadline {
+                running = container.subviews.compactMap(\.layer).compactMap { layer in
+                    layer.animation(forKey: key).map { (layer, $0) }
+                }.first
+                if running == nil { RunLoop.current.run(until: Date().addingTimeInterval(0.003)) }
+            }
+            let (layer, animation) = try XCTUnwrap(running, "a timed Slide hide")
+            var samples: [(fraction: Double, progress: Double, opacity: Float)] = []
+            layer.speed = 0
+            for fraction in [0.25, 0.5, 0.6, 0.8, 0.95] {
+                layer.timeOffset = animation.beginTime + animation.duration * fraction
+                CATransaction.flush()
+                samples.append((fraction, controller.displayedProgressForProbe, container.motionOpacity(presented: true)))
+            }
+            layer.speed = 1
+            layer.timeOffset = 0
+            let note = samples.map { String(format: "%.2f: %.2f/%.2f", $0.fraction, $0.progress, $0.opacity) }.joined(separator: ", ")
+            // Accelerating: behind the clock all the way (the reveal's
+            // ease-out was 70 % there by a quarter).
+            for sample in samples.prefix(4) {
+                XCTAssertLessThan(sample.progress, sample.fraction, "accelerating (\(note))")
+            }
+            XCTAssertLessThan(samples[0].progress, 0.12, "slow to start (\(note))")
+            XCTAssertEqual(samples[0].opacity, 1, accuracy: 0.01, "opaque early (\(note))")
+            XCTAssertEqual(samples[1].opacity, 1, accuracy: 0.01, "opaque half way (\(note))")
+            XCTAssertLessThan(samples[3].opacity, 0.9, "fading at the end (\(note))")
+            XCTAssertLessThan(samples[4].opacity, 0.25, "nearly gone (\(note))")
+            spin(until: { hidden })
+            XCTAssertTrue(hidden)
+            let screen = try XCTUnwrap(controller.currentScreen)
+            XCTAssertTrue(controller.show(on: screen, corner: .topRight))
+            spin(0.6)
+            XCTAssertEqual(container.motionOpacity(presented: true), 1, accuracy: 0.01, "the reveal is opaque")
+            XCTAssertEqual(container.motionOpacity(presented: false), 1, accuracy: 0.01)
+            XCTAssertTrue(container.motionIsAtRest)
+        }
+    }
+
     /// Slide and Swoop, from every corner: at 30 % and 70 % of a hide and
     /// back on the reveal, the island's stand-in shows (the windows are
     /// empty) and is drawn by the panel's own transform about the island's
