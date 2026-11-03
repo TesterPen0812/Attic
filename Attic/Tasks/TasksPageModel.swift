@@ -102,6 +102,26 @@ struct TasksListRow: Identifiable, Equatable {
     }
 }
 
+/// Stable siblings in the lazy list: a task keeps its identity when its
+/// due day moves it across headers, rather than being reparented between
+/// nested dynamic ForEach collections.
+struct TasksDateListEntry: Identifiable {
+    let group: TasksPanelDesign.Group
+    let row: TasksListRow?
+    var reorderIDs: [UUID] = []
+    var id: String { row.map { "task:" + $0.id.uuidString } ?? "group:" + group.key }
+
+    static func entries(_ sections: TasksSections) -> [Self] {
+        sections.groups.flatMap { group in
+            let rows = sections.groupRows[group.key] ?? []
+            let byStatus = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
+            return [Self(group: group, row: nil)] + rows.map {
+                Self(group: group, row: $0, reorderIDs: byStatus[$0.status] ?? [])
+            }
+        }
+    }
+}
+
 /// A list as the page shows it: the open rows (with any finished row still
 /// held in place), and on Now the rows finished today, which show under
 /// "Completed today" when it is open.
