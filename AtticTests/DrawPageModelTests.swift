@@ -47,6 +47,41 @@ final class DrawPageModelTests: XCTestCase {
         model.handleKey(DrawKey(characters: characters, keyCode: code, command: command, shift: shift))
     }
 
+    func testAuditA5EscapeClosesSearchBeforeChangingBoardState() {
+        model.openSearch()
+        model.search.query = "plan"
+        XCTAssertTrue(key("\u{1B}", code: DrawKey.escapeCode))
+        XCTAssertFalse(model.isSearching)
+        XCTAssertEqual(model.search.query, "")
+    }
+
+    func testAuditA6CommandZRestoresDeletedCanvasWhileToastOffersUndo() throws {
+        stroke()
+        let deleted = try XCTUnwrap(model.canvasID)
+        let toasts = PanelToastCenter()
+        model.library.toasts = toasts
+        model.library.perform(.delete)
+        XCTAssertNotNil(toasts.current)
+        XCTAssertNotEqual(model.canvasID, deleted)
+        XCTAssertTrue(key("z", command: true))
+        XCTAssertEqual(model.canvasID, deleted)
+        XCTAssertTrue(try store.library().contains { $0.id == deleted })
+    }
+
+    func testAuditA7OpeningBeforeBoardLayoutFitsOnceRealSizeArrives() throws {
+        stroke()
+        let fresh = DrawPageModel(store: store)
+        fresh.setBoard(size: .zero, clearInsets: model.clearInsets)
+        fresh.start()
+        fresh.setBoard(size: CGSize(width: 320, height: 460), clearInsets: model.clearInsets)
+        let expected = DrawViewport.fit(DrawGeometry.union(fresh.objects), in: fresh.clearRect)
+        XCTAssertEqual(fresh.viewport, expected)
+        XCTAssertGreaterThan(fresh.viewport.zoom, DrawViewport.minZoom)
+        fresh.setViewport(DrawViewport(x: 15, y: 20, zoom: 0.5), byUser: true)
+        fresh.setBoard(size: CGSize(width: 400, height: 500), clearInsets: model.clearInsets)
+        XCTAssertEqual(fresh.viewport, DrawViewport(x: 15, y: 20, zoom: 0.5), "resizing preserves a user-chosen view")
+    }
+
     // MARK: Tools reach the store
 
     func testPenStoresOneSmoothedStroke() {
