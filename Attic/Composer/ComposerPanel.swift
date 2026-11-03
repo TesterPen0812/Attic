@@ -132,32 +132,53 @@ final class PanelComposerEndFollower {
     private weak var scroll: NSScrollView?
     private weak var room: PanelComposerRoom?
     private var subscription: AnyCancellable?
+    private var insetObservation: NSKeyValueObservation?
     private let glide = TasksScrollGlide()
     private var generation = 0
-    var isCurrent = true { didSet { if !isCurrent { glide.stop() } } }
+    private var expectedBottomInset: CGFloat?
+    var isCurrent = true { didSet { if !isCurrent { expectedBottomInset = nil; glide.stop() } } }
 
     func stop() {
         generation += 1
+        expectedBottomInset = nil
         subscription = nil
+        insetObservation = nil
         glide.stop()
     }
 
     func bind(scroll: NSScrollView, room: PanelComposerRoom?) {
-        self.scroll = scroll
+        if self.scroll !== scroll {
+            self.scroll = scroll
+            insetObservation = scroll.observe(\.contentInsets, options: [.new]) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.moveAfterInsetLayout() }
+            }
+        }
         guard self.room !== room else { return }
         self.room = room
-        subscription = room?.$height.removeDuplicates().dropFirst().sink { [weak self] _ in
-            MainActor.assumeIsolated { self?.heightWillChange() }
+        subscription = room?.$height.removeDuplicates().dropFirst().sink { [weak self] height in
+            MainActor.assumeIsolated { self?.heightWillChange(to: height) }
         }
     }
 
-    private func heightWillChange() {
+    private func heightWillChange(to height: CGFloat) {
         generation += 1
+        expectedBottomInset = nil
         guard isCurrent, let scroll,
-              scroll.contentView.bounds.minY >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1 else { return }
+              glide.isRunning || scroll.contentView.bounds.minY >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1 else { return }
+        let oldExtra = max(0, (room?.height ?? 0) - AtticControlSize.addBarHeight)
+        let newExtra = max(0, height - AtticControlSize.addBarHeight)
+        expectedBottomInset = scroll.contentInsets.bottom + newExtra - oldExtra
+        moveAfterInsetLayout()
+    }
+
+    private func moveAfterInsetLayout() {
+        guard isCurrent, let scroll, let expectedBottomInset,
+              abs(scroll.contentInsets.bottom - expectedBottomInset) < 0.5 else { return }
         let ticket = generation
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.generation == ticket, self.isCurrent, let scroll = self.scroll else { return }
+            guard let self, self.generation == ticket, self.isCurrent, let scroll = self.scroll,
+                  let expected = self.expectedBottomInset, abs(scroll.contentInsets.bottom - expected) < 0.5 else { return }
+            self.expectedBottomInset = nil
             scroll.superview?.layoutSubtreeIfNeeded()
             let target = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)
             let delta = target - scroll.contentView.bounds.minY
