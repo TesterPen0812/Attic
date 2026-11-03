@@ -174,37 +174,29 @@ struct DrawLibraryRows: View {
 
     var body: some View {
         let height = DrawLibraryMetrics.listHeight(rows)
-        Group {
-            if height <= maxHeight {
-                listRows.frame(height: height)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) { listRows }
-                        .frame(height: maxHeight)
-                        .onChange(of: scrollTarget) { _, id in
-                            if let id { proxy.scrollTo(id) }
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        if row.startsSection { AtticDropdownRule() }
+                        DrawLibraryRowView(row: row, isLit: row.id == litID,
+                                           onHover: { inside in hover(row, inside) }) {
+                            choose(row)
                         }
+                        .id(row.id)
+                    }
                 }
             }
-        }
-        .task(id: shownThumbnails) {
-            thumbnailsShown?(rows.compactMap(\.canvas))
-        }
-    }
-
-    private var listRows: some View {
-        VStack(spacing: 0) {
-            ForEach(rows) { row in
-                if row.startsSection { AtticDropdownRule() }
-                DrawLibraryRowView(row: row, isLit: row.id == litID,
-                                   onHover: { inside in hover(row, inside) }) {
-                    choose(row)
-                }
-                .id(row.id)
+            .scrollDisabled(height <= maxHeight)
+            .frame(height: min(height, maxHeight))
+            .task(id: shownThumbnails) {
+                thumbnailsShown?(rows.compactMap(\.canvas))
+            }
+            .onChange(of: scrollTarget) { _, id in
+                if let id { proxy.scrollTo(id) }
             }
         }
     }
-
 }
 
 /// One row, drawn as the glass menus draw theirs: the leading column
