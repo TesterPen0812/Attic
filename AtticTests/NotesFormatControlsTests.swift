@@ -1185,6 +1185,21 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertTrue(nativeContains(overlay), "Return never chooses an invisible match")
     }
 
+    func testAuditB6DismissalClearsPresentationRoomAfterTheTargetDisappears() {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        engine.linkableNotes = { [.init(id: UUID(), title: "Research notes")] }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "research"
+        XCTAssertNotNil(engine.linkSuggestionGap)
+        engine.performEdit(NSRange(location: 0, length: engine.textStorage.length), with: NSAttributedString(string: ""), name: "Replace")
+        controls.cancelCard()
+        XCTAssertNil(engine.linkSuggestionGap, "transient room cannot leak into a replacement document")
+    }
+
     func testTheLinkCardAddsEditsAndRemovesALink() throws {
         let (controls, engine, textView) = make()
         let target = range("free tier", textView)
