@@ -209,6 +209,7 @@ final class NoteFormatControls: NSObject {
 
     func invalidate() {
         setLinkSuggestionRoom(0)
+        engine.linkSuggestionGap = nil
         cardModel.onLinkSuggestionsChange = nil
         for observer in [selectionObserver, boundsObserver, resignObserver].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(observer)
@@ -1133,7 +1134,18 @@ final class NoteFormatControls: NSObject {
         defer { changingLinkRoom = false }
         let anchor = cellLinkTarget.flatMap { engine.tableAttachment(id: $0.tableID)?.1 }
             ?? linkTarget?.range ?? barAnchor ?? selection
-        guard anchor.location < engine.textStorage.length else { return }
+        guard anchor.location < engine.textStorage.length else {
+            // A replacement/import may remove the captured target while its
+            // field is open. Dismissal still retires all presentation state.
+            if height == 0 {
+                linkRoom = 0
+                engine.linkSuggestionGap = nil
+                if let minimum = linkRoomMinimum { textView.minSize = minimum }
+                linkRoomMinimum = nil
+                textView.sizeToFit()
+            }
+            return
+        }
         let before = textView.firstRect(forCharacterRange: anchor, actualRange: nil)
         if linkRoomMinimum == nil { linkRoomMinimum = textView.minSize }
         linkRoom = height
