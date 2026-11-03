@@ -75,6 +75,7 @@ final class PanelMotionCompletionBarrier {
 
 struct PanelVisibilityTransitionState {
     private(set) var generation = 0
+    var hasPendingHide: Bool { pendingHide != nil }
     private var transitionCancellation: (() -> Void)?
     private var pendingHide: (
         generation: Int,
@@ -170,6 +171,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
+
+    /// A Space switch can leave AppKit's isVisible true while WindowServer
+    /// no longer presents this overlay in the active full-screen Space.
+    /// The hover monitor calls only while its logical reveal is still live.
+    /// Re-order the existing windows, without a reveal, focus change or motion.
+    func reassertPresentationAfterSpaceChange() {
+        guard !visibilityTransition.hasPendingHide, !isInteractiveDismissal,
+              !panel.isVisible || !panel.isOnActiveSpace else { return }
+        panel.orderFrontRegardless()
+        showIsland()
+        resamplePointerPassthrough()
+    }
     #if DEBUG
     /// The motion bench: how far the panel is collapsed now (0 shown, 1
     /// hidden), whichever animation draws it.
@@ -794,10 +807,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.handleInteractionCancellation(cancellation, frame: frame)
         }
         panel.delegate = self
-        // Spaces membership alone does not carry an already visible panel
-        // into another app's full-screen Space. Explicit cross-application
-        // eligibility keeps it there without a new order-in or activation.
-        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
 
     private func bindContentSize() {

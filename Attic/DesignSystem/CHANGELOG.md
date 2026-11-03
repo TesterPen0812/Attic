@@ -5,8 +5,10 @@ when another app owns the keyboard. Corner reveal and pointer wake keep
 focus with that app. Solid controls retain their release-delayed key look;
 Reduce Transparency and the selected surface still apply.
 
-The panel and island explicitly join other applications' full-screen
-Spaces, including a Space entered while the pointer stays in the corner.
+Space changes reconcile a live reveal with WindowServer's presentation,
+including entering another app's full-screen Space with a stationary
+pointer. The panel and island re-order without activating Attic or
+superseding a hide.
 
 ## 2026-11-02 · Draw cursors keep their screen size
 
