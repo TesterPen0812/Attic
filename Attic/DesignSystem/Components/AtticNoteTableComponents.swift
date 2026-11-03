@@ -192,7 +192,7 @@ final class AtticNoteTableGripView: AtticNoteTableControlView {
 }
 
 /// The "+" at the end of the last column or under the last row: a 14 pt
-/// disc with an 8 pt plus.
+/// curve-1.4 control with an 8 pt plus.
 @MainActor
 final class AtticNoteTableAddChipView: AtticNoteTableControlView {
     override init(frame: NSRect) {
@@ -208,7 +208,7 @@ final class AtticNoteTableAddChipView: AtticNoteTableControlView {
     override func draw(_ dirtyRect: NSRect) {
         let rect = drawnRect
         (isHovered ? tokens.tableGripFill : tokens.tableAddFill).nsColor.setFill()
-        NSBezierPath(ovalIn: rect).fill()
+        NSBezierPath(cgPath: Squircle(cornerRadius: rect.height / 2, exponent: AtticShape.controlExponent).path(in: rect).cgPath).fill()
         let glyph = AtticNoteTableMetrics.addChipGlyph
         let path = NSBezierPath()
         path.move(to: CGPoint(x: rect.midX - glyph / 2, y: rect.midY))
