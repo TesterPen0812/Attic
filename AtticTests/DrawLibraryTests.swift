@@ -33,6 +33,19 @@ final class DrawLibraryTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testAuditB7NewCanvasNamesAvoidBothDraftAndSavedNames() {
+        let repository = DrawMemoryRepository()
+        let store = DrawStore(repository: repository)
+        let first = store.create()
+        XCTAssertEqual(first.name, "Untitled")
+        XCTAssertEqual(store.create().name, "Untitled 2", "drafts reserve their visible names")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Saved"))]), on: first.id).isSaved)
+        let relaunched = DrawStore(repository: repository)
+        XCTAssertEqual(relaunched.create().name, "Untitled 2", "persisted names also reserve their suffix")
+        XCTAssertEqual(relaunched.create(name: "Chosen name").name, "Chosen name")
+        XCTAssertEqual(relaunched.create(name: " ").name, "Untitled 3")
+    }
+
     private func actions(export: Bool = false) -> DrawLibraryActions {
         var exporter: (@MainActor (UUID) -> Void)?
         if export { exporter = { [unowned self] (id: UUID) -> Void in self.record("export \(id)") } }

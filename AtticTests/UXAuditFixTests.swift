@@ -214,6 +214,43 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAuditB7IdenticalHistoryCannotRestoreButDifferentWritingCan() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditB7")))
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text("Title"), .text("Writing")])
+        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .pause,
+            content: try NoteContentCodec.encode(document), contentFormat: NoteDocument.currentFormat,
+            title: "Title", body: "Writing", attachmentIDs: [], sourceRevisionID: nil)
+        for identical in [true, false] {
+            let current = identical ? document : NoteDocument(blocks: [.text("Title"), .text("Changed writing")])
+            let browser = NoteHistoryBrowser(noteID: id, current: current, currentRevision: nil, entries: [NoteHistoryEntry(version)])
+            try withHost(NoteHistoryPage(controller: controller, browser: browser,
+                layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)))) { host in
+                let restore = try XCTUnwrap(find("notes-history-restore", in: host))
+                XCTAssertEqual(restore.isAccessibilityEnabled?(), !identical)
+            }
+        }
+    }
+
+    func testAuditB7CalendarSearchLabelsADifferentYear() async throws {
+        let calendar = CalendarMonthMath.calendar()
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 12)))
+        let then = try XCTUnwrap(calendar.date(from: DateComponents(year: 1992, month: 6, day: 17, hour: 12)))
+        let event = CalendarEvent(id: "far", title: "Target event", start: then, end: then.addingTimeInterval(3600),
+            isAllDay: false, location: nil, calendarTitle: "Test", colour: .init(red: 0.2, green: 0.4, blue: 0.8))
+        let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: [event]), calendar: calendar, now: { now })
+        model.setQuery("Target")
+        try await Task.sleep(for: .milliseconds(200))
+        await model.waitForEventReadsForTesting()
+        XCTAssertEqual(model.snapshot.groups.first?.day.year, 1992)
+        try withHost(CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)),
+            taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in })) { host in
+            let year = try XCTUnwrap(find("calendar-search-year-1992", in: host))
+            XCTAssertEqual(year.accessibilityValue?() as? String ?? year.accessibilityLabel?(), "1992")
+        }
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
