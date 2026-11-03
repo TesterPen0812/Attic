@@ -165,6 +165,35 @@ final class PhoneShellWaveUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["phone-task-title"].waitForExistence(timeout: 6))
     }
 
+    func testCapturePriorityExpandsInPlaceAndNoteShowsConfirmation() throws {
+        app.buttons["Create"].tap()
+        let expanded = app.buttons["phone-priority-expand"]
+        XCTAssertTrue(expanded.waitForExistence(timeout: 5))
+        expanded.tap()
+        XCTAssertTrue(app.buttons["phone-priority-high"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.switches["Later"].exists, "Priority takes the date and Later controls' place")
+        screenshot("Capture expanded priority")
+        app.buttons["phone-priority-high"].tap()
+        XCTAssertTrue(expanded.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["phone-priority-low"].exists)
+        app.buttons["Cancel"].tap()
+
+        app.buttons["Create"].tap()
+        let noteKind = app.buttons["Note"]
+        XCTAssertTrue(noteKind.waitForExistence(timeout: 5))
+        noteKind.tap()
+        let title = app.textFields["phone-capture-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("New note confirmation " + UUID().uuidString.prefix(8))
+        app.buttons["phone-capture-create"].tap()
+        XCTAssertFalse(app.alerts["Could not save"].exists)
+        let notice = app.staticTexts["Added to Notes"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 6), "Quick capture confirms inside the thumb capsule")
+        screenshot("Capture note confirmation")
+        XCTAssertTrue(app.buttons["Create"].waitForExistence(timeout: 8), "Capture chrome returns after the notice")
+    }
+
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Phone wave · " + name

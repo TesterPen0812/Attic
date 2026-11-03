@@ -58,6 +58,7 @@ struct PhoneShell: View {
     @State private var capturePresented = false
     @State private var captureDraft = PhoneCaptureDraft()
     @State private var captureCommitted = false
+    @State private var captureConfirmation: String?
     @ScaledMetric(relativeTo: .largeTitle) private var pageTitleSize: CGFloat = 34
 
     init(container: ModelContainer, syntheticCalendar: Bool) {
@@ -90,6 +91,7 @@ struct PhoneShell: View {
         }
         .sheet(isPresented: $capturePresented, onDismiss: {
             if captureCommitted {
+                if captureDraft.kind == .note { captureConfirmation = "Added to Notes" }
                 captureDraft = PhoneCaptureDraft()
                 captureCommitted = false
             }
@@ -100,6 +102,12 @@ struct PhoneShell: View {
                 captureCommitted = true
                 capturePresented = false
             }
+        }
+        .task(id: captureConfirmation) {
+            guard captureConfirmation != nil else { return }
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            captureConfirmation = nil
         }
         .alert("Could not save", isPresented: Binding(
             get: { state.errorMessage != nil },
@@ -215,16 +223,28 @@ struct PhoneShell: View {
             .background(.regularMaterial, in: Capsule())
             Spacer(minLength: 8)
             HStack(spacing: 0) {
-                Button { searchPresented = true } label: {
-                    Image(systemName: "magnifyingglass").font(.system(size: 21))
-                        .frame(width: 44, height: 44)
+                if let captureConfirmation {
+                    Label {
+                        Text(captureConfirmation).font(.system(size: 15, weight: .semibold))
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("phone-capture-confirmation")
+                } else {
+                    Button { searchPresented = true } label: {
+                        Image(systemName: "magnifyingglass").font(.system(size: 21))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Search")
+                    Button { capturePresented = true } label: {
+                        Image(systemName: "plus").font(.system(size: 24, weight: .regular))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Create")
                 }
-                .accessibilityLabel("Search")
-                Button { capturePresented = true } label: {
-                    Image(systemName: "plus").font(.system(size: 24, weight: .regular))
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("Create")
             }
             .padding(4)
             .background(.regularMaterial, in: Capsule())
@@ -675,6 +695,7 @@ private struct PhoneCaptureSheet: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var titleFocused: Bool
     @State private var saveError: String?
+    @State private var priorityExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -688,22 +709,60 @@ private struct PhoneCaptureSheet: View {
                     TextEditor(text: $draft.bodyText).frame(minHeight: 105)
                     Toggle("Pin", isOn: $draft.pinned)
                 } else {
-                    Picker("Priority", selection: $draft.priority) {
-                        ForEach(TaskPriority.allCases) { level in Text(level.title).tag(level) }
+                    if priorityExpanded {
+                        HStack(spacing: 3) {
+                            ForEach(TaskPriority.allCases) { level in
+                                Button {
+                                    draft.priority = level
+                                    withAnimation(.easeInOut(duration: 0.16)) { priorityExpanded = false }
+                                } label: {
+                                    Text(level == .high ? "!! High" : level.title)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .foregroundStyle(draft.priority == level ? Color.primary : Color.secondary)
+                                        .background(draft.priority == level ? Color(uiColor: .secondarySystemBackground) : .clear,
+                                                    in: RoundedRectangle(cornerRadius: 8))
+                                }
+                                .accessibilityIdentifier("phone-priority-\(level.rawValue)")
+                                .accessibilityAddTraits(draft.priority == level ? .isSelected : [])
+                            }
+                        }
+                        .padding(3)
+                        .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("phone-priority-expanded")
+                    } else {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) { priorityExpanded = true }
+                        } label: {
+                            HStack {
+                                Text("Priority")
+                                Spacer()
+                                Text(draft.priority == .high ? "!! High" : draft.priority.title)
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.down").font(.caption).foregroundStyle(.tertiary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("phone-priority-expand")
+                        Toggle("Later", isOn: $draft.later)
+                            .onChange(of: draft.later) { _, later in
+                                if later { draft.dueEnabled = false }
+                            }
+                        Toggle("Set date", isOn: $draft.dueEnabled)
+                            .onChange(of: draft.dueEnabled) { _, enabled in
+                                if enabled { draft.later = false }
+                            }
+                        if draft.dueEnabled { DatePicker("Due", selection: $draft.dueDate, displayedComponents: .date) }
                     }
-                    Toggle("Later", isOn: $draft.later)
-                        .onChange(of: draft.later) { _, later in
-                            if later { draft.dueEnabled = false }
-                        }
-                    Toggle("Set date", isOn: $draft.dueEnabled)
-                        .onChange(of: draft.dueEnabled) { _, enabled in
-                            if enabled { draft.later = false }
-                        }
-                    if draft.dueEnabled { DatePicker("Due", selection: $draft.dueDate, displayedComponents: .date) }
                 }
-                TextField("Tags", text: $draft.tags)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                if !priorityExpanded {
+                    TextField("Tags", text: $draft.tags)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
             }
             .navigationTitle("New \(draft.kind.rawValue.lowercased())")
             .navigationBarTitleDisplayMode(.inline)
