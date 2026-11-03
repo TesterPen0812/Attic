@@ -347,6 +347,22 @@ final class UXAuditFixTests: XCTestCase {
         assertCornerAlpha(bitmap, expected, extent: 2.5)
     }
 
+    func testAcceptedShapesDetailCountHoverKeepsItsIconContrast() {
+        for mode in [AtticDesignMode.light, .dark] {
+            var context = AtticDesignContext(mode: mode, surface: .solid)
+            context.reduceMotion = true
+            context.reduceTransparency = false
+            let report = AtticAppearanceCheck.run(families: [.taskRows], contexts: [context], scale: 2)
+            XCTAssertGreaterThan(report.glyphsMeasured, 0)
+            let problems = report.failures.filter { failure, _ in
+                failure.family == AtticGalleryFamily.taskRows.title && failure.specimen == "Hover"
+                    && failure.detail.hasPrefix("checkmark.square")
+                    && (failure.kind == .contrast || failure.kind == .glyphContrast)
+            }
+            XCTAssertTrue(problems.isEmpty, problems.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+        }
+    }
+
     private func shapeBitmap<V: View>(_ view: V, scale: CGFloat = 4) throws -> NSBitmapImageRep {
         let renderer = ImageRenderer(content: view)
         renderer.scale = scale
