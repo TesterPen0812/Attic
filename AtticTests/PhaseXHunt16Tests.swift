@@ -301,24 +301,8 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
     }
     #endif
 
-    private func drawnHintBaseline(_ hint: NSView) throws -> CGFloat {
-        let bitmap = try XCTUnwrap(hint.bitmapImageRepForCachingDisplay(in: hint.bounds))
-        hint.cacheDisplay(in: hint.bounds, to: bitmap)
-        let scale = CGFloat(bitmap.pixelsWide) / hint.bounds.width
-        var first: Int?
-        for x in 0..<bitmap.pixelsWide where first == nil {
-            for y in 0..<bitmap.pixelsHigh where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { first = x; break }
-        }
-        let start = try XCTUnwrap(first, "hint must actually draw")
-        var bottom = 0
-        for x in (start + Int(2 * scale))..<min(bitmap.pixelsWide, start + Int(ceil(4.6 * scale))) {
-            for y in 0..<bitmap.pixelsHigh where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.25 { bottom = max(bottom, y) }
-        }
-        return hint.frame.minY + CGFloat(bottom + 1) / scale
-    }
-
     #if !ATTIC_GENERATED_TESTS
-    func testHeadlessReopenedHintBaselineMatchesTypedText() throws {
+    func testHeadlessReopenedEmptyLineKeepsItsBaselineWithoutAHelper() throws {
         for preceding in [NoteBlock.text("Body"), callout("Callout"), code("let x = 1")] {
             let original = NoteDocument(blocks: [.text("Title"), preceding, .text("")])
             let bytes = try NoteContentCodec.encode(original)
@@ -327,9 +311,11 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
             text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
             let format = NoteFormatControls(engine: engine, textView: text, scrollView: try XCTUnwrap(text.enclosingScrollView), design: AtticDesignContext(mode: .dark))
             controls.append(format); format.refresh(); settle(text)
-            XCTAssertTrue(format.isHintVisible)
-            let hint = try XCTUnwrap(descendants(text).compactMap { $0 as? NoteSlashHintLabel }.first { !$0.isHidden })
-            let before = try drawnHintBaseline(hint)
+            XCTAssertFalse(format.isHintVisible, "B3 removes the helper, including after reopening")
+            XCTAssertTrue(descendants(text).compactMap { $0 as? NoteSlashHintLabel }.allSatisfy(\.isHidden))
+            let blank = try segment(text, at: engine.textStorage.length)
+            let blankLine = try XCTUnwrap(NoteLineGeometry.line(at: blank, in: text))
+            let before = NoteLineGeometry.drawnBaseline(blankLine.baseline, in: text)
             XCTAssertEqual(try NoteContentCodec.encode(engine.document()), bytes)
             text.insertText("x", replacementRange: text.selectedRange()); settle(text)
             let frame = try segment(text, at: engine.textStorage.length)
