@@ -875,6 +875,39 @@ final class ComposerTests: XCTestCase {
         return view
     }
 
+    func testFollowupEventGetsLengthAndCalendarRowsAndGrowsTheListRoom() async throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        model.open(on: .calendar(selected: today), as: .event)
+        await model.loadCalendars()
+        type("Appointment tomorrow at 10am")
+        let view = host(.event, on: .calendar(selected: today))
+        spin(0.2)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        let all = elements(view)
+        func frame(_ id: String) throws -> CGRect {
+            let element = try XCTUnwrap(all.first { $0.accessibilityIdentifier?() == id }, id)
+            return try XCTUnwrap(element.accessibilityFrame?())
+        }
+        let date = try frame("composer-chip-date"), length = try frame("composer-chip-length"), calendar = try frame("composer-chip-calendar")
+        XCTAssertGreaterThan(abs(date.midY - length.midY), 20, "length has its own row")
+        XCTAssertGreaterThan(abs(length.midY - calendar.midY), 20, "calendar has its own row")
+        XCTAssertGreaterThan(view.fittingSize.height, ComposerMetrics.height + 40)
+        XCTAssertGreaterThan(calendar.width, 150, "calendar names have room")
+        let room = PanelComposerRoom()
+        let overlay = NSHostingView(rootView: ComposerOverlay(model: model,
+            layout: PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 352, height: 520)), room: room)
+            .frame(width: 352, height: 520))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 352, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = overlay; windows.append(window)
+        spin(0.4); overlay.layoutSubtreeIfNeeded(); spin(0.1)
+        XCTAssertEqual(room.height, view.fittingSize.height, accuracy: 1, "the inset follows the actual Event card")
+    }
+
     func testTheCardIsTheDesignsWidthAndKeepsTheTasksHeightForEveryKind() {
         let task = host(nil, on: .calendar(selected: today)).fittingSize
         XCTAssertEqual(task.width, ComposerMetrics.width, accuracy: 0.5)

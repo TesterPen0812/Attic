@@ -144,6 +144,7 @@ final class PanelIntegrationTests: XCTestCase {
         let (panel, session, editor) = try await followupNotes()
         editor.insertText("Original", replacementRange: NSRange(location: 0, length: 0))
         followupSwitch(panel, to: .tasks)
+        XCTAssertTrue(panel.uiState.builtPages.contains(.notes), "failure path also retains Notes")
         followupSwitch(panel, to: .notes)
         XCTAssertTrue(session.engine.textView === editor, "failure path uses the retained editor too")
         let live = try XCTUnwrap(session.engine.textView)

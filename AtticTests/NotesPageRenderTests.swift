@@ -39,7 +39,7 @@ final class NotesPageRenderTests: XCTestCase {
 
     private let gate = PersistenceGate()
 
-    private func makeHarness(context: AtticDesignContext, size: CGSize = CGSize(width: 320, height: 520), seed: (NoteStore) throws -> Void) throws -> Harness {
+    private func makeHarness(context: AtticDesignContext, size: CGSize = CGSize(width: 320, height: 520), composerRoom: PanelComposerRoom? = nil, seed: (NoteStore) throws -> Void) throws -> Harness {
         let gate = gate
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         try seed(store)
@@ -48,6 +48,7 @@ final class NotesPageRenderTests: XCTestCase {
         let toasts = PanelToastCenter()
         let root = NotesRenderRoot(noteDraft: noteDraft, store: store, uiState: uiState, toasts: toasts, size: size)
             .atticDesign(context)
+            .environment(\.panelComposerRoom, composerRoom)
         let host = NSHostingView(rootView: AnyView(root))
         host.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -115,6 +116,32 @@ final class NotesPageRenderTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+    func testFollowupNotesWritingAndLibraryMakeRoomForTheCard() throws {
+        let room = PanelComposerRoom()
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft), composerRoom: room) { store in
+            try Self.seedPricing(store)
+        }
+        let note = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        spin()
+        let writing = try XCTUnwrap(harness.controller.active?.engine.scrollView)
+        let resting = writing.contentInsets.bottom
+        for height: CGFloat in [90, 152] {
+            room.set(height: height, open: true); spin()
+            XCTAssertEqual(writing.contentInsets.bottom - resting, height - AtticControlSize.addBarHeight, accuracy: 1)
+        }
+        room.set(height: 0, open: false); spin()
+        XCTAssertEqual(writing.contentInsets.bottom, resting, accuracy: 1)
+        XCTAssertTrue(harness.controller.showLibrary()); spin()
+        let list = try XCTUnwrap(descendants(of: harness.host).compactMap { $0 as? NSScrollView }.first { $0.documentView != nil })
+        func extent() -> CGFloat { (list.documentView?.frame.height ?? 0) + list.contentInsets.bottom }
+        let closed = extent()
+        room.set(height: 152, open: true); spin()
+        XCTAssertGreaterThanOrEqual(extent() - closed, 152 - AtticControlSize.addBarHeight - 1)
+        room.set(height: 0, open: false); spin()
+        XCTAssertEqual(extent(), closed, accuracy: 1)
+    }
+
     func testTitleAccessoriesSitOnTheTitleAndTheTagsPushTheBodyDown() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })

@@ -473,6 +473,32 @@ final class CalendarPageTests: XCTestCase {
 
     // MARK: - Hosted: bounded updates, no layout loop
 
+    func testFollowupCalendarMakesRoomForTheMeasuredCardHeight() throws {
+        let room = PanelComposerRoom()
+        let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
+            calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        let size = CGSize(width: 320, height: 460)
+        let page = CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 28, panelSize: size),
+            taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in })
+            .environment(\.panelComposerRoom, room)
+            .atticDesign(AtticDesignContext(controls: .craft)).frame(width: size.width, height: size.height)
+        let host = NSHostingView(rootView: page)
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.3)); host.layoutSubtreeIfNeeded() }
+        settle()
+        let scroll = try XCTUnwrap(Self.scrollView(in: host))
+        func extent() -> CGFloat { (scroll.documentView?.frame.height ?? 0) + scroll.contentInsets.bottom }
+        let closed = extent()
+        for height: CGFloat in [90, 152] {
+            room.set(height: height, open: true); settle()
+            XCTAssertEqual(extent() - closed, height - AtticControlSize.addBarHeight, accuracy: 1)
+        }
+        room.set(height: 0, open: false); settle()
+        XCTAssertEqual(extent(), closed, accuracy: 1)
+    }
+
     func testHostedPageSettlesAndUpdatesBoundedly() throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Water plants", dueDay: day(2026, 10, 30))])
