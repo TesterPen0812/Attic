@@ -6,6 +6,24 @@ import XCTest
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testAuditA3DeleteAfterBoldUndoAndHistoryDoesNotConflictWithOwnSave() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try type("Audit title\nAudit writing")
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let session = try XCTUnwrap(controller.active)
+        _ = session.engine.makeView()
+        XCTAssertTrue(session.engine.perform(.mark(.bold), selection: NSRange(location: 12, length: 5)))
+        XCTAssertTrue(session.engine.undoCommand())
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertNil(store.note(withID: session.noteID), store.lastErrorMessage ?? "deleted")
+    }
+
     func testU17PermanentPurgeReleasesDisplacedVersionRestoreSession() async throws {
         weak var displaced: NoteSession?
         var noteID: UUID!
