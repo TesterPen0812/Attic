@@ -239,6 +239,9 @@ final class UXAuditFixTests: XCTestCase {
             XCTAssertTrue(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" } === field)
             XCTAssertFalse(field.isEnabled)
             XCTAssertNil(find("draw-title-filter", in: host))
+            model.newCanvas(name: "Another canvas")
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(field.placeholderString, model.canvasName)
         }
     }
 
