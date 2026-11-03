@@ -116,10 +116,6 @@ enum CalendarDesign {
     static let red = AtticRGBA(red: 222 / 255, green: 56 / 255, blue: 46 / 255, alpha: 1)
     static let nowRed = AtticRGBA(red: 232 / 255, green: 64 / 255, blue: 52 / 255, alpha: 1)
 
-    /// The page's search window: a year back, two years ahead.
-    static let searchYearsBack = 1
-    static let searchYearsAhead = 2
-
     /// The design's ease, `cubic-bezier(0.3, 0.7, 0.2, 1)` (the Tasks
     /// search's motion: it opens in 240 ms and leaves in 120 ms).
     static func searchAnimation(opening: Bool, reduceMotion: Bool) -> Animation {

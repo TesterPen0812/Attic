@@ -44,6 +44,7 @@ final class CalendarPageModel: ObservableObject {
     /// until the source reports a change.
     private var eventCache: (interval: DateInterval, events: [CalendarEvent])?
     private var searchCache: (query: String, interval: DateInterval, events: [CalendarEvent])?
+    private var searchCacheComplete = true
     private var sourceGeneration = 0
     private var eventRequest: DateInterval?
     private var searchRequest: (query: String, interval: DateInterval)?
@@ -78,6 +79,12 @@ final class CalendarPageModel: ObservableObject {
                                         groups: [], query: "", access: source.accessState)
         rebuild()
         observe()
+    }
+
+    deinit {
+        searchTask?.cancel()
+        eventTask?.cancel()
+        eventSearchTask?.cancel()
     }
 
     // MARK: Actions
@@ -118,6 +125,10 @@ final class CalendarPageModel: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            eventSearchTask?.cancel()
+            eventSearchTask = nil
+            searchRequest = nil
+            if !searchCacheComplete { searchCache = nil }
             rebuild(query: text)
             return
         }
@@ -225,11 +236,42 @@ final class CalendarPageModel: ObservableObject {
     }
 
     private func search(_ query: String, in interval: DateInterval) -> [CalendarEvent] {
-        if let searchCache, searchCache.query == query, searchCache.interval == interval {
+        if let searchCache, searchCache.query == query, searchCache.interval == interval,
+           searchCacheComplete || (searchRequest?.query == query && searchRequest?.interval == interval) {
             if searchRequest?.query != query || searchRequest?.interval != interval {
                 eventSearchTask?.cancel(); searchRequest = nil
             }
             return searchCache.events
+        }
+        if let reader = source as? AsyncCalendarEventSearching {
+            if searchRequest?.query != query || searchRequest?.interval != interval {
+                eventSearchTask?.cancel()
+                searchCache = nil
+                searchCacheComplete = false
+                searchRequest = (query, interval)
+                let epoch = sourceGeneration
+                eventSearchTask = Task { [weak self] in
+                    var matches: [CalendarEvent] = []
+                    var seen = Set<CalendarEvent>()
+                    for await batch in reader.searchEvents(query, in: interval, around: self?.now() ?? Date()) {
+                        guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
+                              self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
+                        for event in batch where seen.insert(event).inserted { matches.append(event) }
+                        self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
+                        self.rebuild()
+                    }
+                    guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
+                          self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
+                    self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
+                    self.searchCacheComplete = true
+                    self.searchRequest = nil
+                    self.rebuild()
+                }
+                #if DEBUG
+                sourceFetches += 1
+                #endif
+            }
+            return []
         }
         if let reader = source as? AsyncCalendarEventReading {
             if searchRequest?.query != query || searchRequest?.interval != interval {
@@ -241,6 +283,7 @@ final class CalendarPageModel: ObservableObject {
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                     self.searchCache = (query, interval, events)
+                    self.searchCacheComplete = true
                     self.searchRequest = nil
                     self.rebuild()
                 }
@@ -252,6 +295,7 @@ final class CalendarPageModel: ObservableObject {
         }
         let events = source.search(query, in: interval)
         searchCache = (query, interval, events)
+        searchCacheComplete = true
         #if DEBUG
         sourceFetches += 1
         #endif
