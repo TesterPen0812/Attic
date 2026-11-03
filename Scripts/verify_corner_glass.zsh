@@ -2,7 +2,7 @@
 # Run from the Air's authorized SSH session. Builds run in agents tmux.
 set -eu
 [[ $(scutil --get ComputerName) == *Air* ]] || { print -u2 'Air only'; exit 2; }
-(( $# == 2 || $# == 3 )) || { print -u2 'usage: verify_corner_glass.zsh <AtticBugsTwo executable> <evidence dir> [glass]'; exit 2; }
+(( $# == 2 || $# == 3 )) || { print -u2 'usage: verify_corner_glass.zsh <AtticBugsTwo executable> <evidence dir> [glass|solid]'; exit 2; }
 [[ ! -e "$2/driver.log" ]] || { print -u2 'Use a fresh evidence directory for each run'; exit 2; }
 root=${0:A:h:h}
 evidence=$2

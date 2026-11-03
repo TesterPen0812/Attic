@@ -3,8 +3,9 @@ import AppKit
 import ScreenCaptureKit
 
 let args = CommandLine.arguments
-guard args.count == 3 || args.count == 4 else { fatalError("usage: check <preview executable> <evidence directory> [glass]") }
+guard args.count == 3 || args.count == 4 else { fatalError("usage: check <preview executable> <evidence directory> [glass|solid]") }
 let executable = args[1], output = args[2]
+let surface = args.last == "solid" ? "solid" : "glass"
 guard executable.contains("AtticBugsTwo.app/Contents/MacOS/AtticBugsTwo") else { fatalError("test identity only") }
 try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
 let app = NSApplication.shared
@@ -132,7 +133,7 @@ Task { @MainActor in
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.createsNewApplicationInstance = true
-        configuration.arguments = ["-selectedCorner", "topRight", "-panelIslandSpot", "screenSideCornerEnd", "-hasShownWelcome", "YES", "-appearancePreference", "light", "-panelSurfaceStyle", "glass"]
+        configuration.arguments = ["-selectedCorner", "topRight", "-panelIslandSpot", "screenSideCornerEnd", "-hasShownWelcome", "YES", "-appearancePreference", "light", "-panelSurfaceStyle", surface]
         configuration.environment = ["ATTIC_PAGE_BENCH": "1"]
         let bundle = URL(fileURLWithPath: executable).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         preview = try await NSWorkspace.shared.openApplication(at: bundle, configuration: configuration)
