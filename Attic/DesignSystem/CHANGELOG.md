@@ -1,3 +1,8 @@
+## 2026-11-03 · Draw field focus
+
+Draw Search and canvas Tags claim their own native fields after attachment.
+Escape closes Search and restores the page's controls.
+
 ## 2026-11-03 · Complete failure messages
 
 Panel failure notices wrap to their full message at narrow widths, so the

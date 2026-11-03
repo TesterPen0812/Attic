@@ -238,6 +238,7 @@ extension DrawPageModel {
     /// Escape: the innermost open thing closes, then the selection clears.
     @discardableResult
     func escape() -> Bool {
+        if isSearching { closeSearch(); return true }
         if editing != nil { endEditing(); return true }
         if isFiltering { closeFilter(); return true }
         if isSelectionStyleOpen { isSelectionStyleOpen = false; return true }

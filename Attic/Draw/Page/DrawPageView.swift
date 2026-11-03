@@ -165,10 +165,11 @@ struct DrawTitleCapsule: View {
 struct DrawSearchField: View {
     @ObservedObject var model: DrawPageModel
     @ObservedObject var search: DrawSearchModel
+    @State private var searchFocused = true
 
     var body: some View {
         AtticTabsSearchField(placeholder: String(localized: "Search canvases"), text: $search.query,
-                             floating: true, onEscape: model.closeSearch, header: true)
+                             isFocused: $searchFocused, floating: true, onEscape: model.closeSearch, header: true)
             .atticDesignCorners()
             .onKeyPress(.upArrow) { search.moveHighlight(by: -1); return .handled }
             .onKeyPress(.downArrow) { search.moveHighlight(by: 1); return .handled }

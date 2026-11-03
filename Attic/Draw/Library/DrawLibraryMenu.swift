@@ -330,6 +330,7 @@ enum DrawThumbnailCache {
 /// listing every canvas tag with its count, the open canvas's ticked.
 struct DrawCanvasTagEditor: View {
     @ObservedObject var model: DrawLibraryMenuModel
+    @State private var fieldClaim = AtticFieldClaim()
 
     var body: some View {
         let current = Set(model.currentCanvas?.tags ?? [])
@@ -346,6 +347,18 @@ struct DrawCanvasTagEditor: View {
                 return true
             })
         }
+        .background(AtticFieldClaimProbe(claim: fieldClaim, placeholder: String(localized: "Tag"),
+            wanted: { model.mode == .tags }).accessibilityHidden(true))
+        .onAppear {
+            // The inline card replaces the filter's live field. Claim its
+            // own native field after attachment, once the old editor leaves.
+            let request = fieldClaim.beginFocusRequest()
+            DispatchQueue.main.async {
+                guard model.mode == .tags, let window = fieldClaim.field?.window else { return }
+                fieldClaim.takeKeyboard(request: request, in: window)
+            }
+        }
+        .onDisappear { fieldClaim.cancelFocusRequest() }
         .onExitCommand { model.closeTags() }
         .accessibilityIdentifier("draw-library-tags")
     }
