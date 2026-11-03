@@ -58,7 +58,19 @@ final class TasksGoingInTests: XCTestCase {
             AtticTransparencySeam.systemOverride = nil
         }
         let id = try add("Audit original", due: -1)
-        let probes = try drawn {
+        let size = CGSize(width: 320, height: 460)
+        let window = NSPanel(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+            addBarFocused: .constant(false), pointer: TasksPointer())
+        let host = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        window.contentView = host
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        do {
             self.model.beginEditingTitle(id)
             self.model.editingTitle = "Audit revised"
             XCTAssertTrue(self.model.commitTitle())
@@ -67,10 +79,17 @@ final class TasksGoingInTests: XCTestCase {
             XCTAssertTrue(self.model.toggleTag("home", for: [id]).isApplied)
         }
         XCTAssertEqual(model.rows(for: .now).first?.model.title, "Audit revised")
-        XCTAssertTrue(probes.contains {
-            if case .text(.taskTitle, "Audit revised") = $0.kind { return $0.frame != .null }
-            return false
-        }, "the mounted row redraws its title after a durable edit")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        host.layoutSubtreeIfNeeded()
+        func labels(_ element: AnyObject, depth: Int = 0) -> [String] {
+            guard depth < 40 else { return [] }
+            let own = [(element.accessibilityLabel?() ?? nil) ?? "", (element.accessibilityValue?() ?? nil) as? String ?? ""]
+            return own + ((element.accessibilityChildren?() ?? nil) ?? []).flatMap { labels($0 as AnyObject, depth: depth + 1) }
+        }
+        let shown = labels(host)
+        print("AUDIT_A1_AX", shown.filter { $0.contains("Audit") })
+        XCTAssertTrue(shown.contains { $0.contains("Audit revised") }, "the mounted row and VoiceOver read the durable edit")
+        XCTAssertFalse(shown.contains { $0.contains("Audit original") }, "the original row does not remain visible")
     }
 
     // MARK: - The ›
