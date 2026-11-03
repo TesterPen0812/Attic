@@ -161,6 +161,62 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.notes.note(withID: session.noteID)?.title, "Original unsaved")
     }
 
+    func testFollowupHiddenNotesCannotConsumeFindEscapeOrReclaimFocus() async throws {
+        var chrome: NotesPageChrome?
+        NotesEditorPage.lifetimeProbe = { value, _ in chrome = value }
+        defer { NotesEditorPage.lifetimeProbe = nil }
+        let (panel, session, editor) = try await followupNotes()
+        session.engine.find.show()
+        XCTAssertTrue(session.engine.find.isShown)
+        let controls = try XCTUnwrap(chrome?.controls)
+        followupSwitch(panel, to: .tasks)
+        XCTAssertFalse(session.engine.find.isShown, "Find releases its input without refocusing on leave")
+        let window = try XCTUnwrap(editor.window)
+        window.makeFirstResponder(nil)
+        let responder = window.firstResponder
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        XCTAssertFalse(controls.handleKey(escape), "hidden controls cannot take another page's Escape")
+        editor.restoreInputFocus()
+        XCTAssertTrue(window.firstResponder === responder, "late focus restoration cannot focus hidden Notes")
+    }
+
+    func testFollowupHiddenNotesLibraryReleasesItsNativeKeyboardMonitor() async throws {
+        var keys: NotesLibraryKeys?
+        NotesLibraryView.lifetimeProbe = { keys = $0 }
+        defer { NotesLibraryView.lifetimeProbe = nil }
+        let (panel, _, _) = try await followupNotes()
+        XCTAssertTrue(panel.noteDraft.pages.showLibrary()); spin(0.3)
+        let libraryKeys = try XCTUnwrap(keys)
+        XCTAssertNotNil(libraryKeys.handler)
+        followupSwitch(panel, to: .tasks)
+        XCTAssertNil(libraryKeys.handler, "the hidden library cannot handle typing, Return, delete or Undo")
+        followupSwitch(panel, to: .notes)
+        XCTAssertNotNil(libraryKeys.handler, "the same built library resumes its keys")
+        XCTAssertNotNil(libraryKeys.window)
+    }
+
+    func testFollowupHiddenNotesRefusesLateTableInput() async throws {
+        let panel = try makePanel()
+        let (id, _) = try panel.notes.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Table"), .table(.blank()), .text("After")])).get()
+        await panel.noteDraft.pages.startAndWait()
+        XCTAssertTrue(panel.noteDraft.pages.open(noteID: id))
+        followupSwitch(panel, to: .notes)
+        let session = try XCTUnwrap(panel.noteDraft.pages.active)
+        let engine = session.engine
+        let blockID = try XCTUnwrap(engine.document().blocks.first { $0.kind == .table }?.id)
+        let attachment = try XCTUnwrap(engine.tableAttachment(id: blockID)?.0)
+        engine.enterTable(attachment, at: .init(row: 1, column: 0), caret: .start)
+        spin(0.2)
+        let cell = attachment.tableView.editor
+        followupSwitch(panel, to: .tasks)
+        let before = engine.document()
+        cell.insertText("late", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(engine.document(), before, "retaining the table cannot retain permission to edit it")
+        XCTAssertFalse(engine.allowsTableCellEdit)
+    }
+
     private func spin(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }

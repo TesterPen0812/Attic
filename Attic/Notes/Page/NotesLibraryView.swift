@@ -9,6 +9,9 @@ import SwiftUI
 /// found nothing, makes the note it names), ⌘⌫ deletes; Esc ends the
 /// search, then goes back to the note.
 struct NotesLibraryView: View {
+    #if DEBUG
+    static var lifetimeProbe: ((NotesLibraryKeys) -> Void)?
+    #endif
     @ObservedObject var model: NotesLibraryModel
     @ObservedObject var controller: NotesPageController
     @ObservedObject var store: NoteStore
@@ -105,6 +108,9 @@ struct NotesLibraryView: View {
         .padding(.horizontal, pageEdge)
         .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
+            #if DEBUG
+            Self.lifetimeProbe?(keys)
+            #endif
             keys.start(owner: keyOwner, handler: { event in handle(event) })
             if searchFocused { beginSearch() }
         }
