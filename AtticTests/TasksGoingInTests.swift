@@ -52,12 +52,19 @@ final class TasksGoingInTests: XCTestCase {
     // A1: edits must reach the already mounted lazy row, including AX.
     func testAuditA1MountedRowReadsEditedFields() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
-        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
         let id = try add("Audit original", due: -1)
-        let task = try XCTUnwrap(store.task(withID: id))
         let probes = try drawn {
-            XCTAssertTrue(self.store.rename(task, to: "Audit revised"))
-            XCTAssertTrue(self.store.setPriority(.high, for: task))
+            self.model.beginEditingTitle(id)
+            self.model.editingTitle = "Audit revised"
+            XCTAssertTrue(self.model.commitTitle())
+            XCTAssertTrue(self.model.setDueDay(self.day(3), for: [id]).isApplied)
+            XCTAssertTrue(self.model.setPriority(.high, for: [id]).isApplied)
+            XCTAssertTrue(self.model.toggleTag("home", for: [id]).isApplied)
         }
         XCTAssertEqual(model.rows(for: .now).first?.model.title, "Audit revised")
         XCTAssertTrue(probes.contains {
