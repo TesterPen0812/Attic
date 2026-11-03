@@ -17,6 +17,21 @@ final class UXAuditFixTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAuditB2WidthStopsAtReadingWidthOnLoadAndEdit() throws {
+        let suite = "AuditB2.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(1900.0, forKey: "panelContentSize")
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(PanelContentSize.max, Double(PanelPageLayout.readingWidth))
+        XCTAssertEqual(settings.panelContentSize, 600)
+        settings.panelContentSize = 950
+        XCTAssertEqual(settings.panelContentSize, 600)
+        settings.panelContentSize = 420
+        XCTAssertEqual(settings.panelContentSize, 420)
+        XCTAssertEqual(AppSettings(defaults: defaults).panelContentSize, 420)
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
