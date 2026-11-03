@@ -1,4 +1,5 @@
 import Combine
+import QuartzCore
 import SwiftUI
 
 extension PanelBottomBarLook {
@@ -289,10 +290,10 @@ struct DrawTitleField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.setAccessibilityLabel(label)
         field.isEnabled = requestsFocus
-        if requestsFocus { DispatchQueue.main.async { [weak field] in
-            guard context.coordinator.parent.requestsFocus, let field else { return }
-            field.window?.makeFirstResponder(field)
-        } }
+        #if DEBUG
+        DrawMenuFocusProbe.record("field.created", details: identifier ?? "")
+        #endif
+        if requestsFocus { context.coordinator.claimFocus(field) }
         return field
     }
 
@@ -300,16 +301,36 @@ struct DrawTitleField: NSViewRepresentable {
         let takesFocus = requestsFocus && !context.coordinator.parent.requestsFocus
         context.coordinator.parent = self
         field.isEnabled = requestsFocus
-        if takesFocus { DispatchQueue.main.async { [weak field] in
-            guard context.coordinator.parent.requestsFocus, let field else { return }
-            field.window?.makeFirstResponder(field)
-        } }
+        if takesFocus { context.coordinator.claimFocus(field) }
         if field.stringValue != text { field.stringValue = text }
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: DrawTitleField
         init(_ parent: DrawTitleField) { self.parent = parent }
+
+        func claimFocus(_ field: NSTextField) {
+            let claim: @MainActor () -> Void = { [weak self, weak field] in
+                guard let self, self.parent.requestsFocus, let field, let window = field.window else { return }
+                #if DEBUG
+                DrawMenuFocusProbe.record("focus.begin", details: "hadEditor=\(window.fieldEditor(false, for: field) != nil)")
+                #endif
+                let accepted = window.makeFirstResponder(field)
+                #if DEBUG
+                DrawMenuFocusProbe.record("focus.end", details: "accepted=\(accepted)")
+                DrawMenuFocusProbe.flush()
+                #endif
+            }
+            #if DEBUG
+            if let delay = DrawMenuFocusProbe.delay {
+                DrawMenuFocusProbe.record("focus.scheduled", details: "delay=\(delay)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: claim)
+                return
+            }
+            #endif
+            DispatchQueue.main.async(execute: claim)
+        }
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
@@ -329,3 +350,28 @@ struct DrawTitleField: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+/// Temporary, bounded A11 discriminator in this job's isolated preview only.
+/// Normal launches keep the original focus scheduling and emit nothing.
+@MainActor
+enum DrawMenuFocusProbe {
+    static let delay: TimeInterval? = {
+        guard Bundle.main.bundleIdentifier?.hasPrefix("com.taha.Attic.preview.fixes") == true,
+              let raw = ProcessInfo.processInfo.environment["ATTIC_MENU_FOCUS_DELAY"],
+              let value = Double(raw), value.isFinite, (0...2).contains(value) else { return nil }
+        return value
+    }()
+    private static var records: [String] = []
+    static func record(_ event: String, details: String = "") {
+        guard delay != nil else { return }
+        records.append(String(format: "ATTIC_MENU_TRACE %.6f %@ %@", CACurrentMediaTime(), event, details))
+    }
+    static func flush() {
+        guard !records.isEmpty else { return }
+        let batch = records.joined(separator: "\n")
+        records.removeAll(keepingCapacity: true)
+        DispatchQueue.global(qos: .utility).async { print(batch) }
+    }
+}
+#endif
