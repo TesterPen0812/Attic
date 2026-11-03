@@ -193,14 +193,10 @@ extension AtticRaisedRecipe {
 /// stronger edge. Otherwise (the Craft style, Reduce Transparency, or a
 /// capture) the drawn `AtticRaisedBackground`.
 ///
-/// Open for Phase 1 (recorded 2026-09-25, no behaviour change yet): native
-/// Liquid Glass renders flat (a grey slab with a dark outline, no
-/// highlights) when its window is not key, and the panel currently reveals
-/// as a non-key window. Phase 1 must decide between making the panel key
-/// while it is shown and a deliberate non-key treatment (for example the
-/// Craft style while inactive), and add a real screen-capture check on
-/// macOS 26 of the controls in the revealed panel: `ImageRenderer`
-/// captures cannot render glass, so only an on-screen capture proves it.
+/// Native Liquid Glass otherwise renders flat in an inactive window. The
+/// docked panel requests active native appearance without taking focus
+/// (owner, 2026-11-03). Verify that on screen with its backdrop: off-screen
+/// ImageRenderer captures cannot render glass.
 struct AtticRaisedMaterialModifier: ViewModifier {
     let cornerRadius: CGFloat
     let state: AtticControlState

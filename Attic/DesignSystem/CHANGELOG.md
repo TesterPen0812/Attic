@@ -1,3 +1,10 @@
+## 2026-11-03 · Glass before the first click
+
+The docked panel and its island request active native Liquid Glass even
+when another app owns the keyboard. Corner reveal and pointer wake keep
+focus with that app. Solid controls retain their release-delayed key look;
+Reduce Transparency and the selected surface still apply.
+
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white

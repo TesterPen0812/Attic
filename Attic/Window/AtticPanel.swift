@@ -98,7 +98,8 @@ final class AtticPanel: NSPanel {
 
     override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
-    /// The same release-delayed state drives native glass and SwiftUI chrome.
+    /// Native glass appearance, independent of keyboard ownership. Docked
+    /// panels keep glass active on hover; other panels may follow key state.
     var activeAppearance: (() -> Bool)?
     @objc func _hasActiveAppearance() -> Bool { activeAppearance?() ?? (isKeyWindow && !isPressing) }
 
