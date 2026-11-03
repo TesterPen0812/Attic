@@ -49,6 +49,23 @@ final class TasksGoingInTests: XCTestCase {
         return id
     }
 
+    // A1: edits must reach the already mounted lazy row, including AX.
+    func testAuditA1MountedRowReadsEditedFields() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let id = try add("Audit original", due: -1)
+        let task = try XCTUnwrap(store.task(withID: id))
+        let probes = try drawn {
+            XCTAssertTrue(self.store.rename(task, to: "Audit revised"))
+            XCTAssertTrue(self.store.setPriority(.high, for: task))
+        }
+        XCTAssertEqual(model.rows(for: .now).first?.model.title, "Audit revised")
+        XCTAssertTrue(probes.contains {
+            if case .text(.taskTitle, "Audit revised") = $0.kind { return $0.frame != .null }
+            return false
+        }, "the mounted row redraws its title after a durable edit")
+    }
+
     // MARK: - The ›
 
     func testTheOpenButtonShowsOnHoverOrSelectionAndNeverWhileRenaming() {
