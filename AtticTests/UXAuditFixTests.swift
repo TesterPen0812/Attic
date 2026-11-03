@@ -95,7 +95,10 @@ final class UXAuditFixTests: XCTestCase {
             searchEditor.insertText("plan", replacementRange: searchEditor.selectedRange())
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             XCTAssertEqual(model.search.query, "plan")
-            searchEditor.cancelOperation(nil)
+            let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
+            window.sendEvent(escape)
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             XCTAssertFalse(model.isSearching)
         }
@@ -140,8 +143,8 @@ final class UXAuditFixTests: XCTestCase {
             onOpen: { _ in }, onDelete: { _ in }, onBack: {})
         try withHost(view) { host in
             let group = try XCTUnwrap(find("notes-library-group-today", in: host))
-            let value = (group as? NSAccessibilityElement)?.accessibilityValue() as? String
-                ?? (group as? NSView)?.accessibilityValue() as? String
+            let value = (group as? any NSAccessibilityProtocol)?.accessibilityValue() as? String
+            print("AUDIT_GROUP_AX", type(of: group), value ?? "nil")
             XCTAssertEqual(value, "1 note")
         }
     }
