@@ -143,7 +143,10 @@ final class UXAuditFixTests: XCTestCase {
             onOpen: { _ in }, onDelete: { _ in }, onBack: {})
         try withHost(view) { host in
             let group = try XCTUnwrap(find("notes-library-group-today", in: host))
-            let value = (group as? any NSAccessibilityProtocol)?.accessibilityValue() as? String
+            let selector = NSSelectorFromString("accessibilityValue")
+            let object = try XCTUnwrap(group as? NSObject)
+            XCTAssertTrue(object.responds(to: selector))
+            let value = object.perform(selector)?.takeUnretainedValue() as? String
             print("AUDIT_GROUP_AX", type(of: group), value ?? "nil")
             XCTAssertEqual(value, "1 note")
         }
