@@ -101,6 +101,7 @@ final class UXAuditFixTests: XCTestCase {
         }
         model.closeSearch()
         model.openFilter()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         model.library.perform(.tags)
         RunLoop.main.run(until: Date().addingTimeInterval(0.6))
         let tagEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
