@@ -8,7 +8,8 @@ Reduce Transparency and the selected surface still apply.
 Space changes reconcile a live reveal with WindowServer's presentation,
 including entering another app's full-screen Space with a stationary
 pointer. The panel and island re-order without activating Attic or
-superseding a hide.
+superseding a hide. A still-ordered family gets fresh native admission
+(out, then in); bringing it forward alone does not join the new Space.
 
 ## 2026-11-02 · Draw cursors keep their screen size
 

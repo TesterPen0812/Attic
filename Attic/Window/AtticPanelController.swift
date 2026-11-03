@@ -31,7 +31,17 @@ enum PanelSpacePresentation {
     @discardableResult
     static func reassert(_ window: NSWindow) -> Bool {
         guard !window.isVisible || !window.isOnActiveSpace else { return false }
+        let children = (window.childWindows ?? []).filter(\.isVisible)
+        // WindowServer keeps an already ordered overlay in its old Space:
+        // order-front alone does not admit it to a new full-screen Space.
+        // Explicitly cycle the visible family, including the child's mouse
+        // policy. Preserve hidden children and the live views/first responder.
+        if window.isVisible {
+            children.forEach { $0.orderOut(nil) }
+            window.orderOut(nil)
+        }
         window.orderFrontRegardless()
+        children.forEach { $0.orderFrontRegardless() }
         return true
     }
 }
