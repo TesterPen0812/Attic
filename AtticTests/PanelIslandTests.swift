@@ -19,6 +19,22 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Frame math
 
+    /// A revealed overlay must follow the pointer's Space even when it
+    /// becomes another application's full-screen Space without a new move.
+    /// canJoinAllSpaces/fullScreenAuxiliary alone let an already visible
+    /// overlay disappear during that transition (Air, f685090d).
+    func testDockedOverlayWindowsCanJoinOtherApplicationsWithoutActivation() throws {
+        try withController { controller, _, panel in
+            for window in [panel, controller.islandWindowsForTesting.island, controller.islandWindowsForTesting.label] {
+                XCTAssertTrue(window.collectionBehavior.contains(.canJoinAllApplications))
+                XCTAssertTrue(window.collectionBehavior.contains(.canJoinAllSpaces))
+                XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAuxiliary))
+                XCTAssertTrue(window.styleMask.contains(.nonactivatingPanel))
+                XCTAssertFalse(window.isKeyWindow, "Space membership must not acquire the keyboard")
+            }
+        }
+    }
+
     private func placed(in visible: CGRect, corner: ScreenCorner) -> (panel: CGRect, island: CGRect) {
         let area = L.panelArea(in: visible, corner: corner, spot: standing)
         let panel = PanelGeometry.panelFrame(in: area, size: size, corner: corner)
