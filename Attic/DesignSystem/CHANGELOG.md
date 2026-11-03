@@ -1,7 +1,8 @@
 ## 2026-11-03 · Glass before the first click
 
-The docked panel and its island request active native Liquid Glass even
-when another app owns the keyboard. Corner reveal and pointer wake keep
+The docked panel and its island request active native Liquid Glass from
+creation, even before child attachment and while another app owns the
+keyboard. Corner reveal and pointer wake keep
 focus with that app. Solid controls retain their release-delayed key look;
 Reduce Transparency and the selected surface still apply.
 

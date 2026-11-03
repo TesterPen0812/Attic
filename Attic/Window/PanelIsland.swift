@@ -996,19 +996,12 @@ final class PanelIslandWindow: NSPanel {
     }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
-    /// Draws with the parent's native appearance, so the island's glass
-    /// matches the panel without taking its keyboard. The docked panel
-    /// keeps glass active even before a click (owner, 3 Nov). AppKit asks
-    /// the window it is in, and a child window that is never key always
-    /// answers inactive; SwiftUI's `appearsActive`/`controlActiveState` and
-    /// an `isKeyWindow` override do not reach it (measured on macOS 26.4).
-    /// Only the look changes: the window still never becomes key or main,
-    /// and the keyboard stays with the panel. AppKit asks again whenever
-    /// the parent's key state changes and when the window is ordered in
-    /// attached (`show(attachedTo:)` attaches before it orders in).
-    @objc func _hasActiveAppearance() -> Bool {
-        (parent as? AtticPanel)?._hasActiveAppearance() ?? (parent?.isKeyWindow ?? false)
-    }
+    /// Glass initializes when its hosting view is installed, before this
+    /// window has a parent. A parent-dependent answer caches inactive glass
+    /// on a cold corner reveal, even after the getter later returns true.
+    /// Request active glass from creation, as the panel does (owner, 3 Nov).
+    /// This changes neither key/main eligibility nor application activation.
+    @objc func _hasActiveAppearance() -> Bool { true }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     // Clicks are routed by the island's own passthrough, never by its
