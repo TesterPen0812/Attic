@@ -5,6 +5,9 @@ when another app owns the keyboard. Corner reveal and pointer wake keep
 focus with that app. Solid controls retain their release-delayed key look;
 Reduce Transparency and the selected surface still apply.
 
+The panel and island explicitly join other applications' full-screen
+Spaces, including a Space entered while the pointer stays in the corner.
+
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white

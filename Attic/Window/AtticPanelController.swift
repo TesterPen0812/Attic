@@ -794,7 +794,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.handleInteractionCancellation(cancellation, frame: frame)
         }
         panel.delegate = self
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        // Spaces membership alone does not carry an already visible panel
+        // into another app's full-screen Space. Explicit cross-application
+        // eligibility keeps it there without a new order-in or activation.
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .transient]
     }
 
     private func bindContentSize() {

@@ -1137,7 +1137,7 @@ final class PanelIslandWindows {
             window.becomesKeyOnlyIfNeeded = true
             window.ignoresMouseEvents = !interactive
             window.allowsKey = interactive
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+            window.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .transient]
             return window
         }
         island = window(interactive: true)
