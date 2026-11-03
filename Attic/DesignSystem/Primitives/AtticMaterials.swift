@@ -735,6 +735,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// surface; gallery boards taller than a panel pass the panel's height,
     /// so text sits in the Tint exactly as it would in the panel.
     var tintHeight: CGFloat?
+    /// A small satellite crops the panel-sized material. Native regular glass
+    /// switches to a dark control treatment at narrow dimensions.
+    var nativeGlassSize: CGSize?
 
     @Environment(\.atticCapture) private var capture
 
@@ -798,8 +801,19 @@ struct AtticSurfaceBackground<S: Shape>: View {
             AtticVisualEffect(material: .sidebar)
                 .clipShape(shape)
         } else if model.kind == .glass {
-            shape.fill(Color.clear).glassEffect(.regular, in: shape)
-                .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
+            Group {
+                if let nativeGlassSize {
+                    GeometryReader { proxy in
+                        shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                            .frame(width: nativeGlassSize.width, height: nativeGlassSize.height)
+                            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    }
+                    .clipShape(shape)
+                } else {
+                    shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                }
+            }
+            .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
         } else {
             ZStack {
                 shape.fill(.ultraThinMaterial)
@@ -871,6 +885,18 @@ struct AtticVisualEffect: NSViewRepresentable {
 }
 
 // MARK: - The panel's surface
+
+/// The panel's native material footprint, shared with its satellite surface.
+private struct AtticPanelSurfaceSizeKey: EnvironmentKey {
+    static let defaultValue = AtticLayout.panelSize
+}
+
+extension EnvironmentValues {
+    var atticPanelSurfaceSize: CGSize {
+        get { self[AtticPanelSurfaceSizeKey.self] }
+        set { self[AtticPanelSurfaceSizeKey.self] = newValue }
+    }
+}
 
 /// The panel's own surface inside its squircle: the palette-hued base, the
 /// native material on Glass and Frosted, and the Tint (the live panel and
