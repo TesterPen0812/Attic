@@ -1,3 +1,9 @@
+## 2026-11-03 · Distinct canvases, meaningful Restore and Calendar years
+
+New unnamed canvases take the next free Untitled suffix, including unsaved drafts.
+History disables Restore when the writing is identical. Calendar search names each
+year when results cross years, including the first result outside the current year.
+
 ## 2026-11-03 · Link to a note
 
 The existing Link field offers up to four matching note titles, in 23 pt rows.

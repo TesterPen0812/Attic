@@ -3607,8 +3607,7 @@ extension NotesPageController {
     }
 
     func restoreHistoryVersionDurably() async -> Bool {
-        guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
-              !browser.isRestoring, !browser.showsCurrent else { return false }
+        guard let browser = historyBrowser, let selected = browser.selected, browser.canRestoreSelected else { return false }
         // A task's page restores its note's version through its own session
         // (Phase 3): the note only; the task, its subtasks and the
         // association are never rewound (§ 2.10, S4).

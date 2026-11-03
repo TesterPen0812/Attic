@@ -116,7 +116,7 @@ struct NoteHistoryPage: View {
                     Button { restore() } label: {
                         Text(browser.failure == nil ? "Restore" : "Retry").frame(width: 60, height: 32)
                     }
-                        .disabled(browser.selected?.canRestore != true || browser.isRestoring || browser.showsCurrent)
+                        .disabled(!browser.canRestoreSelected)
                         .accessibilityIdentifier("notes-history-restore")
                 }
                 .font(.system(size: 11.5, weight: .medium))

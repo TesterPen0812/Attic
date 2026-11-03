@@ -145,7 +145,18 @@ struct CalendarPage: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             // Every day on its own, each with its grey date tile, empty days
             // too (owner, 2026-10-31: the older agenda).
-            ForEach(snapshot.groups) { group in
+            ForEach(Array(snapshot.groups.enumerated()), id: \.element.id) { index, group in
+                if snapshot.isSearching && (index == 0 ? group.day.year != snapshot.today.year
+                    : snapshot.groups[index - 1].day.year != group.day.year) {
+                    Text(verbatim: String(group.day.year))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color)
+                        .padding(.horizontal, CalendarDesign.dayPadding)
+                        .padding(.top, 4)
+                        .padding(.bottom, 6)
+                        .accessibilityLabel(String(group.day.year))
+                        .accessibilityIdentifier("calendar-search-year-\(group.day.year)")
+                }
                 CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
                                   rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
                                   onSelectDay: { day in afterClosingEvent { model.select(day) } })
