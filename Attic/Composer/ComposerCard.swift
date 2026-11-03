@@ -70,7 +70,9 @@ struct ComposerCard: View {
     @ObservedObject var title: TasksAddBarState
 
     @Environment(\.atticDesign) private var design
-    @State private var titleFocused = true
+    /// The card is kept built while closed (A11): the title asks for the
+    /// keyboard only as the card opens (`focusRequest`), never on mount.
+    @State private var titleFocused = false
     @FocusState private var writingFocused: Bool
     /// The title field's wrapped height (one line: `titleHeight`).
     @State private var titleFieldHeight = ComposerMetrics.titleHeight
@@ -113,6 +115,12 @@ struct ComposerCard: View {
         .modifier(ComposerChrome(drawn: drawsChrome))
         // Closing: still drawn for the shrink, but takes no input.
         .disabled(!model.isOpen)
+        .onAppear { if model.isOpen { titleFocused = true } }
+        .onChange(of: model.isOpen) { _, open in
+            guard !open else { return }
+            titleFocused = false
+            writingFocused = false
+        }
         .onChange(of: model.focusRequest) { _, _ in
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
@@ -229,7 +237,8 @@ struct ComposerCard: View {
                 editor: model.editor,
                 accessibilityIdentifier: "composer-title",
                 growth: AtticTokenFieldGrowth(height: $titleFieldHeight, minHeight: ComposerMetrics.titleHeight,
-                                              maxLines: ComposerMetrics.titleMaxLines)
+                                              maxLines: ComposerMetrics.titleMaxLines),
+                acceptsKeyboard: model.isOpen
             )
             .frame(height: titleLineHeight, alignment: .top)
             .overlay(alignment: .leading) {
