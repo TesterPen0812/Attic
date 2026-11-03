@@ -124,7 +124,13 @@ final class DrawInputTests: XCTestCase {
         if let ns = NSEvent(cgEvent: event), ns.window === panel,
            hypot(ns.locationInWindow.x - point.x, ns.locationInWindow.y - point.y) < 0.5 { return ns }
         event.location = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - point.y)
-        let ns = try XCTUnwrap(NSEvent(cgEvent: event))
+        var ns = try XCTUnwrap(NSEvent(cgEvent: event))
+        // Do not assume AppKit's coordinate basis for a recorded gesture.
+        // Translate by its measured error, preserving every
+        // touch, phase, delta and magnification sample in the recording.
+        let correction = CGPoint(x: point.x - ns.locationInWindow.x, y: point.y - ns.locationInWindow.y)
+        event.location = CGPoint(x: event.location.x + correction.x, y: event.location.y - correction.y)
+        ns = try XCTUnwrap(NSEvent(cgEvent: event))
         XCTAssertEqual(ns.locationInWindow.x, point.x, accuracy: 0.5, "the event lands at the point (window \(String(describing: ns.window)))")
         XCTAssertEqual(ns.locationInWindow.y, point.y, accuracy: 0.5)
         return ns
