@@ -236,6 +236,18 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(window.end, date(2028, 10, 29))
     }
 
+    func testAuditA9SearchIncludesEventsOutsideTheOldThreeYearWindow() throws {
+        let store = try makeTestStore()
+        let source = CalendarEventSourceStub(events: [
+            event("old", "Audit milestone", start: date(1992, 1, 10, 8), end: date(1992, 1, 10, 9)),
+            event("future", "Audit milestone", start: date(2052, 1, 10, 8), end: date(2052, 1, 10, 9))
+        ])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        model.setQuery("milestone")
+        model.commitSearch()
+        XCTAssertEqual(model.snapshot.groups.map(\.day), [day(1992, 1, 10), day(2052, 1, 10)])
+    }
+
     func testModelSearchesEventsAndOpenTasksAndShowsNoMatches() async throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Book flights", dueDay: day(2026, 12, 1)),

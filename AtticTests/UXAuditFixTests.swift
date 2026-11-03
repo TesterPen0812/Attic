@@ -105,6 +105,57 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertTrue(field.placeholderString?.localizedCaseInsensitiveContains("tag") == true)
     }
 
+    private func withHost<Content: View>(_ content: Content, size: CGSize = CGSize(width: 320, height: 460),
+                                         check: (NSView) throws -> Void) rethrows {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let host = NSHostingView(rootView: content.atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        try check(host)
+    }
+
+    func testAuditA10NotesGroupCountsNotes() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        _ = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Audit note")])).get()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditAXNotes")))
+        let model = NotesLibraryModel(search: { _ in [] }, store: store)
+        model.layout = .list
+        let view = NotesLibraryView(model: model, controller: controller, store: store,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)), bottomClearance: 0,
+            searchFocused: .constant(false), searchOpen: .constant(false), rowCommands: { _ in [] }, libraryCommands: { [] },
+            onOpen: { _ in }, onDelete: { _ in }, onBack: {})
+        try withHost(view) { host in
+            let group = try XCTUnwrap(find("notes-library-group-today", in: host))
+            let value = (group as? NSAccessibilityElement)?.accessibilityValue() as? String
+                ?? (group as? NSView)?.accessibilityValue() as? String
+            XCTAssertEqual(value, "1 note")
+        }
+    }
+
+    func testAuditA10TableButtonsKeepTheirIndividualNames() throws {
+        let model = NoteFormatModel()
+        var snapshot = NoteFormatSnapshot()
+        snapshot.table = NoteTableToolsState(headerRow: true, rows: 3, columns: 2)
+        model.setSnapshot(snapshot)
+        try withHost(NoteFormatRowView(model: model, onClose: {}), size: CGSize(width: 320, height: 40)) { host in
+            for tool in NoteTableTool.allCases {
+                let button = try XCTUnwrap(find("notes-format-row-table-\(tool)", in: host))
+                XCTAssertEqual(button.accessibilityLabel?() ?? nil, tool.title)
+            }
+            let close = try XCTUnwrap(find("notes-format-row-close", in: host))
+            XCTAssertEqual(close.accessibilityLabel?() ?? nil, "Close Format")
+        }
+    }
+
     func testAuditA10CalendarPlusNamesTheEventItCreates() {
         XCTAssertEqual(PanelBottomBarLook.calendarPlus.label, "New event")
     }
