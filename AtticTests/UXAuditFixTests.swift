@@ -32,6 +32,42 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).panelContentSize, 420)
     }
 
+    func testAuditB3EmptyTasksAndSettingsHaveNoInstructionalHelpers() throws {
+        for tab in TasksTab.allCases {
+            XCTAssertEqual(TasksPanelDesign.empty(tab: tab, query: "", filtered: false).body, "")
+        }
+        let suite = "AuditB3.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        func words(_ root: AnyObject) -> String {
+            var result: [String] = []
+            func walk(_ node: AnyObject, depth: Int) {
+                guard depth < 50 else { return }
+                if let object = node as? NSObject {
+                    for key in ["accessibilityLabel", "accessibilityValue", "accessibilityHelp"] {
+                        let selector = NSSelectorFromString(key)
+                        if object.responds(to: selector), let text = object.perform(selector)?.takeUnretainedValue() as? String { result.append(text) }
+                    }
+                }
+                for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject, depth: depth + 1) }
+            }
+            walk(root, depth: 0)
+            return result.joined(separator: " ")
+        }
+        withHost(GeneralSettingsView(settings: settings, loginItemService: LoginItemService(),
+            globalHotKey: GlobalHotKey(combination: .newTask)), size: CGSize(width: 400, height: 1600)) { host in
+            let text = words(host)
+            XCTAssertFalse(text.contains("light tap on the trackpad"))
+            XCTAssertFalse(text.contains("Lively springs"))
+        }
+        withHost(PanelSettingsView(settings: settings), size: CGSize(width: 400, height: 1600)) { host in
+            let text = words(host)
+            XCTAssertFalse(text.contains("swipe two fingers"))
+            XCTAssertFalse(text.contains("drag the panel's inward edge"))
+        }
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }

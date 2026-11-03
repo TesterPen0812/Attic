@@ -1128,7 +1128,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Table"), .text("")]))
         textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertFalse(controls.isHintVisible)
         XCTAssertTrue(engine.insertTable())
         controls.refresh()
         XCTAssertNotNil(engine.focusedTable, "the table insertion puts the keyboard in its first cell")
@@ -1143,29 +1143,26 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.isHintVisible, "remembered table focus must not bring the overlap back")
         engine.focusedTable?.deactivate()
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "ordinary empty body lines still show their hint after leaving the table")
+        XCTAssertFalse(controls.isHintVisible, "ordinary empty body lines have no helper")
     }
 
-    /// Draft 7's hint: an empty body line with the caret in it, every
-    /// note; gone with the first keystroke; never on a line with text, the
-    /// title, a styled empty line or a read-only note. VoiceOver hears it as
-    /// the text's help, never as content.
-    func testTheHintShowsOnAnEmptyBodyLineAndGoesWithTheFirstKeystroke() {
+    /// B3 removes the instructional line, including its VoiceOver help.
+    func testAuditB3EmptyBodyHasNoHelperText() {
         let (controls, _, textView) = make()
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible, "a line with text")
         type("\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "an empty body line")
-        XCTAssertEqual(textView.accessibilityHelp(), NoteSlashHintView.text)
+        XCTAssertFalse(controls.isHintVisible, "B3 removes the empty-body helper")
+        XCTAssertNil(textView.accessibilityHelp())
         XCTAssertFalse(textView.string.contains("Type /"), "never content")
         type("a", textView)
         XCTAssertFalse(controls.isHintVisible, "the first keystroke hides it at once")
         XCTAssertNil(textView.accessibilityHelp())
         type("\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "on the next empty line again")
+        XCTAssertFalse(controls.isHintVisible, "no helper on the next empty line either")
         controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible, "an empty list item keeps its own look")
@@ -1176,7 +1173,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let (empty, _, emptyView) = make(NoteDocument(blocks: [.text("")]))
         type("Plan\n", emptyView)
         empty.refresh()
-        XCTAssertTrue(empty.isHintVisible, "any note, not only new drafts")
+        XCTAssertFalse(empty.isHintVisible, "no helper in any note")
 
         let (readOnly, _, readOnlyView) = make(NoteDocument(blocks: [.text("Plan"), .text("")]), readOnly: true)
         readOnlyView.setSelectedRange(NSRange(location: (readOnlyView.string as NSString).length, length: 0))
@@ -1184,14 +1181,15 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(readOnly.isHintVisible, "read only")
     }
 
-    func testTypingSlashHidesTheHint() {
-        let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]))
+    func testAuditB3SlashStillOpensCommandsWithoutAHelper() {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("")]))
         type("Plan\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertFalse(controls.isHintVisible)
         type("/", textView)
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible)
+        XCTAssertNotNil(engine.slashSession)
     }
 
     // MARK: The format row (OD-14)
