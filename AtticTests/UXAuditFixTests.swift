@@ -282,6 +282,74 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertEqual(AtticRadius.reviewBar - 7, AtticRadius.noteBlock)
     }
 
+    func testAcceptedShapesPopoverHighlightHasTheControlCurve() throws {
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = true
+        design.reduceTransparency = false
+        let actual = try shapeBitmap(AtticPopoverRow(systemName: nil, title: "", isHighlighted: true, action: {})
+            .frame(width: 120).atticDesign(design))
+        let expected = try shapeBitmap(Squircle(cornerRadius: 14, exponent: AtticShape.controlExponent)
+            .fill(design.tokens.selected.color).frame(width: 120, height: 28))
+        assertCornerAlpha(actual, expected, extent: 14)
+    }
+
+    func testAcceptedShapesUnavailableImageHasTheSmallObjectContour() throws {
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = true
+        design.reduceTransparency = false
+        let actual = NSBitmapImageRep(data: try XCTUnwrap(NoteObjectRenderer(design: design, scale: 4)
+            .placeholder(size: CGSize(width: 40, height: 28), text: "").tiffRepresentation))
+        let expected = try shapeBitmap(Squircle(cornerRadius: 6, exponent: AtticShape.surfaceExponent)
+            .fill(design.tokens.tagFill.color).frame(width: 40, height: 28))
+        assertCornerAlpha(try XCTUnwrap(actual), expected, extent: 9)
+    }
+
+    func testAcceptedShapesNativeTableGripsHaveTheControlCurve() throws {
+        for axis in [AtticNoteTableGripView.Axis.row, .column] {
+            let grip = AtticNoteTableGripView(axis: axis)
+            grip.design.reduceMotion = true
+            grip.design.reduceTransparency = false
+            grip.frame = CGRect(origin: .zero, size: grip.drawnSize)
+            let scale: CGFloat = 8
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(grip.bounds.width * scale), pixelsHigh: Int(grip.bounds.height * scale),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
+            grip.draw(grip.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+            let expected = try shapeBitmap(Squircle(cornerRadius: 2.5, exponent: AtticShape.controlExponent)
+                .fill(grip.tokens.tableGripFill.color).frame(width: grip.bounds.width, height: grip.bounds.height), scale: scale)
+            // Only the outermost corner: the three circular dots are document ink.
+            assertCornerAlpha(bitmap, expected, extent: 0.75, scale: scale)
+        }
+    }
+
+    private func shapeBitmap<V: View>(_ view: V, scale: CGFloat = 4) throws -> NSBitmapImageRep {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = scale
+        return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+    }
+
+    private func assertCornerAlpha(_ actual: NSBitmapImageRep, _ expected: NSBitmapImageRep,
+                                   extent: CGFloat, scale: CGFloat = 4,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.pixelsWide, expected.pixelsWide, file: file, line: line)
+        XCTAssertEqual(actual.pixelsHigh, expected.pixelsHigh, file: file, line: line)
+        var difference: CGFloat = 0
+        let count = Int(extent * scale)
+        for y in 0..<count {
+            for x in 0..<count {
+                difference += abs((actual.colorAt(x: x, y: y)?.alphaComponent ?? 0)
+                    - (expected.colorAt(x: x, y: y)?.alphaComponent ?? 0))
+            }
+        }
+        XCTAssertLessThan(difference / CGFloat(count * count), 0.004,
+            "visible contour must follow the accepted shape", file: file, line: line)
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
