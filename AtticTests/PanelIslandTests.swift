@@ -921,6 +921,21 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    func testColdSolidPanelControlsAreNativeGlassBeforeAnyClick() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "native glass layer check on the Air")
+        NSApp.deactivate()
+        spin(0.2)
+        try withController(configure: { $0.appearance = .light; $0.panelSurfaceStyle = .solid }) { _, state, panel in
+            XCTAssertFalse(state.isPanelKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertFalse(NSRunningApplication.current.isActive)
+            // Solid itself has no glass underlay: these must be the controls.
+            let controls = glassStates(in: try XCTUnwrap(panel.contentView))
+            XCTAssertFalse(controls.isEmpty, "a cold Solid panel must not substitute drawn controls")
+            XCTAssertEqual(Set(controls), [true])
+        }
+    }
+
     func testTheIslandsGlassStaysActiveWithAndWithoutThePanelsKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         try withController { controller, _, panel in

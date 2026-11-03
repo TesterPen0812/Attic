@@ -243,19 +243,18 @@ final class PanelShellTests: XCTestCase {
 
     // MARK: Key window
 
-    /// Native Liquid Glass renders flat in a window that is not key; the
-    /// panel draws its controls in the Craft style until it is key.
-    func testControlsAreGlassOnlyWhileThePanelIsKey() {
+    /// Owner, 3 Nov: glass before any click, on every panel surface.
+    func testControlsStayGlassBeforeThePanelIsKey() {
         XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: true), .liquidGlass)
-        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false), .craft)
-        // Glass and Frosted keep real glass out of focus (Phase 0's weight).
-        for surface in [PanelSurfaceStyle.glass, .frosted] {
+        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false), .liquidGlass)
+        // Keyboard ownership must not substitute a drawn control.
+        for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
             XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: surface), .liquidGlass)
             XCTAssertEqual(AtticDesignContext(surface: .glass, reduceTransparency: true,
                                               controls: PanelKeyTreatment.controls(isPanelKey: false, surface: surface)).effectiveControls,
                            .craft, "Reduce Transparency still draws them")
         }
-        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: .solid), .craft)
+        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: .solid), .liquidGlass)
         let state = PanelUIState()
         XCTAssertFalse(state.isPanelKey)
         state.setPanelKey(true)

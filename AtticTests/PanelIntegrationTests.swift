@@ -370,13 +370,13 @@ final class PanelIntegrationTests: XCTestCase {
     // MARK: Key state, haptics
 
     /// The older glass controls (Notes, Canvas, subtask and attachment
-    /// controls) follow the same rule as the shell: real glass only while
-    /// the panel is key; Reduce Transparency is opaque either way.
-    func testOlderGlassControlsFollowThePanelsKeyState() {
+    /// controls) keep real glass before a click, as the shell does;
+    /// Reduce Transparency remains opaque either way.
+    func testOlderGlassControlsStayGlassWithoutThePanelsKeyboard() {
         XCTAssertEqual(AtticGlassControlTreatment.resolve(
             reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: true)), .nativeGlass)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(
-            reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: false)), .drawn)
+            reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: false)), .nativeGlass)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(reduceTransparency: true, controls: .liquidGlass), .opaque)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(reduceTransparency: true, controls: .craft), .opaque)
     }
