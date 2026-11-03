@@ -26,6 +26,16 @@ enum PanelWorkAreaEvents {
     }
 }
 
+/// The native ordering boundary for restoring an overlay in a new Space.
+enum PanelSpacePresentation {
+    @discardableResult
+    static func reassert(_ window: NSWindow) -> Bool {
+        guard !window.isVisible || !window.isOnActiveSpace else { return false }
+        window.orderFrontRegardless()
+        return true
+    }
+}
+
 struct PanelResizePersistenceState {
     private var wasTemporarilyClamped = false
 
@@ -178,8 +188,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// Re-order the existing windows, without a reveal, focus change or motion.
     func reassertPresentationAfterSpaceChange() {
         guard !visibilityTransition.hasPendingHide, !isInteractiveDismissal,
-              !panel.isVisible || !panel.isOnActiveSpace else { return }
-        panel.orderFrontRegardless()
+              PanelSpacePresentation.reassert(panel) else { return }
         showIsland()
         resamplePointerPassthrough()
     }

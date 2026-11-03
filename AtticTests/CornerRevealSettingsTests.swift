@@ -220,6 +220,51 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertFalse(rig.controller.isPanelVisible)
     }
 
+    func testAVisibleWindowOutsideTheActiveSpaceGetsFreshNativeAdmissionWithItsVisibleChildren() {
+        final class SpacePanel: NSPanel {
+            var activeSpace = false
+            var ordered: ((String) -> Void)?
+            override var isOnActiveSpace: Bool { activeSpace }
+            override func orderOut(_ sender: Any?) { ordered?("out"); super.orderOut(sender) }
+            override func orderFrontRegardless() { ordered?("in"); super.orderFrontRegardless() }
+        }
+        func window() -> SpacePanel {
+            let window = SpacePanel(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: -6000, y: -6000, width: 80, height: 80)),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.becomesKeyOnlyIfNeeded = true
+            return window
+        }
+        let parent = window(), child = window(), hiddenChild = window()
+        defer {
+            parent.removeChildWindow(child); parent.removeChildWindow(hiddenChild)
+            child.close(); hiddenChild.close(); parent.close()
+        }
+        parent.orderFrontRegardless()
+        parent.addChildWindow(child, ordered: .above)
+        parent.addChildWindow(hiddenChild, ordered: .above)
+        child.orderFrontRegardless(); hiddenChild.orderOut(nil)
+        XCTAssertTrue(parent.isVisible)
+        XCTAssertFalse(parent.isOnActiveSpace, "the real Air failure: AppKit visible, absent from the active Space")
+        var orders: [String] = []
+        parent.ordered = { orders.append("parent." + $0) }
+        child.ordered = { orders.append("child." + $0) }
+        hiddenChild.ordered = { orders.append("hidden." + $0) }
+        let active = NSRunningApplication.current.isActive
+        XCTAssertTrue(PanelSpacePresentation.reassert(parent))
+        XCTAssertEqual(orders, ["child.out", "parent.out", "parent.in", "child.in"],
+                       "order-front alone leaves an already ordered window in its old Space; explicit child ordering also resets first-click policy")
+        XCTAssertTrue(parent.isVisible)
+        XCTAssertTrue(child.isVisible)
+        XCTAssertFalse(hiddenChild.isVisible)
+        XCTAssertFalse(parent.isKeyWindow)
+        XCTAssertEqual(NSRunningApplication.current.isActive, active)
+        orders.removeAll()
+        parent.activeSpace = true
+        XCTAssertFalse(PanelSpacePresentation.reassert(parent))
+        XCTAssertEqual(orders, [], "a window already on this Space is undisturbed")
+    }
+
     /// The monitor reads the rule as it changes: hover off, a key, chosen
     /// displays. Corners that don't answer are not even sampled closely.
     /// Explicit opens show the panel whatever the rule says.
