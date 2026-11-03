@@ -293,9 +293,7 @@ struct DrawTitleField: NSViewRepresentable {
             super.viewDidMoveToWindow()
             guard let window, window.fieldEditor(false, for: self) == nil else { return }
             // Allocate the shared editor without claiming first responder.
-            if let editor = window.fieldEditor(true, for: self) as? NSTextView {
-                _ = editor.inputContext
-            }
+            _ = window.fieldEditor(true, for: self)
         }
     }
 
