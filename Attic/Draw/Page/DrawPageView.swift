@@ -147,6 +147,7 @@ struct DrawTitleCapsule: View {
                         onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil,
                         alignment: .left, font: .systemFont(ofSize: m.titleFont), identifier: "draw-title-filter",
                         requestsFocus: library.mode == .list)
+                        .accessibilityIdentifier("draw-title-filter")
                     Button(action: model.closeFilter) {
                         AtticIcon(systemName: "xmark", size: 8, weight: .medium, ink: .helper)
                             .frame(width: 16, height: m.capsule)
