@@ -418,12 +418,14 @@ struct TasksEmptyState: View {
                 TasksElsewhereLinks(elsewhere: elsewhere, follow: follow)
             }
             .lineLimit(1)
-            Text(verbatim: empty.body)
-                .font(.system(size: 10))
-                .multilineTextAlignment(.center)
-                .modifier(TasksInk(.helper))
-                .frame(maxWidth: 190)
-                .padding(.top, 3)
+            if !empty.body.isEmpty {
+                Text(verbatim: empty.body)
+                    .font(.system(size: 10))
+                    .multilineTextAlignment(.center)
+                    .modifier(TasksInk(.helper))
+                    .frame(maxWidth: 190)
+                    .padding(.top, 3)
+            }
             if empty.canClear, let clear {
                 AtticRaisedButton(systemName: nil, title: "Clear filters", height: 22,
                                   cornerRadius: TasksDesignMetrics.innerRadius, action: clear)

@@ -242,7 +242,7 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false).title, "Nothing to do right now")
         XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing scheduled")
         XCTAssertEqual(TasksPanelDesign.empty(tab: .done, query: "", filtered: false),
-                       .init(title: "Nothing completed yet", body: "Tasks you check off show up here.", canClear: false))
+                       .init(title: "Nothing completed yet", body: "", canClear: false))
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: " milk ", filtered: false),
                        .init(title: "No results", body: "No tasks match “milk”.", canClear: true))
         XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: true).canClear, true)

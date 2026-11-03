@@ -1589,43 +1589,9 @@ final class NoteFormatControls: NSObject {
         character == 0x0A || character == 0x0D || character == 0x2029 || character == 0x2028
     }
 
-    /// The hint shows on an empty Body line with the caret in it (a line
-    /// already given a style, or a list item, keeps its own look), never
-    /// during a composition, the `/` list or a card.
-    private func updateHint() {
-        guard let textView else { return }
-        let current = selection
-        let show = !engine.isReadOnly && caretOnEmptyLine(current) && engine.paragraphStyle(at: current.location) == .body
-            && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
-        if show, let rect = caretRect() {
-            let size = hintHost.fittingSize
-            // O18-04: the hint's first baseline is the line's own, as
-            // TextKit laid the line out (typed text lands there), measured
-            // from the hint itself rather than estimated from font metrics.
-            var y = rect.minY + (rect.height - size.height) / 2
-            if let line = NoteLineGeometry.line(at: rect, in: textView) {
-                // On the device pixel the line's glyphs are drawn on, so
-                // the hint is crisp and its letters share their row.
-                y = NoteLineGeometry.drawnBaseline(line.baseline, in: textView) - hintBaselineOffset(height: size.height)
-            }
-            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height)
-            if hintHost.frame != frame { hintHost.frame = frame }
-            if !hintShown {
-                hintHost.isHidden = false
-                hintShown = true
-                // A hint, not content: VoiceOver reads it after the text.
-                textView.setAccessibilityHelp(NoteSlashHintView.text)
-            }
-        } else if hintShown {
-            hideHint()
-        }
-    }
-
-    /// The hint's first text baseline below its view's top: it draws its
-    /// letters on exactly that baseline (`NoteSlashHintLabel`), so the hint
-    /// stands on the line's own baseline on every OS (a hosting view's
-    /// reported baseline differed between macOS 26 and 27).
-    private func hintBaselineOffset(height: CGFloat) -> CGFloat { hintHost.baselineOffset }
+    /// Accepted B3 removes the empty-line instruction, including its AX help.
+    /// Slash commands remain available through typing and the Format button.
+    private func updateHint() { hideHint() }
 
     private func hideHint() {
         hintHost.isHidden = true

@@ -1,3 +1,9 @@
+## 2026-11-03 · Reading width and helper removal
+
+Panel width stops at 600 pt, including restored and manually resized widths.
+Empty Tasks pages, empty note lines, Haptics/Animations and Panel's gesture
+footnotes no longer show instructional helpers. Slash commands remain available.
+
 ## 2026-11-03 · Accurate control names
 
 Calendar's + is named New event. Notes section counts name notes, with

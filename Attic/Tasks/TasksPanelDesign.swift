@@ -227,10 +227,7 @@ enum TasksPanelDesign {
         let canClear: Bool
     }
 
-    /// The design's empty states. Now's and Later's sentences say what
-    /// Attic's pages hold (the design's speak of dates, which Attic's
-    /// pages are not sorted by). `tag` is the chosen tag chip (the
-    /// design's list filter).
+    /// Empty views retain result descriptions; unfiltered pages have no helper sentence.
     static func empty(tab: TasksTab, query: String, filtered: Bool, tag: String? = nil) -> Empty {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
@@ -247,13 +244,13 @@ enum TasksPanelDesign {
         switch tab {
         case .now:
             return Empty(title: String(localized: "Nothing to do right now"),
-                         body: String(localized: "Tasks you add, or bring in from Later, show up here."), canClear: false)
+                         body: "", canClear: false)
         case .backlog:
             return Empty(title: String(localized: "Nothing scheduled"),
-                         body: String(localized: "Tasks you put off for later show up here."), canClear: false)
+                         body: "", canClear: false)
         case .done:
             return Empty(title: String(localized: "Nothing completed yet"),
-                         body: String(localized: "Tasks you check off show up here."), canClear: false)
+                         body: "", canClear: false)
         }
     }
 
