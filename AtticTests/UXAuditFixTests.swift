@@ -254,6 +254,27 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAcceptedD4TheTitleCapsuleFiltersAndTheMenuHasNoSearchRow() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 320, height: 460)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
+        try withHost(DrawPageHost(model: model, uiState: state, layout: layout)) { host in
+            model.openFilter()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            func fields(_ view: NSView) -> [NSTextField] {
+                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            }
+            let native = fields(host)
+            let title = try XCTUnwrap(native.first { $0.accessibilityIdentifier() == "draw-title-filter" })
+            XCTAssertNil(native.first { $0.accessibilityIdentifier() == "draw-library-search" })
+            let frame = host.convert(title.bounds, from: title)
+            XCTAssertGreaterThanOrEqual(frame.minY, size.height - layout.headerBottom)
+            XCTAssertLessThanOrEqual(frame.maxY, size.height)
+            XCTAssertTrue(title.isEnabled)
+        }
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
