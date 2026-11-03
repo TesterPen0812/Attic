@@ -98,7 +98,8 @@ final class AtticPanel: NSPanel {
 
     override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
-    /// The same release-delayed state drives native glass and SwiftUI chrome.
+    /// Native glass appearance, independent of keyboard ownership. Docked
+    /// panels keep glass active on hover; other panels may follow key state.
     var activeAppearance: (() -> Bool)?
     @objc func _hasActiveAppearance() -> Bool { activeAppearance?() ?? (isKeyWindow && !isPressing) }
 
@@ -114,6 +115,14 @@ final class AtticPanel: NSPanel {
 
     static let willOrderOutNotification = Notification.Name("AtticPanelWillOrderOut")
     private var mousePolicy = AtticMousePolicy()
+    private var preservesActivationDuringSpaceReadmission = false
+
+    func preservingActivationForSpaceReadmission(_ reorder: () -> Void) {
+        let previous = preservesActivationDuringSpaceReadmission
+        preservesActivationDuringSpaceReadmission = true
+        defer { preservesActivationDuringSpaceReadmission = previous }
+        reorder()
+    }
 
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         if place == .out {
@@ -122,7 +131,7 @@ final class AtticPanel: NSPanel {
         }
         super.order(place, relativeTo: otherWin)
         if place != .out { mousePolicy.orderedIn(self) }
-        else { PanelActivation.shared.hidden(self) }
+        else { PanelActivation.shared.hidden(self, preservingActivation: preservesActivationDuringSpaceReadmission) }
     }
 
     override func orderFrontRegardless() {
@@ -139,7 +148,7 @@ final class AtticPanel: NSPanel {
         NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
         mousePolicy.orderedOut()
         super.orderOut(sender)
-        PanelActivation.shared.hidden(self)
+        PanelActivation.shared.hidden(self, preservingActivation: preservesActivationDuringSpaceReadmission)
     }
 
     /// Esc reaches the window only when no responder in it handled the key:
@@ -1299,6 +1308,7 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.setDisableActions(true)
         layer.transform = current
         layer.removeAnimation(forKey: Self.collapseAnimationKey)
+        layer.removeAnimation(forKey: Self.slideFadeAnimationKey)
         CATransaction.commit()
     }
 
@@ -1313,6 +1323,7 @@ final class AtticPanelContentContainer: NSView {
     }
 
     private static let fadeAnimationKey = "AtticPanelReducedFade"
+    private static let slideFadeAnimationKey = "AtticPanelSlideEndFade"
 
     func setCollapseProgress(
         _ progress: CGFloat, corner: ScreenCorner, reduceMotion: Bool,
@@ -1335,6 +1346,7 @@ final class AtticPanelContentContainer: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layer.removeAnimation(forKey: Self.fadeAnimationKey)
+            layer.removeAnimation(forKey: Self.slideFadeAnimationKey)
             layer.transform = CATransform3DIdentity
             layer.opacity = target
             if fades, duration > 0, from != target {
@@ -1353,6 +1365,8 @@ final class AtticPanelContentContainer: NSView {
             return
         }
         if layer.opacity != 1 { resetReducedFade() }
+        let endFade = layer.animation(forKey: Self.slideFadeAnimationKey) != nil
+            ? layer.presentation()?.opacity ?? 1 : 1
         let from = presentationTransform
         let target = CATransform3DMakeAffineTransform(PanelCollapseGeometry.transform(
             progress: progress, visibleBounds: hostingView.frame,
@@ -1366,9 +1380,19 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.removeAnimation(forKey: Self.collapseAnimationKey)
+        layer.removeAnimation(forKey: Self.slideFadeAnimationKey)
         layer.transform = target
+        // A hide's end fade the panel is taken back from: back to opaque.
+        if endFade < 1, progress < 1 {
+            let back = CABasicAnimation(keyPath: "opacity")
+            back.fromValue = endFade
+            back.toValue = 1
+            back.duration = max(0.08, duration * 0.5)
+            layer.add(back, forKey: Self.slideFadeAnimationKey)
+        }
         if duration > 0, !reduceMotion, !CATransform3DEqualToTransform(from, target) {
             let animation: CABasicAnimation
+            let hides = progress >= 1 && spring == nil
             if let spring {
                 // The feel's spring (a swipe's spring-back): it settles in
                 // its own time.
@@ -1378,13 +1402,26 @@ final class AtticPanelContentContainer: NSView {
             } else {
                 animation = CABasicAnimation(keyPath: "transform")
                 animation.duration = duration
-                animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+                animation.timingFunction = hides
+                    ? CAMediaTimingFunction(controlPoints: 0.42, 0, 1, 1) // `slideHideTiming`
+                    : CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
             }
             animation.keyPath = "transform"
             animation.fromValue = NSValue(caTransform3D: from)
             animation.toValue = NSValue(caTransform3D: target)
             CATransaction.setCompletionBlock(completion)
             layer.add(animation, forKey: Self.collapseAnimationKey)
+            if hides {
+                // The last part fades out, so the hide ends cleanly. It holds
+                // at 0 until the next motion takes the panel back.
+                let fade = CAKeyframeAnimation(keyPath: "opacity")
+                fade.values = [1, 1, 0]
+                fade.keyTimes = [0, NSNumber(value: PanelHideMotionTuning.slideFadeStart), 1]
+                fade.duration = duration
+                fade.fillMode = .forwards
+                fade.isRemovedOnCompletion = false
+                layer.add(fade, forKey: Self.slideFadeAnimationKey)
+            }
             CATransaction.commit()
         } else {
             CATransaction.commit()

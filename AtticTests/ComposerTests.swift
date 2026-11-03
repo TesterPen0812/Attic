@@ -305,7 +305,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(task.dueTimeMinutes, 16 * 60)
         XCTAssertEqual(task.status, .todo)
         XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
-        XCTAssertFalse(model.isOpen)
+        XCTAssertTrue(model.isOpen, "P4: Return adds the task and the card stays open")
         XCTAssertFalse(model.hasDraft)
         XCTAssertTrue(opened.isEmpty)
 
@@ -370,6 +370,73 @@ final class ComposerTests: XCTestCase {
         model.open(on: .tasks(.now))
         XCTAssertEqual(page.addBar.text, "Draft")
         XCTAssertEqual(model.writing, "kept")
+    }
+
+    /// Accepted 2026-11-03 (P4): Return or Create adds the task and the card
+    /// stays open, empty, its title asked for the keyboard again; ⌘Return
+    /// opens the task's page, so the card folds.
+    func testReturnAddsTheTaskAndTheCardStaysOpenEmptyForTheNextOne() async throws {
+        model.open(on: .tasks(.now))
+        type("Call Sam")
+        let asked = model.focusRequest
+        model.submit()
+        XCTAssertEqual(liveTasks().map(\.title), ["Call Sam"])
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "")
+        XCTAssertNotEqual(model.focusRequest, asked, "the title takes the keyboard for the next one")
+        type("Call Ann")
+        model.submit()
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Call Sam", "Call Ann"])
+        XCTAssertTrue(model.isOpen)
+        type("Open it")
+        model.submit(openingPage: true)
+        XCTAssertFalse(model.isOpen, "⌘Return opens the page and the card folds")
+        XCTAssertEqual(opened.count, 1)
+    }
+
+    /// UX audit A2: a draft kept with Escape comes back after a quit and
+    /// relaunch (a new model on the same defaults), and is gone once used.
+    func testAKeptDraftComesBackAfterRelaunchAndGoesOnceUsed() throws {
+        let suite = "ComposerDraft.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ComposerDraftStore(defaults: defaults)
+        func relaunch() -> (TasksPageModel, ComposerModel) {
+            let fixed = now
+            let page = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
+            return (page, ComposerModel(tasks: page, services: ComposerServices(drafts: store)))
+        }
+        let (first, card) = relaunch()
+        card.open(on: .tasks(.now))
+        card.choose(.note)
+        first.addBar = TaskAddBarText(text: "Plan the trip #travel")
+        card.writing = "Book trains"
+        card.close()
+        let (second, again) = relaunch()
+        XCTAssertEqual(second.addBar.text, "Plan the trip #travel")
+        XCTAssertEqual(again.writing, "Book trains")
+        XCTAssertEqual(again.kind, .note)
+        // The app quitting with the card open keeps what it holds too.
+        again.open(on: .tasks(.now))
+        second.addBar = TaskAddBarText(text: "Plan the trip, then pack")
+        again.saveKeptDraft()
+        let (third, card3) = relaunch()
+        XCTAssertEqual(third.addBar.text, "Plan the trip, then pack")
+        card3.open(on: .notes)
+        card3.submit()
+        XCTAssertNil(store.load(), "a used draft is not kept")
+        let (fourth, card4) = relaunch()
+        XCTAssertEqual(fourth.addBar.text, "")
+        XCTAssertEqual(card4.writing, "")
+    }
+
+    /// B1: a long title wraps into the writing line's space while the
+    /// writing is empty and not being typed in.
+    func testALongTitleTakesTheWritingLinesSpaceOnlyWhileTheWritingIsEmpty() {
+        XCTAssertTrue(ComposerCard.titleTakesWritingSpace(titleWraps: true, writing: "", writingFocused: false))
+        XCTAssertFalse(ComposerCard.titleTakesWritingSpace(titleWraps: false, writing: "", writingFocused: false))
+        XCTAssertFalse(ComposerCard.titleTakesWritingSpace(titleWraps: true, writing: "notes", writingFocused: false))
+        XCTAssertFalse(ComposerCard.titleTakesWritingSpace(titleWraps: true, writing: "", writingFocused: true))
     }
 
     // MARK: Events
@@ -677,13 +744,35 @@ final class ComposerTests: XCTestCase {
 
     }
 
-    func testReturnInTheTitleCreatesAndClosesTheCard() throws {
+    func testReturnInTheTitleCreatesAndTheCardStaysOpenInTheTitle() throws {
         let (window, _, field) = try mountForKeys(on: .tasks(.now))
         typeKeys(field, "Call Sam")
         key(window, "\r", code: 36)
         XCTAssertEqual(liveTasks().map(\.title), ["Call Sam"])
-        XCTAssertFalse(model.isOpen)
+        XCTAssertTrue(model.isOpen, "P4: the card stays open")
+        XCTAssertTrue(window.firstResponder === field, "ready for the next one")
+        XCTAssertEqual(field.string, "")
         XCTAssertTrue(opened.isEmpty)
+    }
+
+    /// UX audit A4: Tab and ⇧Tab move between the title and the writing
+    /// line and never leave the card.
+    func testTabAndShiftTabStayInsideTheCard() throws {
+        let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Call Sam")
+        @MainActor func inWriting() -> Bool {
+            guard let editor = window.firstResponder as? NSTextView, editor !== field else { return false }
+            return (editor.delegate as? NSView)?.isDescendant(of: hosting) ?? editor.isDescendant(of: hosting)
+        }
+        key(window, "\t", code: 48)
+        XCTAssertTrue(inWriting(), "Tab from the title goes to the writing line, not out of the card")
+        key(window, "\t", code: 48)
+        XCTAssertTrue(window.firstResponder === field, "Tab from the writing line comes back to the title")
+        key(window, "\u{19}", code: 48, modifiers: .shift)
+        XCTAssertTrue(inWriting(), "⇧Tab from the title goes to the writing line")
+        key(window, "\u{19}", code: 48, modifiers: .shift)
+        XCTAssertTrue(window.firstResponder === field, "⇧Tab from the writing line comes back to the title")
+        XCTAssertEqual(page.addBar.text, "Call Sam")
     }
 
     func testCommandReturnInTheTitleCreatesAndOpens() throws {
@@ -796,8 +885,24 @@ final class ComposerTests: XCTestCase {
             heights.append(view.fittingSize.height)
         }
         XCTAssertEqual(Set(heights.map { ($0 * 2).rounded() }).count, 1, "\(heights)")
-        // 11 + 20 + 2 + 15 + 43 + 28 + 11, give or take the field's line.
-        XCTAssertEqual(heights[0], 130, accuracy: 6)
+        // P4: 9 + 20 + 5 + 15 + 5 + 28 + 8 = 90 (the design's 180 px).
+        XCTAssertEqual(heights[0], ComposerMetrics.height, accuracy: 1)
+        XCTAssertEqual(ComposerMetrics.height, 90)
+    }
+
+    /// B1 on screen: a title too long for one line wraps into the writing
+    /// line's space, and the card keeps its 90 pt.
+    func testALongTitleWrapsAndTheCardKeepsItsHeight() {
+        let short = host(nil, on: .tasks(.now)).fittingSize.height
+        type("Ring the plumber about the dripping kitchen tap before the weekend")
+        let view = host(nil, on: .tasks(.now))
+        for _ in 0..<3 { view.layoutSubtreeIfNeeded(); spin(0.05) }
+        XCTAssertEqual(view.fittingSize.height, short, accuracy: 1, "the card keeps its height")
+        @MainActor func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        XCTAssertNil(elements(view).first { $0.accessibilityIdentifier?() == "composer-writing" },
+                     "the writing line gives its space to the title")
     }
 
     func testDateLabels() {

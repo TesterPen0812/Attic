@@ -153,10 +153,16 @@ final class PanelHideMotionTests: XCTestCase {
             let hostCorners = [CGPoint(x: host.minX, y: host.minY), CGPoint(x: host.maxX, y: host.minY),
                                CGPoint(x: host.minX, y: host.maxY), CGPoint(x: host.maxX, y: host.maxY)]
             for corner in ScreenCorner.allCases {
-                let island = PanelIslandLayout.islandFrame(panelFrame: visible, corner: corner)
-                let anchor = PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+                // The standing island (the default lies flat on the screen's
+                // bottom edge); L3 moves it in from the panel's end, so the
+                // anchor is the corner of the two together.
+                let island = PanelIslandLayout.islandFrame(panelFrame: visible, corner: corner, spot: .screenSideCornerEnd)
+                let anchor = PanelIslandLayout.collapseAnchor(panelFrame: visible, corner: corner, spot: .screenSideCornerEnd)
                 XCTAssertTrue(host.insetBy(dx: 1, dy: 1).contains(anchor), "\(size) \(corner): the anchor is in the window")
-                XCTAssertTrue(host.contains(island.insetBy(dx: -PanelIslandLayout.windowMargin + 1, dy: 0)))
+                // The capsule and its contact layers (L4: 0.5 pt edge, 0 1 2 pt)
+                // fit; the deep 16 pt layer's outer blur is cut by the window
+                // during the motion.
+                XCTAssertTrue(host.contains(island.insetBy(dx: -3, dy: 0)), "\(size) \(corner): the island fits")
                 let right = corner == .topRight || corner == .bottomRight
                 let top = corner == .topRight || corner == .topLeft
                 let inset = SIMD2(Float((right ? host.maxX - anchor.x : anchor.x - host.minX) / host.width),

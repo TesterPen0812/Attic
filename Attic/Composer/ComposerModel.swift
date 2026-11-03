@@ -68,6 +68,36 @@ struct ComposerServices {
     var openEvent: (CalendarOwnedEvent) -> Void = { _ in }
     /// A creation's notice and its Undo.
     var toast: (String, @escaping @MainActor () -> CommandOutcome) -> Void = { _, _ in }
+    /// Where a kept draft waits across a quit (A2); nil keeps it in memory only.
+    var drafts: ComposerDraftStore? = nil
+}
+
+/// A draft kept with Escape or a click outside, saved so it comes back
+/// after the app quits and relaunches (UX audit A2). Only the words are
+/// kept: the title's text, the writing and the kind it was typed as.
+struct ComposerDraftStore {
+    struct Draft: Codable, Equatable {
+        var title: String
+        var writing: String
+        var kind: String
+    }
+
+    let defaults: UserDefaults
+    var key = "composerKeptDraft"
+
+    func load() -> Draft? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(Draft.self, from: data)
+    }
+
+    func save(_ draft: Draft?) {
+        guard let draft, !(draft.title.isEmpty && draft.writing.isEmpty) else {
+            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
+            return
+        }
+        guard load() != draft, let data = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(data, forKey: key)
+    }
 }
 
 /// The "+" card's state. It lives as long as the panel, so a draft dismissed
@@ -108,6 +138,24 @@ final class ComposerModel: ObservableObject {
     init(tasks: TasksPageModel, services: ComposerServices = ComposerServices()) {
         self.tasks = tasks
         self.services = services
+        restoreKeptDraft()
+    }
+
+    // MARK: The kept draft (A2)
+
+    /// A draft saved before a quit comes back into an empty card.
+    private func restoreKeptDraft() {
+        guard let saved = services.drafts?.load(), tasks.addBar.text.isEmpty, writing.isEmpty else { return }
+        tasks.addBar = TaskAddBarText(text: saved.title)
+        writing = saved.writing
+        if let kind = ComposerKind(rawValue: saved.kind) { self.kind = kind }
+    }
+
+    /// Saves what the card holds now (or forgets it once used up). Called
+    /// when the card closes, after a creation and as the app quits.
+    func saveKeptDraft() {
+        guard let drafts = services.drafts else { return }
+        drafts.save(hasDraft ? ComposerDraftStore.Draft(title: tasks.addBar.text, writing: writing, kind: kind.rawValue) : nil)
     }
 
     var title: TasksAddBarState { tasks.addBarState }
@@ -149,6 +197,7 @@ final class ComposerModel: ObservableObject {
         draftGeneration += 1
         isOpen = false
         restoreFocus()
+        saveKeptDraft()
     }
 
     /// What had the keyboard before the card opened.
@@ -260,8 +309,8 @@ final class ComposerModel: ObservableObject {
 
     // MARK: Creating
 
-    /// Return creates; ⌘Return creates and opens the item's page. The card
-    /// closes on success and keeps the draft (and says so) on failure.
+    /// Return creates and the card stays open (P4); ⌘Return creates and
+    /// opens the item's page. A failure keeps the draft and says so.
     @discardableResult
     func create(openingPage: Bool = false) async -> Bool {
         if kind != .event { return createImmediately(openingPage: openingPage) }
@@ -278,10 +327,10 @@ final class ComposerModel: ObservableObject {
             // The submitted event did not save: the card says so even when
             // the draft was edited while it was saving, and keeps that draft.
             guard generation == draftGeneration else { return false }
-            return finishCreation(false)
+            return finishCreation(false, openingPage: openingPage)
         case let .saved(current):
             guard generation == draftGeneration, current else { return true }
-            return finishCreation(true)
+            return finishCreation(true, openingPage: openingPage)
         }
     }
 
@@ -308,14 +357,22 @@ final class ComposerModel: ObservableObject {
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
         let made = kind == .task ? createTask(openingPage: openingPage) : createNote(openingPage: openingPage)
-        return finishCreation(made)
+        return finishCreation(made, openingPage: openingPage)
     }
 
-    private func finishCreation(_ made: Bool) -> Bool {
+    /// Return or Create (P4): the card stays open, empty and ready for the
+    /// next one, the keyboard still in its title. ⌘Return opens the new
+    /// item's page, so the card folds.
+    private func finishCreation(_ made: Bool, openingPage: Bool) -> Bool {
         failed = !made
         guard made else { return false }
         clearDraft()
-        isOpen = false
+        saveKeptDraft()
+        if openingPage {
+            isOpen = false
+        } else {
+            focusRequest &+= 1
+        }
         return true
     }
 

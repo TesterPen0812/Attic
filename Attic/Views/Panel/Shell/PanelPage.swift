@@ -43,9 +43,9 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     var systemName: String {
         switch self {
         case .tasks: "checkmark.circle"
-        case .notes: "note.text"
+        case .notes: "doc.text"
         case .calendar: "calendar"
-        case .canvas: "scribble.variable"
+        case .canvas: "pencil.and.scribble"
         }
     }
 
@@ -84,33 +84,55 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-/// How the shell moves between pages (A20). Every switch, by every route
-/// and between every pair, uses the same motion: the Animations feel's
-/// navigation spring (`AtticMotionPreset.pageSwitch`) carrying the pages
-/// sideways in their order as they crossfade, as Notes slides between a
-/// note and All notes. Reduce Motion and Animations: Reduced switch at once.
+/// How the shell moves between pages: "Motion: page switch and hide",
+/// option A (Accepted 2026-11-02), replacing A20's full-width slide. Every
+/// switch, by every route and between every pair, uses it: the old page
+/// fades out in place, then the new page fades in while it moves about
+/// 30 pt in from its side in the page order, on the feel's navigation
+/// spring (`AtticMotionPreset.pageSwitch`). Two pages never show at once,
+/// so neither their scroll bars nor their bottom bars cross. Reduce Motion
+/// and Animations: Reduced switch at once.
 ///
-/// Before A20 the shell crossfaded for 180 ms whatever the feel, and only
-/// the first visit to Notes looked sprung: the Notes editor's own springy
-/// slide (`.animation(value: controller.active?.id)`) ran because its
-/// session started on that first appearance; later visits kept the session,
-/// so only the plain crossfade showed.
+/// A20 carried the pages the panel's full width (352 pt) on the spring
+/// while they crossfaded: 70 % of the travel by 100 ms and both pages
+/// through each other for about 100 ms (the owner's recording, 2 Nov).
 struct PanelPageMotion: Equatable {
     /// The spring, or nil for an instant switch.
     let spring: AtticMotionSpring?
 
     static let instant = PanelPageMotion(spring: nil)
 
+    /// How far the new page moves in.
+    static let travel: CGFloat = 30
+    /// The old page's fade out.
+    static let fadeOut: TimeInterval = 0.09
+    /// The new page starts once the old one has gone…
+    static let fadeInDelay: TimeInterval = fadeOut
+    /// …and fades in over this.
+    static let fadeIn: TimeInterval = 0.16
+
     /// The motion for a switch now, in the current feel.
     static func current(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> PanelPageMotion {
         reduceMotion ? .instant : PanelPageMotion(spring: AtticMotionPreset.pageSwitch.spring(in: tuning))
     }
 
-    /// Whether the pages travel sideways (they do whenever the switch animates).
+    /// Whether the pages move at all (they do whenever the switch animates).
     var travels: Bool { spring != nil }
 
+    /// Where a page rests out of view on `side` (-1 left, 1 right) of the
+    /// current one.
+    func restingOffset(side: CGFloat) -> CGFloat { travels ? side * Self.travel : 0 }
+
+    /// The switch's transaction, which moves the pages (and the top row's
+    /// counter-move with them): the spring, once the old page has gone.
     var animation: Animation? {
-        spring.map { .spring(duration: $0.response, bounce: $0.bounce) }
+        spring.map { Animation.spring(duration: $0.response, bounce: $0.bounce).delay(Self.fadeInDelay) }
+    }
+
+    /// A page's own fade: out at once, or in once the old page has gone.
+    func opacityAnimation(incoming: Bool) -> Animation? {
+        guard travels else { return nil }
+        return incoming ? .easeOut(duration: Self.fadeIn).delay(Self.fadeInDelay) : .easeIn(duration: Self.fadeOut)
     }
 }
 

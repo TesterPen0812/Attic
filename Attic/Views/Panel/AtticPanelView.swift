@@ -117,9 +117,9 @@ struct AtticPanelView: View {
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
-                                // current one, so it travels in from there.
-                                restingOffset: pageMotion.travels
-                                    ? page.side(from: currentPage) * panelSize.width : 0,
+                                // current one, so it moves in from there.
+                                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage)),
+                                motion: pageMotion,
                                 // Canvas has single-key tool shortcuts (V, P, E);
                                 // hidden, they must not fire. Tasks has none
                                 // outside its menus, and disabling it would
@@ -142,10 +142,10 @@ struct AtticPanelView: View {
             }
         }
         .overlay {
-            // Over the bar, never in it: the bar stays still while the "+"
-            // grows into the card and back.
+            // Over the bar, never in it: the card takes the bar's row (P4)
+            // while the bar's own pills and "+" fade out under it.
             if uiState.isPageContentLoaded {
-                ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome)
+                ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome, room: composerState.room)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -343,7 +343,8 @@ struct AtticPanelView: View {
             },
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
-            })
+            },
+            drafts: ComposerDraftStore(defaults: settings.userDefaults))
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
@@ -493,6 +494,13 @@ struct AtticPanelView: View {
 
     private var storeObservedPanel: some View {
         surfacedPanel
+            #if DEBUG
+            // The capture bench (`ATTIC_PAGE_BENCH`): opens or folds the "+" card.
+            .onReceive(NotificationCenter.default.publisher(for: .atticBenchToggleComposer)) { _ in
+                guard let model = composerState.model else { return }
+                if model.isOpen { model.close() } else { model.open(on: .tasks(.now)) }
+            }
+            #endif
             .onChange(of: uiState.selectedSection) { _, _ in
                 composerState.model?.close()
                 syncBottomControlsHeight()
@@ -555,6 +563,7 @@ struct AtticPanelView: View {
             .environment(\.panelTopRowState, topRowState)
             .environment(\.panelSharedChrome, sharedChrome)
             .environment(\.panelComposer, composerRoute)
+            .environment(\.panelComposerRoom, composerState.room)
             // The Tall island (Accepted 2026-10-31) is another window: its
             // clicks come here, to the one page-switch path, and pointing
             // at it builds the other pages early, as the old switch did.
@@ -668,8 +677,8 @@ struct AtticPanelView: View {
     /// scale: they hold AppKit scroll views, which a SwiftUI scale would
     /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.
     private func pageTransition(_ page: PanelPage) -> AnyTransition {
-        .modifier(active: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: true),
-                  identity: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: false))
+        .modifier(active: PanelPageTravel(page: page, uiState: uiState, isAway: true),
+                  identity: PanelPageTravel(page: page, uiState: uiState, isAway: false))
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their
@@ -741,6 +750,8 @@ struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
     /// Where the page rests while hidden (0 when it is current).
     let restingOffset: CGFloat
+    /// The switch's motion: the page's own fade (option A) reads it.
+    var motion: PanelPageMotion = .instant
     let disablesWhenHidden: Bool
 
     func body(content: Content) -> some View {
@@ -748,7 +759,8 @@ struct PanelPageVisibility: ViewModifier {
             .environment(\.atticPanelPageIsCurrent, isCurrent)
             .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
             .offset(x: isCurrent ? 0 : restingOffset)
-            .opacity(isCurrent ? 1 : 0)
+            // Out at once, in once the old page has gone: never two pages.
+            .animation(motion.opacityAnimation(incoming: isCurrent)) { $0.opacity(isCurrent ? 1 : 0) }
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
             .accessibilityHidden(!isCurrent)
@@ -767,33 +779,26 @@ struct PanelPageVisibility: ViewModifier {
 private struct PanelPageTravel: ViewModifier {
     let page: PanelPage
     let uiState: PanelUIState
-    let width: CGFloat
     let isAway: Bool
 
     func body(content: Content) -> some View {
-        let travel = isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0
+        let motion = uiState.lastPageSwitch?.motion ?? .instant
+        let travel = isAway ? motion.restingOffset(side: uiState.lastPageSwitch?.restingSide(of: page) ?? 0) : 0
         content
             .transformEnvironment(\.panelPageTravel) { $0 += travel }
             .offset(x: travel)
-            .opacity(isAway ? 0 : 1)
+            // Away is the end of a removal and the start of an insertion.
+            .animation(motion.opacityAnimation(incoming: !isAway)) { $0.opacity(isAway ? 0 : 1) }
     }
 }
 
-/// Native Liquid Glass renders flat (a grey slab with a dark outline) in a
-/// window that is not key over a Solid panel, and a panel revealed from the
-/// corner must not take the keyboard from the app the person is typing in.
-/// So on Solid the panel's controls are real glass while it is key (an
-/// explicit open, or once the person clicks in it) and the Craft-style
-/// recipe, the design system's drawn material, while it is not.
-///
-/// On Glass and Frosted the controls stay real glass whether or not the
-/// panel is key, as Phase 0's did (owner, 2026-09-27): the opaque drawn
-/// faces read as solid blocks over the see-through surface, while glass
-/// takes the colour behind it at the same weight as the key panel's.
-/// (Reduce Transparency still draws them: it makes the surface Solid.)
+/// Owner, 3 Nov: controls retain native glass before the first click,
+/// including over a Solid panel. Native window appearance is kept active
+/// independently of keyboard ownership. Reduce Transparency still selects
+/// the design system's opaque material in AtticDesignContext.
 enum PanelKeyTreatment {
     static func controls(isPanelKey: Bool, surface: PanelSurfaceStyle = .solid) -> AtticControlMaterial {
-        isPanelKey || surface != .solid ? .liquidGlass : .craft
+        .liquidGlass
     }
 }
 
@@ -977,3 +982,10 @@ extension AtticPanelView {
         }
     }
 }
+
+#if DEBUG
+extension Notification.Name {
+    /// The capture bench: open or fold the "+" card.
+    static let atticBenchToggleComposer = Notification.Name("AtticBenchToggleComposer")
+}
+#endif

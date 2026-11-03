@@ -13,13 +13,16 @@ import XCTest
 final class PanelIslandTests: XCTestCase {
     private typealias L = PanelIslandLayout
     private let size = CGSize(width: 340, height: 560)
+    /// These tests were written for the standing island; the default is
+    /// now the screen's bottom edge (`PanelIslandPositionTests`).
+    private let standing: PanelIslandSpot = .screenSideCornerEnd
 
     // MARK: Frame math
 
     private func placed(in visible: CGRect, corner: ScreenCorner) -> (panel: CGRect, island: CGRect) {
-        let area = L.panelArea(in: visible, corner: corner)
+        let area = L.panelArea(in: visible, corner: corner, spot: standing)
         let panel = PanelGeometry.panelFrame(in: area, size: size, corner: corner)
-        return (panel, L.islandFrame(panelFrame: panel, corner: corner))
+        return (panel, L.islandFrame(panelFrame: panel, corner: corner, spot: standing))
     }
 
     private func assertPlacement(in visible: CGRect, corner: ScreenCorner, _ note: String,
@@ -30,20 +33,20 @@ final class PanelIslandTests: XCTestCase {
         XCTAssertEqual(island.height, CGFloat(99), accuracy: 0.01, "\(what): four 21 pt items", file: file, line: line)
         switch corner {
         case .topRight, .bottomRight:
-            XCTAssertEqual(visible.maxX - island.maxX, 8, accuracy: 0.01, "\(what): 8 pt from the edge", file: file, line: line)
-            XCTAssertEqual(island.minX - panel.maxX, 8, accuracy: 0.01, "\(what): 8 pt from the panel", file: file, line: line)
+            XCTAssertEqual(visible.maxX - island.maxX, 10, accuracy: 0.01, "\(what): 10 pt from the edge (L2)", file: file, line: line)
+            XCTAssertEqual(island.minX - panel.maxX, 6, accuracy: 0.01, "\(what): 6 pt from the panel (L2)", file: file, line: line)
             XCTAssertEqual(visible.maxX - panel.maxX, 43, accuracy: 0.01, "\(what): the panel docks 43 pt in", file: file, line: line)
         case .topLeft, .bottomLeft:
-            XCTAssertEqual(island.minX - visible.minX, 8, accuracy: 0.01, "\(what): 8 pt from the edge", file: file, line: line)
-            XCTAssertEqual(panel.minX - island.maxX, 8, accuracy: 0.01, "\(what): 8 pt from the panel", file: file, line: line)
+            XCTAssertEqual(island.minX - visible.minX, 10, accuracy: 0.01, "\(what): 10 pt from the edge (L2)", file: file, line: line)
+            XCTAssertEqual(panel.minX - island.maxX, 6, accuracy: 0.01, "\(what): 6 pt from the panel (L2)", file: file, line: line)
             XCTAssertEqual(panel.minX - visible.minX, 43, accuracy: 0.01, "\(what): the panel docks 43 pt in", file: file, line: line)
         }
         switch corner {
         case .topRight, .topLeft:
-            XCTAssertEqual(island.maxY, panel.maxY, accuracy: 0.01, "\(what): lined up with the panel's top", file: file, line: line)
+            XCTAssertEqual(panel.maxY - island.maxY, L.endInset, accuracy: 0.5, "\(what): level with the top row (L3)", file: file, line: line)
             XCTAssertEqual(visible.maxY - panel.maxY, PanelGeometry.screenInset, accuracy: 0.01, file: file, line: line)
         case .bottomRight, .bottomLeft:
-            XCTAssertEqual(island.minY, panel.minY, accuracy: 0.01, "\(what): lined up with the panel's bottom", file: file, line: line)
+            XCTAssertEqual(island.minY - panel.minY, L.endInset, accuracy: 0.5, "\(what): level with the bottom bar (L3)", file: file, line: line)
             XCTAssertEqual(panel.minY - visible.minY, PanelGeometry.screenInset, accuracy: 0.01, file: file, line: line)
         }
         XCTAssertTrue(visible.contains(island), "\(what): on screen", file: file, line: line)
@@ -66,19 +69,19 @@ final class PanelIslandTests: XCTestCase {
         for corner in [ScreenCorner.topRight, .bottomRight] { assertPlacement(in: dockRight, corner: corner, "Dock on the right") }
         for corner in [ScreenCorner.topLeft, .bottomLeft] { assertPlacement(in: dockLeft, corner: corner, "Dock on the left") }
         for corner in ScreenCorner.allCases { assertPlacement(in: dockBottom, corner: corner, "Dock at the bottom") }
-        XCTAssertEqual(placed(in: dockRight, corner: .topRight).island.maxX, 1440 - 64 - 8, accuracy: 0.01,
-                       "8 pt from the Dock, not from the screen's edge")
+        XCTAssertEqual(placed(in: dockRight, corner: .topRight).island.maxX, 1440 - 64 - 10, accuracy: 0.01,
+                       "10 pt from the Dock, not from the screen's edge")
     }
 
     func testThePanelsAreaKeepsTheIslandsStripAndItsResizeLimitToo() {
         let visible = CGRect(x: 0, y: 0, width: 1440, height: 875)
-        XCTAssertEqual(L.panelArea(in: visible, corner: .topRight), CGRect(x: 0, y: 0, width: 1440 - 31, height: 875))
-        XCTAssertEqual(L.panelArea(in: visible, corner: .bottomLeft), CGRect(x: 31, y: 0, width: 1440 - 31, height: 875))
-        let maximum = PanelGeometry.resizeMaximumSize(in: L.panelArea(in: visible, corner: .topRight))
+        XCTAssertEqual(L.panelArea(in: visible, corner: .topRight, spot: standing), CGRect(x: 0, y: 0, width: 1440 - 31, height: 875))
+        XCTAssertEqual(L.panelArea(in: visible, corner: .bottomLeft, spot: standing), CGRect(x: 31, y: 0, width: 1440 - 31, height: 875))
+        let maximum = PanelGeometry.resizeMaximumSize(in: L.panelArea(in: visible, corner: .topRight, spot: standing))
         XCTAssertEqual(maximum.width, 1440 - 12 - 43, "the widest panel still leaves the island its room")
         // A panel pushed against the island's side stays clear of it.
         let pushed = PanelGeometry.constrainedFrame(CGRect(x: 1300, y: 300, width: 340, height: 560),
-                                                    to: L.panelArea(in: visible, corner: .topRight))
+                                                    to: L.panelArea(in: visible, corner: .topRight, spot: standing))
         XCTAssertEqual(visible.maxX - pushed.maxX, 43, accuracy: 0.01)
     }
 
@@ -92,9 +95,9 @@ final class PanelIslandTests: XCTestCase {
             XCTAssertEqual(island.maxY - item.maxY, 3 + CGFloat(index) * 24, accuracy: 0.01)
         }
         XCTAssertEqual(L.itemFrame(3, in: island).minY - island.minY, 3, accuracy: 0.01)
-        let rightLabel = L.labelWindowFrame(island: island, corner: .topRight)
+        let rightLabel = L.labelWindowFrame(island: island, corner: .topRight, spot: standing)
         XCTAssertEqual(island.minX - rightLabel.maxX, 6, accuracy: 0.01, "right corners: the label sits left of the island")
-        let leftLabel = L.labelWindowFrame(island: island, corner: .bottomLeft)
+        let leftLabel = L.labelWindowFrame(island: island, corner: .bottomLeft, spot: standing)
         XCTAssertEqual(leftLabel.minX - island.maxX, 6, accuracy: 0.01, "left corners: right of it")
         XCTAssertEqual(L.labelHeight, 20)
         XCTAssertEqual(L.labelFontSize, 11)
@@ -123,8 +126,10 @@ final class PanelIslandTests: XCTestCase {
 
         // The label: only the pointed item's row draws (hosted in a window
         // and drawn from its own view tree; the flat look, as glass draws
-        // artefacts off screen).
+        // artefacts off screen). Awake, the first name waits 400 ms (L8).
+        state.island.wake()
         state.island.point(at: .calendar)
+        spin(L.labelDelay + 0.1)
         let host = NSHostingView(rootView: PanelIslandLabels(model: state.island)
             .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true, controls: .craft)))
         let labelSize = CGSize(width: L.labelRoom, height: L.height())
@@ -247,7 +252,7 @@ final class PanelIslandTests: XCTestCase {
                 let surface = controller.panelVisibleFrameForTesting
                 let capsule = windows.islandFrame
                 let window = windows.island.frame
-                let expected = PanelIslandLayout.islandFrame(panelFrame: surface, corner: corner)
+                let expected = PanelIslandLayout.islandFrame(panelFrame: surface, corner: corner, spot: standing)
                 let margin = PanelIslandLayout.windowMargin
                 XCTAssertEqual(capsule, expected, note)
                 XCTAssertEqual(window, capsule.insetBy(dx: -margin, dy: -margin), note)
@@ -295,8 +300,13 @@ final class PanelIslandTests: XCTestCase {
     }
 
     func testPassthroughCountsTheIsland() throws {
-        try withController { controller, _, panel in
+        try withController { controller, state, panel in
             let windows = controller.islandWindowsForTesting
+            // At rest (D4): its dots' capsule and the zone that wakes it.
+            XCTAssertFalse(state.island.isAwake)
+            let rest = windows.restFrame
+            XCTAssertTrue(controller.containsScreenPoint(CGPoint(x: rest.midX, y: rest.midY)), "the resting island is the panel")
+            state.island.wake()
             let centre = CGPoint(x: windows.islandFrame.midX, y: windows.islandFrame.midY)
             XCTAssertTrue(controller.containsScreenPoint(centre), "pointing at the island is pointing at the panel")
             let item = PanelIslandLayout.itemFrame(3, in: windows.islandFrame)
@@ -471,6 +481,59 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// "Motion: page switch and hide" (Accepted 2026-11-02): Slide hides on
+    /// an accelerating curve (`hideTiming`'s start, ending fast) and its
+    /// last part fades out, so nothing sits in the corner. The reveal
+    /// keeps its curve and comes back fully opaque. Reduce Motion is off
+    /// here (`withController` states it).
+    func testSlideHidesOnAnAcceleratingCurveAndItsLastPartFades() throws {
+        try withController(configure: { $0.hideAnimation = .slide }) { controller, _, panel in
+            let container = try content(panel)
+            var hidden = false
+            _ = controller.requestHide { hidden = $0 == .hidden }
+            let key = "attic.panel.collapse"
+            var running: (CALayer, CAAnimation)?
+            let deadline = Date().addingTimeInterval(1)
+            while running == nil, Date() < deadline {
+                running = container.subviews.compactMap(\.layer).compactMap { layer in
+                    layer.animation(forKey: key).map { (layer, $0) }
+                }.first
+                if running == nil { RunLoop.current.run(until: Date().addingTimeInterval(0.003)) }
+            }
+            let (layer, animation) = try XCTUnwrap(running, "a timed Slide hide")
+            var samples: [(fraction: Double, progress: Double, opacity: Float)] = []
+            layer.speed = 0
+            layer.timeOffset = animation.beginTime
+            CATransaction.flush()
+            for fraction in [0.25, 0.5, 0.6, 0.8, 0.95] {
+                layer.timeOffset = animation.beginTime + animation.duration * fraction
+                CATransaction.flush()
+                samples.append((fraction, controller.displayedProgressForProbe, container.motionOpacity(presented: true)))
+            }
+            layer.speed = 1
+            layer.timeOffset = 0
+            let note = samples.map { String(format: "%.2f: %.2f/%.2f", $0.fraction, $0.progress, $0.opacity) }.joined(separator: ", ")
+            // Accelerating: behind the clock all the way (the reveal's
+            // ease-out was 70 % there by a quarter).
+            for sample in samples.prefix(4) {
+                XCTAssertLessThan(sample.progress, sample.fraction, "accelerating (\(note))")
+            }
+            XCTAssertLessThan(samples[0].progress, 0.12, "slow to start (\(note))")
+            XCTAssertEqual(samples[0].opacity, 1, accuracy: 0.01, "opaque early (\(note))")
+            XCTAssertEqual(samples[1].opacity, 1, accuracy: 0.01, "opaque half way (\(note))")
+            XCTAssertLessThan(samples[3].opacity, 0.9, "fading at the end (\(note))")
+            XCTAssertLessThan(samples[4].opacity, 0.25, "nearly gone (\(note))")
+            spin(until: { hidden })
+            XCTAssertTrue(hidden)
+            let screen = try XCTUnwrap(controller.currentScreen)
+            XCTAssertTrue(controller.show(on: screen, corner: .topRight))
+            spin(0.6)
+            XCTAssertEqual(container.motionOpacity(presented: true), 1, accuracy: 0.01, "the reveal is opaque")
+            XCTAssertEqual(container.motionOpacity(presented: false), 1, accuracy: 0.01)
+            XCTAssertTrue(container.motionIsAtRest)
+        }
+    }
+
     /// Slide and Swoop, from every corner: at 30 % and 70 % of a hide and
     /// back on the reveal, the island's stand-in shows (the windows are
     /// empty) and is drawn by the panel's own transform about the island's
@@ -538,7 +601,7 @@ final class PanelIslandTests: XCTestCase {
                 let group = try XCTUnwrap(layer.animation(forKey: "attic.panel.swoop"), note)
                 let surface = local(panel.visibleContentFrame, in: panel)
                 let anchor = islandAnchor(panel, corner)
-                let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner), in: panel)
+                let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner, spot: standing), in: panel)
                 let panelCorners = corners(surface), island = corners(capsule)
                 let curve = (0...800).map { step in
                     PanelSwoopGeometry.transform(progress: Double(step) / 800, visibleBounds: surface,
@@ -664,10 +727,12 @@ final class PanelIslandTests: XCTestCase {
                 let genie = container.genieForTesting
                 let note = "reduce transparency \(reduceTransparency)"
                 XCTAssertFalse(container.isIslandStandInShown, "\(note): nothing changes on screen")
-                for index in 0..<PanelPage.allCases.count {
-                    let item = local(PanelIslandLayout.itemFrame(index, in: windows.islandFrame), in: panel)
-                    let alpha = try XCTUnwrap(genie.snapshotAlpha(around: CGPoint(x: item.midX, y: item.midY)), note)
-                    XCTAssertGreaterThan(alpha, 60, "\(note): item \(index) is in the snapshot")
+                // At rest (D4): the dots' capsule, end to end.
+                let rest = local(windows.restFrame, in: panel)
+                for point in [CGPoint(x: rest.midX, y: rest.minY + 4), CGPoint(x: rest.midX, y: rest.midY),
+                              CGPoint(x: rest.midX, y: rest.maxY - 4)] {
+                    let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                    XCTAssertGreaterThan(alpha, 60, "\(note): the resting island at \(point) is in the snapshot")
                 }
                 var hidden = false
                 _ = controller.requestHide { hidden = $0 == .hidden }
@@ -697,11 +762,10 @@ final class PanelIslandTests: XCTestCase {
                 let genie = container.genieForTesting
                 spin(until: { !container.isIslandStandInShown })
                 @MainActor func items(_ corner: ScreenCorner) -> [CGPoint] {
-                    let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner)
-                    return PanelPage.allCases.indices.map { index in
-                        let item = local(PanelIslandLayout.itemFrame(index, in: island), in: panel)
-                        return CGPoint(x: item.midX, y: item.midY)
-                    }
+                    // A reveal shows the island at rest (D4): its dots' capsule.
+                    let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner, spot: standing)
+                    let rest = local(L.restFrame(island: island, corner: corner, spot: standing), in: panel)
+                    return [CGPoint(x: rest.midX, y: rest.midY)]
                 }
                 var from = ScreenCorner.topRight
                 for to in [ScreenCorner.bottomRight, .bottomLeft, .topLeft, .topRight] {
@@ -736,12 +800,14 @@ final class PanelIslandTests: XCTestCase {
     /// before and just after it, the island's region draws the same, with
     /// the stand-in showing the same page, chip and look, and no label.
     func testTheSwapsBetweenTheIslandAndItsStandInShowNoChange() throws {
-        try withController { controller, _, panel in
-            // Off-screen glass renders as artefacts: compare the flat look.
-            AtticTransparencySeam.systemOverride = true
-            spin(0.3)
+        // This seam is sampled as the roots are constructed. Changing it
+        // afterwards leaves native glass in a software bitmap comparison.
+        try withController(configure: { _ in AtticTransparencySeam.systemOverride = true }) { controller, _, panel in
             let container = try content(panel)
             let windows = controller.islandWindowsForTesting
+            XCTAssertTrue(glassStates(in: try XCTUnwrap(windows.island.contentView)).isEmpty,
+                          "the bitmap comparison must use the flat fixture")
+            XCTAssertTrue(glassStates(in: windows.standIn).isEmpty)
             var looks: [(after: Bool, toMotion: Bool, pixels: [UInt8])] = []
             var failures: [String] = []
             controller.islandSwapProbe = { after, toMotion in
@@ -788,12 +854,9 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Active glass (owner, 1 Nov: the island drew inactive glass while Attic was focused)
 
-    /// The island windows draw active exactly while their parent is key,
-    /// whatever their own key state (they are never key).
-    /// Key-window lane only: the invisible host freezes every window's
-    /// `isKeyWindow` override to false.
-    func testTheIslandWindowsDrawActiveExactlyWhileTheirParentIsKey() throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
+    /// Native glass reads its initial appearance before child attachment.
+    /// That answer must already be active, independently of keyboard state.
+    func testTheIslandWindowsRequestActiveGlassEvenBeforeParentAttachment() throws {
         final class ReportsKey: NSWindow { var key = true; override var isKeyWindow: Bool { key } }
         let parent = ReportsKey(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: 0, y: 0, width: 80, height: 80)),
                                 styleMask: [.borderless], backing: .buffered, defer: true)
@@ -802,24 +865,86 @@ final class PanelIslandTests: XCTestCase {
                                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         island.isReleasedWhenClosed = false
         func active() -> Bool? { (island.value(forKey: "_hasActiveAppearance") as? NSNumber)?.boolValue }
-        XCTAssertEqual(active(), false, "alone: inactive")
+        XCTAssertEqual(active(), true, "glass initializes before attachment; it must not cache the inactive appearance")
         parent.addChildWindow(island, ordered: .above)
         defer { parent.removeChildWindow(island) }
         XCTAssertEqual(active(), true, "the parent is key: active")
         parent.key = false
-        XCTAssertEqual(active(), false, "the parent resigned: inactive")
+        XCTAssertEqual(active(), true, "the parent resigned: glass remains active")
         XCTAssertFalse(island.isKeyWindow)
         XCTAssertFalse(island.canBecomeMain)
     }
 
-    /// With the panel key, the island's and its label's glass draw as active
-    /// as the panel's own; when the panel resigns key or Attic deactivates,
-    /// inactive with it; and the island never takes the keyboard.
-    func testTheIslandsGlassIsActiveExactlyWhileThePanelIsKey() throws {
+    /// Owner, 3 Nov: a corner reveal and pointer wake must have active glass
+    /// before any click, including while another app owns the keyboard.
+    func testCornerRevealRequestsActiveGlassWithoutTakingTheKeyboard() throws {
+        try withController { controller, state, panel in
+            XCTAssertFalse(state.isPanelKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            let active = NSRunningApplication.current.isActive
+            for page in PanelPage.allCases {
+                state.selectSection(page.section)
+                spin(0.3)
+                let responder = panel.firstResponder
+                state.island.wake()
+                spin(0.3)
+                XCTAssertTrue(panel._hasActiveAppearance(), "\(page): native glass must be active before a click")
+                XCTAssertTrue(controller.islandWindowsForTesting.island._hasActiveAppearance())
+                XCTAssertTrue(controller.islandWindowsForTesting.label._hasActiveAppearance())
+                XCTAssertFalse(panel.isKeyWindow)
+                XCTAssertFalse(state.isPanelKey, "solid/glass chrome's key policy is independent")
+                XCTAssertTrue(panel.firstResponder === responder)
+                XCTAssertEqual(NSRunningApplication.current.isActive, active)
+            }
+        }
+    }
+
+    /// Native glass stays active as keyboard focus and app activation change.
+    func testTheColdNonKeyIslandActuallyDrawsActiveGlassBeforeAnyClick() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "native glass layer check on the Air")
+        NSApp.deactivate()
+        spin(0.2)
+        try withController(configure: { $0.appearance = .light; $0.panelSurfaceStyle = .glass }) { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            state.island.wake()
+            state.island.point(at: .tasks)
+            spin(PanelIslandLayout.labelDelay + 0.4)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertTrue(panel._hasActiveAppearance())
+            let own = glassStates(in: try XCTUnwrap(panel.contentView))
+            let island = glassStates(in: try XCTUnwrap(windows.island.contentView))
+            let label = glassStates(in: try XCTUnwrap(windows.label.contentView))
+            print("COLD_GLASS own=\(own) island=\(island) label=\(label)")
+            XCTAssertTrue(own.contains(true))
+            XCTAssertEqual(Set(island), [true], "actual native glass, before a key transition, not just the window's getter")
+            XCTAssertEqual(Set(label), [true])
+        }
+    }
+
+    func testColdSolidPanelControlsAreNativeGlassBeforeAnyClick() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "native glass layer check on the Air")
+        NSApp.deactivate()
+        spin(0.2)
+        let active = NSRunningApplication.current.isActive
+        try withController(configure: { $0.appearance = .light; $0.panelSurfaceStyle = .solid }) { _, state, panel in
+            XCTAssertFalse(state.isPanelKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertEqual(NSRunningApplication.current.isActive, active)
+            // Solid itself has no glass underlay: these must be the controls.
+            let controls = glassStates(in: try XCTUnwrap(panel.contentView))
+            XCTAssertFalse(controls.isEmpty, "a cold Solid panel must not substitute drawn controls")
+            XCTAssertEqual(Set(controls), [true])
+        }
+    }
+
+    func testTheIslandsGlassStaysActiveWithAndWithoutThePanelsKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         try withController { controller, _, panel in
             let windows = controller.islandWindowsForTesting
+            // Awake, the first name shows after 400 ms (D4, L8).
+            windows.model.wake()
             windows.model.point(at: PanelIslandLayout.pages[0])
+            spin(PanelIslandLayout.labelDelay + 0.1)
             let other = makeOtherKeyWindow()
             defer { other.orderOut(nil) }
             @MainActor func assertGlass(active: Bool, _ note: String, file: StaticString = #filePath, line: UInt = #line) throws {
@@ -846,7 +971,7 @@ final class PanelIslandTests: XCTestCase {
 
             other.makeKey()
             spin(until: { !panel.isKeyWindow })
-            try assertGlass(active: false, "another window is key")
+            try assertGlass(active: true, "another window is key")
 
             panel.makeKey()
             spin(until: { panel.isKeyWindow })
@@ -858,13 +983,16 @@ final class PanelIslandTests: XCTestCase {
             let screen = try XCTUnwrap(controller.currentScreen)
             XCTAssertTrue(controller.show(on: screen, corner: .topRight, makeKey: true))
             spin(until: { panel.isKeyWindow && !((try? self.content(panel).isIslandStandInShown) ?? true) })
+            // The hide settled it: the pointer wakes it again.
+            windows.model.wake()
             windows.model.point(at: PanelIslandLayout.pages[0])
+            spin(PanelIslandLayout.labelDelay + 0.1)
             try assertGlass(active: true, "shown again, key")
             XCTAssertTrue(NSApp.keyWindow === panel, "the keyboard stays with the panel")
 
             NSApp.deactivate()
             spin(until: { !panel.isKeyWindow })
-            try assertGlass(active: false, "Attic deactivated")
+            try assertGlass(active: true, "Attic deactivated")
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKey()
             spin(until: { panel.isKeyWindow })
@@ -905,8 +1033,7 @@ final class PanelIslandTests: XCTestCase {
             }
             XCTAssertEqual(seen.count, 8, "\(seen)")
             for (index, entry) in seen.enumerated() {
-                let key = index < 4
-                XCTAssertTrue(entry.hasSuffix("island=[\"\(key)\"] standIn=[\"\(key)\"]"), "swap \(index): \(entry)")
+                XCTAssertTrue(entry.hasSuffix("island=[\"true\"] standIn=[\"true\"]"), "swap \(index): \(entry)")
             }
         }
     }
@@ -952,8 +1079,9 @@ final class PanelIslandTests: XCTestCase {
 
     /// The island's outer corner on `corner`'s side, in the panel window's points.
     private func islandAnchor(_ panel: AtticPanel, _ corner: ScreenCorner) -> CGPoint {
-        let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner)
-        let point = PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+        // L3 moves the island in from the panel's end: the anchor is the
+        // corner of the two together (`PanelIslandLayout.collapseAnchor`).
+        let point = L.collapseAnchor(panelFrame: panel.visibleContentFrame, corner: corner, spot: standing)
         return CGPoint(x: point.x - panel.frame.minX, y: point.y - panel.frame.minY)
     }
 
@@ -968,7 +1096,7 @@ final class PanelIslandTests: XCTestCase {
         XCTAssertTrue(container.isIslandStandInShown, "\(note): the stand-in draws the island", file: file, line: line)
         XCTAssertEqual(windows.island.contentView?.layer?.opacity ?? 1, 0, "\(note): the window is empty", file: file, line: line)
         let surface = local(panel.visibleContentFrame, in: panel)
-        let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner), in: panel)
+        let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner, spot: standing), in: panel)
         let standIn = windows.standIn.frame
         let margin = L.windowMargin
         XCTAssertEqual(standIn.minX, capsule.minX - margin, accuracy: 0.5, "\(note): over the island", file: file, line: line)
@@ -1085,6 +1213,7 @@ final class PanelIslandTests: XCTestCase {
         let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let settings = AppSettings(defaults: defaults)
+        settings.islandSpot = standing
         configure(settings)
         let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         let controller = AtticPanelController(

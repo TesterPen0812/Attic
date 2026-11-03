@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Keeps a Tasks list's scroll position while its page is not built (round
@@ -19,6 +20,8 @@ struct TasksScrollKeeper: NSViewRepresentable {
     /// and VoiceOver does not read it (SwiftUI's own hiding did not reach
     /// into a list's scroll view, round 9).
     var drawn = true
+    /// The "+" card's room (P4): a list resting at its end follows the card.
+    @Environment(\.panelComposerRoom) private var composerRoom
 
     func makeNSView(context: Context) -> KeeperView {
         let view = KeeperView()
@@ -28,6 +31,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.pointer = pointer
         view.focusSelection = focusSelection
         view.drawn = drawn
+        view.composerRoom = composerRoom
         return view
     }
 
@@ -38,6 +42,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.pointer = pointer
         view.focusSelection = focusSelection
         view.drawn = drawn
+        view.composerRoom = composerRoom
     }
 
     /// `y` kept within what the list can scroll: from the top inset to the
@@ -103,6 +108,58 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
     final class KeeperView: NSView {
         weak var model: TasksPageModel?
+        /// The "+" card taking the bar's row (P4): the list makes room, and
+        /// one resting at its end scrolls up with the card so its last rows
+        /// are not covered, and back down as it folds.
+        weak var composerRoom: PanelComposerRoom? {
+            didSet { if composerRoom !== oldValue { observeComposerRoom() } }
+        }
+        private var roomObserver: AnyCancellable?
+        private let roomGlide = TasksScrollGlide()
+        /// How far the list scrolled up for the open card.
+        private var roomLift: CGFloat = 0
+
+        private func observeComposerRoom() {
+            roomObserver = composerRoom?.$isOpen.removeDuplicates().dropFirst()
+                .sink { [weak self] open in MainActor.assumeIsolated { self?.composerRoomChanged(open: open) } }
+        }
+
+        private func composerRoomChanged(open: Bool) {
+            guard drawn, let scroll = enclosingScrollView else { return }
+            let atEnd = scroll.contentView.bounds.origin.y >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1
+            if open {
+                roomLift = 0
+                guard atEnd else { return }
+                // Once the list has its new end room (the same turn's update).
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let scroll = self.enclosingScrollView, self.composerRoom?.isOpen == true else { return }
+                    scroll.layoutSubtreeIfNeeded()
+                    let origin = scroll.contentView.bounds.origin.y
+                    let lift = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - origin
+                    guard lift > 0.5 else { return }
+                    self.roomLift = lift
+                    self.moveForRoom(by: lift, in: scroll)
+                }
+            } else {
+                let lift = roomLift
+                roomLift = 0
+                guard atEnd, lift > 0.5 else { return }
+                moveForRoom(by: -lift, in: scroll)
+            }
+        }
+
+        private func moveForRoom(by delta: CGFloat, in scroll: NSScrollView) {
+            if AtticMotionPreference.reducesMotion {
+                let clip = scroll.contentView
+                var origin = clip.bounds.origin
+                origin.y = TasksScrollKeeper.clampedOriginY(origin.y + delta, in: scroll)
+                clip.scroll(to: origin)
+                scroll.reflectScrolledClipView(clip)
+                return
+            }
+            let spring = AtticMotionPreset.expand.spring(in: .current)
+            roomGlide.run(by: delta, in: scroll, spring: Spring(duration: spring.response, bounce: spring.bounce))
+        }
         var tab: TasksTab = .now
         weak var proxies: TasksListProxies?
         weak var pointer: TasksPointer?

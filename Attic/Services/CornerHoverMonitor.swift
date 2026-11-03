@@ -86,6 +86,7 @@ final class CornerHoverMonitor {
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
     private var screenChangeToken: NSObjectProtocol?
+    private var spaceChangeToken: NSObjectProtocol?
     private var cornerObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
@@ -149,6 +150,19 @@ final class CornerHoverMonitor {
                 self?.samplePointer()
             }
         }
+        spaceChangeToken = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // WindowServer changes Space membership independently of mouse
+            // delivery. Reconcile on the next turn, after that change lands.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning else { return }
+                self.refreshCachedScreenFrames()
+                self.samplePointer()
+                guard self.stateMachine.isVisible, !self.stateMachine.isHidePending else { return }
+                self.panelController.reassertPresentationAfterSpaceChange()
+            }
+        }
         // The corner and the hover rule (control audit item 10): a change
         // re-reads which corners answer and samples once.
         cornerObservation = Publishers.MergeMany(
@@ -188,6 +202,8 @@ final class CornerHoverMonitor {
         revealRefreshTask = nil
         if let screenChangeToken { NotificationCenter.default.removeObserver(screenChangeToken) }
         screenChangeToken = nil
+        if let spaceChangeToken { NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeToken) }
+        spaceChangeToken = nil
         cornerObservation = nil
         lockObservation = nil
         trailingSampleWork?.cancel()

@@ -26,6 +26,31 @@ enum PanelWorkAreaEvents {
     }
 }
 
+/// The native ordering boundary for restoring an overlay in a new Space.
+@MainActor enum PanelSpacePresentation {
+    @discardableResult
+    static func reassert(_ window: NSWindow, onActiveSpace: Bool) -> Bool {
+        guard !window.isVisible || !onActiveSpace else { return false }
+        let children = (window.childWindows ?? []).filter(\.isVisible)
+        // WindowServer keeps an already ordered overlay in its old Space:
+        // order-front alone does not admit it to a new full-screen Space.
+        // Explicitly cycle the visible family, including the child's mouse
+        // policy. Preserve hidden children and the live views/first responder.
+        let reorder = {
+            if window.isVisible {
+                children.forEach { $0.orderOut(nil) }
+                window.orderOut(nil)
+            }
+            window.orderFrontRegardless()
+            children.forEach { $0.orderFrontRegardless() }
+        }
+        if let panel = window as? AtticPanel {
+            panel.preservingActivationForSpaceReadmission(reorder)
+        } else { reorder() }
+        return true
+    }
+}
+
 struct PanelResizePersistenceState {
     private var wasTemporarilyClamped = false
 
@@ -75,6 +100,7 @@ final class PanelMotionCompletionBarrier {
 
 struct PanelVisibilityTransitionState {
     private(set) var generation = 0
+    var hasPendingHide: Bool { pendingHide != nil }
     private var transitionCancellation: (() -> Void)?
     private var pendingHide: (
         generation: Int,
@@ -170,6 +196,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
+
+    /// A Space switch can leave AppKit's isVisible true while WindowServer
+    /// no longer presents this overlay in the active full-screen Space.
+    /// The hover monitor calls only while its logical reveal is still live.
+    /// Re-order the existing windows, without a reveal, focus change or motion.
+    func reassertPresentationAfterSpaceChange() {
+        guard !visibilityTransition.hasPendingHide, !isInteractiveDismissal,
+              PanelSpacePresentation.reassert(panel, onActiveSpace: panel.isOnActiveSpace) else { return }
+        showIsland()
+        resamplePointerPassthrough()
+    }
     #if DEBUG
     /// The motion bench: how far the panel is collapsed now (0 shown, 1
     /// hidden), whichever animation draws it.
@@ -740,7 +777,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }
             return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
         }
-        panel.activeAppearance = { [weak uiState] in uiState?.isPanelKey ?? false }
+        // A corner reveal must draw live glass before any click, while the
+        // other app keeps activation and the keyboard. Native glass asks the
+        // window, not SwiftUI's controlActiveState. The island requests this
+        // same answer from creation. Keyboard state still updates after the
+        // release, but controls no longer substitute a drawn material.
+        panel.activeAppearance = { true }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -1459,7 +1501,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             slideMotionRun = spring.map {
                 PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, spring: $0, velocity: 0)
             } ?? PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, duration: duration,
-                                    timing: UnitBezier(0.22, 0.8, 0.28, 1))
+                                    timing: collapseProgress >= 1 ? PanelHideMotionTuning.slideHideTiming
+                                        : UnitBezier(0.22, 0.8, 0.28, 1))
         }
         contentContainer?.setCollapseProgress(
             collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,

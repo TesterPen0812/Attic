@@ -193,14 +193,10 @@ extension AtticRaisedRecipe {
 /// stronger edge. Otherwise (the Craft style, Reduce Transparency, or a
 /// capture) the drawn `AtticRaisedBackground`.
 ///
-/// Open for Phase 1 (recorded 2026-09-25, no behaviour change yet): native
-/// Liquid Glass renders flat (a grey slab with a dark outline, no
-/// highlights) when its window is not key, and the panel currently reveals
-/// as a non-key window. Phase 1 must decide between making the panel key
-/// while it is shown and a deliberate non-key treatment (for example the
-/// Craft style while inactive), and add a real screen-capture check on
-/// macOS 26 of the controls in the revealed panel: `ImageRenderer`
-/// captures cannot render glass, so only an on-screen capture proves it.
+/// Native Liquid Glass otherwise renders flat in an inactive window. The
+/// docked panel requests active native appearance without taking focus
+/// (owner, 2026-11-03). Verify that on screen with its backdrop: off-screen
+/// ImageRenderer captures cannot render glass.
 struct AtticRaisedMaterialModifier: ViewModifier {
     let cornerRadius: CGFloat
     let state: AtticControlState
@@ -892,10 +888,13 @@ struct AtticPanelStageSurface: View {
 /// panel, the gallery and Settings' Appearance miniature all draw this one.
 struct AtticPanelRim: View {
     var cornerSize: CGFloat
+    /// The shape's curve: the panel's, or the island's control curve (the
+    /// island wears the panel's surface, Accepted 2026-11-03).
+    var exponent: CGFloat = AtticStyle.panelSquircleExponent
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        let shape = Squircle(cornerRadius: cornerSize, exponent: exponent)
         let dark = design.mode == .dark
         ZStack {
             if let hairline = Self.lightHairline(for: design) {
@@ -910,7 +909,7 @@ struct AtticPanelRim: View {
                 shape.stroke(edge.color.color, lineWidth: edge.width)
                 if let highlight = edge.innerHighlight {
                     // Defined Dark Edge: a faint line just inside it.
-                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: AtticStyle.panelSquircleExponent)
+                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: exponent)
                         .stroke(highlight.color, lineWidth: 0.5)
                         .padding(edge.width)
                 }
@@ -942,7 +941,7 @@ struct AtticPanelRim: View {
         ZStack {
             shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
             if dark {
-                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)
+                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: exponent)
                     .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
                     .padding(0.75)
             }

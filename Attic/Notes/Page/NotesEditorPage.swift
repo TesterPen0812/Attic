@@ -387,6 +387,8 @@ struct NotesEditorPage: View {
         .padding(.trailing, Self.headerTitleReserve)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, layout.chromeInsets.top)
+        // The top row changes in place on a page switch (option A).
+        .panelChangesInPlace()
     }
 
     /// What the top row's search button takes from the scrolled-away

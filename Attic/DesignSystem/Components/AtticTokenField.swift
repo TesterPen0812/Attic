@@ -56,6 +56,10 @@ struct AtticTokenFieldActions {
     var fileDragTargeted: ((Bool) -> Void)? = nil
     /// Refuses a native edit before the field or its draft history changes.
     var admitEdit: (() -> Bool)? = nil
+    /// Tab (false) or ⇧Tab (true) outside a suggestion list: true when the
+    /// owner moved the keyboard itself (the "+" card keeps Tab inside its
+    /// fields); nil or false moves along the window's key loop.
+    var tab: ((_ backward: Bool) -> Bool)? = nil
 }
 
 /// A recognised piece of typed text (`#tag`, a date, `!`, `!!`) and how it
@@ -151,6 +155,9 @@ struct AtticTokenField: NSViewRepresentable {
     /// A composer's field wraps onto more lines as the text grows (O17-05);
     /// nil keeps one line that scrolls sideways (a row's title editor).
     var growth: AtticTokenFieldGrowth? = nil
+    /// False keeps the field out of the keyboard's reach (the "+" card's
+    /// title while the card is closed but kept built).
+    var acceptsKeyboard = true
 
     @Environment(\.atticDesign) private var design
 
@@ -193,6 +200,7 @@ struct AtticTokenField: NSViewRepresentable {
             reduceMotion: design.reduceMotion
         ))
         view.textView.isEditable = isEnabled
+        view.textView.refusesKeyboard = !acceptsKeyboard
         view.textView.setAccessibilityLabel(accessibilityLabel)
         view.textView.setAccessibilityIdentifier(accessibilityIdentifier)
         if view.textView.string != text {
@@ -748,6 +756,10 @@ final class AtticChipLayoutManager: NSLayoutManager {
 /// dismisses it, a multi-line paste goes to the owner, and ⌘Z undoes
 /// typing first, then the page.
 final class AtticTokenTextView: NSTextView {
+    /// Set while the owner keeps the field built but out of reach.
+    var refusesKeyboard = false
+    override var acceptsFirstResponder: Bool { !refusesKeyboard && super.acceptsFirstResponder }
+    override var canBecomeKeyView: Bool { !refusesKeyboard && super.canBecomeKeyView }
     weak var owner: AtticTokenField.Coordinator?
     /// No undo manager at all (round 4): the text view can register
     /// nothing anywhere (not the window's, which outlives it); ⌘Z and the
@@ -856,10 +868,12 @@ final class AtticTokenTextView: NSTextView {
     /// One line: Tab moves the keyboard on, as in a text field (review 15:
     /// outside a suggestion list Tab is focus navigation).
     override func insertTab(_ sender: Any?) {
+        if owner?.parent.actions.tab?(false) == true { return }
         window?.selectNextKeyView(self)
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if owner?.parent.actions.tab?(true) == true { return }
         window?.selectPreviousKeyView(self)
     }
 

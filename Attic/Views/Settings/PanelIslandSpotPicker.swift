@@ -16,8 +16,20 @@ enum PanelIslandSpotDiagram {
     static let gap: CGFloat = 5
     static let edge: CGFloat = 5
     static let panelSize = CGSize(width: 46, height: 62)
-    /// The panel's top or bottom from the screen's edge.
+    /// The panel's top or bottom from the screen's edge; in a bottom corner
+    /// it leaves room for the spot on the screen's bottom edge.
     static let panelEnd: CGFloat = 8
+    static let bottomEdgeRoom: CGFloat = 15
+
+    private static func panelEnd(_ corner: ScreenCorner) -> CGFloat {
+        PanelIslandLayout.isTop(corner) ? panelEnd : bottomEdgeRoom
+    }
+
+    /// The panel drawn for the top-right corner, before mirroring.
+    private static func unmirroredPanel(_ corner: ScreenCorner) -> CGRect {
+        CGRect(x: size.width - edge - thickness - gap - panelSize.width, y: panelEnd(corner),
+               width: panelSize.width, height: panelSize.height)
+    }
     /// How far past its capsule a spot takes a click.
     static let hitSlop = CGSize(width: 4, height: 2)
     static let screenRadius: CGFloat = 10
@@ -25,16 +37,20 @@ enum PanelIslandSpotDiagram {
 
     /// The panel, in the diagram's points (top-left origin), in `corner`.
     static func panelFrame(corner: ScreenCorner) -> CGRect {
-        mirrored(CGRect(x: size.width - edge - thickness - gap - panelSize.width, y: panelEnd,
-                        width: panelSize.width, height: panelSize.height), corner: corner)
+        mirrored(unmirroredPanel(corner), corner: corner)
     }
 
     /// A spot's capsule, in the diagram's points, with the panel in `corner`.
     static func spotFrame(_ spot: PanelIslandSpot, corner: ScreenCorner) -> CGRect {
+        let spot = spot.shown(in: corner)
         // Drawn for the top-right corner, then mirrored.
-        let panel = panelFrame(corner: .topRight)
+        let panel = unmirroredPanel(corner)
         let frame: CGRect
         switch spot.side {
+        case .across where spot == .bottomEdge:
+            // The screen's bottom edge (a bottom corner only): drawn here at
+            // the top, between the screen's edge and the panel, and mirrored.
+            frame = CGRect(x: panel.midX - length / 2, y: max(1, panel.minY - gap - thickness), width: length, height: thickness)
         case .across:
             frame = CGRect(x: panel.midX - length / 2, y: panel.maxY + gap, width: length, height: thickness)
         case .screen, .open:
@@ -68,10 +84,10 @@ enum PanelIslandSpotDiagram {
     /// The spot an arrow key moves to from `spot`: the nearest one that
     /// way, favouring the one most in line (nil: none that way).
     static func spot(from spot: PanelIslandSpot, toward direction: Direction, corner: ScreenCorner) -> PanelIslandSpot? {
-        let start = spotFrame(spot, corner: corner)
+        let start = spotFrame(spot.shown(in: corner), corner: corner)
         let origin = CGPoint(x: start.midX, y: start.midY)
         var best: (spot: PanelIslandSpot, score: CGFloat)?
-        for candidate in PanelIslandSpot.allCases where candidate != spot {
+        for candidate in PanelIslandSpot.spots(in: corner) where candidate != spot.shown(in: corner) {
             let frame = spotFrame(candidate, corner: corner)
             let dx = frame.midX - origin.x, dy = frame.midY - origin.y
             let (along, across): (CGFloat, CGFloat) = switch direction {
@@ -98,7 +114,7 @@ struct PanelIslandSpotRow: View {
         HStack(spacing: m.rowTrailingMinGap) {
             VStack(alignment: .leading, spacing: m.labelValueGap) {
                 AtticText(verbatim: String(localized: "Position"), style: .groupLabel, ink: .label)
-                AtticText(verbatim: settings.islandSpot.title, style: .groupValue, ink: .body)
+                AtticText(verbatim: settings.islandSpot.title(in: settings.corner), style: .groupValue, ink: .body)
             }
             .accessibilityHidden(true)
             Spacer(minLength: m.rowTrailingMinGap)
@@ -139,7 +155,7 @@ struct PanelIslandSpotPicker: View {
                 .frame(width: panel.width, height: panel.height)
                 .offset(x: panel.minX, y: panel.minY)
                 .accessibilityHidden(true)
-            ForEach(PanelIslandSpot.allCases) { spot in
+            ForEach(PanelIslandSpot.spots(in: corner)) { spot in
                 spotButton(spot)
             }
         }
@@ -160,7 +176,7 @@ struct PanelIslandSpotPicker: View {
         let tokens = design.tokens
         let frame = D.spotFrame(spot, corner: corner)
         let hit = D.hitFrame(spot, corner: corner)
-        let isSelected = spot == selection
+        let isSelected = spot == selection.shown(in: corner)
         let ink = isSelected ? tokens.ink(.accent)
             : tokens.ink(.heading).withAlpha(hovered == spot ? 0.42 : 0.24)
         // Controls are on curve 1.4 (Accepted "Shapes"): a capsule.

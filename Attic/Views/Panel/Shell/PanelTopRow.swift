@@ -200,6 +200,20 @@ extension EnvironmentValues {
     }
 }
 
+/// Keeps a view in the top row in place while the shell moves its page for
+/// a switch, as `PanelTopRow` does (an open note's scrolled-away title).
+struct PanelChangesInPlace: ViewModifier {
+    @Environment(\.panelPageTravel) private var travel
+
+    func body(content: Content) -> some View {
+        content.offset(x: -travel)
+    }
+}
+
+extension View {
+    func panelChangesInPlace() -> some View { modifier(PanelChangesInPlace()) }
+}
+
 /// The top row. `leading` is the page's text after the pin (Calendar's
 /// month; empty elsewhere); `pageSwitch` the page's own switch (Now · Later
 /// · Done, Calendar's ‹ ›; the slot Notes' board | list fills on the notes

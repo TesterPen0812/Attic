@@ -405,6 +405,8 @@ final class AppCoordinator: ObservableObject {
     private var performanceSignalSource: (any DispatchSourceSignal)?
     #if DEBUG
     private var hideMotionBench: PanelHideMotionBench?
+    private var pageSwitchBench: (any DispatchSourceSignal)?
+    private var benchSources: [any DispatchSourceSignal] = []
     #endif
     private var performancePhaseIndex = 0
 
@@ -942,6 +944,54 @@ final class AppCoordinator: ObservableObject {
             // only): signal-driven hides, reveals and swipes.
             if let mode = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_MODE"].flatMap(PanelHideAnimation.init(storedValue:)) {
                 settings.hideAnimation = mode
+            }
+            // The page-switch bench (preview identities only): with
+            // `ATTIC_PAGE_BENCH=1`, SIGINFO switches to the next page in
+            // order as any route does, and prints when, for the frame
+            // monitor's log (`ATTIC_FRAME_MONITOR`).
+            if ProcessInfo.processInfo.environment["ATTIC_PAGE_BENCH"] == "1",
+               Bundle.main.bundleIdentifier?.hasPrefix("com.taha.Attic.preview.") == true {
+                signal(SIGINFO, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: SIGINFO, queue: .main)
+                source.setEventHandler { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        let pages = PanelPage.allCases
+                        let index = pages.firstIndex(of: PanelPage(self.uiState.selectedSection)) ?? 0
+                        let next = pages[(index + 1) % pages.count]
+                        print(String(format: "ATTIC_PAGE_SWITCH %.4f %@", CACurrentMediaTime(), next.rawValue))
+                        self.hoverMonitor.revealForPerformanceProbe(section: next.section)
+                    }
+                }
+                source.resume()
+                // SIGWINCH wakes the island and lets it settle as when the
+                // pointer leaves 1.2 s later; SIGPROF opens or folds the card.
+                signal(SIGWINCH, SIG_IGN)
+                let island = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
+                island.setEventHandler { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let model = self?.uiState.island else { return }
+                        print(String(format: "ATTIC_ISLAND_WAKE %.4f", CACurrentMediaTime()))
+                        model.wake()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            MainActor.assumeIsolated {
+                                model.track(pointer: CGPoint(x: -100_000, y: -100_000), rest: .zero, awake: .zero)
+                            }
+                        }
+                    }
+                }
+                island.resume()
+                signal(SIGPROF, SIG_IGN)
+                let card = DispatchSource.makeSignalSource(signal: SIGPROF, queue: .main)
+                card.setEventHandler {
+                    MainActor.assumeIsolated {
+                        print(String(format: "ATTIC_CARD_TOGGLE %.4f", CACurrentMediaTime()))
+                        NotificationCenter.default.post(name: .atticBenchToggleComposer, object: nil)
+                    }
+                }
+                card.resume()
+                pageSwitchBench = source
+                benchSources = [island, card]
             }
             hideMotionBench = PanelHideMotionBench.installIfRequested(
                 isVisible: { [weak self] in self?.panelController.isPanelVisible ?? false },

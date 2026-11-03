@@ -164,6 +164,107 @@ final class CornerRevealSettingsTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
+    /// WindowServer can remove a revealed panel from the current Space
+    /// without changing the hover machine's logical visibility. Replaying
+    /// that lost native presentation needs no new mouse event or activation.
+    func testASpaceChangeRepairsLostNativePresentationWithoutTakingTheKeyboard() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        let panel = rig.controller.panelForTesting
+        let active = NSRunningApplication.current.isActive
+        let responder = panel.firstResponder
+        XCTAssertFalse(rig.monitor.isHiddenForPerformanceProbe)
+        panel.orderOut(nil)
+        XCTAssertFalse(panel.isVisible)
+        let samples = rig.monitor.sampleCount
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertGreaterThan(rig.monitor.sampleCount, samples, "a Space change is an input even with a stationary pointer")
+        XCTAssertTrue(panel.isVisible, "the logical reveal must have native presentation in the new Space")
+        XCTAssertTrue(rig.controller.islandWindowsForTesting.isVisible)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertTrue(panel.firstResponder === responder)
+        XCTAssertEqual(NSRunningApplication.current.isActive, active)
+    }
+
+    func testSpaceChangesNeverReviveAHiddenOrStoppedPanel() throws {
+        let rig = try makePanel()
+        rig.settings.revealOnHover = false
+        rig.monitor.start()
+        let panel = rig.controller.panelForTesting
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertFalse(panel.isVisible)
+        rig.monitor.stop()
+        spin(0.4)
+        let samples = rig.monitor.sampleCount
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertEqual(rig.monitor.sampleCount, samples, "stop removes the workspace observer")
+        XCTAssertFalse(panel.isVisible)
+    }
+
+    func testASpaceChangeDoesNotCancelAnAcceptedHide() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        var hidden = false
+        _ = rig.controller.requestHide { hidden = $0 == .hidden }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        let deadline = Date().addingTimeInterval(3)
+        while !hidden, Date() < deadline { spin(0.02) }
+        XCTAssertTrue(hidden, "Space repair must not supersede the accepted hide")
+        XCTAssertFalse(rig.controller.isPanelVisible)
+    }
+
+    func testAVisibleWindowOutsideTheActiveSpaceGetsFreshNativeAdmissionWithItsVisibleChildren() {
+        final class SpacePanel: NSPanel {
+            var activeSpace = false
+            var ordered: ((String) -> Void)?
+            override var isOnActiveSpace: Bool { activeSpace }
+            override func orderOut(_ sender: Any?) { ordered?("out"); super.orderOut(sender) }
+            override func orderFrontRegardless() { ordered?("in"); super.orderFrontRegardless() }
+        }
+        func window() -> SpacePanel {
+            let window = SpacePanel(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: -6000, y: -6000, width: 80, height: 80)),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.becomesKeyOnlyIfNeeded = true
+            return window
+        }
+        let parent = window(), child = window(), hiddenChild = window()
+        defer {
+            parent.removeChildWindow(child); parent.removeChildWindow(hiddenChild)
+            child.close(); hiddenChild.close(); parent.close()
+        }
+        parent.orderFrontRegardless()
+        parent.addChildWindow(child, ordered: .above)
+        parent.addChildWindow(hiddenChild, ordered: .above)
+        child.orderFrontRegardless(); hiddenChild.orderOut(nil)
+        XCTAssertTrue(parent.isVisible)
+        XCTAssertFalse(parent.isOnActiveSpace, "the real Air failure: AppKit visible, absent from the active Space")
+        var orders: [String] = []
+        parent.ordered = { orders.append("parent." + $0) }
+        child.ordered = { orders.append("child." + $0) }
+        hiddenChild.ordered = { orders.append("hidden." + $0) }
+        let active = NSRunningApplication.current.isActive
+        XCTAssertTrue(PanelSpacePresentation.reassert(parent, onActiveSpace: parent.isOnActiveSpace))
+        XCTAssertEqual(orders, ["child.out", "parent.out", "parent.in", "child.in"],
+                       "order-front alone leaves an already ordered window in its old Space; explicit child ordering also resets first-click policy")
+        XCTAssertTrue(parent.isVisible)
+        XCTAssertTrue(child.isVisible)
+        XCTAssertFalse(hiddenChild.isVisible)
+        XCTAssertFalse(parent.isKeyWindow)
+        XCTAssertEqual(NSRunningApplication.current.isActive, active)
+        orders.removeAll()
+        parent.activeSpace = true
+        XCTAssertFalse(PanelSpacePresentation.reassert(parent, onActiveSpace: parent.isOnActiveSpace))
+        XCTAssertEqual(orders, [], "a window already on this Space is undisturbed")
+    }
+
     /// The monitor reads the rule as it changes: hover off, a key, chosen
     /// displays. Corners that don't answer are not even sampled closely.
     /// Explicit opens show the panel whatever the rule says.

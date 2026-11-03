@@ -1,3 +1,20 @@
+## 2026-11-03 · Glass before the first click
+
+The docked panel and its island request active native Liquid Glass from
+creation, even before child attachment and while another app owns the
+keyboard. Corner reveal and pointer wake keep
+focus with that app. Controls over Solid also keep native glass before a
+click; keyboard state still follows release. Reduce Transparency and the
+selected panel/island surface still apply.
+
+Space changes reconcile a live reveal with WindowServer's presentation,
+including entering another app's full-screen Space with a stationary
+pointer. The panel and island re-order without activating Attic or
+superseding a hide. A still-ordered family gets fresh native admission
+(out, then in); bringing it forward alone does not join the new Space.
+That temporary ordering does not return borrowed activation; a real hide
+keeps its normal focus handoff.
+
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white

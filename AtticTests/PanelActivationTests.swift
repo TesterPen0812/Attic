@@ -113,6 +113,18 @@ final class PanelActivationTests: XCTestCase {
         XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"], "focus is returned once")
     }
 
+    func testNativeSpaceReadmissionDoesNotReturnBorrowedActivation() throws {
+        let window = panel()
+        try click(window); active(); fixture.events = []
+        // Replay WindowServer's off-Space state without taking the Pro's screen.
+        XCTAssertTrue(PanelSpacePresentation.reassert(window, onActiveSpace: false))
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(fixture.events, [], "native re-admission is not a logical hide and must not restore another app")
+        fixture.events = []
+        window.orderOut(nil)
+        XCTAssertEqual(fixture.events, ["yield", "restore", "deactivate"], "the later real hide keeps its focus handoff")
+    }
+
     func testVisibleSettingsOrTaskNotePreventsFocusReturn() throws {
         for title in ["Settings", "Task Note"] {
             let window = panel()

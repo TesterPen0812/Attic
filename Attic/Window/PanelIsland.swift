@@ -22,9 +22,29 @@ enum PanelIslandSpot: String, CaseIterable, Codable, Identifiable {
     case openSideMiddle
     case openSideFarEnd
     case acrossOpenEnd
+    /// The eighth spot (Accepted 2026-11-03, "The island, improved", the
+    /// bottom default, reading (a)): flat under the panel in every corner.
+    /// In a bottom corner it lies across the screen's bottom edge, and the
+    /// panel moves up to make room; in a top corner it is "across the open
+    /// end".
+    case bottomEdge
 
-    /// Today's place (Accepted "Island position": "The default is today's place").
-    static let defaultSpot: PanelIslandSpot = .screenSideCornerEnd
+    /// The island starts under the panel (the bottom default, reading (a)).
+    static let defaultSpot: PanelIslandSpot = .bottomEdge
+
+    /// The spots offered with the panel in `corner`: in a top corner the
+    /// screen's bottom edge is the open end, so it is not a spot of its own.
+    static func spots(in corner: ScreenCorner) -> [PanelIslandSpot] {
+        PanelIslandLayout.isTop(corner) ? allCases.filter { $0 != .bottomEdge } : allCases
+    }
+
+    /// The spot this is with the panel in `corner` (the bottom edge is the
+    /// open end in a top corner).
+    func shown(in corner: ScreenCorner) -> PanelIslandSpot {
+        self == .bottomEdge && PanelIslandLayout.isTop(corner) ? .acrossOpenEnd : self
+    }
+
+    func title(in corner: ScreenCorner) -> String { shown(in: corner).title }
 
     enum Side: Equatable { case screen, open, across }
     enum Position: Equatable { case cornerEnd, middle, farEnd }
@@ -35,7 +55,7 @@ enum PanelIslandSpot: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .screenSideCornerEnd, .screenSideMiddle, .screenSideFarEnd: .screen
         case .openSideCornerEnd, .openSideMiddle, .openSideFarEnd: .open
-        case .acrossOpenEnd: .across
+        case .acrossOpenEnd, .bottomEdge: .across
         }
     }
 
@@ -43,7 +63,7 @@ enum PanelIslandSpot: String, CaseIterable, Codable, Identifiable {
     var position: Position {
         switch self {
         case .screenSideCornerEnd, .openSideCornerEnd: .cornerEnd
-        case .screenSideMiddle, .openSideMiddle, .acrossOpenEnd: .middle
+        case .screenSideMiddle, .openSideMiddle, .acrossOpenEnd, .bottomEdge: .middle
         case .screenSideFarEnd, .openSideFarEnd: .farEnd
         }
     }
@@ -61,6 +81,7 @@ enum PanelIslandSpot: String, CaseIterable, Codable, Identifiable {
         case .openSideMiddle: String(localized: "Open side, middle")
         case .openSideFarEnd: String(localized: "Open side, far end")
         case .acrossOpenEnd: String(localized: "Across the open end")
+        case .bottomEdge: String(localized: "Across the screen's bottom edge")
         }
     }
 }
@@ -81,12 +102,71 @@ enum PanelIslandLayout {
     static let inset: CGFloat = AtticPageButtonMetrics.inset
     static let item: CGFloat = AtticPageButtonMetrics.segment
     static let gap: CGFloat = AtticPageButtonMetrics.gap
-    /// From the work area's side edge (the Dock's edge when it sits there).
-    static let edgeInset: CGFloat = 8
-    /// Between the island and the panel.
-    static let panelGap: CGFloat = 8
-    /// How far the panel's side edge sits from the work area's side edge.
+    /// From the work area's edge (the Dock's edge when it sits there):
+    /// 10 pt (L2, was 8).
+    static let edgeInset: CGFloat = 10
+    /// Between the island and the panel: 6 pt (L2, was 8).
+    static let panelGap: CGFloat = 6
+    /// How far the panel's side edge sits from the work area's side edge
+    /// (still 43 pt).
     static let panelSideInset: CGFloat = edgeInset + width + panelGap
+    /// L3: standing at an end, the island sits 15.5 pt in from the panel's
+    /// top (or bottom), so its first item's centre is level with Pin, •••
+    /// and Search, 29 pt below the panel's top (mirrored at the bottom).
+    /// Placed on whole points toward the panel's end (15 pt, 28.5 pt
+    /// centres), so the window lands exactly where it is placed.
+    static let endInset: CGFloat = 15.5
+    /// L12: lying flat, the items are 25 × 21 (the capsule 115 × 27).
+    static let flatItemWidth: CGFloat = 25
+
+    // D4, dots at rest: a 13 × 43 capsule, a dot per page 10 pt apart, the
+    // current page's 6 pt at full ink, the others 5 pt at 32 %.
+    static let restThickness: CGFloat = 13
+    static let restLength: CGFloat = 43
+    static let restDot: CGFloat = 5
+    static let restCurrentDot: CGFloat = 6
+    static let restDotStep: CGFloat = 10
+    static let restDotInk: Double = 0.32
+    /// It wakes when the pointer comes within 16 pt.
+    static let wakeDistance: CGFloat = 16
+    /// It settles 800 ms after the pointer leaves.
+    static let settleDelay: TimeInterval = 0.8
+    /// L8: the first name waits 400 ms; another within 500 ms shows at once.
+    static let labelDelay: TimeInterval = 0.4
+    static let labelFollow: TimeInterval = 0.5
+    /// The pop spring (200 ms, bounce 0.12): the chip's travel (L5) and the
+    /// dots growing into their icons (D4).
+    static let pop = AtticMotionSpring(response: 0.2, bounce: 0.12)
+
+    @MainActor
+    static func popAnimation(reduceMotion: Bool) -> Animation {
+        reduceMotion ? AtticMotionScale.reducedFade : .spring(duration: pop.response, bounce: pop.bounce)
+    }
+
+    /// L5: the chip slides on the pop spring; Reduce Motion fades it.
+    static func chipTravels(reduceMotion: Bool) -> Bool { !reduceMotion }
+    @MainActor
+    static func chipAnimation(reduceMotion: Bool) -> Animation? { popAnimation(reduceMotion: reduceMotion) }
+
+    /// An item's icon: 12.2 pt, Draw's `pencil.and.scribble` 11.5 (I6).
+    static func iconSize(for page: PanelPage) -> CGFloat {
+        page == .canvas ? 11.5 : AtticPageButtonMetrics.iconSize
+    }
+
+    /// L4, a contact shadow: a 0.5 pt edge at 10 %, 0 1 2 pt at 16 % and
+    /// 0 6 16 pt at 16 % (Dark: 60 / 50 / 50 %).
+    struct ContactShadow: Equatable {
+        struct Layer: Equatable { var y: CGFloat; var blur: CGFloat; var opacity: Double }
+        var edgeWidth: CGFloat
+        var edgeOpacity: Double
+        var layers: [Layer]
+    }
+
+    static func contactShadow(dark: Bool) -> ContactShadow {
+        ContactShadow(edgeWidth: 0.5, edgeOpacity: dark ? 0.60 : 0.10,
+                      layers: [.init(y: 1, blur: 2, opacity: dark ? 0.50 : 0.16),
+                               .init(y: 6, blur: 16, opacity: dark ? 0.50 : 0.16)])
+    }
 
     /// The name label beside an item: a 20 pt capsule of 11 pt medium text,
     /// 8 pt padding, 6 pt from the island on the panel's side, sliding in
@@ -98,9 +178,10 @@ enum PanelIslandLayout {
     static let labelSlide: CGFloat = 4
     /// The label window's room for the longest page name.
     static let labelRoom: CGFloat = 120
-    /// Transparent room around the island's capsule for its glass's edge
-    /// and shadow (less than `panelGap`, so it never reaches the panel).
-    static let windowMargin: CGFloat = 6
+    /// Transparent room around the island's capsule for its edge and its
+    /// contact shadow (L4's deepest layer, 6 + 16 pt). It reaches over the
+    /// panel; the margin passes the pointer through (`updatePassthrough`).
+    static let windowMargin: CGFloat = 22
 
     static var pages: [PanelPage] { PanelPage.allCases }
 
@@ -119,6 +200,17 @@ enum PanelIslandLayout {
 
     static func height(count: Int = PanelPage.allCases.count) -> CGFloat {
         2 * inset + CGFloat(count) * item + CGFloat(max(count - 1, 0)) * gap
+    }
+
+    /// Lying flat: 2 × 3 + 4 × 25 + 3 × 3 = 115 pt (L12).
+    static func flatLength(count: Int = PanelPage.allCases.count) -> CGFloat {
+        2 * inset + CGFloat(count) * flatItemWidth + CGFloat(max(count - 1, 0)) * gap
+    }
+
+    /// Whether a flat island lies under the panel (a top corner's open end,
+    /// or the screen's bottom edge), not above it.
+    static func liesBelowPanel(corner: ScreenCorner, spot: PanelIslandSpot) -> Bool {
+        spot.isFlat && (isTop(corner) || spot == .bottomEdge)
     }
 
     /// Whether the island sits right of the panel (the right corners).
@@ -158,15 +250,16 @@ enum PanelIslandLayout {
         case .across:
             let trim = min(strip, max(0, visibleFrame.height))
             area.size.height -= trim
-            // The open end: the bottom in a top corner, the top in a bottom one.
-            if isTop(corner) { area.origin.y += trim }
+            // Under the panel (a top corner's open end, the screen's bottom
+            // edge): the strip comes off the bottom; above it, off the top.
+            if liesBelowPanel(corner: corner, spot: spot) { area.origin.y += trim }
         }
         return area
     }
 
-    /// The capsule's size: 27 × 99 standing, 99 × 27 lying flat.
+    /// The capsule's size: 27 × 99 standing, 115 × 27 lying flat.
     static func size(spot: PanelIslandSpot) -> CGSize {
-        spot.isFlat ? CGSize(width: height(), height: width) : CGSize(width: width, height: height())
+        spot.isFlat ? CGSize(width: flatLength(), height: width) : CGSize(width: width, height: height())
     }
 
     /// The island's capsule in screen points at `spot` around `panelFrame`
@@ -178,12 +271,13 @@ enum PanelIslandLayout {
         let size = size(spot: spot)
         let top = isTop(corner)
         if spot.isFlat {
-            let y = top ? panelFrame.minY - panelGap - size.height : panelFrame.maxY + panelGap
+            let y = liesBelowPanel(corner: corner, spot: spot) ? panelFrame.minY - panelGap - size.height : panelFrame.maxY + panelGap
             let x = wholePoint(panelFrame.midX - size.width / 2, towardMax: isOnRight(corner))
             return CGRect(x: x, y: y, width: size.width, height: size.height)
         }
         let x = isRightOfPanel(corner: corner, spot: spot) ? panelFrame.maxX + panelGap : panelFrame.minX - panelGap - size.width
-        let atTop = panelFrame.maxY - size.height, atBottom = panelFrame.minY
+        let atTop = wholePoint(panelFrame.maxY - endInset - size.height, towardMax: true)
+        let atBottom = wholePoint(panelFrame.minY + endInset, towardMax: false)
         let y: CGFloat = switch spot.position {
         case .cornerEnd: top ? atTop : atBottom
         case .middle: wholePoint(panelFrame.midY - size.height / 2, towardMax: top)
@@ -205,7 +299,7 @@ enum PanelIslandLayout {
                          spot: PanelIslandSpot = .defaultSpot) -> CGRect {
         let island = islandFrame(panelFrame: panelFrame, corner: corner, spot: spot)
         if spot.isFlat {
-            let y = isTop(corner) ? island.maxY : panelFrame.maxY
+            let y = liesBelowPanel(corner: corner, spot: spot) ? island.maxY : panelFrame.maxY
             return CGRect(x: island.minX, y: y, width: island.width, height: panelGap)
         }
         let x = isRightOfPanel(corner: corner, spot: spot) ? panelFrame.maxX : island.maxX
@@ -215,18 +309,52 @@ enum PanelIslandLayout {
     /// An item's square in screen points: top to bottom, or left to right
     /// in a flat island (wider than tall), in the pages' order.
     static func itemFrame(_ index: Int, in island: CGRect) -> CGRect {
-        let step = CGFloat(index) * (item + gap)
         if island.width > island.height {
-            return CGRect(x: island.minX + inset + step, y: island.minY + inset, width: item, height: item)
+            let step = CGFloat(index) * (flatItemWidth + gap)
+            return CGRect(x: island.minX + inset + step, y: island.minY + inset, width: flatItemWidth, height: item)
         }
+        let step = CGFloat(index) * (item + gap)
         return CGRect(x: island.minX + inset, y: island.maxY - inset - item - step, width: item, height: item)
     }
 
     /// The side of the island its label shows on: the panel's (Accepted
     /// "Island position": "The name label shows on the panel's side").
     static func labelSide(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) -> PanelIslandLabelSide {
-        if spot.isFlat { return isTop(corner) ? .above : .below }
+        if spot.isFlat { return liesBelowPanel(corner: corner, spot: spot) ? .above : .below }
         return isRightOfPanel(corner: corner, spot: spot) ? .left : .right
+    }
+
+    /// D4: the capsule at rest, 13 × 43 (43 × 13 lying flat), on the
+    /// panel's side of the island and at the end the island lines up with
+    /// (centred in the middle and lying flat).
+    static func restFrame(island: CGRect, corner: ScreenCorner, spot: PanelIslandSpot) -> CGRect {
+        if spot.isFlat {
+            let y = liesBelowPanel(corner: corner, spot: spot) ? island.maxY - restThickness : island.minY
+            return CGRect(x: island.midX - restLength / 2, y: y, width: restLength, height: restThickness)
+        }
+        let x = isRightOfPanel(corner: corner, spot: spot) ? island.minX : island.maxX - restThickness
+        let top = isTop(corner)
+        let y: CGFloat = switch spot.position {
+        case .cornerEnd: top ? island.maxY - restLength : island.minY
+        case .middle: island.midY - restLength / 2
+        case .farEnd: top ? island.minY : island.maxY - restLength
+        }
+        return CGRect(x: x, y: y, width: restThickness, height: restLength)
+    }
+
+    /// A page's dot at rest: its size, its ink and its centre along the
+    /// rest capsule from its start (the top, or the left lying flat).
+    struct RestDot: Equatable {
+        var diameter: CGFloat
+        var ink: Double
+        var along: CGFloat
+    }
+
+    static func restDots(current: Int, count: Int = PanelPage.allCases.count) -> [RestDot] {
+        (0..<count).map { index in
+            RestDot(diameter: index == current ? restCurrentDot : restDot, ink: index == current ? 1 : restDotInk,
+                    along: restThickness / 2 + CGFloat(index) * restDotStep)
+        }
     }
 
     /// The label window, on the panel's side: beside a standing island and
@@ -248,7 +376,7 @@ enum PanelIslandLayout {
     /// panel resizes (the motion layer is not flipped).
     static func standInResizing(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) -> NSView.AutoresizingMask {
         let top = isTop(corner)
-        if spot.isFlat { return [.minXMargin, .maxXMargin, top ? .maxYMargin : .minYMargin] }
+        if spot.isFlat { return [.minXMargin, .maxXMargin, liesBelowPanel(corner: corner, spot: spot) ? .maxYMargin : .minYMargin] }
         let x: NSView.AutoresizingMask = isRightOfPanel(corner: corner, spot: spot) ? .minXMargin : .maxXMargin
         switch spot.position {
         case .middle: return [x, .minYMargin, .maxYMargin]
@@ -276,8 +404,16 @@ enum PanelIslandLayout {
 @MainActor
 final class PanelIslandModel: ObservableObject {
     @Published private(set) var page: PanelPage = .tasks
-    /// The item under the pointer: its name label shows. Never switches.
+    /// The item under the pointer. Never switches.
     @Published private(set) var pointed: PanelPage?
+    /// The item whose name label shows (L8): the first after 400 ms, the
+    /// next at once while one shows or went less than 500 ms ago.
+    @Published private(set) var labelPage: PanelPage?
+    /// D4: awake, the island draws its items; at rest, a dot per page.
+    @Published private(set) var isAwake = false
+    /// Where the island sits, for the rest capsule's place.
+    @Published private(set) var corner: ScreenCorner = .topRight
+    @Published private(set) var spot: PanelIslandSpot = .defaultSpot
     /// Which side of the island faces the panel (the label goes there).
     @Published private(set) var labelSide: PanelIslandLabelSide = .left
     /// The island lies flat, its items in a row (the across spot).
@@ -298,6 +434,27 @@ final class PanelIslandModel: ObservableObject {
     let approaches = PassthroughSubject<Void, Never>()
     /// Before a click's request: the panel becomes active (one click).
     var onClick: (() -> Void)?
+
+    private let now: () -> Date
+    private let schedule: (TimeInterval, @escaping () -> Void) -> Void
+    /// Bumped to cancel a scheduled label or settle.
+    private var labelTurn = 0
+    private var settleTurn = 0
+    private var labelHiddenAt: Date?
+    /// Whether the pointer was within the wake zone at its last move.
+    private var pointerNear = false
+    /// A pull off the island is under way: it stays awake.
+    var isPulling = false {
+        didSet { if isPulling { wake() } else if oldValue { settleIfAway() } }
+    }
+
+    init(now: @escaping () -> Date = Date.init,
+         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, run in
+             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { run() }
+         }) {
+        self.now = now
+        self.schedule = schedule
+    }
 
     var onOpenInOwnPanel: ((PanelPage) -> Void)?
     var onPutBack: ((PanelPage) -> Void)?
@@ -324,40 +481,108 @@ final class PanelIslandModel: ObservableObject {
         if outPages != pages { outPages = pages }
     }
 
+    /// A page dragged out or back near the island: its ring shows, and the
+    /// island stays awake while it does.
     func setSnapTarget(_ target: Bool) {
         if isSnapTarget != target { isSnapTarget = target }
+        if target { wake() } else { settleIfAway() }
     }
 
     func setCorner(_ corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) {
         let side = PanelIslandLayout.labelSide(corner: corner, spot: spot)
         if labelSide != side { labelSide = side }
         if isFlat != spot.isFlat { isFlat = spot.isFlat }
+        if self.corner != corner { self.corner = corner }
+        if self.spot != spot { self.spot = spot }
     }
 
     /// The pointer is over `page`'s item (nil: over none).
     func point(at page: PanelPage?) {
         if pointed == nil, page != nil { approaches.send() }
         if pointed != page { pointed = page }
+        labelTurn &+= 1
+        guard let page else {
+            if labelPage != nil {
+                labelPage = nil
+                labelHiddenAt = now()
+            }
+            return
+        }
+        wake()
+        let recently = labelHiddenAt.map { now().timeIntervalSince($0) < PanelIslandLayout.labelFollow } ?? false
+        if labelPage != nil || recently {
+            if labelPage != page { labelPage = page }
+            return
+        }
+        let turn = labelTurn
+        schedule(PanelIslandLayout.labelDelay) { [weak self] in
+            guard let self, self.labelTurn == turn, self.pointed == page else { return }
+            self.labelPage = page
+        }
     }
 
     /// The pointer left `page`'s item (another item may have it already).
     func leave(_ page: PanelPage) {
-        if pointed == page { pointed = nil }
+        if pointed == page { point(at: nil) }
     }
 
     func click(_ page: PanelPage) {
+        wake()
         guard !suppressesClicks else { return }
         onClick?()
         requests.send(page)
+    }
+
+    // MARK: Resting and waking (D4)
+
+    func wake() {
+        settleTurn &+= 1
+        if !isAwake { isAwake = true }
+    }
+
+    /// The pointer moved: within 16 pt of the capsule as it is now, the
+    /// island wakes; away from it, it settles 800 ms later.
+    func track(pointer: CGPoint, rest: CGRect, awake: CGRect) {
+        let zone = (isAwake ? awake : rest).insetBy(dx: -PanelIslandLayout.wakeDistance, dy: -PanelIslandLayout.wakeDistance)
+        let near = zone.contains(pointer)
+        let wasNear = pointerNear
+        pointerNear = near
+        if near {
+            wake()
+        } else if wasNear || isAwake {
+            settleIfAway()
+        }
+    }
+
+    /// Settles in 800 ms unless something holds it awake by then.
+    private func settleIfAway() {
+        guard isAwake, !pointerNear, !isSnapTarget, !isPulling else { return }
+        settleTurn &+= 1
+        let turn = settleTurn
+        schedule(PanelIslandLayout.settleDelay) { [weak self] in
+            guard let self, self.settleTurn == turn, !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
+            self.settle()
+        }
+    }
+
+    /// At rest now (the panel hid, or the settle delay ran out).
+    func settle() {
+        settleTurn &+= 1
+        pointerNear = false
+        if pointed != nil { point(at: nil) }
+        if isAwake { isAwake = false }
     }
 }
 
 // MARK: - Views
 
-/// The island: one glass capsule (the tag bar's and "+"'s control glass,
-/// or their flat look) with an item per page, the current page on the grey
-/// selection chip. VoiceOver reads "Pages" with a named button per page,
-/// the current one selected.
+/// The island (Accepted 2026-10-31 "Tall island", improved 2026-11-03): a
+/// capsule in the panel's own surface with an item per page, the current
+/// page on the grey selection chip, which travels to a new page on the pop
+/// spring (L5). Not in use and not pointed at, it rests as dots, one per
+/// page, in a narrow capsule on the panel's side (D4); waking, each dot
+/// travels to its item's place and grows into its icon. VoiceOver reads
+/// "Pages" with a named button per page, the current one selected.
 struct PanelIslandView: View {
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
@@ -370,47 +595,65 @@ struct PanelIslandView: View {
     @FocusState private var focused: PanelPage?
 
     private typealias L = PanelIslandLayout
-    private typealias M = AtticPageButtonMetrics
+
+    private var size: CGSize {
+        model.isFlat ? CGSize(width: L.flatLength(), height: L.width) : CGSize(width: L.width, height: L.height())
+    }
+
+    /// A screen-point rect in the capsule's own top-left coordinates.
+    private func local(_ rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: size.height - rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    private var bounds: CGRect { CGRect(origin: .zero, size: size) }
+
+    private func itemRect(_ index: Int) -> CGRect { local(L.itemFrame(index, in: bounds)) }
+
+    private var restRect: CGRect { local(L.restFrame(island: bounds, corner: model.corner, spot: model.spot)) }
+
+    /// A page's dot at rest, in the capsule's coordinates.
+    private func dotCentre(_ index: Int, dots: [L.RestDot]) -> CGPoint {
+        let rest = restRect
+        return model.isFlat ? CGPoint(x: rest.minX + dots[index].along, y: rest.midY)
+            : CGPoint(x: rest.midX, y: rest.minY + dots[index].along)
+    }
 
     var body: some View {
-        let radius = AtticRadius.header
-        let chipRadius = AtticRadius.nested(outer: radius, gap: L.inset) ?? radius
-        // Lying flat (the across spot), the same items in a row, in the same
-        // order reading left to right (Accepted "Island position").
-        let stack = model.isFlat ? AnyLayout(HStackLayout(spacing: L.gap)) : AnyLayout(VStackLayout(spacing: L.gap))
-        let size = model.isFlat ? CGSize(width: L.height(), height: L.width) : CGSize(width: L.width, height: L.height())
-        stack {
-            ForEach(L.pages) { page in
-                if isStandIn {
-                    face(page, chipRadius: chipRadius)
-                } else {
-                    item(page, chipRadius: chipRadius)
+        let reduceMotion = design.reduceMotion
+        Group {
+            if reduceMotion {
+                // Reduce Motion: it fades between the two; the one showing
+                // takes the pointer and VoiceOver (at rest too, as without
+                // Reduce Motion).
+                ZStack(alignment: .topLeading) {
+                    drawing(awake: false, interactive: !isStandIn && !model.isAwake)
+                        .opacity(model.isAwake ? 0 : 1)
+                        .accessibilityHidden(model.isAwake)
+                    drawing(awake: true, interactive: !isStandIn && model.isAwake)
+                        .opacity(model.isAwake ? 1 : 0)
+                        .accessibilityHidden(!model.isAwake)
                 }
+                .animation(AtticMotionScale.reducedFade, value: model.isAwake)
+            } else {
+                drawing(awake: model.isAwake, interactive: !isStandIn)
+                    .animation(L.popAnimation(reduceMotion: false), value: model.isAwake)
             }
         }
-        .padding(L.inset)
-        .frame(width: size.width, height: size.height)
-        // The surface sits behind the items rather than wrapping them, so
-        // the glass does not tint the icons and chip (the owner's recording
-        // of build 1: the island read faint), as the top-line tabs do.
-        .background {
-            Color.clear
-                .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass, cornerRadius: radius))
-        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .overlay {
             // A floating panel dragged near: a solid blue ring (the
             // design's 4 px at 55 %, outside the capsule).
-            AtticControlShape.shape(cornerRadius: radius + PanelPullOutLayout.ringWidth, exponent: cornerExponent)
+            AtticControlShape.shape(cornerRadius: AtticRadius.header + PanelPullOutLayout.ringWidth, exponent: cornerExponent)
                 .strokeBorder(PanelPullOutLayout.blue.opacity(0.55), lineWidth: PanelPullOutLayout.ringWidth)
                 .padding(-PanelPullOutLayout.ringWidth)
                 .opacity(model.isSnapTarget ? 1 : 0)
-                .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion,
+                .animation(AtticMotionPreset.popover.animation(reduceMotion: reduceMotion,
                                                                showing: model.isSnapTarget), value: model.isSnapTarget)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
-        .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent))
         .padding(L.windowMargin)
+        .onChange(of: focused) { _, now in if now != nil { model.wake() } }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
@@ -418,38 +661,98 @@ struct PanelIslandView: View {
         .allowsHitTesting(!isStandIn)
     }
 
-    /// An item as drawn: the chip or hover fill, the icon and the out dot.
-    private func face(_ page: PanelPage, chipRadius: CGFloat) -> some View {
+    /// The island awake (its items) or at rest (its dots).
+    private func drawing(awake: Bool, interactive: Bool) -> some View {
+        let radius = AtticRadius.header
+        let chipRadius = AtticRadius.nested(outer: radius, gap: L.inset) ?? radius
+        let current = L.pages.firstIndex(of: model.page) ?? 0
+        let dots = L.restDots(current: current)
+        let capsule = awake ? bounds : restRect
+        let travels = L.chipTravels(reduceMotion: design.reduceMotion)
+        return ZStack(alignment: .topLeading) {
+            PanelIslandSurface(cornerRadius: min(radius, min(capsule.width, capsule.height) / 2))
+                .frame(width: capsule.width, height: capsule.height)
+                .offset(x: capsule.minX, y: capsule.minY)
+            // L5: one chip, travelling from the old item to the new one.
+            if travels {
+                let chip = itemRect(current)
+                AtticSelectionMarker(cornerRadius: chipRadius)
+                    .frame(width: chip.width, height: chip.height)
+                    .offset(x: chip.minX, y: chip.minY)
+                    .opacity(awake ? 1 : 0)
+                    .animation(L.chipAnimation(reduceMotion: false), value: model.page)
+                    .allowsHitTesting(false)
+            }
+            ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
+                let rect = itemRect(index)
+                Group {
+                    if interactive {
+                        item(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                    } else {
+                        face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                    }
+                }
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    /// An item as drawn: the hover fill (and under Reduce Motion its own
+    /// chip), and its mark: a dot at rest that travels to the item's place
+    /// and grows into the icon awake (D4), with the out dot.
+    private func face(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot], chipRadius: CGFloat,
+                      chips: Bool) -> some View {
         let isSelected = page == model.page
         let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
+        let rect = itemRect(index)
+        let dot = dots[index]
+        let centre = dotCentre(index, dots: dots)
+        let offset = awake ? CGSize.zero : CGSize(width: centre.x - rect.midX, height: centre.y - rect.midY)
+        let iconSize = L.iconSize(for: page)
+        let faceStyle = L.face(isSelected: isSelected, solid: design.effectiveSurface == .solid)
+        let out = model.outPages.contains(page)
+        let ink = design.tokens.ink(faceStyle.ink).color
         return ZStack {
-            if isSelected {
+            if awake, chips, isSelected {
                 AtticSelectionMarker(cornerRadius: chipRadius)
                     .transition(AtticSelectionMarker.transition)
-            } else if model.pointed == page {
+            } else if awake, model.pointed == page, !isSelected {
                 shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
             }
-            let face = L.face(isSelected: isSelected, solid: design.effectiveSurface == .solid)
-            AtticIcon(systemName: page.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
-            // A page that's out: a 4 pt blue dot at the item's
-            // top-right corner (the design's 8 px, 6 px in).
+            ZStack {
+                Circle()
+                    .fill(out ? PanelPullOutLayout.blue : ink)
+                    .frame(width: dot.diameter, height: dot.diameter)
+                    .scaleEffect(awake ? iconSize / dot.diameter : 1)
+                    .opacity(awake ? 0 : (out ? 1 : dot.ink))
+                AtticIcon(systemName: page.systemName, size: iconSize, weight: faceStyle.weight, ink: faceStyle.ink)
+                    .scaleEffect(awake ? 1 : dot.diameter / iconSize)
+                    .opacity(awake ? 1 : 0)
+            }
+            .offset(offset)
+            // A page that's out: a 4 pt blue dot at the item's top-right
+            // corner (the design's 8 px, 6 px in); at rest its dot is blue.
             Circle()
                 .fill(PanelPullOutLayout.blue)
                 .frame(width: PanelPullOutLayout.outDot, height: PanelPullOutLayout.outDot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .padding(PanelPullOutLayout.outDotInset)
-                .opacity(model.outPages.contains(page) ? 1 : 0)
+                .opacity(awake && out ? 1 : 0)
                 .accessibilityHidden(true)
         }
         .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
-        .frame(width: L.item, height: L.item)
+        .animation(L.popAnimation(reduceMotion: design.reduceMotion), value: model.page)
+        .frame(width: rect.width, height: rect.height)
         .contentShape(Rectangle())
     }
 
-    private func item(_ page: PanelPage, chipRadius: CGFloat) -> some View {
+    private func item(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot], chipRadius: CGFloat,
+                      chips: Bool) -> some View {
         let isSelected = page == model.page
         return Button { model.click(page) } label: {
-            face(page, chipRadius: chipRadius)
+            face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
         .focused($focused, equals: page)
@@ -460,6 +763,8 @@ struct PanelIslandView: View {
         .onHover { inside in
             if inside { model.point(at: page) } else { model.leave(page) }
         }
+        // At rest the dots take no pointer: coming near wakes the island.
+        .allowsHitTesting(awake)
         .atticContextMenu { model.commands(for: page) }
         .accessibilityActions {
             // SwiftUI prepends custom actions to AppKit's rotor list.
@@ -474,16 +779,41 @@ struct PanelIslandView: View {
     }
 }
 
-private struct PanelIslandSurface: ViewModifier {
-    let flat: Bool
+/// The island wears the panel's own surface (Accepted 2026-11-03, "The
+/// panel's appearance"): Palette, Surface, Tint and Tint length from
+/// Settings › Appearance, with the panel's rim, in the island's curve 1.4
+/// shape, over L4's contact shadow.
+private struct PanelIslandSurface: View {
     let cornerRadius: CGFloat
 
-    func body(content: Content) -> some View {
-        if flat {
-            content.atticFlatSurface(cornerRadius: cornerRadius)
-        } else {
-            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
-        }
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.controlExponent)
+        let shadow = PanelIslandLayout.contactShadow(dark: design.mode == .dark)
+        AtticSurfaceBackground(model: design.tokens.panel, shape: shape)
+            .overlay { AtticPanelRim(cornerSize: cornerRadius, exponent: AtticShape.controlExponent) }
+            .background {
+                // L4: the layers fall outside the capsule only, so a
+                // see-through surface never darkens.
+                ZStack {
+                    ForEach(Array(shadow.layers.enumerated()), id: \.offset) { _, layer in
+                        shape.fill(Color.black)
+                            .shadow(color: .black.opacity(layer.opacity), radius: layer.blur / 2, x: 0, y: layer.y)
+                    }
+                    shape.inset(by: -shadow.edgeWidth / 2)
+                        .stroke(Color.black.opacity(shadow.edgeOpacity), lineWidth: shadow.edgeWidth)
+                }
+                .mask {
+                    Rectangle()
+                        .padding(-PanelIslandLayout.windowMargin)
+                        .overlay { shape.blendMode(.destinationOut) }
+                        .compositingGroup()
+                }
+                .allowsHitTesting(false)
+            }
+            .contentShape(shape)
+            .accessibilityHidden(true)
     }
 }
 
@@ -504,10 +834,10 @@ struct PanelIslandLabels: View {
                 // Over the panel, each name centred over its item.
                 HStack(spacing: L.gap) {
                     ForEach(L.pages) { page in
-                        label(page).frame(width: L.item, height: L.labelHeight)
+                        label(page).frame(width: L.flatItemWidth, height: L.labelHeight)
                     }
                 }
-                .frame(width: L.height() + L.labelRoom, height: L.labelHeight)
+                .frame(width: L.flatLength() + L.labelRoom, height: L.labelHeight)
             } else {
                 let alignment: Alignment = model.labelSide == .left ? .trailing : .leading
                 VStack(spacing: L.gap) {
@@ -526,7 +856,8 @@ struct PanelIslandLabels: View {
 
     /// A page's name: it slides in 4 pt from the island's side.
     private func label(_ page: PanelPage) -> some View {
-        let shown = model.pointed == page
+        // L8: the first name waits; awake only (D4).
+        let shown = model.labelPage == page && model.isAwake
         let towardIsland: CGSize = switch model.labelSide {
         case .left: CGSize(width: L.labelSlide, height: 0)
         case .right: CGSize(width: -L.labelSlide, height: 0)
@@ -540,14 +871,28 @@ struct PanelIslandLabels: View {
             .fixedSize()
             .padding(.horizontal, L.labelPadding)
             .frame(height: L.labelHeight)
-            .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass,
-                                         cornerRadius: L.labelHeight / 2))
+            .modifier(PanelIslandLabelSurface(flat: design.effectiveControls != .liquidGlass,
+                                              cornerRadius: L.labelHeight / 2))
             .opacity(shown ? 1 : 0)
             .offset(shown ? .zero : towardIsland)
-            .animation(shown || L.labelFadesOut(pointed: model.pointed)
+            .animation(shown || L.labelFadesOut(pointed: model.labelPage)
                        ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown) : nil,
                        value: shown)
             .accessibilityHidden(true)
+    }
+}
+
+/// The name label's own surface: the controls' glass (or their flat look).
+private struct PanelIslandLabelSurface: ViewModifier {
+    let flat: Bool
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        if flat {
+            content.atticFlatSurface(cornerRadius: cornerRadius)
+        } else {
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
+        }
     }
 }
 
@@ -651,19 +996,12 @@ final class PanelIslandWindow: NSPanel {
     }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }
-    /// Draws active with the parent's release-delayed key appearance, so
-    /// the island's glass looks like the panel's own controls (owner, 1 Nov:
-    /// it drew inactive glass while Attic was focused). AppKit's glass asks
-    /// the window it is in, and a child window that is never key always
-    /// answers inactive; SwiftUI's `appearsActive`/`controlActiveState` and
-    /// an `isKeyWindow` override do not reach it (measured on macOS 26.4).
-    /// Only the look changes: the window still never becomes key or main,
-    /// and the keyboard stays with the panel. AppKit asks again whenever
-    /// the parent's key state changes and when the window is ordered in
-    /// attached (`show(attachedTo:)` attaches before it orders in).
-    @objc func _hasActiveAppearance() -> Bool {
-        (parent as? AtticPanel)?._hasActiveAppearance() ?? (parent?.isKeyWindow ?? false)
-    }
+    /// Glass initializes when its hosting view is installed, before this
+    /// window has a parent. A parent-dependent answer caches inactive glass
+    /// on a cold corner reveal, even after the getter later returns true.
+    /// Request active glass from creation, as the panel does (owner, 3 Nov).
+    /// This changes neither key/main eligibility nor application activation.
+    @objc func _hasActiveAppearance() -> Bool { true }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     // Clicks are routed by the island's own passthrough, never by its
@@ -759,8 +1097,12 @@ final class PanelIslandWindows {
     let label: PanelIslandWindow
     private(set) var corner: ScreenCorner = .topRight
     private(set) var spot: PanelIslandSpot = .defaultSpot
-    /// The capsule in screen points (not the window's transparent margin).
+    /// The capsule awake, in screen points (not the window's margin).
     private(set) var islandFrame: CGRect = .zero
+    /// The capsule at rest (D4).
+    private(set) var restFrame: CGRect = .zero
+    /// The capsule as it is now: awake, or at rest.
+    var capsuleFrame: CGRect { model.isAwake ? islandFrame : restFrame }
     /// Pulls off the island (the pull-out answers them).
     var onPull: ((PanelIslandPull) -> Void)?
     private var pullTracker = PanelIslandPullTracker()
@@ -829,9 +1171,10 @@ final class PanelIslandWindows {
     /// release is not a click.
     func handlePointer(_ pointer: PanelIslandPointer) {
         guard let pull = pullTracker.handle(pointer, island: islandFrame) else { return }
-        if case .began = pull { model.suppressesClicks = true; model.point(at: nil) }
+        if case .began = pull { model.suppressesClicks = true; model.point(at: nil); model.isPulling = true }
         onPull?(pull)
         if case .ended = pull {
+            model.isPulling = false
             // The release reaches SwiftUI first; clicks count again after.
             DispatchQueue.main.async { [weak model] in model?.suppressesClicks = false }
         }
@@ -844,6 +1187,7 @@ final class PanelIslandWindows {
         model.setCorner(corner, spot: spot)
         let capsule = PanelIslandLayout.islandFrame(panelFrame: panelFrame, corner: corner, spot: spot)
         islandFrame = capsule
+        restFrame = PanelIslandLayout.restFrame(island: capsule, corner: corner, spot: spot)
         let islandWindowFrame = capsule.insetBy(dx: -PanelIslandLayout.windowMargin, dy: -PanelIslandLayout.windowMargin)
         if island.frame != islandWindowFrame { island.setFrame(islandWindowFrame, display: island.isVisible) }
         let labelFrame = PanelIslandLayout.labelWindowFrame(island: capsule, corner: corner, spot: spot)
@@ -869,7 +1213,7 @@ final class PanelIslandWindows {
     }
 
     func hide() {
-        model.point(at: nil)
+        model.settle()
         island.parent?.removeChildWindow(island)
         label.parent?.removeChildWindow(label)
         island.orderOut(nil)
@@ -901,8 +1245,9 @@ final class PanelIslandWindows {
     /// Left alone while a button is held, so a pull off the island keeps
     /// its drag and release.
     func updatePassthrough(at point: CGPoint) {
+        if island.isVisible { model.track(pointer: point, rest: restFrame, awake: islandFrame) }
         guard NSEvent.pressedMouseButtons == 0 else { return }
-        let ignores = island.frame.contains(point) && !islandFrame.contains(point)
+        let ignores = island.frame.contains(point) && !capsuleFrame.contains(point)
         guard island.ignoresMouseEvents != ignores else { return }
         island.ignoresMouseEvents = ignores
         if ignores { model.point(at: nil) }
@@ -917,8 +1262,12 @@ final class PanelIslandWindows {
     /// motion's while the stand-in shows it).
     var shownAlpha: CGFloat { handedOffShown ?? island.contentView?.alphaValue ?? 0 }
 
-    /// Whether `point` (screen) is on the island's capsule while it shows.
+    /// Whether `point` (screen) is on the island while it shows: its
+    /// capsule awake, or at rest the zone where the pointer wakes it.
     func contains(_ point: CGPoint) -> Bool {
-        island.isVisible && shownAlpha > 0.01 && islandFrame.contains(point)
+        let zone = model.isAwake
+            ? islandFrame
+            : restFrame.insetBy(dx: -PanelIslandLayout.wakeDistance, dy: -PanelIslandLayout.wakeDistance)
+        return island.isVisible && shownAlpha > 0.01 && zone.contains(point)
     }
 }

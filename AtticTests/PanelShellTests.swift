@@ -93,6 +93,31 @@ final class PanelShellTests: XCTestCase {
     /// Before, the shell crossfaded for 180 ms whatever the feel, and only
     /// the first visit to Notes looked sprung (the editor's own slide for
     /// the note its session started on).
+    /// "Motion: page switch and hide" (Accepted 2026-11-02), option A: the
+    /// new page moves only about 30 pt from its side in the page order, and
+    /// the old page fades out before the new one fades in, so two pages
+    /// never show at once. Reduce Motion and Animations: Reduced stay
+    /// instant. The top row changes in place (`panelPageTravel`).
+    func testOptionAThePageMovesAbout30ptAndThePagesNeverShowTogether() {
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        XCTAssertTrue(motion.travels)
+        XCTAssertEqual(PanelPageMotion.travel, 30, "about 30 pt, not the panel's width")
+        XCTAssertEqual(motion.restingOffset(side: 1), 30)
+        XCTAssertEqual(motion.restingOffset(side: -1), -30)
+        XCTAssertGreaterThan(PanelPageMotion.fadeOut, 0)
+        XCTAssertGreaterThanOrEqual(PanelPageMotion.fadeInDelay, PanelPageMotion.fadeOut,
+                                    "the new page starts fading in once the old one has gone")
+        XCTAssertNotNil(motion.opacityAnimation(incoming: true))
+        XCTAssertNotNil(motion.opacityAnimation(incoming: false))
+        XCTAssertNotEqual(motion.opacityAnimation(incoming: true), motion.opacityAnimation(incoming: false))
+        let instant = PanelPageMotion.current(reduceMotion: true)
+        XCTAssertFalse(instant.travels)
+        XCTAssertEqual(instant.restingOffset(side: 1), 0)
+        XCTAssertNil(instant.opacityAnimation(incoming: true), "Reduce Motion: instant")
+        XCTAssertNil(instant.opacityAnimation(incoming: false))
+        XCTAssertNil(instant.animation)
+    }
+
     func testEveryPageSwitchUsesTheFeelsMotionEveryTime() throws {
         let saved = AtticMotionTuning.current
         defer { AtticMotionTuning.current = saved }
@@ -112,7 +137,9 @@ final class PanelShellTests: XCTestCase {
             XCTAssertGreaterThan(spring.bounce, 0, "\(feel): never a plain fade")
             for (index, record) in used.enumerated() {
                 XCTAssertEqual(record.motion, PanelPageMotion(spring: spring), "\(feel) switch \(index) to \(record.to)")
-                XCTAssertEqual(record.motion.animation, .spring(duration: spring.response, bounce: spring.bounce))
+                // Option A: the spring starts once the old page has faded.
+                XCTAssertEqual(record.motion.animation,
+                               .spring(duration: spring.response, bounce: spring.bounce).delay(PanelPageMotion.fadeInDelay))
                 XCTAssertNotEqual(record.motion.animation, .spring(duration: 0.18, bounce: 0), "the old crossfade")
             }
             // First and repeated visits to Notes are the same switch.
@@ -216,19 +243,18 @@ final class PanelShellTests: XCTestCase {
 
     // MARK: Key window
 
-    /// Native Liquid Glass renders flat in a window that is not key; the
-    /// panel draws its controls in the Craft style until it is key.
-    func testControlsAreGlassOnlyWhileThePanelIsKey() {
+    /// Owner, 3 Nov: glass before any click, on every panel surface.
+    func testControlsStayGlassBeforeThePanelIsKey() {
         XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: true), .liquidGlass)
-        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false), .craft)
-        // Glass and Frosted keep real glass out of focus (Phase 0's weight).
-        for surface in [PanelSurfaceStyle.glass, .frosted] {
+        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false), .liquidGlass)
+        // Keyboard ownership must not substitute a drawn control.
+        for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
             XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: surface), .liquidGlass)
             XCTAssertEqual(AtticDesignContext(surface: .glass, reduceTransparency: true,
                                               controls: PanelKeyTreatment.controls(isPanelKey: false, surface: surface)).effectiveControls,
                            .craft, "Reduce Transparency still draws them")
         }
-        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: .solid), .craft)
+        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: .solid), .liquidGlass)
         let state = PanelUIState()
         XCTAssertFalse(state.isPanelKey)
         state.setPanelKey(true)

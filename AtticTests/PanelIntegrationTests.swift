@@ -91,7 +91,7 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(hidden)
     }
 
-    func testNativePanelAndIslandAppearanceFollowTheReleasedKeyLook() throws {
+    func testNativePanelAndIslandStayActiveWithoutChangingKeyboardOwnership() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
         defer {
@@ -109,12 +109,19 @@ final class PanelIntegrationTests: XCTestCase {
             typealias Read = @convention(c) (AnyObject, Selector) -> Bool
             return unsafeBitCast(method_getImplementation(method), to: Read.self)(window, selector)
         }
-        // The controller's published key look is the release-delayed state;
-        // AppKit's raw key state is deliberately false in the invisible host.
+        // The released keyboard state still changes. Native appearance must
+        // stay active through it without acquiring or moving the keyboard.
+        let key = panel.isKeyWindow, islandKey = island.isKeyWindow
+        let responder = panel.firstResponder
+        let active = NSRunningApplication.current.isActive
         for releasedLook in [false, true, false] {
             rig.uiState.setPanelKey(releasedLook)
-            XCTAssertEqual(try appearance(panel), releasedLook, "native panel follows the published key look")
-            XCTAssertEqual(try appearance(island), releasedLook, "island and panel agree, even before native key state catches up")
+            XCTAssertTrue(try appearance(panel), "glass stays active before and after release")
+            XCTAssertTrue(try appearance(island), "the island agrees independently of keyboard state")
+            XCTAssertEqual(panel.isKeyWindow, key)
+            XCTAssertEqual(island.isKeyWindow, islandKey)
+            XCTAssertTrue(panel.firstResponder === responder)
+            XCTAssertEqual(NSRunningApplication.current.isActive, active)
         }
     }
 
@@ -370,13 +377,13 @@ final class PanelIntegrationTests: XCTestCase {
     // MARK: Key state, haptics
 
     /// The older glass controls (Notes, Canvas, subtask and attachment
-    /// controls) follow the same rule as the shell: real glass only while
-    /// the panel is key; Reduce Transparency is opaque either way.
-    func testOlderGlassControlsFollowThePanelsKeyState() {
+    /// controls) keep real glass before a click, as the shell does;
+    /// Reduce Transparency remains opaque either way.
+    func testOlderGlassControlsStayGlassWithoutThePanelsKeyboard() {
         XCTAssertEqual(AtticGlassControlTreatment.resolve(
             reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: true)), .nativeGlass)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(
-            reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: false)), .drawn)
+            reduceTransparency: false, controls: PanelKeyTreatment.controls(isPanelKey: false)), .nativeGlass)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(reduceTransparency: true, controls: .liquidGlass), .opaque)
         XCTAssertEqual(AtticGlassControlTreatment.resolve(reduceTransparency: true, controls: .craft), .opaque)
     }

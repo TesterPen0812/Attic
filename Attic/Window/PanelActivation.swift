@@ -92,8 +92,11 @@ final class PanelActivation {
 
     func isActivationWindow(_ window: NSWindow) -> Bool { activationWindow === window }
 
-    func hidden(_ window: NSWindow) {
+    func hidden(_ window: NSWindow, preservingActivation: Bool = false) {
         if pressWindow === window { pressWindow = nil; beforePress = nil }
+        // Native Space re-admission briefly orders out an otherwise live
+        // panel. It cancels a stale press but is not the user's focus handoff.
+        guard !preservingActivation else { return }
         guard borrowedActivation else { return }
         if system.isActive() { returnFocusIfUnoccupied() }
         else if !awaitingActivation { clearBorrowedActivation() }
