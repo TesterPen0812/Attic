@@ -377,8 +377,10 @@ final class MarqueeInteractionTests: XCTestCase {
         let rect = try XCTUnwrap(engine.rect(for: quote))
         let card = NoteDragLiftView(snapshot: NoteDragLiftView.snapshot(of: rect, in: text), size: rect.size,
                                     padding: CGSize(width: 6, height: 4), tokens: engine.style.tokens)
-        let fill = try XCTUnwrap(card.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) })
+        let backing = try XCTUnwrap(card.layer as? CAShapeLayer)
+        let fill = try XCTUnwrap(backing.fillColor.flatMap { NSColor(cgColor: $0) })
         XCTAssertGreaterThan(fill.alphaComponent, 0.85, "an opaque backing: the text under the card never shows through")
+        XCTAssertTrue(try XCTUnwrap(backing.path).contains(CGPoint(x: card.bounds.midX, y: card.bounds.midY)))
         XCTAssertNotNil((card.layer?.sublayers?.first)?.contents, "the block's snapshot")
         XCTAssertEqual(card.frame.size, CGSize(width: rect.width + 12, height: rect.height + 8))
 
