@@ -779,8 +779,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         // A corner reveal must draw live glass before any click, while the
         // other app keeps activation and the keyboard. Native glass asks the
-        // window, not SwiftUI's controlActiveState. The island inherits this
-        // answer from its parent. Keep the release-delayed SwiftUI key state
+        // window, not SwiftUI's controlActiveState. The island requests this
+        // same answer from creation. Keep the release-delayed SwiftUI key state
         // separate: Solid's controls still change treatment after a press.
         panel.activeAppearance = { true }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }

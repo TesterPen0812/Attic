@@ -800,12 +800,14 @@ final class PanelIslandTests: XCTestCase {
     /// before and just after it, the island's region draws the same, with
     /// the stand-in showing the same page, chip and look, and no label.
     func testTheSwapsBetweenTheIslandAndItsStandInShowNoChange() throws {
-        try withController { controller, _, panel in
-            // Off-screen glass renders as artefacts: compare the flat look.
-            AtticTransparencySeam.systemOverride = true
-            spin(0.3)
+        // This seam is sampled as the roots are constructed. Changing it
+        // afterwards leaves native glass in a software bitmap comparison.
+        try withController(configure: { _ in AtticTransparencySeam.systemOverride = true }) { controller, _, panel in
             let container = try content(panel)
             let windows = controller.islandWindowsForTesting
+            XCTAssertTrue(glassStates(in: try XCTUnwrap(windows.island.contentView)).isEmpty,
+                          "the bitmap comparison must use the flat fixture")
+            XCTAssertTrue(glassStates(in: windows.standIn).isEmpty)
             var looks: [(after: Bool, toMotion: Bool, pixels: [UInt8])] = []
             var failures: [String] = []
             controller.islandSwapProbe = { after, toMotion in
