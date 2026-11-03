@@ -1036,6 +1036,8 @@ final class PanelChromeTests: XCTestCase {
             ComposerOverlay.corners = []
             var doubled = 0
             var samples = 0
+            // P4: folding, the bar's "+" fades back as the card fades out.
+            var counting = true
             // Terra 9 (batch 3): the motion is stepped, never sampled in
             // real time. As the page switch's test does, the presentation
             // is paused and its clock stepped 60 frames a second through
@@ -1055,7 +1057,7 @@ final class PanelChromeTests: XCTestCase {
                     layer.timeOffset = begin + Double(step) / 60
                     CATransaction.flush()
                     samples += 1
-                    if ComposerOverlay.isPresented && PanelSharedBottomBar.drawsPlus { doubled += 1 }
+                    if counting, ComposerOverlay.isPresented && PanelSharedBottomBar.drawsPlus { doubled += 1 }
                     assertSameFrames(before, try barFrames(still, in: host), "the bars stay still (frame \(step))")
                     let now = try XCTUnwrap(frame(of: plus, in: host))
                     XCTAssertEqual(now.maxX, plusFrame.maxX, accuracy: 0.5)
@@ -1069,13 +1071,14 @@ final class PanelChromeTests: XCTestCase {
                           "an in-between frame on the way open: \(opening.map(\.size.width))")
             XCTAssertEqual(opening.last?.size.width ?? 0, 289, accuracy: 0.5)
             ComposerOverlay.surfaces = []
+            counting = false
             // Closing through a page switch.
             try sample(plus: "calendar-new-task") { state.selectSection(.calendar) }
             spin(0.3)
             let closing = ComposerOverlay.surfaces
             XCTAssertTrue(closing.contains { $0.size.width > 30 && $0.size.width < 285 },
                           "an in-between frame on the way back: \(closing.map(\.size.width))")
-            XCTAssertEqual(doubled, 0, "never two \"+\"s: the bar's own hides while the grow draws")
+            XCTAssertEqual(doubled, 0, "never two \"+\"s while the card opens: the bar's own fades out under it")
             XCTAssertFalse(ComposerOverlay.isPresented)
             XCTAssertTrue(PanelSharedBottomBar.drawsPlus, "the bar's \"+\" is back once the shrink ends")
             let corners = ComposerOverlay.corners
@@ -1086,6 +1089,45 @@ final class PanelChromeTests: XCTestCase {
             }
             XCTAssertEqual(corners[0].x, plusFrame.maxX, accuracy: 1)
             XCTAssertEqual(corners[0].y, plusFrame.maxY, accuracy: 1)
+        }
+    }
+
+    /// Accepted 2026-11-03 (P4): the card opens onto the bar's own row (its
+    /// bottom-trailing corner on the "+"'s), the tag pills and "+" go under
+    /// it, nothing dims, the list keeps the card's height clear, and folding
+    /// gives the row back.
+    func testTheCardTakesTheBarsRowAndTheListMakesRoom() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let plusFrame = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
+            XCTAssertNotNil(element("tasks-tag-bar-books", in: host))
+            ComposerOverlay.corners = []
+            PanelComposerRoom.lastSet = nil
+            XCTAssertTrue(try XCTUnwrap(element("tasks-new-task", in: host)).accessibilityPerformPress?() ?? false)
+            spin(0.3)
+            XCTAssertNotNil(element("composer-card", in: host))
+            let corner = try XCTUnwrap(ComposerOverlay.corners.last)
+            XCTAssertEqual(corner.x, plusFrame.maxX, accuracy: 1, "it grows from the \"+\" corner")
+            XCTAssertEqual(corner.y, plusFrame.maxY, accuracy: 1, "its bottom edge is the bar's bottom edge")
+            XCTAssertNil(element("tasks-tag-bar-books", in: host), "the tag pills go under the card")
+            XCTAssertNil(element("tasks-new-task", in: host), "and so does \"+\"")
+            let room = try XCTUnwrap(PanelComposerRoom.lastSet)
+            XCTAssertTrue(room.open)
+            XCTAssertEqual(room.height, ComposerMetrics.height, accuracy: 1, "the list keeps the card's height clear")
+            XCTAssertEqual(TasksViewport.composerExtra(room: room.height, stackHeight: TasksViewport.reservedStack),
+                           max(0, room.height - max(TasksViewport.reservedStack, AtticControlSize.addBarHeight)))
+            state.selectSection(.calendar)
+            spin(0.3)
+            state.selectSection(.tasks)
+            spin(0.5)
+            XCTAssertNil(element("composer-card", in: host))
+            XCTAssertNotNil(element("tasks-tag-bar-books", in: host), "folding gives the row back")
+            XCTAssertNotNil(element("tasks-new-task", in: host))
+            XCTAssertEqual(PanelComposerRoom.lastSet?.height, 0)
+            XCTAssertEqual(PanelComposerRoom.lastSet?.open, false)
         }
     }
 
