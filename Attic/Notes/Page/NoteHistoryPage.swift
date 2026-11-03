@@ -80,7 +80,7 @@ struct NoteHistoryPage: View {
                         .font(.system(size: 11))
                         .foregroundStyle(design.tokens.color(.body))
                         .padding(8)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .background(.regularMaterial, in: Squircle(cornerRadius: AtticRadius.noteBlock))
                         .accessibilityIdentifier("notes-history-restore-error")
                 }
                 HStack(spacing: 6) {
@@ -200,6 +200,8 @@ struct NoteHistoryVersionSwitch: View {
 
     @Environment(\.atticDesign) private var design
     @State private var hovered: Bool?
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var focused: Bool
 
     static let height = AtticTopGlassMetrics.height
     static let inset = AtticControlSize.capsuleInset
@@ -209,8 +211,8 @@ struct NoteHistoryVersionSwitch: View {
 
     var body: some View {
         let tokens = design.tokens
-        let height = Self.height
-        let inset = Self.inset
+        let height = trackHeight
+        let inset = trackInset
         let outer = AtticRadius.control(height: height)
         let inner = max(0, outer - inset)
         HStack(spacing: 0) {
@@ -222,9 +224,10 @@ struct NoteHistoryVersionSwitch: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: height - inset * 2)
                         .background {
-                            RoundedRectangle(cornerRadius: inner, style: .continuous)
+                            AtticControlShape.shape(cornerRadius: inner, exponent: AtticShape.controlExponent)
                                 .fill((isSelected ? tokens.selected : (hovered == choice.value ? tokens.chipHover : .clear)).color)
                         }
+                        .atticFocusRing(focused && isSelected && keyboardFocusVisible, cornerRadius: inner)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(AtticUndimmedButtonStyle())
@@ -236,6 +239,16 @@ struct NoteHistoryVersionSwitch: View {
         .padding(inset)
         .frame(height: height)
         .atticRaisedMaterial(cornerRadius: outer, interactive: false)
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in
+            let selected = choices.firstIndex { $0.value == selection } ?? 0
+            guard let next = AtticPageArrows.next(from: selected, key: press.key, modifiers: press.modifiers, count: choices.count) else { return .ignored }
+            selection = choices[next].value
+            return .handled
+        }
+        .atticDesignCorners()
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Compare version"))
     }

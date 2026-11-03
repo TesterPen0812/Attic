@@ -20,7 +20,7 @@ struct AtticDateChip: View {
         }
         .padding(.horizontal, AtticTagMetrics.horizontalPadding)
         .frame(height: height)
-        .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(tokens.tagFill.color))
+        .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(tokens.tagFill.color))
         .accessibilityHidden(true)
     }
 }
@@ -57,8 +57,8 @@ struct AtticNoteMenuButton: View {
         Button(action: action) {
             AtticIcon(systemName: "ellipsis", size: m.menuGlyphSize, weight: .medium, ink: isOpen ? .glyph : .icon)
                 .frame(width: m.menuButtonSize, height: m.menuButtonSize)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+                .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
@@ -277,7 +277,7 @@ struct AtticNoteRow: View {
         return Button(action: action) {
             AtticIcon(systemName: "ellipsis", size: AtticNoteMetrics.rowActionsGlyphSize, weight: .medium, ink: .icon)
                 .frame(width: Self.actionsWidth, height: Self.actionsHeight)
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()

@@ -325,7 +325,7 @@ struct AtticDropOutline: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = Squircle(cornerRadius: cornerRadius)
         ZStack {
             shape.fill(tokens.hover.color)
             shape.strokeBorder(tokens.focusRing.color, lineWidth: AtticRingMetrics.dropOutlineWidth)
@@ -364,7 +364,7 @@ struct AtticCarryPreview: View {
                 AtticText(verbatim: "\(count)", style: .tag, ink: .onInverse, allowsOverlap: true)
                     .padding(.horizontal, m.badgePadding)
                     .frame(minWidth: m.badgeSize, minHeight: m.badgeSize)
-                    .background(Capsule().fill(design.tokens.color(.inverseFill)))
+                    .background(AtticControlShape.shape(cornerRadius: m.badgeSize / 2, exponent: AtticShape.controlExponent).fill(design.tokens.color(.inverseFill)))
                     .offset(x: m.badgeOffset, y: -m.badgeOffset)
                     .accessibilityLabel(String(localized: "\(count) items"))
             }
@@ -421,7 +421,7 @@ struct AtticThumbnailPlaceholder: View {
         let t = AtticThumbnailTokens.self
         let dark = design.mode == .dark
         let gradient = dark ? t.darkGradient : t.lightGradient
-        RoundedRectangle(cornerRadius: AtticRadius.image, style: .continuous)
+        Squircle(cornerRadius: AtticRadius.image)
             .fill(LinearGradient(colors: [gradient.top.color, gradient.bottom.color], startPoint: .top, endPoint: .bottom))
             .overlay(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: t.barRadius, style: .continuous)
@@ -541,7 +541,7 @@ struct AtticStatusPill: View {
                         AtticText(verbatim: "+\(more)", style: .count, ink: .body)
                             .padding(.horizontal, AtticTagMetrics.horizontalPadding)
                             .frame(height: AtticControlSize.tagHeight)
-                            .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight), style: .continuous)
+                            .background(AtticControlShape.shape(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight), exponent: AtticShape.controlExponent)
                                 .fill(design.tokens.chipHover.color))
                     }
                 }
@@ -656,8 +656,8 @@ private struct AtticStatusDetailButton: View {
             AtticText(verbatim: title, style: .controlLabel, ink: prominent ? .heading : .body)
                 .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: height)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+                .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .onHover { hovered = $0 }

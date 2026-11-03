@@ -405,7 +405,7 @@ struct NoteHighlightSwatchFace: View {
 
     var body: some View {
         let side = NoteHighlightSwatch.size
-        let shape = RoundedRectangle(cornerRadius: 3, style: .continuous)
+        let shape = Squircle(cornerRadius: 3)
         let dark = design.tokens.context.mode == .dark
         shape.fill(design.tokens.highlightMarker(colour).color)
             .overlay(shape.strokeBorder(Color(white: dark ? 1 : 0, opacity: 0.18), lineWidth: 0.5))
@@ -463,7 +463,7 @@ struct NoteLinkField: View {
 
     var body: some View {
         let height = AtticControlSize.smallHeight
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: AtticRadius.control(height: height), exponent: AtticShape.controlExponent)
         let hasLink: Bool = if case .link(true) = model.card { true } else { false }
         HStack(spacing: 5) {
             AtticIcon(systemName: "link", size: AtticSmallControlMetrics.iconSize - 2, weight: .regular, ink: .helper)
@@ -561,7 +561,7 @@ struct NoteFormatStyleStrip: View {
                                          isKeyboardFocused: model.styleStripKeyboardIndex == index)
             }
         }
-        .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.chipHover.color))
+        .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(design.tokens.chipHover.color))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Style"))
         .accessibilityIdentifier("notes-format-style-strip")
@@ -590,8 +590,8 @@ private struct NoteFormatStyleStripCell: View {
                 .lineLimit(1)
                 .fixedSize()
                 .frame(width: NoteFormatStyleStrip.cellWidth(command), height: height)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+                .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()

@@ -115,7 +115,7 @@ private struct AtticFormatToggleFace<Face: View>: View {
         let ink: AtticInk = !isEnabled ? .disabledIcon : (value == .off ? offInk : .glyph)
         face(ink)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+            .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
     }
 }
 
@@ -191,9 +191,9 @@ struct AtticFormatStyleFace: View {
         .padding(.horizontal, m.barStylePadding)
         .frame(width: width)
         .frame(height: height)
-        .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+        .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent)
             .fill((hovered && isEnabled ? design.tokens.chipHover : .clear).color))
-        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         .atticFocusRing(isKeyboardFocused, cornerRadius: radius)
         .onHover { hovered = $0 }
     }

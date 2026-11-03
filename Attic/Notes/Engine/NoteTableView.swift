@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 /// Where the caret goes in a cell.
 enum NoteTableCaret: Equatable {
@@ -49,8 +50,7 @@ enum NoteTableDrawing {
         let contrast = design.colourKey.increaseContrast
         let hairline = contrast ? M.contrastHairline : M.hairline
         let bounds = CGRect(origin: .zero, size: layout.size)
-        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: hairline / 2, dy: hairline / 2),
-                                xRadius: M.radius, yRadius: M.radius)
+        let card = NSBezierPath(cgPath: Squircle(cornerRadius: M.radius).inset(by: hairline / 2).path(in: bounds).cgPath)
         NSGraphicsContext.saveGraphicsState()
         card.addClip()
         if table.headerRow, !layout.rowHeights.isEmpty {
@@ -132,6 +132,7 @@ final class NoteTableView: NSView {
     private(set) var cellSelection: NoteTableCellRange?
     private(set) var grid = NoteTableLayout(columnWidths: [], rowHeights: [], viewportWidth: 264)
     private let fadeMask = CAGradientLayer()
+    private let cornerMask = CAShapeLayer()
     /// U-25: a wide table's rounded outline stays put while its cells
     /// scroll under it (drawn over the viewport, outside its fade).
     let frameView = NoteTableFrameView()
@@ -143,8 +144,8 @@ final class NoteTableView: NSView {
         scrollView.wantsLayer = true
         scrollView.clipsToBounds = true
         // The card's corners clip the cells wherever the table scrolls.
-        scrollView.layer?.cornerRadius = M.radius
-        scrollView.layer?.cornerCurve = .continuous
+        cornerMask.actions = ["path": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        scrollView.layer?.mask = cornerMask
         scrollView.addSubview(canvas)
         scrollView.table = self
         canvas.table = self
@@ -430,14 +431,18 @@ final class NoteTableView: NSView {
 
     /// The 16 pt fade at each cut edge, only while there is more that way.
     private func updateFade() {
+        if cornerMask.frame != scrollView.bounds || cornerMask.path == nil {
+            cornerMask.frame = scrollView.bounds
+            cornerMask.path = Squircle(cornerRadius: M.radius).path(in: scrollView.bounds).cgPath
+        }
         guard grid.scrolls, bounds.width > 2 * M.edgeFade else {
-            scrollView.layer?.mask = nil
+            cornerMask.mask = nil
             return
         }
         let offset = scrollOffset
         let left = offset > 0.5, right = offset + bounds.width < grid.width - 0.5
         guard left || right else {
-            scrollView.layer?.mask = nil
+            cornerMask.mask = nil
             return
         }
         CATransaction.begin()
@@ -449,7 +454,7 @@ final class NoteTableView: NSView {
         fadeMask.colors = [left ? NSColor.clear.cgColor : NSColor.black.cgColor, NSColor.black.cgColor,
                            NSColor.black.cgColor, right ? NSColor.clear.cgColor : NSColor.black.cgColor]
         fadeMask.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
-        scrollView.layer?.mask = fadeMask
+        cornerMask.mask = fadeMask
         CATransaction.commit()
     }
 
@@ -727,8 +732,7 @@ final class NoteTableFrameView: NSView {
         guard let attachment = table?.attachment else { return }
         let design = attachment.engine?.objectDesign ?? attachment.style.design
         let hairline = design.colourKey.increaseContrast ? NoteTableView.M.contrastHairline : NoteTableView.M.hairline
-        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: hairline / 2, dy: hairline / 2),
-                                xRadius: NoteTableView.M.radius, yRadius: NoteTableView.M.radius)
+        let card = NSBezierPath(cgPath: Squircle(cornerRadius: NoteTableView.M.radius).inset(by: hairline / 2).path(in: bounds).cgPath)
         AtticColorTokens.resolve(design).tableGrid.nsColor.setStroke()
         card.lineWidth = hairline
         card.stroke()

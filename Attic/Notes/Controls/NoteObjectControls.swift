@@ -440,8 +440,7 @@ final class NoteObjectSelectionView: NSView {
         if let shape {
             path = NSBezierPath(cgPath: shape.inset(by: width / 2).path(in: objectRect).cgPath)
         } else {
-            let radius = max(0, AtticRadius.image - width / 2)
-            path = NSBezierPath(roundedRect: objectRect.insetBy(dx: width / 2, dy: width / 2), xRadius: radius, yRadius: radius)
+            path = NSBezierPath(cgPath: Squircle(cornerRadius: AtticRadius.image).inset(by: width / 2).path(in: objectRect).cgPath)
         }
         path.lineWidth = width
         return path

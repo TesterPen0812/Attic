@@ -340,7 +340,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
             // Draft N5 B: rgba(52,168,83,0.1) / rgba(214,52,58,0.07) on a 6 pt
             // squircle, a 1.5 pt bar; the system colours keep dark mode.
             let tint: NSColor = mark == .added ? .systemGreen : .systemRed
-            let path = CGPath(roundedRect: band, cornerWidth: 6, cornerHeight: 6, transform: nil)
+            let path = Squircle(cornerRadius: AtticRadius.small).path(in: band).cgPath
             context.saveGState()
             context.addPath(path)
             context.clip()
@@ -488,7 +488,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                 let origin = line.typographicBounds.origin
                 let rect = CGRect(x: point.x + origin.x + startX - padding, y: point.y + centreY - T.inlineCodeChipHeight / 2,
                                   width: width + 2 * padding, height: T.inlineCodeChipHeight)
-                context.addPath(CGPath(roundedRect: rect, cornerWidth: T.inlineCodeChipRadius, cornerHeight: T.inlineCodeChipRadius, transform: nil))
+                context.addPath(Squircle(cornerRadius: T.inlineCodeChipRadius).path(in: rect).cgPath)
             }
         }
         context.fillPath()
@@ -514,7 +514,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                           height: slice.height + (joinsAbove ? radius * 2 : 0) + (joinsBelow ? radius * 2 : 0))
         context.saveGState()
         context.clip(to: slice)
-        context.addPath(CGPath(roundedRect: full, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.addPath(Squircle(cornerRadius: radius).path(in: full).cgPath)
         context.setFillColor(ink.cgColor)
         context.fillPath()
         context.restoreGState()
@@ -974,7 +974,7 @@ final class NoteMonoCopyButton: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius)
+        let shape = NSBezierPath(cgPath: Squircle(cornerRadius: Self.radius, exponent: AtticShape.controlExponent).path(in: bounds).cgPath)
         (hovered ? hoverFill : fill).setFill()
         shape.fill()
         let configuration = NSImage.SymbolConfiguration(pointSize: T.monoCopyGlyph, weight: .regular)
@@ -1461,7 +1461,7 @@ final class NoteDropLineView: NSView {
 /// shadow, which follow the panel's look), so nothing under it shows
 /// through and no text is drawn twice. Moves are Core Animation's.
 final class NoteDragLiftView: NSView {
-    static let cornerRadius: CGFloat = 8
+    static let cornerRadius: CGFloat = AtticRadius.row
     /// The card's room around its snapshot.
     let padding: CGSize
     private let image = CALayer()
@@ -1470,13 +1470,15 @@ final class NoteDragLiftView: NSView {
         self.padding = padding
         super.init(frame: CGRect(origin: .zero, size: CGSize(width: size.width + padding.width * 2,
                                                              height: size.height + padding.height * 2)))
+        let card = CAShapeLayer()
+        layer = card
         wantsLayer = true
-        guard let layer else { return }
-        layer.backgroundColor = tokens.popoverFill.nsColor.cgColor
-        layer.cornerRadius = Self.cornerRadius
-        layer.cornerCurve = .continuous
-        layer.borderWidth = AtticHairline.width
-        layer.borderColor = tokens.popoverOuterRim.nsColor.cgColor
+        card.fillColor = tokens.popoverFill.nsColor.cgColor
+        card.path = Squircle(cornerRadius: Self.cornerRadius).path(in: bounds).cgPath
+        card.lineWidth = AtticHairline.width
+        card.strokeColor = tokens.popoverOuterRim.nsColor.cgColor
+        card.shadowPath = card.path
+        let layer = card
         layer.shadowColor = tokens.dropdownShadow.nsColor.withAlphaComponent(1).cgColor
         layer.shadowOpacity = Float(tokens.dropdownShadow.alpha)
         layer.shadowRadius = AtticShadows.dropdown.radius / 2
@@ -1491,6 +1493,16 @@ final class NoteDragLiftView: NSView {
     required init?(coder: NSCoder) { fatalError("not archived") }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard let card = layer as? CAShapeLayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.path = Squircle(cornerRadius: Self.cornerRadius).path(in: bounds).cgPath
+        card.shadowPath = card.path
+        CATransaction.commit()
+    }
 
     /// Shows `image` on the card instead, cross-fading (`animated`) or at
     /// once (a dragged table row taking or leaving the header's look).

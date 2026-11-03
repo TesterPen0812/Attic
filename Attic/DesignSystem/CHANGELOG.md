@@ -1,3 +1,12 @@
+## 2026-11-03 · Remaining Shapes surfaces and controls
+
+Remaining note, image, table, drag-card and Settings tile outlines use squircles;
+compact control fills use curve 1.4. Small images use 6 pt corners, note blocks
+10 pt and carried rows 12 pt. Image selection rings and table fades compose with
+the same contour. Proposal comparison uses a 34 pt track: 17 pt outer corners,
+7 pt insets and 10 pt inner corners. Its existing two-choice control now follows
+native Tab/arrow keyboard behavior. Rings and coloured dots keep their circles.
+
 ## 2026-11-03 · Canvas filter in the title
 
 The title capsule becomes the canvas filter. The menu has no second search row

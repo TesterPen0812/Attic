@@ -114,7 +114,7 @@ enum AtticRadius {
     static let groupCard: CGFloat = card
     static let contentCard: CGFloat = 10
     static let tile: CGFloat = 10
-    static let image: CGFloat = 8
+    static let image: CGFloat = small
     /// Hover, selection and pressed highlights on rows (always 10).
     static let highlight: CGFloat = 10
     /// A chip nested in a capsule: outer radius minus the inset
