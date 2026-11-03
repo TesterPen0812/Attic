@@ -358,8 +358,9 @@ final class NoteObjectRenderer {
         return image
     }
 
-    func placeholder(size: CGSize, text: String) -> NSImage {
-        render(NoteObjectPlaceholder(text: text).frame(width: size.width, height: size.height))
+    func placeholder(size: CGSize, text: String,
+                     outline: AtticControlOutline = .init(cornerRadius: AtticRadius.small, exponent: AtticShape.surfaceExponent)) -> NSImage {
+        render(NoteObjectPlaceholder(text: text, outline: outline).frame(width: size.width, height: size.height))
             ?? NSImage(size: size)
     }
 
@@ -402,7 +403,9 @@ final class NoteObjectRenderer {
         case let opaque as NoteOpaqueAttachment:
             opaque.renderedImage = placeholder(
                 size: opaque.isInline ? CGSize(width: 24, height: AtticControlSize.tagHeight) : CGSize(width: 240, height: 28),
-                text: opaque.isInline ? "…" : String(localized: "Content from a newer Attic")
+                text: opaque.isInline ? "…" : String(localized: "Content from a newer Attic"),
+                outline: .init(cornerRadius: opaque.isInline ? AtticRadius.control(height: AtticControlSize.tagHeight) : AtticRadius.noteBlock,
+                               exponent: opaque.isInline ? AtticShape.controlExponent : AtticShape.surfaceExponent)
             )
         case let divider as NoteDividerAttachment:
             // R14: a 1 pt rule in the `divider` ink (black 6 %, white 7 %;
@@ -427,13 +430,13 @@ final class NoteObjectRenderer {
 
 private struct NoteObjectPlaceholder: View {
     let text: String
+    let outline: AtticControlOutline
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let radius = AtticRadius.control(height: AtticControlSize.tagHeight)
         AtticText(verbatim: text, style: .chipLabel, ink: .helper)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.tagFill.color))
+            .background(outline.fill(design.tokens.tagFill.color))
     }
 }
 

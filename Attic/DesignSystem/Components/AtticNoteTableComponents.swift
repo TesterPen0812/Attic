@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 /// A note table's hover-free controls (sheet 3, panel 2), drawn from the
 /// tokens: the column and row grips (a pill with three dots), the "+" chips
@@ -176,7 +177,7 @@ final class AtticNoteTableGripView: AtticNoteTableControlView {
         let radius = min(rect.width, rect.height) / 2
         let fill = isHovered ? tokens.tableGripDot.withAlpha(tokens.tableGripFill.alpha * 1.6) : tokens.tableGripFill
         fill.nsColor.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        NSBezierPath(cgPath: Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).path(in: rect).cgPath).fill()
         tokens.tableGripDot.nsColor.setFill()
         let dot: CGFloat = 2, gap: CGFloat = 2
         let span = dot * 3 + gap * 2

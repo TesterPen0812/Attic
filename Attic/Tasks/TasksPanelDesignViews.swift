@@ -192,7 +192,7 @@ private struct TasksImageTile: View {
             }
         }
         .frame(width: width, height: TasksDesignMetrics.tile)
-        .clipShape(RoundedRectangle(cornerRadius: TasksDesignMetrics.tileRadius, style: .continuous))
+        .clipShape(Squircle(cornerRadius: TasksDesignMetrics.tileRadius, exponent: TasksDesignMetrics.cornerExponent))
         .task(id: reference.digest) {
             if let cached = TaskThumbnailMemory.image(for: reference.digest) { image = cached; return }
             let data = try? await TaskImageFiles.shared.thumbnail(reference, pixels: 120)
