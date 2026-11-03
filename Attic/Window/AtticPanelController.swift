@@ -29,8 +29,8 @@ enum PanelWorkAreaEvents {
 /// The native ordering boundary for restoring an overlay in a new Space.
 enum PanelSpacePresentation {
     @discardableResult
-    static func reassert(_ window: NSWindow) -> Bool {
-        guard !window.isVisible || !window.isOnActiveSpace else { return false }
+    static func reassert(_ window: NSWindow, onActiveSpace: Bool) -> Bool {
+        guard !window.isVisible || !onActiveSpace else { return false }
         let children = (window.childWindows ?? []).filter(\.isVisible)
         // WindowServer keeps an already ordered overlay in its old Space:
         // order-front alone does not admit it to a new full-screen Space.
@@ -198,7 +198,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// Re-order the existing windows, without a reveal, focus change or motion.
     func reassertPresentationAfterSpaceChange() {
         guard !visibilityTransition.hasPendingHide, !isInteractiveDismissal,
-              PanelSpacePresentation.reassert(panel) else { return }
+              PanelSpacePresentation.reassert(panel, onActiveSpace: panel.isOnActiveSpace) else { return }
         showIsland()
         resamplePointerPassthrough()
     }

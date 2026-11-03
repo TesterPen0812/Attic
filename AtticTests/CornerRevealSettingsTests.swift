@@ -251,7 +251,7 @@ final class CornerRevealSettingsTests: XCTestCase {
         child.ordered = { orders.append("child." + $0) }
         hiddenChild.ordered = { orders.append("hidden." + $0) }
         let active = NSRunningApplication.current.isActive
-        XCTAssertTrue(PanelSpacePresentation.reassert(parent))
+        XCTAssertTrue(PanelSpacePresentation.reassert(parent, onActiveSpace: parent.isOnActiveSpace))
         XCTAssertEqual(orders, ["child.out", "parent.out", "parent.in", "child.in"],
                        "order-front alone leaves an already ordered window in its old Space; explicit child ordering also resets first-click policy")
         XCTAssertTrue(parent.isVisible)
@@ -261,7 +261,7 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(NSRunningApplication.current.isActive, active)
         orders.removeAll()
         parent.activeSpace = true
-        XCTAssertFalse(PanelSpacePresentation.reassert(parent))
+        XCTAssertFalse(PanelSpacePresentation.reassert(parent, onActiveSpace: parent.isOnActiveSpace))
         XCTAssertEqual(orders, [], "a window already on this Space is undisturbed")
     }
 
