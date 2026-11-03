@@ -75,8 +75,9 @@ final class TasksGoingInTests: XCTestCase {
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
+        let pointer = TasksPointer()
         let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-            addBarFocused: .constant(false), pointer: TasksPointer())
+            addBarFocused: .constant(false), pointer: pointer)
         var design = AtticDesignContext(mode: .light)
         design.reduceMotion = true
         let host = NSHostingView(rootView: page.atticDesign(design)
@@ -105,6 +106,15 @@ final class TasksGoingInTests: XCTestCase {
         print("AUDIT_A1_AX", shown.filter { $0.contains("Audit") })
         XCTAssertTrue(shown.contains { $0.contains("Audit revised") }, "the mounted row and VoiceOver read the durable edit")
         XCTAssertFalse(shown.contains { $0.contains("Audit original") }, "the original row does not remain visible")
+        XCTAssertEqual(shown.filter { $0.contains("Audit revised") }.count, 1, "one accessible task after moving")
+        if movingDay {
+            XCTAssertFalse(shown.contains("Overdue"), "the empty old date group leaves with its header")
+            let group = try XCTUnwrap(model.sections(for: .now).groups.first)
+            XCTAssertTrue(shown.contains(group.title), "the new date header is mounted")
+            let header = try XCTUnwrap(pointer.headerFrames[group.key])
+            let row = try XCTUnwrap(pointer.frames[TasksRowID(tab: .now, id: id)])
+            XCTAssertGreaterThanOrEqual(row.minY + 0.5, header.maxY, "the task is under its new header")
+        }
     }
 
     // MARK: - The ›
