@@ -212,6 +212,36 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAuditA11TitleFilterRetainsPreparedInputWithoutTakingTheKeyboard() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 320, height: 460)
+        let wasActive = NSApp.isActive
+        try withHost(DrawPageHost(model: model, uiState: state,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
+            func fields(_ view: NSView) -> [NSTextField] {
+                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            }
+            let field = try XCTUnwrap(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" })
+            let window = try XCTUnwrap(host.window)
+            let editor = try XCTUnwrap(window.fieldEditor(false, for: field))
+            XCTAssertFalse(field.isEnabled)
+            XCTAssertFalse(window.firstResponder === field || window.firstResponder === editor)
+            XCTAssertEqual(NSApp.isActive, wasActive)
+            XCTAssertNil(find("draw-title-filter", in: host))
+            model.openFilter()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            XCTAssertTrue(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" } === field)
+            XCTAssertTrue(field.isEnabled)
+            XCTAssertTrue(window.fieldEditor(false, for: field) === editor)
+            model.closeFilter()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            XCTAssertTrue(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" } === field)
+            XCTAssertFalse(field.isEnabled)
+            XCTAssertNil(find("draw-title-filter", in: host))
+        }
+    }
+
     func testAuditB7IdenticalHistoryCannotRestoreButDifferentWritingCan() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditB7")))
