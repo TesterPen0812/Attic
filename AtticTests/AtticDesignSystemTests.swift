@@ -53,6 +53,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 18)
         XCTAssertEqual(AtticRadius.control(height: 28), 14)
         XCTAssertEqual(AtticRadius.control(height: 18), 9)
+        XCTAssertEqual(NoteMonoCopyButton.radius, NoteMonoCopyButton.size / 2, "native code-copy controls follow the same half-height rule")
         XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4 on the 27 pt header)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
