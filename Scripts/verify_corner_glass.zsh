@@ -1,11 +1,34 @@
 #!/bin/zsh
-# Run on the Air in the agents tmux session, with the Air screen lock owned by bugs2.
+# Run from the Air's authorized SSH session. Builds run in agents tmux.
 set -eu
 [[ $(scutil --get ComputerName) == *Air* ]] || { print -u2 'Air only'; exit 2; }
-[[ $(cat /tmp/attic-air-screen.lockdir/owner) == bugs2 ]] || { print -u2 'Acquire the Air screen lock first'; exit 2; }
 (( $# == 2 || $# == 3 )) || { print -u2 'usage: verify_corner_glass.zsh <AtticBugsTwo executable> <evidence dir> [glass]'; exit 2; }
 [[ ! -e "$2/driver.log" ]] || { print -u2 'Use a fresh evidence directory for each run'; exit 2; }
 root=${0:A:h:h}
+evidence=$2
+preview_info=${1:A:h:h}/Info.plist
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$preview_info") == com.taha.Attic.preview.bugs2 ]] || { print -u2 'Attic Bugs Two identity only'; exit 2; }
+owns_screen_lock=false
+for attempt in {1..60}; do
+    if mkdir /tmp/attic-air-screen.lockdir 2>/dev/null; then
+        print bugs2 > /tmp/attic-air-screen.lockdir/owner
+        owns_screen_lock=true
+        break
+    fi
+    [[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == bugs2 ]] && break
+    sleep 1
+done
+[[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == bugs2 ]] || { print -u2 'Air screen lock timed out'; exit 2; }
+release_screen_lock() {
+    if $owns_screen_lock && [[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == bugs2 ]]; then
+        if [[ -f "$evidence/driver.log" ]] && ! grep -q RESULT "$evidence/driver.log"; then
+            print -u2 'Driver did not finish; screen lock retained for cleanup'
+            return
+        fi
+        mv /tmp/attic-air-screen.lockdir "$root/.build/bugs2-released-lock-$$"
+    fi
+}
+trap release_screen_lock EXIT
 driver="$root/.build/BugsTwoCheck.app"
 mkdir -p "$driver/Contents/MacOS" "$2"
 cat > "$driver/Contents/Info.plist" <<'PLIST'
