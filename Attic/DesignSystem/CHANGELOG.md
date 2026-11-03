@@ -18,6 +18,8 @@ image and opaque-content placeholders follow their small-object, block or chip r
 The title capsule becomes the canvas filter. The menu has no second search row
 and uses the recovered room for canvases and actions. Escape returns the keyboard
 to the board; Tags temporarily owns the field without competing with the filter.
+The filter and its window editor stay prepared between openings without claiming
+the keyboard; the closed input is disabled and absent from VoiceOver.
 
 ## 2026-11-03 · Draw object navigation
 
