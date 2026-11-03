@@ -73,6 +73,93 @@ final class PanelIntegrationTests: XCTestCase {
         return panel
     }
 
+    // Retaining Notes must retain its native editor without retaining input ownership.
+    private func followupNotes() async throws -> (Panel, NoteSession, NoteEditorTextView) {
+        let panel = try makePanel()
+        await panel.noteDraft.pages.startAndWait()
+        panel.uiState.selectSection(.notes)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: false), .shown)
+        spin(until: { panel.noteDraft.pages.active?.engine.textView != nil })
+        let session = try XCTUnwrap(panel.noteDraft.pages.active)
+        let editor = try XCTUnwrap(session.engine.textView)
+        return (panel, session, editor)
+    }
+
+    private func followupSwitch(_ panel: Panel, to section: PanelSection) {
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: section, takesKeyboard: false), .shown)
+        spin(0.4)
+    }
+
+    func testFollowupKeptNotesSavesAnEditOnLeaving() async throws {
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Durable on leave", replacementRange: NSRange(location: 0, length: 0))
+        followupSwitch(panel, to: .tasks)
+        let fresh = ModelContext(panel.notes.container)
+        let rows = try fresh.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(rows.first { $0.id == session.noteID }?.title, "Durable on leave")
+        XCTAssertTrue(session.engine.textView === editor, "leaving must retain the built editor")
+        followupSwitch(panel, to: .notes)
+        XCTAssertTrue(session.engine.textView === editor, "returning must reuse the same native editor")
+        XCTAssertFalse(editor.isSuspended)
+    }
+
+    func testFollowupKeptNotesReleasesInputAndAgentLocks() async throws {
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Releasable", replacementRange: NSRange(location: 0, length: 0))
+        followupSwitch(panel, to: .tasks)
+        XCTAssertTrue(panel.uiState.builtPages.contains(.notes), "the page stays built")
+        XCTAssertTrue(session.engine.textView === editor)
+        XCTAssertTrue(editor.isSuspended, "a retained hidden editor must reject late input")
+        XCTAssertFalse(editor.isEditable)
+        let text = editor.string
+        editor.insertText("stray", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(editor.string, text)
+        if case .direct = panel.notes.agentWriteDisposition(session.noteID) {} else {
+            XCTFail("a clean hidden note must release the visible-editor write lock")
+        }
+        XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.notesEditorFocus))
+        XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.notesPopover))
+    }
+
+    func testFollowupKeptNotesRefreshesImportedContextBeforePresentation() async throws {
+        let (panel, session, _) = try await followupNotes()
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0),
+            with: NSAttributedString(string: "Before import"), name: "Type"))
+        followupSwitch(panel, to: .tasks)
+        XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
+        let oldContext = panel.notes.modelContext
+        let other = trackAttachmentReconciliation(of: NoteStore(container: panel.notes.container,
+            attachmentFileStore: makeTestAttachmentFileStore()))
+        let revision = try XCTUnwrap(other.note(withID: session.noteID)?.revisionID)
+        _ = try other.saveDocument(noteID: session.noteID,
+            document: NoteDocument(blocks: [.text("Imported writing")]), baseRevisionID: revision).get()
+        panel.notes.refresh()
+        XCTAssertFalse(panel.notes.modelContext === oldContext, "imports replace the context")
+        followupSwitch(panel, to: .notes)
+        XCTAssertEqual(panel.noteDraft.pages.active?.engine.plainText, "Imported writing")
+        XCTAssertFalse(panel.noteDraft.pages.active?.engine === session.engine, "stale engine is replaced before showing")
+    }
+
+    func testFollowupKeptNotesFailedSaveRollsBackAndRefusesLeaving() async throws {
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Original", replacementRange: NSRange(location: 0, length: 0))
+        followupSwitch(panel, to: .tasks)
+        followupSwitch(panel, to: .notes)
+        XCTAssertTrue(session.engine.textView === editor, "failure path uses the retained editor too")
+        let live = try XCTUnwrap(session.engine.textView)
+        live.insertText(" unsaved", replacementRange: NSRange(location: live.string.utf16.count, length: 0))
+        panel.gate.shouldFail = true
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .refused(.unsavedNote))
+        XCTAssertEqual(panel.uiState.selectedSection, .notes)
+        XCTAssertEqual(session.engine.plainText, "Original unsaved", "the draft remains available for retry")
+        let fresh = ModelContext(panel.notes.container)
+        XCTAssertEqual(try fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == session.noteID }?.title, "Original")
+        XCTAssertFalse(panel.notes.modelContext.hasChanges, "failed save rolls back staging")
+        panel.gate.shouldFail = false
+        followupSwitch(panel, to: .tasks)
+        XCTAssertEqual(panel.notes.note(withID: session.noteID)?.title, "Original unsaved")
+    }
+
     private func spin(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
