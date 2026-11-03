@@ -577,6 +577,7 @@ final class TasksPageModel: ObservableObject {
         if let memory {
             tab = memory.page ?? .now
             viewOptionsByTab = memory.viewOptions
+            scrollOffsets = memory.scrollOffsets
         }
     }
 
@@ -1437,7 +1438,9 @@ final class TasksPageModel: ObservableObject {
     /// Each list's scroll position while it is not on screen (its page is
     /// not built then): restored when it is built again (round 10). Not
     /// published: saving it redraws nothing.
-    var scrollOffsets: [TasksTab: CGFloat] = [:]
+    var scrollOffsets: [TasksTab: CGFloat] = [:] {
+        didSet { memory?.saveScrollOffsets(scrollOffsets) }
+    }
 
     // MARK: - Selection
 

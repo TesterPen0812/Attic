@@ -99,11 +99,98 @@ final class UXAuditFixTests: XCTestCase {
         let wanted = try XCTUnwrap(first.canvasID)
         let viewport = DrawViewport(x: -120, y: 87, zoom: 1.75)
         first.setViewport(viewport, byUser: true)
+        first.flushViewportMemory()
         _ = store.create(name: "Another canvas")
         let restored = DrawPageModel(store: store, resumeDefaults: defaults)
         restored.start()
         XCTAssertEqual(restored.canvasID, wanted)
         XCTAssertEqual(restored.viewport, viewport)
+    }
+
+    func testAuditB5NativeScrollMemoryRestoresAndClampsAfterRebuilding() throws {
+        let suite = "AuditB5Scroll.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func mount(height: CGFloat) -> (NSWindow, NSScrollView) {
+            let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+            let doc = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: height))
+            scroll.documentView = doc
+            doc.addSubview(PanelResumeScrollKeeper.KeeperView(defaults: defaults, key: "audit"))
+            let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = scroll
+            scroll.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            return (window, scroll)
+        }
+        let (first, scroll) = mount(height: 1200)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 284))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        first.close()
+        let (second, restored) = mount(height: 1200)
+        XCTAssertEqual(restored.contentView.bounds.minY, 284, accuracy: 0.5)
+        second.close()
+        let (third, shorter) = mount(height: 300)
+        XCTAssertLessThanOrEqual(shorter.contentView.bounds.minY, 100)
+        third.close()
+    }
+
+    func testAuditB5PendingScrollWaitsForContentAndYieldsToNavigation() throws {
+        let suite = "AuditB5Loading.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(700.0, forKey: "AtticPanel.scroll.audit")
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let doc = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 300))
+        scroll.documentView = doc
+        let keeper = PanelResumeScrollKeeper.KeeperView(defaults: defaults, key: "audit", ready: false, navigationID: "day1")
+        doc.addSubview(keeper)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(defaults.double(forKey: "AtticPanel.scroll.audit"), 700)
+        doc.setFrameSize(CGSize(width: 200, height: 1400))
+        keeper.update(ready: true, navigationID: "day1")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+        // An explicit navigation cancels a pending restore before its layout turn.
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 0))
+        keeper.update(ready: false, navigationID: "day2")
+        keeper.update(ready: true, navigationID: "day2")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testAuditB5CalendarResumesOnlyAValidDay() throws {
+        let suite = "AuditB5Calendar.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try makeTestStore()
+        let wanted = try XCTUnwrap(DueDay(year: 2027, month: 4, day: 19))
+        let first = CalendarPageModel(store: store, source: CalendarEventSourceStub(), resumeDefaults: defaults)
+        first.select(wanted)
+        XCTAssertEqual(CalendarPageModel(store: store, source: CalendarEventSourceStub(), resumeDefaults: defaults).snapshot.selected, wanted)
+        for bad in [["year": Int.max, "month": 1, "day": 1], ["year": 2027, "month": 2, "day": 31]] {
+            defaults.set(try JSONSerialization.data(withJSONObject: bad), forKey: "AtticCalendar.selectedDay")
+            let restored = CalendarPageModel(store: store, source: CalendarEventSourceStub(), resumeDefaults: defaults)
+            XCTAssertEqual(restored.snapshot.selected, restored.snapshot.today)
+        }
+    }
+
+    func testAuditB5DrawDefersViewportSerializationUntilTheGestureSettles() throws {
+        let suite = "AuditB5WriteBound.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = DrawPageModel(store: DrawInMemoryStore(), resumeDefaults: defaults)
+        model.start()
+        model.flushViewportMemory()
+        let before = defaults.data(forKey: "AtticDraw.viewports")
+        for i in 0..<400 { model.setViewport(DrawViewport(x: CGFloat(i), y: 0, zoom: 1.5), byUser: true) }
+        XCTAssertEqual(defaults.data(forKey: "AtticDraw.viewports"), before)
+        model.flushViewportMemory()
+        XCTAssertNotEqual(defaults.data(forKey: "AtticDraw.viewports"), before)
     }
 
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {

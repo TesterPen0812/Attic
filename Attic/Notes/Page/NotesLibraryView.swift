@@ -403,6 +403,7 @@ struct NotesLibraryView: View {
     private func list(_ groups: [NotesLibraryModel.Group], selected: UUID?) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
+                PanelResumeScrollKeeper(key: "notes-library", navigationID: model.query).frame(width: 0, height: 0)
                 if model.layout == .board {
                     // The board's columns are lazy themselves.
                     VStack(alignment: .leading, spacing: 0) {
@@ -469,7 +470,7 @@ struct NotesLibraryView: View {
             .contentShape(Rectangle())
             .atticContextMenu { libraryCommands() }
             .onAppear {
-                if let selected { proxy.scrollTo(selected, anchor: .center) }
+                if let selected, controller.defaults?.object(forKey: "AtticPanel.scroll.notes-library") == nil { proxy.scrollTo(selected, anchor: .center) }
             }
             // ↑ ↓: never an animated `scrollTo` over the lazy stacks (the
             // list hang, 2026-10-28). A row or card laid out glides there

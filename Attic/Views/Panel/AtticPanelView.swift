@@ -552,6 +552,7 @@ struct AtticPanelView: View {
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
+            .environment(\.panelResumeDefaults, uiState.resumeDefaults)
             .environment(\.panelTopRowState, topRowState)
             .environment(\.panelSharedChrome, sharedChrome)
             .environment(\.panelComposer, composerRoute)

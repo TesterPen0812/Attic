@@ -183,10 +183,17 @@ final class DrawPageModel: ObservableObject {
     @Published private var actionProblem: String?
 
     private let resumeDefaults: UserDefaults?
+    private var viewportMemorySave: DispatchWorkItem?
 
     init(store: any DrawStoreProtocol, resumeDefaults: UserDefaults? = nil) {
         self.resumeDefaults = resumeDefaults
         self.store = store
+        if let data = resumeDefaults?.data(forKey: "AtticDraw.viewports"),
+           let saved = try? JSONDecoder().decode([UUID: DrawViewport].self, from: data) {
+            viewports = saved.filter { _, v in
+                v.x.isFinite && v.y.isFinite && v.zoom.isFinite && (DrawViewport.minZoom...DrawViewport.maxZoom).contains(v.zoom)
+            }
+        }
         observeStore()
         appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.appearanceChanged() } }
@@ -219,8 +226,8 @@ final class DrawPageModel: ObservableObject {
     private(set) static var shared = DrawPageModel(store: DrawInMemoryStore())
 
     /// Called once by the app with its own container, only while the setting is on.
-    static func install(container: ModelContainer) {
-        shared = DrawPageModel(store: DrawPersistentStore(container: container))
+    static func install(container: ModelContainer, resumeDefaults: UserDefaults? = nil) {
+        shared = DrawPageModel(store: DrawPersistentStore(container: container), resumeDefaults: resumeDefaults)
     }
 
     #if DEBUG
@@ -283,6 +290,7 @@ final class DrawPageModel: ObservableObject {
     /// reconciled. False while one is still unsaved (quit stops).
     func prepareToQuit() async -> Bool {
         finishLiveInput()
+        flushViewportMemory()
         while let next = imports.values.first { await next.value }
         flushThumbnail()
         for render in thumbnailRenders.values { await render.task.value }
@@ -447,7 +455,9 @@ final class DrawPageModel: ObservableObject {
     /// The first visit: the newest canvas, or a new empty one.
     func start() {
         guard canvasID == nil else { return }
-        if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
+        if let raw = resumeDefaults?.string(forKey: "AtticDraw.lastCanvas"), let id = UUID(uuidString: raw),
+           (try? store.open(id)) != nil { open(id) }
+        else if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
     }
 
     func open(_ id: UUID) {
@@ -456,8 +466,10 @@ final class DrawPageModel: ObservableObject {
         // The canvas being left gets its thumbnail now.
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
+        flushViewportMemory()
         guard let snapshot = try? store.open(id) else { return }
         canvasID = id
+        resumeDefaults?.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
         canvasName = snapshot.canvas.name
         library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
@@ -885,8 +897,26 @@ final class DrawPageModel: ObservableObject {
         if byUser { userMovedView = true; initialFitPending = false }
         guard next != viewportState.viewport else { return }
         viewportState.viewport = next
+        if let canvasID {
+            viewports[canvasID] = next
+            if resumeDefaults != nil {
+                viewportMemorySave?.cancel()
+                let save = DispatchWorkItem { [weak self] in self?.flushViewportMemory() }
+                viewportMemorySave = save
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: save)
+            }
+        }
         updateLost()
         board?.drawViewportChanged()
+    }
+
+    /// Coalesced off the pan/zoom input path, and explicitly flushed on
+    /// canvas switches and both quit routes.
+    func flushViewportMemory() {
+        viewportMemorySave?.cancel()
+        viewportMemorySave = nil
+        guard let resumeDefaults, let data = try? JSONEncoder().encode(viewports) else { return }
+        resumeDefaults.set(data, forKey: "AtticDraw.viewports")
     }
 
     /// ⇧1 and a click on the pill.

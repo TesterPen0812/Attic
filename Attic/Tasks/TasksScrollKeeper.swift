@@ -287,3 +287,120 @@ final class TasksScrollGlide: NSObject {
         if done { stop() }
     }
 }
+
+/// A page's native scroll offset survives releasing its view and relaunching.
+/// Like TasksScrollKeeper, restoration happens after layout and never publishes
+/// view state from a bounds notification.
+private struct PanelResumeDefaultsKey: EnvironmentKey {
+    static let defaultValue: UserDefaults? = nil
+}
+
+extension EnvironmentValues {
+    var panelResumeDefaults: UserDefaults? {
+        get { self[PanelResumeDefaultsKey.self] }
+        set { self[PanelResumeDefaultsKey.self] = newValue }
+    }
+}
+
+struct PanelResumeScrollKeeper: NSViewRepresentable {
+    let key: String
+    var ready = true
+    var navigationID = ""
+    @Environment(\.panelResumeDefaults) private var defaults
+
+    func makeNSView(context: Context) -> KeeperView {
+        KeeperView(defaults: defaults, key: key, ready: ready, navigationID: navigationID)
+    }
+    func updateNSView(_ view: KeeperView, context: Context) {
+        view.update(ready: ready, navigationID: navigationID)
+    }
+
+    final class KeeperView: NSView {
+        private let defaults: UserDefaults?
+        private let key: String
+        private var observers: [NSObjectProtocol] = []
+        private var wheelMonitor: Any?
+        private weak var clip: NSClipView?
+        private var restoring = true
+        private var ready: Bool
+        private var navigationID: String
+
+        init(defaults: UserDefaults?, key: String, ready: Bool = true, navigationID: String = "") {
+            self.defaults = defaults
+            self.key = "AtticPanel.scroll." + key
+            self.ready = ready
+            self.navigationID = navigationID
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func update(ready: Bool, navigationID: String) {
+            if self.navigationID != navigationID { restoring = false }
+            self.navigationID = navigationID
+            self.ready = ready
+            if ready && restoring { scheduleRestore() }
+        }
+
+        private func scheduleRestore() {
+            DispatchQueue.main.async { [weak self] in self?.restore() }
+        }
+
+        private func restore() {
+            guard restoring, ready, window != nil, let scroll = enclosingScrollView else { return }
+            // Content reads have finished and the view has had a layout turn.
+            // A shorter final list finishes at its end; no latent jump remains.
+            scroll.layoutSubtreeIfNeeded()
+            defer { restoring = false }
+            guard let y = defaults?.object(forKey: key) as? Double, y.isFinite else { return }
+            var origin = scroll.contentView.bounds.origin
+            origin.y = TasksScrollKeeper.clampedOriginY(CGFloat(y), in: scroll)
+            scroll.contentView.scroll(to: origin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObserving()
+            guard window != nil, defaults != nil, let scroll = enclosingScrollView else { return }
+            clip = scroll.contentView
+            scroll.contentView.postsBoundsChangedNotifications = true
+            observers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                object: scroll.contentView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.restoring, let y = self.clip?.bounds.origin.y,
+                          y.isFinite, abs(y) < 10_000_000 else { return }
+                    if self.defaults?.double(forKey: self.key) != Double(y) {
+                        self.defaults?.set(Double(y), forKey: self.key)
+                    }
+                }
+            })
+            observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveScrollNotification,
+                object: scroll, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restoring = false }
+            })
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self, weak scroll] event in
+                MainActor.assumeIsolated {
+                    if let self, let scroll, event.window === scroll.window,
+                       scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) {
+                        self.restoring = false
+                    }
+                    return event
+                }
+            }
+            scheduleRestore()
+        }
+
+        private func stopObserving() {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            observers.removeAll()
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+            wheelMonitor = nil
+        }
+
+        deinit {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+        }
+    }
+}

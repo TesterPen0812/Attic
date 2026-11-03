@@ -321,7 +321,23 @@ struct TasksPageMemory {
     private var pageKey: String { key + ".page" }
     private var viewKey: String { key + ".views" }
 
-    static let removedKeys = ["AtticTasksPanel.page", "AtticTasksPanel.views"]
+    static let removedKeys = ["AtticTasksPanel.page", "AtticTasksPanel.views", "AtticTasksPanel.scroll"]
+
+    var scrollOffsets: [TasksTab: CGFloat] {
+        let stored = defaults.dictionary(forKey: key + ".scroll") ?? [:]
+        var result: [TasksTab: CGFloat] = [:]
+        for (raw, value) in stored {
+            if let raw = Int(raw), let tab = TasksTab(rawValue: raw), let y = value as? Double,
+               y.isFinite, abs(y) < 10_000_000 { result[tab] = CGFloat(y) }
+        }
+        return result
+    }
+
+    func saveScrollOffsets(_ offsets: [TasksTab: CGFloat]) {
+        defaults.set(Dictionary(uniqueKeysWithValues: offsets.compactMap { tab, y in
+            y.isFinite ? (String(tab.rawValue), Double(y)) : nil
+        }), forKey: key + ".scroll")
+    }
 
     var page: TasksTab? {
         (defaults.object(forKey: pageKey) as? Int).flatMap(TasksTab.init(rawValue:))

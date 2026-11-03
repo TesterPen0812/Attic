@@ -38,6 +38,7 @@ final class CalendarPageModel: ObservableObject {
     let calendar: Calendar
     private let now: () -> Date
     private let locale: Locale
+    private let resumeDefaults: UserDefaults?
     private var hasRequestedAccess = false
     private var searchTask: Task<Void, Never>?
     /// The last range fetched from the source, and the last search: reused
@@ -46,7 +47,10 @@ final class CalendarPageModel: ObservableObject {
     private var searchCache: (query: String, interval: DateInterval, events: [CalendarEvent])?
     private var searchCacheComplete = true
     private var sourceGeneration = 0
-    private var eventRequest: DateInterval?
+    @Published private(set) var isLoadingEvents = false
+    private var eventRequest: DateInterval? {
+        didSet { isLoadingEvents = eventRequest != nil }
+    }
     private var searchRequest: (query: String, interval: DateInterval)?
     private var eventTask: Task<Void, Never>?
     private var eventSearchTask: Task<Void, Never>?
@@ -67,7 +71,8 @@ final class CalendarPageModel: ObservableObject {
 
     init(store: TaskStore, source: CalendarEventSource, calendar: Calendar = CalendarMonthMath.calendar(),
          locale: Locale = .current, now: @escaping () -> Date = Date.init,
-         makeWriter: (() throws -> CalendarEventWriter)? = nil) {
+         makeWriter: (() throws -> CalendarEventWriter)? = nil, resumeDefaults: UserDefaults? = nil) {
+        self.resumeDefaults = resumeDefaults
         self.store = store
         self.eventRows = CalendarEventRowState(makeWriter: makeWriter)
         self.source = source
@@ -75,7 +80,10 @@ final class CalendarPageModel: ObservableObject {
         self.locale = locale
         self.now = now
         let today = DueDay(date: now(), calendar: calendar)
-        snapshot = CalendarPageSnapshot(today: today, selected: today, month: CalendarMonth(today), weeks: [],
+        let selected = resumeDefaults?.data(forKey: "AtticCalendar.selectedDay")
+            .flatMap { try? JSONDecoder().decode(DueDay.self, from: $0) }
+            .flatMap { DueDay(year: $0.year, month: $0.month, day: $0.day) } ?? today
+        snapshot = CalendarPageSnapshot(today: today, selected: selected, month: CalendarMonth(selected), weeks: [],
                                         groups: [], query: "", access: source.accessState)
         rebuild()
         observe()
@@ -105,6 +113,7 @@ final class CalendarPageModel: ObservableObject {
     func select(_ day: DueDay) {
         guard day != snapshot.selected else { return }
         rebuild(selected: day)
+        if let data = try? JSONEncoder().encode(day) { resumeDefaults?.set(data, forKey: "AtticCalendar.selectedDay") }
     }
 
     func goToToday() {

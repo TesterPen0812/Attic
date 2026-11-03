@@ -107,6 +107,7 @@ struct CalendarPage: View {
                     .frame(minHeight: viewport, alignment: .top)
             }
             .padding(.bottom, CalendarDesign.agendaBottom)
+            .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
             // What scrolls under the selected week is hidden behind it and
             // fades in below it once it is held (item 14, owner 2026-10-31).
             // Both the cut and the held row follow the scroll in the same
