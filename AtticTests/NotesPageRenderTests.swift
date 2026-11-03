@@ -132,8 +132,8 @@ final class NotesPageRenderTests: XCTestCase {
         }
         room.set(height: 0, open: false); spin()
         XCTAssertEqual(writing.contentInsets.bottom, resting, accuracy: 1)
-        XCTAssertTrue(harness.controller.showLibrary()); spin()
-        let list = try XCTUnwrap(descendants(of: harness.host).compactMap { $0 as? NSScrollView }.first { $0.documentView != nil })
+        XCTAssertTrue(harness.controller.showLibrary()); spin(0.5)
+        let list = try XCTUnwrap(descendants(of: harness.host).compactMap { $0 as? NSScrollView }.first { $0.documentView != nil && !($0.documentView is NSTextView) })
         func extent() -> CGFloat { (list.documentView?.frame.height ?? 0) + list.contentInsets.bottom }
         let closed = extent()
         room.set(height: 152, open: true); spin()

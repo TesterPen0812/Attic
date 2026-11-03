@@ -207,7 +207,7 @@ final class PanelIntegrationTests: XCTestCase {
         let engine = session.engine
         let blockID = try XCTUnwrap(engine.document().blocks.first { $0.kind == .table }?.id)
         let attachment = try XCTUnwrap(engine.tableAttachment(id: blockID)?.0)
-        engine.enterTable(attachment, at: .init(row: 1, column: 0), caret: .start)
+        engine.enterTable(attachment, at: .init(row: 2, column: 1), caret: .end)
         spin(0.2)
         let cell = attachment.tableView.editor
         followupSwitch(panel, to: .tasks)
@@ -215,6 +215,30 @@ final class PanelIntegrationTests: XCTestCase {
         cell.insertText("late", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(engine.document(), before, "retaining the table cannot retain permission to edit it")
         XCTAssertFalse(engine.allowsTableCellEdit)
+        let window = try XCTUnwrap(engine.textView?.window)
+        window.makeFirstResponder(nil)
+        let responder = window.firstResponder
+        cell.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(engine.document(), before, "late Tab on the last cell must not append a row")
+        attachment.tableView.activate(.init(row: 0, column: 0), caret: .start)
+        XCTAssertTrue(window.firstResponder === responder, "a late table callback cannot reclaim hidden input")
+    }
+
+    func testFollowupHiddenNotesDismissesSlashAndRejectsItsLatePick() async throws {
+        var chrome: NotesPageChrome?
+        NotesEditorPage.lifetimeProbe = { value, _ in chrome = value }
+        defer { NotesEditorPage.lifetimeProbe = nil }
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Title", replacementRange: NSRange(location: 0, length: 0))
+        editor.insertNewline(nil)
+        editor.insertText("/", replacementRange: editor.selectedRange())
+        XCTAssertNotNil(session.engine.slashSession)
+        let controls = try XCTUnwrap(chrome?.controls)
+        followupSwitch(panel, to: .tasks)
+        XCTAssertNil(session.engine.slashSession, "the overlay must stop taking clicks on another page")
+        let before = session.engine.document()
+        controls.pickSlash(.table)
+        XCTAssertEqual(session.engine.document(), before, "a queued slash click cannot insert on hidden Notes")
     }
 
     private func spin(_ seconds: TimeInterval) {
@@ -478,8 +502,8 @@ final class PanelIntegrationTests: XCTestCase {
     // MARK: Pages kept built
 
     /// A page shown during this reveal stays built behind the current one,
-    /// so switching back only shows it; Notes (rebuilt in Phase 2) is never
-    /// kept. The hidden release frees the kept pages; Tasks stays built.
+    /// so switching back only shows it. Notes starts on its first real visit,
+    /// then stays built too. The hidden release frees background pages.
     func testShownPagesStayBuiltBehindTheCurrentOneUntilTheHiddenRelease() throws {
         let panel = try makePanel()
         let delay = AtticPanelController.pageReleaseDelay
@@ -492,9 +516,9 @@ final class PanelIntegrationTests: XCTestCase {
         panel.uiState.selectSection(.notes)
         XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas, .notes])
         panel.uiState.selectSection(.tasks)
-        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas], "Notes is rebuilt each time it shows")
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas, .notes], "Notes stays built after its first real visit")
         panel.uiState.prepareBuiltPage(.notes)
-        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas])
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas, .notes])
 
         hide(panel)
         spin(until: { panel.uiState.builtPages == [.tasks] })

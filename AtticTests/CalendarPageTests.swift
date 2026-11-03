@@ -487,12 +487,13 @@ final class CalendarPageTests: XCTestCase {
         window.isReleasedWhenClosed = false; window.contentView = host
         defer { window.contentView = nil; window.close() }
         func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.3)); host.layoutSubtreeIfNeeded() }
-        settle()
+        for _ in 0..<5 { settle() }
         let scroll = try XCTUnwrap(Self.scrollView(in: host))
         func extent() -> CGFloat { (scroll.documentView?.frame.height ?? 0) + scroll.contentInsets.bottom }
         let closed = extent()
         for height: CGFloat in [90, 152] {
             room.set(height: height, open: true); settle()
+            print("FOLLOWUP_CALENDAR height=\(height) doc=\(String(describing: scroll.documentView?.frame)) insets=\(scroll.contentInsets) clip=\(scroll.contentView.bounds) closed=\(closed)")
             XCTAssertEqual(extent() - closed, height - AtticControlSize.addBarHeight, accuracy: 1)
         }
         room.set(height: 0, open: false); settle()
