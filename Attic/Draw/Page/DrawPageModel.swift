@@ -158,6 +158,11 @@ final class DrawPageModel: ObservableObject {
     }
 
     private var viewports: [UUID: DrawViewport] = [:]
+    private var initialFitPending = false
+    private var boardHasRoom: Bool {
+        boardSize.width > clearInsets.left + clearInsets.right + 2 * DrawViewport.fitPadding
+            && boardSize.height > clearInsets.top + clearInsets.bottom + 2 * DrawViewport.fitPadding
+    }
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
     private var flashGeneration = 0
@@ -458,10 +463,13 @@ final class DrawPageModel: ObservableObject {
         isSelectionStyleOpen = false
         closeFilter()
         appliedRevision = store.revision
+        initialFitPending = false
         if let kept = viewports[id] {
             setViewport(kept, byUser: false)
         } else {
-            setViewport(objects.isEmpty ? DrawViewport() : DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
+            initialFitPending = !objects.isEmpty && !boardHasRoom
+            setViewport(objects.isEmpty || initialFitPending ? DrawViewport()
+                : DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
         }
         userMovedView = false
         refreshHistory()
@@ -509,6 +517,10 @@ final class DrawPageModel: ObservableObject {
         guard changed else { return }
         boardSize = size
         clearInsets = insets
+        if initialFitPending, boardHasRoom {
+            initialFitPending = false
+            setViewport(DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
+        }
         updateLost()
     }
 
@@ -867,7 +879,7 @@ final class DrawPageModel: ObservableObject {
     // MARK: Viewport
 
     func setViewport(_ next: DrawViewport, byUser: Bool) {
-        if byUser { userMovedView = true }
+        if byUser { userMovedView = true; initialFitPending = false }
         guard next != viewportState.viewport else { return }
         viewportState.viewport = next
         updateLost()
