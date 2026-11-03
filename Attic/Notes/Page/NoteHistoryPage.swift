@@ -195,6 +195,9 @@ struct NoteHistoryVersionSwitch: View {
     let choices: [(value: Bool, title: String)]
     @Binding var selection: Bool
 
+    var trackHeight: CGFloat = AtticTopGlassMetrics.height
+    var trackInset: CGFloat = AtticControlSize.capsuleInset
+
     @Environment(\.atticDesign) private var design
     @State private var hovered: Bool?
 

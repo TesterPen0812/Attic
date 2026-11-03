@@ -82,6 +82,8 @@ enum AtticRadius {
     static let small: CGFloat = 6
     /// The format sheet: its 12 pt buttons plus its 7 pt padding (38 px).
     static let formatSheet: CGFloat = concentric(inner: 12, padding: 7)
+    /// Review: 20 px inner corners plus 14 px padding, halved (Shapes).
+    static let reviewBar: CGFloat = concentric(inner: 10, padding: 7)
 
     /// Nested shapes stay concentric: the inner radius is the outer radius
     /// minus the padding between them, so the outer one is the inner one

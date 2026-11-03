@@ -273,6 +273,15 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAcceptedShapesReviewTrackUsesItsSeventeenPointOuterCorner() {
+        let control = NoteHistoryVersionSwitch(choices: [(false, "Current"), (true, "Proposed")], selection: .constant(false),
+            trackHeight: AtticRadius.reviewBar * 2, trackInset: 7)
+        let host = NSHostingView(rootView: control.atticDesign(AtticDesignContext(mode: .light)).frame(width: 280))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(host.fittingSize.height, 34, accuracy: 0.5, "20 pt controls plus 7 pt padding on each side")
+        XCTAssertEqual(AtticRadius.reviewBar - 7, AtticRadius.noteBlock)
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }
