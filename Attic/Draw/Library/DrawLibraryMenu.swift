@@ -46,14 +46,16 @@ struct DrawLibraryMenu: View {
     var maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight
     /// Escape in the search row; without it the card has no search row.
     var onSearchEscape: (() -> Void)?
+    var isActive = true
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
 
     init(model: DrawLibraryMenuModel, maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight,
-         onSearchEscape: (() -> Void)? = nil) {
+         onSearchEscape: (() -> Void)? = nil, isActive: Bool = true) {
         self.model = model
         self.maxListHeight = maxListHeight
         self.onSearchEscape = onSearchEscape
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -90,7 +92,7 @@ struct DrawLibraryMenu: View {
                            label: String(localized: "Find a canvas"), onReturn: model.openFirstMatch,
                            onMove: model.moveHighlight(by:), onEscape: onEscape, onEnd: nil,
                            alignment: .left, font: .systemFont(ofSize: m.searchFont),
-                           identifier: "draw-library-search")
+                           identifier: "draw-library-search", requestsFocus: isActive)
                 .accessibilityIdentifier("draw-library-search")
         }
         .padding(.horizontal, m.searchPadding)

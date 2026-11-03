@@ -89,13 +89,19 @@ struct DrawPageHost: View {
             // The canvas menu: a card below the top row (the drawing's
             // `dv.titleMenu`), its search field the first row. Pin, ••• and
             // Search stay where they are, so nothing here can reach them.
-            if model.isFiltering, !model.isSearching {
+            if !model.isSearching {
                 DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
                     boardHeight: model.boardSize.height,
                     chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
-                    chromeBottom: model.clearInsets.left), onSearchEscape: model.closeFilter)
+                    chromeBottom: model.clearInsets.left), onSearchEscape: model.closeFilter, isActive: model.isFiltering)
                     .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
-                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                    // Retain the menu's native hierarchy between openings.
+                    // Opening only reveals it; focus, hit testing and AX stay off while closed.
+                    .opacity(model.isFiltering ? 1 : 0)
+                    .scaleEffect(model.isFiltering ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion), anchor: .bottom)
+                    .offset(y: model.isFiltering || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                    .allowsHitTesting(model.isFiltering)
+                    .accessibilityHidden(!model.isFiltering)
             }
         }
         .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
@@ -246,6 +252,7 @@ struct DrawTitleField: NSViewRepresentable {
     var alignment: NSTextAlignment = .center
     var font: NSFont = .systemFont(ofSize: DrawPageMetrics.titleFont, weight: .bold)
     var identifier: String?
+    var requestsFocus = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -262,12 +269,22 @@ struct DrawTitleField: NSViewRepresentable {
         if let identifier { field.setAccessibilityIdentifier(identifier) }
         field.delegate = context.coordinator
         field.setAccessibilityLabel(label)
-        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        field.isEnabled = requestsFocus
+        if requestsFocus { DispatchQueue.main.async { [weak field] in
+            guard context.coordinator.parent.requestsFocus, let field else { return }
+            field.window?.makeFirstResponder(field)
+        } }
         return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
+        let takesFocus = requestsFocus && !context.coordinator.parent.requestsFocus
         context.coordinator.parent = self
+        field.isEnabled = requestsFocus
+        if takesFocus { DispatchQueue.main.async { [weak field] in
+            guard context.coordinator.parent.requestsFocus, let field else { return }
+            field.window?.makeFirstResponder(field)
+        } }
         if field.stringValue != text { field.stringValue = text }
     }
 
