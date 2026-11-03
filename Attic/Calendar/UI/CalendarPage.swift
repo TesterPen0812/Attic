@@ -252,7 +252,7 @@ struct CalendarPage: View {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 // The page switch is the Tall island (Accepted 2026-10-31).
                 Spacer(minLength: 0)
-                AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: height, height: height),
+                AtticRaisedButton(systemName: "plus", label: "New event", size: CGSize(width: height, height: height),
                                   emphasisedGlyph: true, flat: flat, cornerRadius: TasksDesignMetrics.footerRadius) {
                     onNewTask(model.newTaskDay)
                 }

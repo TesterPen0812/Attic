@@ -739,6 +739,7 @@ struct NoteFormatRowView: View {
                               action: onClose)
                 .accessibilityIdentifier("notes-format-row-close")
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Table"))
     }
 

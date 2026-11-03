@@ -1,3 +1,9 @@
+## 2026-11-03 · Accurate control names
+
+Calendar's + is named New event. Notes section counts name notes, with
+singular counts for one item. Table format controls keep their individual
+Add/Delete Row/Column and Close Format names inside the Table group.
+
 ## 2026-11-03 · History footer clearance
 
 The History row reserves the shared + button's width plus 8 pt, keeping
