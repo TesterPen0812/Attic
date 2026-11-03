@@ -1029,6 +1029,52 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Links
 
+    func testAuditB6LinkFieldOffersNoteTitlesAndStoresTheSelectedIdentity() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        let first = UUID(), second = UUID()
+        engine.linkableNotes = { [.init(id: first, title: "Pricing research"), .init(id: second, title: "Pricing launch"), .init(id: UUID(), title: "Unrelated")] }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "pricing"
+        controls.refresh()
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [first, second])
+        controls.cardModel.linkSuggestionIndex = 1
+        controls.cardModel.submitLink()
+        let url = "attic://note/" + second.uuidString
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, url)
+        let saved = try JSONEncoder().encode(engine.document())
+        XCTAssertEqual(try JSONDecoder().decode(NoteDocument.self, from: saved).blocks[1].marks.first?.url, url)
+        engine.history.undo()
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+    }
+
+    func testAuditB6SuggestionsMakeRoomAboveTheSelectionAndRestoreTheText() {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        engine.linkableNotes = { [.init(id: UUID(), title: "Annual planning"), .init(id: UUID(), title: "Annual review")] }
+        let selection = range("Student pricing", textView)
+        textView.setSelectedRange(selection)
+        let before = engine.document()
+        let upper = textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil)
+        let selected = textView.firstRect(forCharacterRange: selection, actualRange: nil)
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "annual"
+        controls.refresh()
+        spin()
+        let raised = textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil)
+        XCTAssertGreaterThan(raised.minY, upper.minY + 30, "screen coordinates: earlier text moves up for the list")
+        XCTAssertEqual(textView.firstRect(forCharacterRange: selection, actualRange: nil).minY, selected.minY, accuracy: 1)
+        XCTAssertEqual(engine.document(), before, "making room is transient layout, never a document edit")
+        controls.cancelCard()
+        spin()
+        XCTAssertEqual(textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil).minY, upper.minY, accuracy: 1)
+    }
+
     func testTheLinkCardAddsEditsAndRemovesALink() throws {
         let (controls, engine, textView) = make()
         let target = range("free tier", textView)

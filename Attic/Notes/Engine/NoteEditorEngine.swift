@@ -219,6 +219,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onSlashSessionChange: ((NoteSlashSession?) -> Void)?
     var onSlashDateRequest: (() -> Void)?
     var onSlashFileRequest: ((NoteSlashFileRequest) -> Void)?
+    var linkableNotes: (() -> [NoteLinkCandidate])?
+    var onOpenNoteLink: ((UUID) -> Void)?
     var onLinkRequest: ((NoteLinkTarget) -> Void)?
     var onRetryImportObject: ((UUID) -> Void)?
     var onLocateObject: ((UUID) -> Void)?

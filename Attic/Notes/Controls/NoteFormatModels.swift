@@ -495,6 +495,11 @@ final class NoteSlashListModel: ObservableObject {
     var separatorCount: Int { items.indices.filter(startsGroup(at:)).count }
 }
 
+struct NoteLinkCandidate: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+}
+
 /// The date card and the link card (one at a time, anchored at the text).
 @MainActor
 final class NoteFormatCardModel: ObservableObject {
@@ -516,6 +521,10 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var linkText = "" {
         didSet { if linkError != nil, linkText != oldValue { linkError = nil } }
     }
+    @Published var linkSuggestions: [NoteLinkCandidate] = []
+    @Published var linkSuggestionIndex = 0
+    var noteCandidates: (() -> [NoteLinkCandidate])?
+
     @Published var linkError: String?
     @Published var today = Date()
     @Published var calendar = Calendar.current
