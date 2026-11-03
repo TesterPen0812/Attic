@@ -3,7 +3,7 @@
 set -eu
 [[ $(scutil --get ComputerName) == *Air* ]] || { print -u2 'Air only'; exit 2; }
 [[ $(cat /tmp/attic-air-screen.lockdir/owner) == bugs2 ]] || { print -u2 'Acquire the Air screen lock first'; exit 2; }
-(( $# == 2 )) || { print -u2 'usage: verify_corner_glass.zsh <AtticBugsTwo executable> <evidence dir>'; exit 2; }
+(( $# == 2 || $# == 3 )) || { print -u2 'usage: verify_corner_glass.zsh <AtticBugsTwo executable> <evidence dir> [glass]'; exit 2; }
 [[ ! -e "$2/driver.log" ]] || { print -u2 'Use a fresh evidence directory for each run'; exit 2; }
 root=${0:A:h:h}
 driver="$root/.build/BugsTwoCheck.app"
@@ -14,7 +14,7 @@ PLIST
 xcrun swiftc "$root/Scripts/verify_corner_glass.swift" -o "$driver/Contents/MacOS/BugsTwoCheck"
 xcrun swiftc "$root/Scripts/capture_corner_glass.swift" -o "$root/.build/bugs2-capture"
 codesign --force --sign - "$driver"
-open -n --stdout "$2/driver.log" --stderr "$2/driver-error.log" "$driver" --args "$1" "$2"
+open -n --stdout "$2/driver.log" --stderr "$2/driver-error.log" "$driver" --args "$@"
 # Explicit three-minute deadline; all driver waits are bounded too.
 for i in {1..900}; do
     if [[ -f "$2/input-request" ]]; then

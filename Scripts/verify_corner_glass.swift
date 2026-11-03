@@ -3,7 +3,7 @@ import AppKit
 import ScreenCaptureKit
 
 let args = CommandLine.arguments
-guard args.count == 3 else { fatalError("usage: check <preview executable> <evidence directory>") }
+guard args.count == 3 || args.count == 4 else { fatalError("usage: check <preview executable> <evidence directory> [glass]") }
 let executable = args[1], output = args[2]
 guard executable.contains("AtticBugsTwo.app/Contents/MacOS/AtticBugsTwo") else { fatalError("test identity only") }
 try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
@@ -29,6 +29,17 @@ final class Backdrop: NSView {
 }
 let view = Backdrop(frame: backdrop.contentLayoutRect)
 backdrop.contentView = view
+@MainActor func activateBackdrop() {
+    backdrop.makeKeyAndOrderFront(nil)
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier != getpid() {
+        // macOS may decline a programmatic activation by an inactive app.
+        // A real HID click on our own backdrop is the user path instead.
+        let old = NSEvent.mouseLocation
+        click(CGPoint(x: screen.frame.midX, y: screen.frame.midY),
+              returning: CGPoint(x: old.x, y: screen.frame.maxY - old.y))
+    }
+    _ = NSRunningApplication.current.activate(options: [])
+}
 var preview: NSRunningApplication!
 var failures = 0
 func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
@@ -46,8 +57,9 @@ func move(_ point: CGPoint) {
     // still a HID-level CGEvent, with no accessibility mouse-warp shortcut.
     postInput("ObjC.import('CoreGraphics'); $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventMouseMoved, $.CGPointMake(\(point.x),\(point.y)), $.kCGMouseButtonLeft));")
 }
-func click(_ point: CGPoint) {
-    postInput("ObjC.import('CoreGraphics'); for (var t of [$.kCGEventLeftMouseDown,$.kCGEventLeftMouseUp]) { $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null,t,$.CGPointMake(\(point.x),\(point.y)),$.kCGMouseButtonLeft)); delay(0.04); }")
+func click(_ point: CGPoint, returning: CGPoint? = nil) {
+    let restore = returning.map { "$.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null,$.kCGEventMouseMoved,$.CGPointMake(\($0.x),\($0.y)),$.kCGMouseButtonLeft));" } ?? ""
+    postInput("ObjC.import('CoreGraphics'); for (var t of [$.kCGEventLeftMouseDown,$.kCGEventLeftMouseUp]) { $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null,t,$.CGPointMake(\(point.x),\(point.y)),$.kCGMouseButtonLeft)); delay(0.04); } " + restore)
 }
 func islandPoint(_ index: Int) -> CGPoint? {
     for window in windows() {
@@ -76,7 +88,10 @@ func capture(_ name: String, checksPresence: Bool = false) async throws {
         if FileManager.default.fileExists(atPath: path) {
             let brightness = Double(try String(contentsOfFile: path + ".presence", encoding: .utf8)) ?? 0
             if checksPresence && brightness < 0.2 { failures += 1; record("FAIL \(name): window flags say visible but no light panel over the dark backdrop (\(brightness))") }
-            record("CAPTURE \(name) panelBrightness=\(brightness)")
+            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
+            if name.contains("inactive"), front != getpid() { failures += 1; record("FAIL \(name): backdrop does not own activation") }
+            if name.contains("active-key"), front != preview.processIdentifier { failures += 1; record("FAIL \(name): preview does not own activation") }
+            record("CAPTURE \(name) panelBrightness=\(brightness) front=\(front) driver=\(getpid()) target=\(preview.processIdentifier)")
             return
         }
         await pause(0.1)
@@ -91,15 +106,23 @@ func capture(_ name: String, checksPresence: Bool = false) async throws {
     record("\(pass ? "PASS" : "FAIL") \(name) windows=\(count) front=\(front ?? -1) expectedFront=\(getpid()) fullscreen=\(backdrop.styleMask.contains(.fullScreen)) pointer=\(NSEvent.mouseLocation)")
 }
 @MainActor func corner(_ name: String) async throws {
-    backdrop.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
+    activateBackdrop()
     await pause(0.3)
     move(CGPoint(x: screen.frame.midX, y: screen.frame.midY))
     await pause(2)
     record("HIDDEN \(name) windows=\(windows().count)")
     move(CGPoint(x: screen.frame.maxX - 1, y: 1))
     await pause(2)
-    guard abs(NSEvent.mouseLocation.x - (screen.frame.maxX - 1)) < 2 else {
-        record("ERROR HID event was blocked"); failures += 1; return
+    for attempt in 0..<3 {
+        let actual = NSEvent.mouseLocation
+        if abs(actual.x - (screen.frame.maxX - 1)) < 2 && abs(actual.y - (screen.frame.maxY - 1)) < 2 { break }
+        record("HID retry \(attempt) actual=\(actual)")
+        move(CGPoint(x: screen.frame.maxX - 1, y: 1))
+        await pause(0.3)
+    }
+    guard abs(NSEvent.mouseLocation.x - (screen.frame.maxX - 1)) < 2,
+          abs(NSEvent.mouseLocation.y - (screen.frame.maxY - 1)) < 2 else {
+        record("ERROR HID event was blocked actual=\(NSEvent.mouseLocation)"); failures += 1; return
     }
     shown(name)
     try await capture(name, checksPresence: true)
@@ -115,11 +138,13 @@ Task { @MainActor in
         preview = try await NSWorkspace.shared.openApplication(at: bundle, configuration: configuration)
         guard preview.processIdentifier > 0 else { throw NSError(domain: "invalid preview pid", code: 1) }
         record("SCREEN \(screen.frame) target=\(preview.processIdentifier)")
+        record("BUNDLE \(preview.bundleURL?.path ?? "unknown")")
         record("PERMISSIONS post=\(CGPreflightPostEventAccess()) capture=\(CGPreflightScreenCaptureAccess())")
         await pause(4)
-        backdrop.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
+        activateBackdrop()
         await pause(1)
         try await corner("desktop-first")
+        if args.count < 4 || args[3] != "glass" {
         backdrop.toggleFullScreen(nil)
         await pause(3)
         shown("fullscreen-pointer-held-at-corner")
@@ -163,6 +188,7 @@ Task { @MainActor in
         backdrop.toggleFullScreen(nil)
         await pause(3)
         try await corner("desktop-after-fullscreen-relaunch")
+        }
         try await capture("dark-inactive-rest")
         if let point = islandPoint(0) { move(point) }
         await pause(0.4)
@@ -170,13 +196,13 @@ Task { @MainActor in
         view.light = true
         await pause(0.5)
         try await capture("light-inactive-awake")
-        if let point = islandPoint(1) { click(point) }
+        if let point = islandPoint(1) { move(point); await pause(0.2); click(point) }
         await pause(2)
         try await capture("light-active-key")
         view.light = false
         await pause(0.5)
         try await capture("dark-active-key")
-        backdrop.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
+        activateBackdrop()
         await pause(0.5)
         try await capture("dark-after-page-switch-inactive")
         view.light = true
