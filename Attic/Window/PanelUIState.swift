@@ -220,15 +220,18 @@ final class PanelUIState: ObservableObject {
     /// switch back to them only shows them (spec § Performance: page switch
     /// within 50 ms). A page joins when it is first shown (or when the
     /// pointer rests on the page switch); the hidden release frees them.
-    /// Notes is never kept: its editor saves and releases its locks when it
-    /// leaves the screen, and it is rebuilt in Phase 2.
+    /// Notes saves at the navigation boundary and suspends native input while
+    /// hidden; its view no longer has to be discarded to release ownership.
     @Published private(set) var builtPages: Set<PanelPage> = []
 
-    static func keepsBuilt(_ page: PanelPage) -> Bool { page != .notes }
+    static func keepsBuilt(_ page: PanelPage) -> Bool { true }
+
+    /// Notes starts only on its first real visit; after that it stays built.
+    static func prewarms(_ page: PanelPage) -> Bool { page != .notes }
 
     /// Builds `page` behind the current one (the pointer is on the switch).
     func prepareBuiltPage(_ page: PanelPage) {
-        guard isPageContentLoaded, Self.keepsBuilt(page), !builtPages.contains(page) else { return }
+        guard isPageContentLoaded, Self.prewarms(page), !builtPages.contains(page) else { return }
         builtPages.insert(page)
     }
 

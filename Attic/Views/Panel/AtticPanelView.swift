@@ -120,11 +120,11 @@ struct AtticPanelView: View {
                                 // current one, so it moves in from there.
                                 restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage)),
                                 motion: pageMotion,
-                                // Canvas has single-key tool shortcuts (V, P, E);
+                                // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
                                 // outside its menus, and disabling it would
                                 // redraw the whole list on every switch.
-                                disablesWhenHidden: page == .canvas
+                                disablesWhenHidden: page == .canvas || page == .notes
                             ))
                     }
                 }
@@ -622,7 +622,7 @@ struct AtticPanelView: View {
     /// main-thread turn so the pointer never waits on all of them at once.
     private func prepareOtherPages() {
         let pending = PanelPage.allCases.filter {
-            $0 != currentPage && PanelUIState.keepsBuilt($0) && !uiState.builtPages.contains($0)
+            $0 != currentPage && PanelUIState.prewarms($0) && !uiState.builtPages.contains($0)
         }
         for (index, page) in pending.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) {
@@ -671,9 +671,8 @@ struct AtticPanelView: View {
         PanelPageMotion.current(reduceMotion: reduceMotion || settings.animations == .reduced)
     }
 
-    /// A page built or released by a switch (Notes every time, Tasks and
-    /// Canvas on a first visit) travels as a kept page does: in from its
-    /// side of the page left, out to its side of the new one. It reads the
+    /// A page built or released by a switch travels as a kept page does:
+    /// in from its side of the page left, out to its side of the new one. It reads the
     /// switch as it runs (`PanelUIState.lastPageSwitch`). Pages never
     /// scale: they hold AppKit scroll views, which a SwiftUI scale would
     /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.

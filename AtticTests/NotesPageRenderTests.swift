@@ -117,6 +117,10 @@ final class NotesPageRenderTests: XCTestCase {
 
     #if !ATTIC_GENERATED_TESTS
     func testFollowupNotesWritingAndLibraryMakeRoomForTheCard() throws {
+        // Invisible windows receive no display-link frames; check the same end anchor under Reduce Motion.
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
         let room = PanelComposerRoom()
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft), composerRoom: room) { store in
             try Self.seedPricing(store)
@@ -126,8 +130,13 @@ final class NotesPageRenderTests: XCTestCase {
         spin()
         let writing = try XCTUnwrap(harness.controller.active?.engine.scrollView)
         let resting = writing.contentInsets.bottom
-        writing.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: writing)))
-        writing.reflectScrolledClipView(writing.contentView)
+        for _ in 0..<3 {
+            let engine = try XCTUnwrap(harness.controller.active?.engine)
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            writing.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: writing)))
+            writing.reflectScrolledClipView(writing.contentView)
+            spin(0.2)
+        }
         for height: CGFloat in [90, 152] {
             room.set(height: height, open: true); spin()
             XCTAssertEqual(writing.contentInsets.bottom - resting, height - AtticControlSize.addBarHeight, accuracy: 1)

@@ -1947,7 +1947,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
                 let current = PanelPage(self.uiState.selectedSection)
                 let pending = PanelPage.allCases.filter {
-                    $0 != current && PanelUIState.keepsBuilt($0) && !self.uiState.builtPages.contains($0)
+                    $0 != current && PanelUIState.prewarms($0) && !self.uiState.builtPages.contains($0)
                 }
                 for (index, page) in pending.enumerated() {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) { [weak self] in

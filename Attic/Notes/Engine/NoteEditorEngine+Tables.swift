@@ -117,6 +117,7 @@ extension NoteEditorEngine {
     /// keyboard goes back to the table it came from. False when none.
     @discardableResult
     func returnKeyboardToTable() -> Bool {
+        guard textView?.isSuspended != true else { return false }
         guard let table = focusedTable, let window = table.window else { return false }
         if let range = table.cellSelection {
             if window.firstResponder !== table.canvas { window.makeFirstResponder(table.canvas) }
@@ -129,7 +130,7 @@ extension NoteEditorEngine {
         return true
     }
 
-    var allowsTableCellEdit: Bool { !isReadOnly && activity != .writingToolsRefused && !refusesReservedWorkspaceInput() }
+    var allowsTableCellEdit: Bool { textView?.isSuspended != true && !isReadOnly && activity != .writingToolsRefused && !refusesReservedWorkspaceInput() }
 
     var isWritingToolsAvailableForCells: Bool { textView?.writingToolsBehavior != NSWritingToolsBehavior.none }
 
@@ -594,6 +595,7 @@ extension NoteEditorEngine {
 
     /// The keyboard goes into a cell (after layout has hosted the view).
     func enterTable(_ attachment: NoteTableAttachment, at position: NoteTable.Position, caret: NoteTableCaret) {
+        guard textView?.isSuspended != true else { return }
         guard let range = range(ofTable: attachment) else { return }
         if let layoutManager, let textRange = textRange(for: range) { layoutManager.ensureLayout(for: textRange) }
         textView?.scrollRangeToVisible(range)
@@ -603,7 +605,7 @@ extension NoteEditorEngine {
         if view.window == nil {
             // TextKit hosts the view on its next pass.
             DispatchQueue.main.async { [weak self, weak attachment] in
-                guard let self, let attachment, self.range(ofTable: attachment) != nil else { return }
+                guard let self, let attachment, self.textView?.isSuspended != true, self.range(ofTable: attachment) != nil else { return }
                 self.textView?.layoutSubtreeIfNeeded()
                 attachment.tableView.activate(position, caret: caret)
             }

@@ -57,7 +57,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     func restoreInputFocus() {
         // SwiftUI may still retain the outgoing view when a queued page
         // presentation runs. Only the engine's live client owns its input.
-        guard let engine, engine.textView === self else { return }
+        guard !isSuspended, let engine, engine.textView === self else { return }
         window?.makeFirstResponder(calloutIconSession?.receiver ?? self)
     }
 

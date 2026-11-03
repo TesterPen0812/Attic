@@ -347,7 +347,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var pendingImportEdit: (range: NSRange, replacementLength: Int)?
     private var writingToolsObjectsBefore = Set<UUID>()
     private var restoringWritingToolsSnapshot = false
-    private var writingToolsAvailable = true
+    private(set) var writingToolsAvailable = true
     private var beginningWritingTools = false
     var isPerformingSelfMove = false
     private(set) var refusals: [String] = []

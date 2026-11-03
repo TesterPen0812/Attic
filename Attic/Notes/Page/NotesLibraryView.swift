@@ -37,6 +37,7 @@ struct NotesLibraryView: View {
     var onCreate: (_ title: String, _ tag: String?) -> Void = { _, _ in }
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     /// The search field's keyboard, as the top row's field reports it.
     private var fieldFocused: Bool {
         get { searchFocused }
@@ -111,10 +112,16 @@ struct NotesLibraryView: View {
             #if DEBUG
             Self.lifetimeProbe?(keys)
             #endif
-            keys.start(owner: keyOwner, handler: { event in handle(event) })
-            if searchFocused { beginSearch() }
+            if isCurrent {
+                keys.start(owner: keyOwner, handler: { event in handle(event) })
+                if searchFocused { beginSearch() }
+            }
         }
         .onDisappear { keys.stop(owner: keyOwner) }
+        .onChange(of: isCurrent) { _, current in
+            if current { keys.start(owner: keyOwner, handler: { event in handle(event) }) }
+            else { keys.stop(owner: keyOwner, preservingWindow: true) }
+        }
         .onChange(of: searchFocused) { _, focused in
             if focused {
                 if !searchOpen { beginSearch() }
@@ -232,7 +239,7 @@ struct NotesLibraryView: View {
         // The library slides away when a note opens, and this view (and its
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
-        guard controller.isLibraryPresented else { return false }
+        guard isCurrent, controller.isLibraryPresented else { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
         let groups = model.navigable(all, layout: model.layout, store: store)
@@ -410,6 +417,7 @@ struct NotesLibraryView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 PanelResumeScrollKeeper(key: "notes-library", navigationID: model.query).frame(width: 0, height: 0)
+                    .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
                 if model.layout == .board {
                     // The board's columns are lazy themselves.
                     VStack(alignment: .leading, spacing: 0) {
@@ -632,11 +640,11 @@ final class NotesLibraryKeys: ObservableObject {
         }
     }
 
-    func stop(owner: UUID) {
+    func stop(owner: UUID, preservingWindow: Bool = false) {
         guard self.owner == owner else { return }
         self.owner = nil
         handler = nil
-        window = nil
+        if !preservingWindow { window = nil }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
     }

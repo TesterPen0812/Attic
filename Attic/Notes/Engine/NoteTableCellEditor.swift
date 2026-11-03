@@ -235,6 +235,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
+        guard table?.engine?.textView?.isSuspended != true else { return }
         let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
         let wasComposing = hasMarkedText()
         defer {
@@ -263,6 +264,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     override func doCommand(by selector: Selector) {
+        guard table?.engine?.textView?.isSuspended != true else { return }
         if selector != #selector(selectAll(_:)) { selectedEmptyCellText = false }
         guard !hasMarkedText(), let table else { return super.doCommand(by: selector) }
         let selection = selectedRange()

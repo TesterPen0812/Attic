@@ -319,7 +319,7 @@ final class NoteFormatControls: NSObject {
 
     /// Recomputes what shows. Runs after the engine has handled the event.
     func refresh() {
-        guard let textView else { return }
+        guard let textView, !textView.isSuspended else { return }
         // N3: while the link's field stands in the bar, the bar stays as it
         // is (its field has the keyboard; the selection is the link's).
         if linkInBar { updateHint(); return }
@@ -640,6 +640,7 @@ final class NoteFormatControls: NSObject {
     /// ⌃Tab, the bar's keyboard mode and the format shortcuts, before the
     /// text view sees them (never during a composition).
     func handleKey(_ event: NSEvent) -> Bool {
+        guard textView?.isSuspended != true else { return false }
         if event.keyCode == 53, let closed = closeInnermostOnEscape(event) { return closed }
         guard let textView, let window = textView.window, event.window === window else { return false }
         if cardModel.card != nil, cardHasKeyboard, !cardModel.linkSuggestions.isEmpty,
@@ -899,6 +900,7 @@ final class NoteFormatControls: NSObject {
     /// The text view's command keys while a list or the bar shows: the `/`
     /// list takes ↑ ↓ (and ⌃P ⌃N), Return and Tab; Esc closes what is open.
     func handleCommand(_ selector: Selector) -> Bool {
+        guard textView?.isSuspended != true else { return false }
         if slashModel.shown, !slashModel.items.isEmpty {
             switch selector {
             case #selector(NSResponder.moveDown(_:)): slashModel.move(1); return true
@@ -945,6 +947,7 @@ final class NoteFormatControls: NSObject {
     }
 
     func pickSlash(_ kind: NoteSlashItem.Kind) {
+        guard textView?.isSuspended != true else { return }
         onSlashPick?(kind)
         slashModel.hide()
         let start = engine.slashSession?.range.location

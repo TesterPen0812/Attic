@@ -100,7 +100,6 @@ final class PhaseXHunt7Tests: XCTestCase {
                 if expectedPage == .notes, !(await notePage.prepareToLeaveDurably(.pageSwitch)) {
                     return (index, "\(label): Notes page switch refused")
                 }
-                expectedBuilt = Set(expectedBuilt.filter { $0 != .notes })
                 expectedBuilt.insert(PanelPage(target))
                 ui.switchPage(to: target, motion: .instant)
                 expectedPage = target
@@ -376,7 +375,7 @@ final class PhaseXHunt7Tests: XCTestCase {
                 // Call the real shell entry, not a reproduced leave sequence.
                 // This view is never installed in a window or rendered.
                 view.selectSection(target)
-                expectedBuilt.remove(.notes); expectedBuilt.insert(PanelPage(target))
+                expectedBuilt.insert(PanelPage(target))
                 XCTAssertEqual(ui.selectedSection, target)
                 XCTAssertEqual(ui.builtPages, expectedBuilt)
                 XCTAssertEqual(ui.primaryInputFocusRequest, 0)
