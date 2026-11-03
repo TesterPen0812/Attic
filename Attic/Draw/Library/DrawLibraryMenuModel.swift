@@ -102,6 +102,15 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     /// Where Delete posts its Undo toast (the panel's, from the view).
     weak var toasts: PanelToastCenter?
+    private var deletionToastID: UUID?
+
+    /// Only the still-offered canvas deletion owns the board's Undo key.
+    func undoDeletionIfOffered() -> Bool {
+        guard let toasts, let deletionToastID, toasts.current?.id == deletionToastID,
+              toasts.current?.answersUndoKey == true else { return false }
+        _ = toasts.performAction()
+        return true
+    }
     private let now: () -> Date
     private let calendar: Calendar
 
@@ -297,6 +306,7 @@ final class DrawLibraryMenuModel: ObservableObject {
                 return .failed(CommandFailure(message))
             }
         }
+        deletionToastID = toasts?.current?.id
     }
 
     // MARK: Rename

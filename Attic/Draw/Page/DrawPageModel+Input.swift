@@ -253,7 +253,7 @@ extension DrawPageModel {
         let k = key.characters
         if key.command, !key.option, !key.control {
             switch (k, key.shift) {
-            case ("z", false): undo()
+            case ("z", false): if !library.undoDeletionIfOffered() { undo() }
             case ("z", true): redo()
             case ("a", false): selectAll()
             case ("d", false): duplicateSelection()
