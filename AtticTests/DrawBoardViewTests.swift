@@ -74,7 +74,7 @@ final class DrawBoardViewTests: XCTestCase {
             .init(frame: DrawFrame(x: 20, y: 180), content: .shape(.line)),
             .init(frame: DrawFrame(x: 180, y: 180), content: .shape(.arrow)),
             .init(frame: DrawFrame(x: 20, y: 250), content: .stroke([.init(x: 0, y: 0), .init(x: 20, y: 20)])),
-            .init(frame: DrawFrame(x: 180, y: 250), content: .image(.init(original: Data(), pixelWidth: 20, pixelHeight: 20)))
+            .init(frame: DrawFrame(x: 180, y: 250), content: .image(.init(original: Data([1]), pixelWidth: 20, pixelHeight: 20)))
         ]
         let id = try XCTUnwrap(model.canvasID)
         XCTAssertTrue(store.perform(.put(objects), on: id).isSaved)
