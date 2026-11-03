@@ -104,6 +104,36 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertFalse(first.accessibilityPerformPress(), "a removed element cannot select a stale object")
     }
 
+    func testAuditB4TabLeavesTheBoardAtBothEndsOfItsNativeKeyViewLoop() throws {
+        final class Stop: NSView { override var acceptsFirstResponder: Bool { true } }
+        let id = try XCTUnwrap(model.canvasID)
+        let object = DrawObject(frame: DrawFrame(x: 50, y: 70), content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([object]), on: id).isSaved)
+        model.open(id)
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 500))
+        let before = Stop(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
+        let after = Stop(frame: CGRect(x: 40, y: 0, width: 30, height: 30))
+        root.addSubview(before); root.addSubview(board); root.addSubview(after)
+        let window = NSWindow(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        window.autorecalculatesKeyViewLoop = false
+        before.nextKeyView = board; board.nextKeyView = after; after.nextKeyView = before
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(board))
+        board.keyDown(with: key(.keyDown, "\t", code: 48))
+        XCTAssertEqual(model.selection, [object.id])
+        XCTAssertTrue(window.firstResponder === board)
+        board.keyDown(with: key(.keyDown, "\t", code: 48))
+        XCTAssertTrue(window.firstResponder === after)
+        XCTAssertTrue(window.makeFirstResponder(board))
+        model.select([object.id])
+        let backwards = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.shift], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
+        board.keyDown(with: backwards)
+        XCTAssertTrue(window.firstResponder === before)
+    }
+
     /// Board points are y-down; AppKit's view points are y-up.
     private func mouse(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: board.bounds.height - point.y),

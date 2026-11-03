@@ -131,6 +131,7 @@ final class DrawPageModel: ObservableObject {
     private(set) var objects: [DrawObject] = []
     /// Advances with every change the board must redraw.
     private(set) var contentRevision = 0
+    var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
     private(set) var editing: DrawTextEdit?
     private(set) var isShown = false

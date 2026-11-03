@@ -1,3 +1,10 @@
+## 2026-11-03 · Draw object navigation
+
+Tab/Shift-Tab and the arrow keys visit objects in reading order, with normal
+selection handles. Tab at either end returns to the page's native key loop.
+VoiceOver reaches each named object; retained elements follow viewport changes
+and select/reveal the object without editing the drawing.
+
 ## 2026-11-03 · Distinct canvases, meaningful Restore and Calendar years
 
 New unnamed canvases take the next free Untitled suffix, including unsaved drafts.
