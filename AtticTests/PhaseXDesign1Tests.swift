@@ -305,8 +305,7 @@ final class PhaseXDesign1Tests: XCTestCase {
         // R14: centred on the 14 pt label row 8 under the top (8 + 7 − 8 = 7).
         XCTAssertEqual([T.monoCopyInset, T.monoCopyTop], [7, 7])
         XCTAssertEqual(T.monoCopyTop + T.monoCopySize / 2, T.monoPaddingV + T.monoLabelHeight / 2)
-        XCTAssertGreaterThanOrEqual(NoteMonoCopyButton.radius, 4)
-        XCTAssertLessThanOrEqual(NoteMonoCopyButton.radius, 6)
+        XCTAssertEqual(NoteMonoCopyButton.radius, T.monoCopySize / 2, "Accepted Shapes supersedes the old 4–6 pt corner range")
     }
 
     // MARK: D-14 · no system items in Attic's own menus
