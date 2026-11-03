@@ -908,7 +908,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(room.height, view.fittingSize.height, accuracy: 1, "the inset follows the actual Event card")
     }
 
-    func testTheCardIsTheDesignsWidthAndKeepsTheTasksHeightForEveryKind() {
+    func testTheCardKeepsTheTasksHeightExceptForEvents() {
         let task = host(nil, on: .calendar(selected: today)).fittingSize
         XCTAssertEqual(task.width, ComposerMetrics.width, accuracy: 0.5)
         var heights: [CGFloat] = []
@@ -917,7 +917,8 @@ final class ComposerTests: XCTestCase {
             let view = host(kind, on: .calendar(selected: today))
             heights.append(view.fittingSize.height)
         }
-        XCTAssertEqual(Set(heights.map { ($0 * 2).rounded() }).count, 1, "\(heights)")
+        XCTAssertEqual(heights[0], heights[2], accuracy: 1, "Task and Note keep the compact card")
+        XCTAssertGreaterThan(heights[1], heights[0], "P4 supersedes the old same-height Event card")
         // P4: 9 + 20 + 5 + 15 + 5 + 28 + 8 = 90 (the design's 180 px).
         XCTAssertEqual(heights[0], ComposerMetrics.height, accuracy: 1)
         XCTAssertEqual(ComposerMetrics.height, 90)
