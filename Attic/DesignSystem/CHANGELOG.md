@@ -10,6 +10,8 @@ including entering another app's full-screen Space with a stationary
 pointer. The panel and island re-order without activating Attic or
 superseding a hide. A still-ordered family gets fresh native admission
 (out, then in); bringing it forward alone does not join the new Space.
+That temporary ordering does not return borrowed activation; a real hide
+keeps its normal focus handoff.
 
 ## 2026-11-02 · Draw cursors keep their screen size
 

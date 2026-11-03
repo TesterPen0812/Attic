@@ -115,6 +115,14 @@ final class AtticPanel: NSPanel {
 
     static let willOrderOutNotification = Notification.Name("AtticPanelWillOrderOut")
     private var mousePolicy = AtticMousePolicy()
+    private var preservesActivationDuringSpaceReadmission = false
+
+    func preservingActivationForSpaceReadmission(_ reorder: () -> Void) {
+        let previous = preservesActivationDuringSpaceReadmission
+        preservesActivationDuringSpaceReadmission = true
+        defer { preservesActivationDuringSpaceReadmission = previous }
+        reorder()
+    }
 
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         if place == .out {
@@ -123,7 +131,7 @@ final class AtticPanel: NSPanel {
         }
         super.order(place, relativeTo: otherWin)
         if place != .out { mousePolicy.orderedIn(self) }
-        else { PanelActivation.shared.hidden(self) }
+        else { PanelActivation.shared.hidden(self, preservingActivation: preservesActivationDuringSpaceReadmission) }
     }
 
     override func orderFrontRegardless() {
@@ -140,7 +148,7 @@ final class AtticPanel: NSPanel {
         NotificationCenter.default.post(name: Self.willOrderOutNotification, object: self)
         mousePolicy.orderedOut()
         super.orderOut(sender)
-        PanelActivation.shared.hidden(self)
+        PanelActivation.shared.hidden(self, preservingActivation: preservesActivationDuringSpaceReadmission)
     }
 
     /// Esc reaches the window only when no responder in it handled the key:

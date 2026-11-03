@@ -27,7 +27,7 @@ enum PanelWorkAreaEvents {
 }
 
 /// The native ordering boundary for restoring an overlay in a new Space.
-enum PanelSpacePresentation {
+@MainActor enum PanelSpacePresentation {
     @discardableResult
     static func reassert(_ window: NSWindow, onActiveSpace: Bool) -> Bool {
         guard !window.isVisible || !onActiveSpace else { return false }
@@ -36,12 +36,17 @@ enum PanelSpacePresentation {
         // order-front alone does not admit it to a new full-screen Space.
         // Explicitly cycle the visible family, including the child's mouse
         // policy. Preserve hidden children and the live views/first responder.
-        if window.isVisible {
-            children.forEach { $0.orderOut(nil) }
-            window.orderOut(nil)
+        let reorder = {
+            if window.isVisible {
+                children.forEach { $0.orderOut(nil) }
+                window.orderOut(nil)
+            }
+            window.orderFrontRegardless()
+            children.forEach { $0.orderFrontRegardless() }
         }
-        window.orderFrontRegardless()
-        children.forEach { $0.orderFrontRegardless() }
+        if let panel = window as? AtticPanel {
+            panel.preservingActivationForSpaceReadmission(reorder)
+        } else { reorder() }
         return true
     }
 }
