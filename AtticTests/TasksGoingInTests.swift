@@ -51,6 +51,14 @@ final class TasksGoingInTests: XCTestCase {
 
     // A1: edits must reach the already mounted lazy row, including AX.
     func testAuditA1MountedRowReadsEditedFields() throws {
+        try assertAuditRowRefresh(movingDay: true)
+    }
+
+    func testAuditA1SameDateGroupReadsEditedFields() throws {
+        try assertAuditRowRefresh(movingDay: false)
+    }
+
+    private func assertAuditRowRefresh(movingDay: Bool) throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
         defer {
@@ -79,7 +87,7 @@ final class TasksGoingInTests: XCTestCase {
             self.model.beginEditingTitle(id)
             self.model.editingTitle = "Audit revised"
             XCTAssertTrue(self.model.commitTitle())
-            XCTAssertTrue(self.model.setDueDay(self.day(3), for: [id]).isApplied)
+            if movingDay { XCTAssertTrue(self.model.setDueDay(self.day(3), for: [id]).isApplied) }
             XCTAssertTrue(self.model.setPriority(.high, for: [id]).isApplied)
             XCTAssertTrue(self.model.toggleTag("home", for: [id]).isApplied)
         }

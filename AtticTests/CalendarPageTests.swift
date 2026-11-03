@@ -237,6 +237,12 @@ final class CalendarPageTests: XCTestCase {
     }
 
     func testAuditA9SearchIncludesEventsOutsideTheOldThreeYearWindow() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
         let store = try makeTestStore()
         let source = CalendarEventSourceStub(events: [
             event("old", "Audit milestone", start: date(1992, 1, 10, 8), end: date(1992, 1, 10, 9)),
