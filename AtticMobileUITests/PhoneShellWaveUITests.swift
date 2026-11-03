@@ -194,6 +194,22 @@ final class PhoneShellWaveUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Create"].waitForExistence(timeout: 8), "Capture chrome returns after the notice")
     }
 
+    func testHomeSettingsMenuOpensLocalPreferencesAndReturns() throws {
+        let actions = app.buttons["phone-page-actions-menu"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 6))
+        actions.tap()
+        let settings = app.buttons["phone-page-action-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "Home menu should expose Settings")
+        settings.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["phone-settings-page"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.buttons["phone-setting-appearance"].exists)
+        XCTAssertTrue(app.buttons["phone-setting-animations"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["phone-settings-sync-status"].exists)
+        screenshot("Settings")
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.staticTexts["Home"].waitForExistence(timeout: 6))
+    }
+
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Phone wave · " + name

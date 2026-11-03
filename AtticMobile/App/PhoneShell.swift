@@ -28,6 +28,7 @@ enum PhoneRoute: Hashable {
     case task(UUID)
     case canvases
     case canvas(UUID)
+    case settings
 }
 
 enum PhoneTasksTab: String, CaseIterable, Identifiable {
@@ -75,7 +76,7 @@ struct PhoneShell: View {
                         // page header and tab dock would cover its drawing area.
                         destination(route).toolbar(.hidden, for: .navigationBar)
                     } else {
-                        screen(root: false) { destination(route) }
+                        screen(root: false, route: route) { destination(route) }
                     }
                 }
         }
@@ -117,6 +118,7 @@ struct PhoneShell: View {
         } message: {
             Text(state.errorMessage ?? "The operation could not be completed.")
         }
+        .phoneLocalPreferences()
     }
 
     private var isCanvasOpen: Bool {
@@ -125,7 +127,8 @@ struct PhoneShell: View {
         return false
     }
 
-    private func screen<Content: View>(root: Bool, @ViewBuilder content: () -> Content) -> some View {
+    private func screen<Content: View>(root: Bool, route: PhoneRoute? = nil,
+                                      @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0) {
             HStack {
                 if root {
@@ -141,25 +144,9 @@ struct PhoneShell: View {
                     .background(.regularMaterial, in: Circle())
                 }
                 Spacer()
-                Menu {
-                    Button("Refresh", systemImage: "arrow.clockwise") { state.refresh() }
-                    Button("All notes", systemImage: "note.text") { path.append(.allNotes(tag: nil)) }
-                    Button("Canvases", systemImage: "scribble.variable") { path.append(.canvases) }
-                    if root && tab == .tasks {
-                        Section("Filter tasks by tag") {
-                            Button("All tags") { selectedTag = nil }
-                            ForEach(taskTags, id: \.self) { tag in
-                                Button("#" + tag) { selectedTag = tag }
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 20, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())
+                if let menu = pageMenu(root: root, route: route) {
+                    PhonePageActionsMenu(menu: menu)
                 }
-                .accessibilityLabel("More options")
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 16)
@@ -168,6 +155,43 @@ struct PhoneShell: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .background(Color(uiColor: .systemBackground))
+    }
+
+    private func pageMenu(root: Bool, route: PhoneRoute?) -> PhonePageMenu? {
+        if root {
+            switch tab {
+            case .home:
+                return .home(openSettings: { path.append(.settings) })
+            case .tasks:
+                let tagActions = [PhonePageMenuAction(
+                    id: "all-tags", title: "All tags", systemImage: "tag",
+                    isSelected: selectedTag == nil, perform: { selectedTag = nil }
+                )] + taskTags.map { tag in
+                    PhonePageMenuAction(id: "tag-\(tag)", title: "#\(tag)", systemImage: "number",
+                                        isSelected: selectedTag == tag, perform: { selectedTag = tag })
+                }
+                return PhonePageMenu(pageTitle: "Tasks", actions: tagActions)
+            case .calendar:
+                return PhonePageMenu(pageTitle: "Calendar", actions: [
+                    PhonePageMenuAction(id: "settings", title: "Settings", systemImage: "gearshape",
+                                        perform: { path.append(.settings) })
+                ])
+            }
+        }
+        switch route {
+        case .allNotes:
+            return PhonePageMenu(pageTitle: "All notes", actions: [
+                PhonePageMenuAction(id: "refresh", title: "Refresh", systemImage: "arrow.clockwise",
+                                    perform: { state.refresh() })
+            ])
+        case .canvases:
+            return PhonePageMenu(pageTitle: "Canvases", actions: [
+                PhonePageMenuAction(id: "refresh", title: "Refresh", systemImage: "arrow.clockwise",
+                                    perform: { state.refresh() })
+            ])
+        case .note, .task, .canvas, .settings, .none:
+            return nil
+        }
     }
 
     @ViewBuilder private var rootContent: some View {
@@ -196,6 +220,7 @@ struct PhoneShell: View {
         case let .canvas(id): PhoneDrawEditor(state: state, canvasID: id) {
             if !path.isEmpty { path.removeLast() }
         }
+        case .settings: PhoneSettingsPage()
         }
     }
 
