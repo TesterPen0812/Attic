@@ -43,9 +43,9 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     var systemName: String {
         switch self {
         case .tasks: "checkmark.circle"
-        case .notes: "note.text"
+        case .notes: "doc.text"
         case .calendar: "calendar"
-        case .canvas: "scribble.variable"
+        case .canvas: "pencil.and.scribble"
         }
     }
 

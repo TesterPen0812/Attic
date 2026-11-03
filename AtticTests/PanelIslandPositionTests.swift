@@ -68,11 +68,12 @@ final class PanelIslandPositionTests: XCTestCase {
         }
         // L3: standing at an end, the first item's centre is level with the
         // top row's controls, 29 pt below the panel's top (mirrored at the
-        // bottom: the last item with the bottom bar).
+        // bottom: the last item with the bottom bar), on whole points
+        // toward the panel's end: within half a point.
         if !spot.isFlat {
             let first = L.itemFrame(0, in: island), last = L.itemFrame(L.pages.count - 1, in: island)
-            let atTop = { eq(panel.maxY - first.midY, 29, "the first item level with the top row") }
-            let atBottom = { eq(last.midY - panel.minY, 29, "the last item level with the bottom bar") }
+            let atTop = { XCTAssertEqual(panel.maxY - first.midY, 29, accuracy: 0.5, "\(what): the first item level with the top row", file: file, line: line) }
+            let atBottom = { XCTAssertEqual(last.midY - panel.minY, 29, accuracy: 0.5, "\(what): the last item level with the bottom bar", file: file, line: line) }
             switch spot.position {
             case .cornerEnd: top ? atTop() : atBottom()
             case .middle: XCTAssertEqual(island.midY, panel.midY, accuracy: 0.5, "\(what): at the middle", file: file, line: line)
@@ -392,12 +393,11 @@ final class PanelIslandPositionTests: XCTestCase {
                 let container = try content(panel)
                 let genie = container.genieForTesting
                 spin(until: { !container.isIslandStandInShown })
+                // A reveal shows the island at rest (D4): its dots' capsule.
                 @MainActor func items() -> [CGPoint] {
                     let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: .topRight, spot: settings.islandSpot)
-                    return L.pages.indices.map { index in
-                        let item = local(L.itemFrame(index, in: island), in: panel)
-                        return CGPoint(x: item.midX, y: item.midY)
-                    }
+                    let rest = local(L.restFrame(island: island, corner: .topRight, spot: settings.islandSpot), in: panel)
+                    return [CGPoint(x: rest.midX, y: rest.midY)]
                 }
                 for spot in [PanelIslandSpot.openSideMiddle, .acrossOpenEnd, .screenSideCornerEnd] {
                     let note = "\(warm ? "warm" : "cold"), to \(spot)"
@@ -543,6 +543,8 @@ final class PanelIslandPositionTests: XCTestCase {
         // the corner end at the bottom.
         XCTAssertEqual(D.spot(from: .screenSideCornerEnd, toward: .up, corner: .bottomLeft), .screenSideMiddle)
         XCTAssertEqual(D.spot(from: .screenSideCornerEnd, toward: .right, corner: .bottomLeft), .openSideCornerEnd)
+        // The screen's bottom edge, under the panel: ↓ from the corner end.
+        XCTAssertEqual(D.spot(from: .openSideCornerEnd, toward: .down, corner: .bottomLeft), .bottomEdge)
         XCTAssertEqual(D.spot(from: .openSideFarEnd, toward: .up, corner: .bottomLeft), .acrossOpenEnd)
         // Every spot reaches every other.
         for corner in ScreenCorner.allCases {
@@ -597,7 +599,7 @@ final class PanelIslandPositionTests: XCTestCase {
             XCTAssertEqual(element.accessibilityLabel?(), spot.title)
             XCTAssertEqual(element.accessibilityRole?(), .button)
         }
-        XCTAssertEqual(try button(.screenSideCornerEnd).isAccessibilitySelected?(), true, "today's place is chosen")
+        XCTAssertEqual(try button(.bottomEdge).isAccessibilitySelected?(), true, "the default, the screen's bottom edge, is chosen")
         XCTAssertTrue(try button(.openSideMiddle).accessibilityPerformPress?() ?? false)
         spin(0.2)
         XCTAssertEqual(settings.islandSpot, .openSideMiddle)
@@ -649,8 +651,9 @@ final class PanelIslandPositionTests: XCTestCase {
                            "\(note): across the open end", file: file, line: line)
         }
         if !spot.isFlat, spot.position == .farEnd {
-            XCTAssertEqual(top ? abs(island.minY - panel.minY) < 0.5 : abs(island.maxY - panel.maxY) < 0.5, true,
-                           "\(note): at the far end", file: file, line: line)
+            // L3: the end inset, on whole points.
+            let inset = top ? island.minY - panel.minY : panel.maxY - island.maxY
+            XCTAssertEqual(inset, L.endInset, accuracy: 0.51, "\(note): at the far end", file: file, line: line)
         }
     }
 

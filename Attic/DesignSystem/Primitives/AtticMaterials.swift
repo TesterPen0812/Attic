@@ -892,10 +892,13 @@ struct AtticPanelStageSurface: View {
 /// panel, the gallery and Settings' Appearance miniature all draw this one.
 struct AtticPanelRim: View {
     var cornerSize: CGFloat
+    /// The shape's curve: the panel's, or the island's control curve (the
+    /// island wears the panel's surface, Accepted 2026-11-03).
+    var exponent: CGFloat = AtticStyle.panelSquircleExponent
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        let shape = Squircle(cornerRadius: cornerSize, exponent: exponent)
         let dark = design.mode == .dark
         ZStack {
             if let hairline = Self.lightHairline(for: design) {
@@ -910,7 +913,7 @@ struct AtticPanelRim: View {
                 shape.stroke(edge.color.color, lineWidth: edge.width)
                 if let highlight = edge.innerHighlight {
                     // Defined Dark Edge: a faint line just inside it.
-                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: AtticStyle.panelSquircleExponent)
+                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: exponent)
                         .stroke(highlight.color, lineWidth: 0.5)
                         .padding(edge.width)
                 }
@@ -942,7 +945,7 @@ struct AtticPanelRim: View {
         ZStack {
             shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
             if dark {
-                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)
+                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: exponent)
                     .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
                     .padding(0.75)
             }
