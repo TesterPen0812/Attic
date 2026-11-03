@@ -1520,7 +1520,7 @@ private struct AtticStripButton: View {
         let m = AtticSmallControlMetrics.self
         let height = AtticPickerMetrics.stripHeight
         let radius = AtticRadius.control(height: height)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent)
         let tokens = design.tokens
         // Inside the glass (whose own fill shows hover and press): an open
         // picker's selected chip; a set value's recessed fill, so it still

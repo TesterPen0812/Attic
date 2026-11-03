@@ -106,3 +106,17 @@ the counted `fetchCanvasReplicas` funnel) leaves the old rows unread and
 unchanged. The quit route calls `DrawPageModel.prepareToQuit()`, which settles
 the stroke in progress, waits for every image import in flight, retries or
 reconciles unsettled edits and returns false while any is unsaved. Undo survives session switches, not app relaunch.
+
+
+The page can receive identity-scoped `resumeDefaults`; without them it is fully
+session-only. With them it resumes the last canvas and each canvas's validated
+viewport. Gesture changes update memory immediately and coalesce preference
+writes; canvas switches and quitting flush the latest viewport. New unnamed
+canvases use the next free `Untitled` suffix across saved canvases and drafts.
+
+The title capsule becomes the canvas filter; the menu has no duplicate search
+row. Tab/Shift-Tab and arrows visit individual objects in top-to-bottom rows
+(centres within 30 pt), left-to-right within each row. Tab past either end leaves
+the board through the native key-view loop. VoiceOver receives stable, named
+object elements whose frames follow the viewport; selecting one reveals it at
+the current zoom. Navigation changes no drawing data or undo history.

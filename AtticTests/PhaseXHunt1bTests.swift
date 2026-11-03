@@ -247,6 +247,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let versionID = try XCTUnwrap(store.versions(noteID: id).first?.id)
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current"), .text("Changed writing")]),
+                                   baseRevisionID: store.note(withID: id)?.revisionID).get()
         let older = try XCTUnwrap(store.note(withID: id))
         older.pinnedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let newer = NoteItem(id: id, title: older.title, body: older.body,
@@ -260,9 +263,14 @@ final class PhaseXHunt1bTests: XCTestCase {
         let page = await controller(store)
         XCTAssertTrue(page.open(noteID: id))
         await XCTAssertTrueAsync(await page.openHistoryDurably())
+        let browser = try XCTUnwrap(page.historyBrowser)
+        browser.selectedIndex = try XCTUnwrap(browser.entries.firstIndex { $0.id == versionID })
+        browser.updateComparison()
+        XCTAssertTrue(browser.canRestoreSelected, "B7: exercise a real writing restore, not an identical version")
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
         XCTAssertEqual(physical.count, 2)
+        XCTAssertEqual(Set(physical.map(\.body)), ["Body"], "the historical writing is restored on every replica")
         XCTAssertEqual(Set(physical.filter(\.isPinned).map(\.persistentModelID)), [older.persistentModelID], "Body restore preserves both the older pin and the newer explicit unpin")
     }
 
@@ -295,6 +303,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let versionID = try XCTUnwrap(store.versions(noteID: id).first?.id)
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current"), .text("Changed writing")]),
+                                   baseRevisionID: store.note(withID: id)?.revisionID).get()
         XCTAssertTrue(store.setPinned(true, noteID: id))
         let canonical = try XCTUnwrap(store.note(withID: id))
         canonical.tags = ["canonical"]
@@ -317,9 +328,14 @@ final class PhaseXHunt1bTests: XCTestCase {
         let page = await controller(store)
         XCTAssertTrue(page.open(noteID: id))
         await XCTAssertTrueAsync(await page.openHistoryDurably())
+        let browser = try XCTUnwrap(page.historyBrowser)
+        browser.selectedIndex = try XCTUnwrap(browser.entries.firstIndex { $0.id == versionID })
+        browser.updateComparison()
+        XCTAssertTrue(browser.canRestoreSelected, "B7: restore different writing while preserving all metadata")
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
         XCTAssertEqual(physical.count, 2)
+        XCTAssertEqual(Set(physical.map(\.body)), ["Body"], "this is an actual writing restore")
         XCTAssertEqual(Set(physical.filter(\.isPinned).map(\.persistentModelID)), [canonical.persistentModelID], "Body restore preserves each replica's unrelated metadata")
         for replica in physical {
             let expected = try XCTUnwrap(expectedMetadata[replica.persistentModelID])
@@ -512,6 +528,11 @@ final class PhaseXHunt1bTests: XCTestCase {
         let store = try makeTestNoteStore(now: { clock }, attachmentFileStore: makeTestAttachmentFileStore())
         let id = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [
             .text("Current"), .table(NoteTable(texts: [["Header"], ["Protected cell"]]))])).get().noteID
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let versionID = try XCTUnwrap(store.versions(noteID: id).first?.id)
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current"),
+            .table(NoteTable(texts: [["Header"], ["Protected cell"]])), .text("Changed writing")]),
+            baseRevisionID: store.note(withID: id)?.revisionID).get()
         let revision = try XCTUnwrap(store.note(withID: id)?.revisionToken)
         _ = try store.agentWrite(noteID: id, baseRevisionToken: revision,
                                 document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Test", disposition: .proposal).get()
@@ -523,6 +544,11 @@ final class PhaseXHunt1bTests: XCTestCase {
         let page = await controller(store)
         XCTAssertTrue(page.open(noteID: id))
         await XCTAssertTrueAsync(await page.openHistoryDurably())
+        let browser = try XCTUnwrap(page.historyBrowser)
+        browser.selectedIndex = try XCTUnwrap(browser.entries.firstIndex { $0.id == versionID })
+        browser.updateComparison()
+        XCTAssertTrue(browser.canRestoreSelected, "the proposal is current until an actual older writing revision is restored")
+        XCTAssertEqual(store.note(withID: id)?.revisionToken, revision, "the proposal has not already been invalidated by an edit")
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         XCTAssertEqual(store.applyPendingEdits(noteID: id), 0, "An old proposal cannot silently replace a restored revision")
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)

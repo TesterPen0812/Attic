@@ -118,7 +118,7 @@ struct PanelBottomBarLook: Equatable {
 
     static let tasksPlus = Plus(label: String(localized: "New task"), help: String(localized: "New task"), identifier: "tasks-new-task")
     static let notesPlus = Plus(label: String(localized: "New note"), help: String(localized: "New note (⌘N)"), identifier: "notes-new-note")
-    static let calendarPlus = Plus(label: String(localized: "New task"), help: String(localized: "New task"), identifier: "calendar-new-task")
+    static let calendarPlus = Plus(label: String(localized: "New event"), help: String(localized: "New event"), identifier: "calendar-new-task")
 
     /// A page's bar before it reports: its usual controls, no tags yet.
     static func placeholder(for page: PanelPage) -> PanelBottomBarLook {

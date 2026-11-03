@@ -33,6 +33,17 @@ final class TaskRenameDraft: ObservableObject {
 
 @MainActor
 final class PanelUIState: ObservableObject {
+    let resumeDefaults: UserDefaults?
+
+    init(resumeDefaults: UserDefaults? = nil) {
+        self.resumeDefaults = resumeDefaults
+        if let raw = resumeDefaults?.string(forKey: "AtticPanel.lastPage"),
+           let section = PanelSection(rawValue: raw) {
+            selectedSection = section
+            island.show(PanelPage(section))
+        }
+    }
+
     @Published var isComposerPresented = false
     /// Whether the panel is the key window. Native Liquid Glass renders flat
     /// in a window that is not key, so while it is not (a hover reveal never
@@ -145,7 +156,9 @@ final class PanelUIState: ObservableObject {
     @Published var isPanelPinned = false
     @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
-    @Published private(set) var selectedSection: PanelSection = .tasks
+    @Published private(set) var selectedSection: PanelSection = .tasks {
+        didSet { resumeDefaults?.set(selectedSection.rawValue, forKey: "AtticPanel.lastPage") }
+    }
     @Published private var managedInteractionLocks: Set<PanelInteractionLockReason> = []
 
 

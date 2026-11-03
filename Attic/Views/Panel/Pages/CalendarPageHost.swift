@@ -10,12 +10,12 @@ final class CalendarPageState: ObservableObject {
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
-    func model(store: TaskStore) -> CalendarPageModel {
+    func model(store: TaskStore, resumeDefaults: UserDefaults? = nil) -> CalendarPageModel {
         if let model { return model }
         let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
             guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
             return try CalendarEventWriters.makeDefault(undoRoute: undo)
-        })
+        }, resumeDefaults: resumeDefaults)
         model = made
         return made
     }
@@ -34,7 +34,7 @@ struct CalendarPageHost: View {
     var taskNotes: TaskNoteEntryServices?
 
     var body: some View {
-        CalendarPage(model: state.model(store: store), layout: layout, taskActions: taskActions, onNewTask: onNewTask)
+        CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults), layout: layout, taskActions: taskActions, onNewTask: onNewTask)
     }
 
     private var taskActions: CalendarTaskRowActions {

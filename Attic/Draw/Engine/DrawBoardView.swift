@@ -39,6 +39,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private var showsBoardCursor = false
     private var modelChanges: AnyCancellable?
     private var stateObservers: [NSObjectProtocol] = []
+    private var objectAccessibility: [UUID: DrawAccessibilityObjectElement] = [:]
+    private var accessibilityRevision = -1
+    private var accessibilityNotificationQueued = false
 
     #if DEBUG
     /// Test seam: the pointer's window location in place of the real one.
@@ -220,6 +223,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     // MARK: DrawBoardSink
 
     func drawContentChanged() {
+        queueObjectAccessibilityUpdate()
         updateSelection()
         requestRaster()
     }
@@ -230,12 +234,25 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         queueCursorRefresh()
     }
 
-    func drawSelectionChanged() { updateSelection() }
+    func drawSelectionChanged() { updateSelection(); queueObjectAccessibilityUpdate() }
 
     func drawVisibilityChanged() {
         if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
         if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
+    }
+
+    func drawReturnKeyboard() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.model.isShown, !self.isHiddenOrHasHiddenAncestor,
+                  !self.model.isSearching, !self.model.isFiltering, !self.model.library.isRenaming,
+                  self.model.editing == nil, let window = self.window else { return }
+            if let text = window.firstResponder as? NSTextView {
+                let field = text.delegate as? NSTextField
+                guard ["draw-title-filter", "draw-library-search"].contains(field?.accessibilityIdentifier() ?? "") else { return }
+            }
+            window.makeFirstResponder(self)
+        }
     }
 
     private func queueInitialKeyboardFocus() {
@@ -475,7 +492,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
             model.spaceHeld = true
             return
         }
-        if !model.handleKey(Self.key(event)) { super.keyDown(with: event) }
+        let key = Self.key(event)
+        if key.keyCode == 48, !key.command, !key.option, !key.control, model.editing == nil, model.live == nil {
+            if !model.handleKey(key) {
+                if key.shift { window?.selectPreviousKeyView(self) }
+                else { window?.selectNextKeyView(self) }
+            }
+            return
+        }
+        if !model.handleKey(key) { super.keyDown(with: event) }
     }
 
     override func keyUp(with event: NSEvent) {
@@ -739,6 +764,60 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         return String(localized: "\(model.objects.count) objects, \(model.selection.count) selected, \(percent) % zoom")
     }
 
+    private func prepareObjectAccessibility() {
+        guard accessibilityRevision != model.contentRevision else { return }
+        accessibilityRevision = model.contentRevision
+        let ids = Set(model.objectNavigationIDs)
+        objectAccessibility = objectAccessibility.filter { ids.contains($0.key) }
+        for (index, id) in model.objectNavigationIDs.enumerated() {
+            guard let object = model.object(id) else { continue }
+            let element = objectAccessibility[id] ?? DrawAccessibilityObjectElement(board: self, id: id)
+            element.update(object, number: index + 1)
+            objectAccessibility[id] = element
+        }
+    }
+
+    private func queueObjectAccessibilityUpdate() {
+        // A board never queried by an accessibility client pays no tree cost.
+        guard accessibilityRevision >= 0, !accessibilityNotificationQueued else { return }
+        accessibilityNotificationQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.accessibilityNotificationQueued = false
+            self.prepareObjectAccessibility()
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+            if self.window?.firstResponder === self, self.model.selection.count == 1,
+               let element = self.objectAccessibility[self.model.selection[0]] {
+                NSAccessibility.post(element: element, notification: .focusedUIElementChanged)
+            }
+        }
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        prepareObjectAccessibility()
+        var children: [Any] = model.objectNavigationIDs.compactMap { objectAccessibility[$0] }
+        if let editor { children.append(editor) }
+        return children
+    }
+
+    override func accessibilitySelectedChildren() -> [Any]? {
+        prepareObjectAccessibility()
+        return model.objectNavigationIDs.filter { model.selection.contains($0) }.compactMap { objectAccessibility[$0] }
+    }
+
+    fileprivate func focusAccessibleObject(_ id: UUID) -> Bool {
+        guard let canvasID = model.canvasID, model.object(id) != nil, model.live == nil else { return false }
+        model.endEditing()
+        model.reveal(canvasID: canvasID, objectID: id)
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    fileprivate func objectAccessibilityFrame(_ worldRect: CGRect) -> CGRect {
+        guard let window else { return .zero }
+        return window.convertToScreen(convert(viewRect(model.viewport.screen(worldRect)), to: nil))
+    }
+
     /// The handles' resize, for VoiceOver.
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard !model.selection.isEmpty else { return nil }
@@ -747,6 +826,59 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                 NSAccessibilityCustomAction(name: String(localized: "Make Smaller")) { [weak self] in
                     self?.model.scaleSelection(by: 1 / 1.1); return true }]
     }
+}
+
+/// One retained accessibility element per Draw object; its frame follows the
+/// viewport without rebuilding the tree during a pan or zoom.
+@MainActor
+private final class DrawAccessibilityObjectElement: NSAccessibilityElement {
+    private weak var board: DrawBoardView?
+    private let id: UUID
+    private var worldRect = CGRect.zero
+    private var name = ""
+    private var image = false
+
+    init(board: DrawBoardView, id: UUID) {
+        self.board = board
+        self.id = id
+        super.init()
+        setAccessibilityParent(board)
+        setAccessibilityIdentifier("draw-object-" + id.uuidString)
+        setAccessibilityEnabled(true)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func update(_ object: DrawObject, number: Int) {
+        worldRect = DrawGeometry.bounds(object)
+        image = object.isImage
+        switch object.content {
+        case let .text(text): name = String(localized: "Text") + ", " + (text.isEmpty ? String(localized: "Empty") : String(text.prefix(160)))
+        case .stroke: name = String(localized: "Pen stroke") + " \(number)"
+        case let .shape(shape):
+            let kind: String = switch shape {
+            case .rectangle: String(localized: "Rectangle")
+            case .ellipse: String(localized: "Ellipse")
+            case .line: String(localized: "Line")
+            case .arrow: String(localized: "Arrow")
+            }
+            name = kind + " \(number)"
+        case .image: name = String(localized: "Image") + " \(number)"
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { image ? .image : .group }
+    override func accessibilityLabel() -> String? { name }
+    override func accessibilityFrame() -> NSRect { board?.objectAccessibilityFrame(worldRect) ?? .zero }
+    override func isAccessibilitySelected() -> Bool { board?.model.selection.contains(id) == true }
+    override func isAccessibilityFocused() -> Bool {
+        guard let board else { return false }
+        return board.window?.firstResponder === board && board.model.selection == [id]
+    }
+    override func setAccessibilityFocused(_ focused: Bool) {
+        if focused { _ = board?.focusAccessibleObject(id) }
+    }
+    override func accessibilityPerformPress() -> Bool { board?.focusAccessibleObject(id) ?? false }
 }
 
 /// The ink being drawn: frozen chunks of at most 32 samples and a short

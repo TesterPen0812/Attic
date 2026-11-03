@@ -405,7 +405,7 @@ struct NoteHighlightSwatchFace: View {
 
     var body: some View {
         let side = NoteHighlightSwatch.size
-        let shape = RoundedRectangle(cornerRadius: 3, style: .continuous)
+        let shape = Squircle(cornerRadius: 3, exponent: AtticShape.surfaceExponent)
         let dark = design.tokens.context.mode == .dark
         shape.fill(design.tokens.highlightMarker(colour).color)
             .overlay(shape.strokeBorder(Color(white: dark ? 1 : 0, opacity: 0.18), lineWidth: 0.5))
@@ -463,7 +463,7 @@ struct NoteLinkField: View {
 
     var body: some View {
         let height = AtticControlSize.smallHeight
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: AtticRadius.control(height: height), exponent: AtticShape.controlExponent)
         let hasLink: Bool = if case .link(true) = model.card { true } else { false }
         HStack(spacing: 5) {
             AtticIcon(systemName: "link", size: AtticSmallControlMetrics.iconSize - 2, weight: .regular, ink: .helper)
@@ -561,7 +561,7 @@ struct NoteFormatStyleStrip: View {
                                          isKeyboardFocused: model.styleStripKeyboardIndex == index)
             }
         }
-        .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.chipHover.color))
+        .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(design.tokens.chipHover.color))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Style"))
         .accessibilityIdentifier("notes-format-style-strip")
@@ -590,8 +590,8 @@ private struct NoteFormatStyleStripCell: View {
                 .lineLimit(1)
                 .fixedSize()
                 .frame(width: NoteFormatStyleStrip.cellWidth(command), height: height)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+                .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent))
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
@@ -739,6 +739,7 @@ struct NoteFormatRowView: View {
                               action: onClose)
                 .accessibilityIdentifier("notes-format-row-close")
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Table"))
     }
 
@@ -1436,6 +1437,13 @@ struct NoteLinkCardView: View {
         let empty = model.linkText.trimmingCharacters(in: .whitespaces).isEmpty
         let count = hasLink ? 2 : 1
         AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
+            ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, note in
+                AtticDropdownRow(title: note.title, systemName: "note.text", isHighlighted: model.linkSuggestionIndex == index,
+                    onHover: { if $0 { model.linkSuggestionIndex = index } }, position: index + 1, itemCount: model.linkSuggestions.count) {
+                    model.chooseNote(index)
+                }
+                .accessibilityIdentifier("notes-link-suggestion-\(note.id)")
+            }
             AtticDropdownFieldHeader {
                 AtticDropdownField(text: $model.linkText, placeholder: String(localized: "Paste or type a link"), systemName: "link",
                                    focus: $fieldFocused, label: String(localized: "Link address"), identifier: "notes-link-field",
@@ -1556,5 +1564,46 @@ struct NoteSlashHintView: View {
             .fixedSize()
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The existing Link field grows upward into matching note titles (B6).
+struct NoteLinkSuggestionsView: View {
+    @ObservedObject var model: NoteFormatCardModel
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let style = AtticGlassMenuStyle(design: design)
+        VStack(spacing: 0) {
+            ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, candidate in
+                Button { model.chooseNote(index) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "note.text").font(.system(size: 10))
+                        Text(verbatim: candidate.title).font(.system(size: 11)).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Color(nsColor: style.title))
+                    .padding(.horizontal, 9)
+                    .frame(height: 23)
+                    .background {
+                        if model.linkSuggestionIndex == index {
+                            Squircle(cornerRadius: AtticGlassMenuShape.rowRadius).fill(Color(nsColor: style.highlight))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { if $0 { model.linkSuggestionIndex = index } }
+                .accessibilityLabel(Text(verbatim: candidate.title))
+                .accessibilityAddTraits(model.linkSuggestionIndex == index ? .isSelected : [])
+                .accessibilityIdentifier("notes-link-suggestion-\(candidate.id)")
+            }
+        }
+        .padding(.vertical, 1)
+        .background(AtticGlassMenuSurface(style: style))
+        .clipShape(Squircle(cornerRadius: AtticGlassMenuShape.radius))
+        .padding(AtticNoteFormatMetrics.shadowRoom)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Notes"))
     }
 }

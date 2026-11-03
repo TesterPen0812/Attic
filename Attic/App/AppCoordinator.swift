@@ -568,7 +568,7 @@ final class AppCoordinator: ObservableObject {
             // only the explicit start of a test scenario resets that state.
             canvasViewDefaults?.removeObject(forKey: CanvasViewStateArchive.defaultsKey)
         }
-        if AtticDraw.isEnabled, !runtime.isUnitTestHost { DrawPageModel.install(container: container) }
+        if AtticDraw.isEnabled, !runtime.isUnitTestHost { DrawPageModel.install(container: container, resumeDefaults: isRunningTests ? nil : runtime.makeSettingsDefaults()) }
         let canvasSession = CanvasSession(
             store: canvasStore,
             viewStateDefaults: canvasViewDefaults
@@ -578,7 +578,8 @@ final class AppCoordinator: ObservableObject {
             sessionDefaults: isRunningTests ? nil : runtime.makeSettingsDefaults(),
             recoveryURL: runtime.noteRecoveryURL
         )
-        let uiState = PanelUIState()
+        let uiState = PanelUIState(resumeDefaults: isRunningTests ? nil : runtime.makeSettingsDefaults())
+        noteDraft.pages.didFollowNoteLink = { [weak uiState] in uiState?.selectSection(.notes) }
         // The Tasks page's page and views across relaunch (L7), in the
         // identity's own defaults; a UI test starts from none.
         let tasksMemory = runtime.isUnitTestHost ? nil : TasksPageMemory(defaults: runtime.makeSettingsDefaults())
@@ -1125,6 +1126,7 @@ final class AppCoordinator: ObservableObject {
             commitCanvasTermination: {
                 if AtticDraw.isEnabled {
                     DrawPageModel.shared.finishLiveInput()
+                    DrawPageModel.shared.flushViewportMemory()
                     return
                 }
                 canvasSession.cancelActiveInteraction()

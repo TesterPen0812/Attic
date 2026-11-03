@@ -145,6 +145,18 @@ final class NoteHistoryBrowser: ObservableObject {
     }
 
     var selected: NoteHistoryEntry? { entries.indices.contains(selectedIndex) ? entries[selectedIndex] : nil }
+    var canRestoreSelected: Bool {
+        guard let selected, selected.canRestore, !isRestoring, !showsCurrent else { return false }
+        func writing(_ source: NoteDocument) -> NoteDocument {
+            var document = source
+            document.extras["foldedHeadings"] = nil
+            // A task version restores writing, not its title or task metadata.
+            if currentTaskSnapshot != nil, !document.blocks.isEmpty { document.blocks[0] = .text("") }
+            return document
+        }
+        return writing(selected.document) != writing(current)
+    }
+
     func updateComparison() {
         let version = selected?.previewDocument ?? current
         let present = currentTaskSnapshot?.historyDocument(writing: current) ?? current

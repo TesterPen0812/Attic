@@ -1311,11 +1311,9 @@ private struct NoteConflictComparison: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             AtticText(verbatim: title, style: .panelHeading, ink: .heading)
-            Picker("Version", selection: $selected) {
-                Text("Current").tag(0)
-                Text("Proposed").tag(1)
-            }
-            .pickerStyle(.segmented)
+            NoteHistoryVersionSwitch(choices: [(false, String(localized: "Current")), (true, String(localized: "Proposed"))],
+                selection: Binding(get: { selected == 1 }, set: { selected = $0 ? 1 : 0 }),
+                trackHeight: AtticRadius.reviewBar * 2, trackInset: 7)
             ScrollView {
                 AtticText(verbatim: selected == 0 ? current : proposed, style: .body, ink: .heading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1351,10 +1349,8 @@ struct NoteProposalComparison: View {
     var body: some View {
         VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 6) {
-                Picker("Version", selection: $proposed) {
-                    Text("Current").tag(false)
-                    Text("Proposed").tag(true)
-                }.pickerStyle(.segmented)
+                NoteHistoryVersionSwitch(choices: [(false, String(localized: "Current")), (true, String(localized: "Proposed"))],
+                    selection: $proposed, trackHeight: AtticRadius.reviewBar * 2, trackInset: 7)
                 AtticText(verbatim: "\(review.agent) · \(review.createdAt.formatted(date: .omitted, time: .shortened)) · \(review.summary)",
                           style: .helper, ink: .helper)
                 if controller.reviewProposals.count > 1 {

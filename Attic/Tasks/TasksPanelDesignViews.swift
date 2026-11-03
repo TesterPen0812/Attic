@@ -5,6 +5,17 @@ import SwiftUI
 /// unfolds the group; the count shows only while it is folded; the chevron
 /// shows at 60 % under the pointer or while folded, turned −90° when folded.
 struct TasksGroupHeader: View {
+    enum Items: Equatable {
+        case tasks, notes
+        func count(_ count: Int) -> String {
+            switch self {
+            case .tasks: count == 1 ? String(localized: "1 task") : String(localized: "\(count) tasks")
+            case .notes: count == 1 ? String(localized: "1 note") : String(localized: "\(count) notes")
+            }
+        }
+        var showHint: String { self == .notes ? String(localized: "Shows the group's notes") : String(localized: "Shows the group's tasks") }
+        var hideHint: String { self == .notes ? String(localized: "Hides the group's notes") : String(localized: "Hides the group's tasks") }
+    }
     let title: String
     let count: Int
     let folded: Bool
@@ -12,6 +23,7 @@ struct TasksGroupHeader: View {
     /// A row dragged on Now would land in this day (Adaptive picks): the
     /// header takes the title's ink, as under the pointer.
     var isDropTarget = false
+    var items: Items = .tasks
     let toggle: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -53,9 +65,9 @@ struct TasksGroupHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue(folded ? String(localized: "Folded, \(count) tasks") : String(localized: "\(count) tasks"))
+        .accessibilityValue(folded ? String(localized: "Folded, \(items.count(count))") : items.count(count))
         .accessibilityAddTraits([.isHeader, .isButton])
-        .accessibilityHint(folded ? String(localized: "Shows the group's tasks") : String(localized: "Hides the group's tasks"))
+        .accessibilityHint(folded ? items.showHint : items.hideHint)
     }
 }
 
@@ -180,7 +192,7 @@ private struct TasksImageTile: View {
             }
         }
         .frame(width: width, height: TasksDesignMetrics.tile)
-        .clipShape(RoundedRectangle(cornerRadius: TasksDesignMetrics.tileRadius, style: .continuous))
+        .clipShape(Squircle(cornerRadius: TasksDesignMetrics.tileRadius, exponent: TasksDesignMetrics.cornerExponent))
         .task(id: reference.digest) {
             if let cached = TaskThumbnailMemory.image(for: reference.digest) { image = cached; return }
             let data = try? await TaskImageFiles.shared.thumbnail(reference, pixels: 120)
@@ -406,12 +418,14 @@ struct TasksEmptyState: View {
                 TasksElsewhereLinks(elsewhere: elsewhere, follow: follow)
             }
             .lineLimit(1)
-            Text(verbatim: empty.body)
-                .font(.system(size: 10))
-                .multilineTextAlignment(.center)
-                .modifier(TasksInk(.helper))
-                .frame(maxWidth: 190)
-                .padding(.top, 3)
+            if !empty.body.isEmpty {
+                Text(verbatim: empty.body)
+                    .font(.system(size: 10))
+                    .multilineTextAlignment(.center)
+                    .modifier(TasksInk(.helper))
+                    .frame(maxWidth: 190)
+                    .padding(.top, 3)
+            }
             if empty.canClear, let clear {
                 AtticRaisedButton(systemName: nil, title: "Clear filters", height: 22,
                                   cornerRadius: TasksDesignMetrics.innerRadius, action: clear)

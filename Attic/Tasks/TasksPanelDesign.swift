@@ -227,10 +227,7 @@ enum TasksPanelDesign {
         let canClear: Bool
     }
 
-    /// The design's empty states. Now's and Later's sentences say what
-    /// Attic's pages hold (the design's speak of dates, which Attic's
-    /// pages are not sorted by). `tag` is the chosen tag chip (the
-    /// design's list filter).
+    /// Empty views retain result descriptions; unfiltered pages have no helper sentence.
     static func empty(tab: TasksTab, query: String, filtered: Bool, tag: String? = nil) -> Empty {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
@@ -247,13 +244,13 @@ enum TasksPanelDesign {
         switch tab {
         case .now:
             return Empty(title: String(localized: "Nothing to do right now"),
-                         body: String(localized: "Tasks you add, or bring in from Later, show up here."), canClear: false)
+                         body: "", canClear: false)
         case .backlog:
             return Empty(title: String(localized: "Nothing scheduled"),
-                         body: String(localized: "Tasks you put off for later show up here."), canClear: false)
+                         body: "", canClear: false)
         case .done:
             return Empty(title: String(localized: "Nothing completed yet"),
-                         body: String(localized: "Tasks you check off show up here."), canClear: false)
+                         body: "", canClear: false)
         }
     }
 
@@ -361,13 +358,18 @@ extension TasksPanelDesign {
     /// own secondary label colours do, it darkens (or, in Dark, lightens)
     /// what is behind the glass, so it keeps its step from the glass
     /// wherever the panel sits. Solid, and Reduce Transparency, keep the
-    /// opaque grey.
+    /// opaque grey. Interactive metadata includes its state fills before
+    /// converting the tuned grey back to see-through ink.
     @MainActor
-    static func toneInk(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> AtticRGBA {
-        let value = Self.tone(tone, tokens: tokens)
+    static func toneInk(_ tone: TasksDesignTone, tokens: AtticColorTokens, overlays: [AtticRGBA] = []) -> AtticRGBA {
+        var value = Self.tone(tone, tokens: tokens)
+        if !overlays.isEmpty {
+            let backgrounds = tokens.panel.backgrounds(for: .init(ink: .helper, foreground: value, overlays: overlays))
+            value = value.tuned(toContrast: toneFloor(tokens), against: backgrounds, lighten: tokens.context.mode == .dark)
+        }
         guard tokens.context.surface != .solid, tokens.context.reducedFrom == nil else { return value }
         let ink = tokens.ink(.heading)
-        let base = reference(tokens)
+        let base = overlays.reduce(reference(tokens)) { $1.over($0) }
         func mean(_ c: AtticRGBA) -> Double { (c.red + c.green + c.blue) / 3 }
         let span = mean(ink) - mean(base)
         guard abs(span) > 0.01 else { return value }

@@ -15,6 +15,76 @@ superseding a hide. A still-ordered family gets fresh native admission
 That temporary ordering does not return borrowed activation; a real hide
 keeps its normal focus handoff.
 
+## 2026-11-03 · Remaining Shapes surfaces and controls
+
+Remaining note, image, table, drag-card and Settings tile outlines use n=4 squircles;
+compact control fills use curve 1.4. Small images use 6 pt corners, note blocks
+10 pt and carried rows 12 pt; the native 16 pt code-copy control uses 8 pt corners.
+Image selection rings and table fades compose with
+the same contour. Proposal comparison uses a 34 pt track: 17 pt outer corners,
+7 pt insets and 10 pt inner corners. Its existing two-choice control now follows
+native Tab/arrow keyboard behavior. Rings and coloured dots keep their circles;
+decorative quote rules retain their round caps. Popover highlights, task metadata
+controls, inline tag hover fills, native table grips and table add buttons use
+curve 1.4. Metadata hover ink accounts for its row and control fills together;
+unavailable
+image and opaque-content placeholders follow their small-object, block or chip role.
+
+## 2026-11-03 · Canvas filter in the title
+
+The title capsule becomes the canvas filter. The menu has no second search row
+and uses the recovered room for canvases and actions. Escape returns the keyboard
+to the board; Tags temporarily owns the field without competing with the filter.
+The filter and its window editor stay prepared between openings without claiming
+the keyboard; the closed input is disabled and absent from VoiceOver.
+
+## 2026-11-03 · Draw object navigation
+
+Tab/Shift-Tab and the arrow keys visit objects in reading order, with normal
+selection handles. Tab at either end returns to the page's native key loop.
+VoiceOver reaches each named object; retained elements follow viewport changes
+and select/reveal the object without editing the drawing.
+
+## 2026-11-03 · Distinct canvases, meaningful Restore and Calendar years
+
+New unnamed canvases take the next free Untitled suffix, including unsaved drafts.
+History disables Restore when the writing is identical. Calendar search names each
+year when results cross years, including the first result outside the current year.
+
+## 2026-11-03 · Link to a note
+
+The existing Link field offers up to four matching note titles, in 23 pt rows.
+The text above moves up by the list's height and returns on dismissal.
+Arrows choose a note; Return or a click links to its stable identity. Editing
+shows its title, and following it opens the note through the existing save route.
+
+## 2026-11-03 · Reading width and helper removal
+
+Panel width stops at 600 pt, including restored and manually resized widths.
+Empty Tasks pages, empty note lines, Haptics/Animations and Panel's gesture
+footnotes no longer show instructional helpers. Slash commands remain available.
+
+## 2026-11-03 · Accurate control names
+
+Calendar's + is named New event. Notes section counts name notes, with
+singular counts for one item. Table format controls keep their individual
+Add/Delete Row/Column and Close Format names inside the Table group.
+
+## 2026-11-03 · History footer clearance
+
+The History row reserves the shared + button's width plus 8 pt, keeping
+Restore fully visible at the 320 pt panel width.
+
+## 2026-11-03 · Draw field focus
+
+Draw Search and canvas Tags claim their own native fields after attachment.
+Escape closes Search and restores the page's controls.
+
+## 2026-11-03 · Complete failure messages
+
+Panel failure notices wrap to their full message at narrow widths, so the
+next step remains readable.
+
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white

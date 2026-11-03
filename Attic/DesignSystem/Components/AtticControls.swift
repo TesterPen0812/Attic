@@ -2342,7 +2342,7 @@ struct AtticPopoverRow: View {
             }
             .padding(.horizontal, m.rowPadding)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+            .background(Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
             .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())

@@ -1029,6 +1029,177 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Links
 
+    func testAuditB6LinkFieldOffersNoteTitlesAndStoresTheSelectedIdentity() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        let first = UUID(), second = UUID()
+        engine.linkableNotes = { [.init(id: first, title: "Pricing research"), .init(id: second, title: "Pricing launch"), .init(id: UUID(), title: "Unrelated")] }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "pricing"
+        controls.refresh()
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [first, second])
+        controls.cardModel.linkSuggestionIndex = 1
+        controls.cardModel.submitLink()
+        let url = "attic://note/" + second.uuidString
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, url)
+        let saved = try NoteContentCodec.encode(engine.document())
+        XCTAssertEqual(NoteContentCodec.decode(saved).document?.blocks[1].marks.first?.url, url)
+        controls.cardModel.openLink(url: url)
+        XCTAssertEqual(controls.cardModel.linkText, "Pricing launch", "editing shows the note name")
+        controls.cancelCard()
+        engine.history.undo()
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+    }
+
+    func testAuditB6SuggestionsMakeRoomAboveTheSelectionAndRestoreTheText() {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        engine.linkableNotes = { [.init(id: UUID(), title: "Annual planning"), .init(id: UUID(), title: "Annual review")] }
+        let selection = range("Student pricing", textView)
+        textView.setSelectedRange(selection)
+        let before = engine.document()
+        let generation = engine.documentEditGeneration
+        let historyCount = engine.history.undoOps.count
+        let upper = textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil)
+        let selected = textView.firstRect(forCharacterRange: selection, actualRange: nil)
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "annual"
+        controls.refresh()
+        spin()
+        let raised = textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil)
+        XCTAssertGreaterThan(raised.minY, upper.minY + 30, "screen coordinates: earlier text moves up for the list")
+        XCTAssertEqual(textView.firstRect(forCharacterRange: selection, actualRange: nil).minY, selected.minY, accuracy: 1)
+        XCTAssertEqual(engine.document(), before, "making room is transient layout, never a document edit")
+        XCTAssertEqual(engine.documentEditGeneration, generation)
+        XCTAssertEqual(engine.history.undoOps.count, historyCount)
+        controls.cancelCard()
+        spin()
+        XCTAssertEqual(textView.firstRect(forCharacterRange: range("Before launch", textView), actualRange: nil).minY, upper.minY, accuracy: 1)
+    }
+
+    func testAuditB6ArrowSelectionWebAddressesAndStaleNotes() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        let first = UUID(), second = UUID()
+        var candidates: [NoteLinkCandidate] = [.init(id: first, title: "Pricing research"), .init(id: second, title: "Pricing launch")]
+        engine.linkableNotes = { candidates }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "pricing"
+        settle { controls.cardHasKeyboard }
+        let window = try XCTUnwrap(textView.window)
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{f701}", "\u{f701}", keyCode: 125, [], window: window)))
+        XCTAssertEqual(controls.cardModel.linkSuggestionIndex, 1)
+        XCTAssertFalse(controls.handleKey(keyEvent("\u{f700}", "\u{f700}", keyCode: 126, [.shift], window: window)))
+        XCTAssertEqual(controls.cardModel.linkSuggestionIndex, 1)
+        candidates.removeLast()
+        let unchanged = engine.document()
+        controls.cardModel.submitLink()
+        XCTAssertEqual(engine.document(), unchanged, "a deleted candidate cannot become a stale link")
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [first])
+        controls.cardModel.linkText = "example.com"
+        XCTAssertTrue(controls.cardModel.linkSuggestions.isEmpty)
+        controls.cardModel.submitLink()
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, "https://example.com")
+        var dispatched: UUID?
+        engine.onOpenNoteLink = { dispatched = $0 }
+        engine.openLink(NoteLinkPolicy.noteURL(first))
+        XCTAssertEqual(dispatched, first)
+        var externalCalls = 0
+        XCTAssertFalse(NoteLinkPolicy.open(NoteLinkPolicy.noteURL(first), using: { _ in externalCalls += 1; return true }))
+        XCTAssertEqual(externalCalls, 0)
+        XCTAssertNil(NoteLinkPolicy.url("attic://note/not-a-uuid"))
+        XCTAssertNil(NoteLinkPolicy.url("attic://note/" + first.uuidString + "?redirect=https://example.com"))
+    }
+
+    func testAuditB6TableLinkKeepsItsBarByTheSelectedCell() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let doc = NoteDocument(blocks: [.text("Table links"), .text("Before the table"),
+            .table(NoteTable(texts: [["Heading", "Other"], ["Link me", "Value"]])), .text("After the table")])
+        let (controls, engine, textView) = make(doc)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        spin()
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let table = try XCTUnwrap(attachment.hostedView)
+        table.activate(.init(row: 1, column: 0), caret: .range(NSRange(location: 0, length: 7)))
+        engine.linkableNotes = { [.init(id: UUID(), title: "Research notes")] }
+        XCTAssertTrue(controls.router.run(.mark(.link), from: .shortcut))
+        let before = engine.document()
+        controls.cardModel.linkText = "research"
+        spin()
+        let rects = try XCTUnwrap(engine.cellTextRects(NSRange(location: 0, length: 7), in: table, textView: textView))
+        let bar = controls.barFrame
+        XCTAssertTrue(bar.maxY <= rects.first.minY + 1 || bar.minY >= rects.last.maxY - 1)
+        XCTAssertEqual(engine.document(), before)
+        controls.cancelCard()
+        XCTAssertNil(engine.linkSuggestionGap)
+    }
+
+    func testAuditB6FallbackCardDisplaysEveryOfferedNote() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let document = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(document, topInset: 60)
+        textView.window?.orderFront(nil)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let candidate = UUID()
+        engine.linkableNotes = { [.init(id: candidate, title: "Research notes")] }
+        let start = range("Lead", textView).location
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: first.minY + 20))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        textView.setSelectedRange(NSRange(location: start, length: engine.textStorage.length - start))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertFalse(controls.linkInBar, "fixture opens the fallback card")
+        controls.cardModel.linkText = "research"
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        func contains(_ node: AnyObject, depth: Int = 0) -> Bool {
+            guard depth < 50 else { return false }
+            if (node.accessibilityIdentifier?() ?? nil) == "notes-link-suggestion-\(candidate)" { return true }
+            return ((node.accessibilityChildren?() ?? nil) ?? []).contains { contains($0 as AnyObject, depth: depth + 1) }
+        }
+        XCTAssertEqual(controls.cardModel.linkSuggestions.map(\.id), [candidate])
+        // Outside the panel, dropdowns attach beside contentView in its
+        // common parent (AtticDropdownSpace), so include that overlay layer.
+        let overlay = try XCTUnwrap(textView.window?.contentView?.superview)
+        func nativeContains(_ view: NSView) -> Bool {
+            if !view.isHidden, contains(view) { return true }
+            return view.subviews.contains { nativeContains($0) }
+        }
+        XCTAssertTrue(nativeContains(overlay), "Return never chooses an invisible match")
+    }
+
+    func testAuditB6DismissalClearsPresentationRoomAfterTheTargetDisappears() {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        let (controls, engine, textView) = make()
+        engine.linkableNotes = { [.init(id: UUID(), title: "Research notes")] }
+        textView.setSelectedRange(range("free tier", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        controls.cardModel.linkText = "research"
+        XCTAssertNotNil(engine.linkSuggestionGap)
+        engine.performEdit(NSRange(location: 0, length: engine.textStorage.length), with: NSAttributedString(string: ""), name: "Replace")
+        controls.cancelCard()
+        XCTAssertNil(engine.linkSuggestionGap, "transient room cannot leak into a replacement document")
+    }
+
     func testTheLinkCardAddsEditsAndRemovesALink() throws {
         let (controls, engine, textView) = make()
         let target = range("free tier", textView)
@@ -1128,7 +1299,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Table"), .text("")]))
         textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertFalse(controls.isHintVisible)
         XCTAssertTrue(engine.insertTable())
         controls.refresh()
         XCTAssertNotNil(engine.focusedTable, "the table insertion puts the keyboard in its first cell")
@@ -1143,29 +1314,26 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.isHintVisible, "remembered table focus must not bring the overlap back")
         engine.focusedTable?.deactivate()
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "ordinary empty body lines still show their hint after leaving the table")
+        XCTAssertFalse(controls.isHintVisible, "ordinary empty body lines have no helper")
     }
 
-    /// Draft 7's hint: an empty body line with the caret in it, every
-    /// note; gone with the first keystroke; never on a line with text, the
-    /// title, a styled empty line or a read-only note. VoiceOver hears it as
-    /// the text's help, never as content.
-    func testTheHintShowsOnAnEmptyBodyLineAndGoesWithTheFirstKeystroke() {
+    /// B3 removes the instructional line, including its VoiceOver help.
+    func testAuditB3EmptyBodyHasNoHelperText() {
         let (controls, _, textView) = make()
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible, "a line with text")
         type("\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "an empty body line")
-        XCTAssertEqual(textView.accessibilityHelp(), NoteSlashHintView.text)
+        XCTAssertFalse(controls.isHintVisible, "B3 removes the empty-body helper")
+        XCTAssertNil(textView.accessibilityHelp())
         XCTAssertFalse(textView.string.contains("Type /"), "never content")
         type("a", textView)
         XCTAssertFalse(controls.isHintVisible, "the first keystroke hides it at once")
         XCTAssertNil(textView.accessibilityHelp())
         type("\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible, "on the next empty line again")
+        XCTAssertFalse(controls.isHintVisible, "no helper on the next empty line either")
         controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible, "an empty list item keeps its own look")
@@ -1176,7 +1344,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let (empty, _, emptyView) = make(NoteDocument(blocks: [.text("")]))
         type("Plan\n", emptyView)
         empty.refresh()
-        XCTAssertTrue(empty.isHintVisible, "any note, not only new drafts")
+        XCTAssertFalse(empty.isHintVisible, "no helper in any note")
 
         let (readOnly, _, readOnlyView) = make(NoteDocument(blocks: [.text("Plan"), .text("")]), readOnly: true)
         readOnlyView.setSelectedRange(NSRange(location: (readOnlyView.string as NSString).length, length: 0))
@@ -1184,14 +1352,15 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(readOnly.isHintVisible, "read only")
     }
 
-    func testTypingSlashHidesTheHint() {
-        let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]))
+    func testAuditB3SlashStillOpensCommandsWithoutAHelper() {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("")]))
         type("Plan\n", textView)
         controls.refresh()
-        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertFalse(controls.isHintVisible)
         type("/", textView)
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible)
+        XCTAssertNotNil(engine.slashSession)
     }
 
     // MARK: The format row (OD-14)

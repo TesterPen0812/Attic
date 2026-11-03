@@ -77,7 +77,9 @@ final class NotesV2TablesFeatureTests: XCTestCase {
                                                      tokens: AtticColorTokens.resolve(.default), animated: false, below: nil))
         XCTAssertEqual(view.canvas.alphaValue, 0, "the strips stand in for the cells while dragging")
         let card = try XCTUnwrap(textView.subviews.compactMap { $0 as? NoteDragLiftView }.first, "the lifted column")
-        XCTAssertNotNil(card.layer?.backgroundColor, "the card has a backing")
+        let backing = try XCTUnwrap(card.layer as? CAShapeLayer)
+        XCTAssertGreaterThan(try XCTUnwrap(backing.fillColor).alpha, 0, "the card has an opaque backing")
+        XCTAssertTrue(try XCTUnwrap(backing.path).contains(CGPoint(x: card.bounds.midX, y: card.bounds.midY)))
         // From the grip over column 3 to over column 0.
         let canvas = view.canvas
         let start = CGPoint(x: widths.prefix(3).reduce(0, +) + widths[3] / 2, y: 10)
@@ -665,7 +667,12 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertFalse(view.canvas.strokesCard)
         XCTAssertEqual(view.frameView.frame, CGRect(x: 0, y: 0, width: view.bounds.width, height: view.grid.height))
         XCTAssertFalse(view.frameView.isDescendant(of: view.scrollView), "not faded with the cells")
-        XCTAssertEqual(view.scrollView.layer?.cornerRadius, AtticNoteTableMetrics.radius)
+        let corner = try XCTUnwrap(view.scrollView.layer?.mask as? CAShapeLayer)
+        let path = try XCTUnwrap(corner.path)
+        XCTAssertEqual(path.boundingBoxOfPath.width, view.scrollView.bounds.width, accuracy: 0.5)
+        XCTAssertEqual(path.boundingBoxOfPath.height, view.scrollView.bounds.height, accuracy: 0.5)
+        XCTAssertTrue(path.contains(CGPoint(x: 2, y: 2)), "the note-block squircle keeps more of the corner than a circular arc")
+        XCTAssertNotNil(corner.mask as? CAGradientLayer, "horizontal fading composes with the corner clip")
     }
 
     /// U-25: a table that fits draws its own outline with its grid.

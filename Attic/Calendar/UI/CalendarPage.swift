@@ -107,6 +107,7 @@ struct CalendarPage: View {
                     .frame(minHeight: viewport, alignment: .top)
             }
             .padding(.bottom, CalendarDesign.agendaBottom)
+            .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
             // What scrolls under the selected week is hidden behind it and
             // fades in below it once it is held (item 14, owner 2026-10-31).
             // Both the cut and the held row follow the scroll in the same
@@ -144,7 +145,18 @@ struct CalendarPage: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             // Every day on its own, each with its grey date tile, empty days
             // too (owner, 2026-10-31: the older agenda).
-            ForEach(snapshot.groups) { group in
+            ForEach(Array(snapshot.groups.enumerated()), id: \.element.id) { index, group in
+                if snapshot.isSearching && (index == 0 ? group.day.year != snapshot.today.year
+                    : snapshot.groups[index - 1].day.year != group.day.year) {
+                    Text(verbatim: String(group.day.year))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color)
+                        .padding(.horizontal, CalendarDesign.dayPadding)
+                        .padding(.top, 4)
+                        .padding(.bottom, 6)
+                        .accessibilityLabel(String(group.day.year))
+                        .accessibilityIdentifier("calendar-search-year-\(group.day.year)")
+                }
                 CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
                                   rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
                                   onSelectDay: { day in afterClosingEvent { model.select(day) } })
@@ -252,7 +264,7 @@ struct CalendarPage: View {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 // The page switch is the Tall island (Accepted 2026-10-31).
                 Spacer(minLength: 0)
-                AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: height, height: height),
+                AtticRaisedButton(systemName: "plus", label: "New event", size: CGSize(width: height, height: height),
                                   emphasisedGlyph: true, flat: flat, cornerRadius: TasksDesignMetrics.footerRadius) {
                     onNewTask(model.newTaskDay)
                 }

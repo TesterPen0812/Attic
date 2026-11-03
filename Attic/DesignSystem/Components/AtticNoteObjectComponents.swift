@@ -274,7 +274,7 @@ struct AtticNoteImageFailure: View {
     var body: some View {
         let m = AtticNoteObjectMetrics.self
         let placement = AtticNoteObjectLayout.placement(of: face, in: size)
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.image, style: .continuous)
+        let shape = Squircle(cornerRadius: AtticRadius.image, exponent: AtticShape.surfaceExponent)
         ZStack(alignment: .topLeading) {
             shape.fill(design.tokens.recessed.color)
             shape.strokeBorder(design.tokens.contentCardRim.color, lineWidth: AtticHairline.width)
@@ -304,7 +304,7 @@ private struct AtticNoteObjectChips: View {
         ForEach(Array(zip(titles, frames).enumerated()), id: \.offset) { index, pair in
             AtticText(verbatim: pair.0, style: .chipLabel, ink: index == 0 ? .heading : .body)
                 .frame(width: pair.1.width, height: pair.1.height)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.chipHover.color))
+                .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(design.tokens.chipHover.color))
                 .offset(x: pair.1.minX, y: pair.1.minY)
         }
     }
@@ -332,8 +332,8 @@ struct AtticNoteCarryCard: View {
                 AtticText(verbatim: "+\(more)", style: .count, ink: .body)
                     .padding(.horizontal, AtticTagMetrics.horizontalPadding)
                     .frame(height: AtticControlSize.tagHeight)
-                    .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight),
-                                                 style: .continuous).fill(tokens.chipHover.color))
+                    .background(AtticControlShape.shape(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight),
+                                                 exponent: AtticShape.controlExponent).fill(tokens.chipHover.color))
             }
         }
         .padding(.horizontal, m.cardPadding)

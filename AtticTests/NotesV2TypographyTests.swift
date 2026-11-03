@@ -387,7 +387,7 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual(button.minY, origin.y + rect.minY + T.monoCopyTop, accuracy: 0.01)
         // Inside the block (D-12): the chip never crosses its outline.
         XCTAssertTrue(rect.offsetBy(dx: origin.x, dy: origin.y).contains(button), "the chip sits inside the block")
-        XCTAssertEqual(NoteMonoCopyButton.radius, T.monoCopySize / 3, accuracy: 0.001)
+        XCTAssertEqual(NoteMonoCopyButton.radius, T.monoCopySize / 2, accuracy: 0.001, "Accepted Shapes: the square control is a whole superellipse")
         // The pointer reaching the chip keeps it.
         view.updateMonoCopy(at: NSPoint(x: button.midX, y: button.minY + 1))
         XCTAssertFalse(view.monoCopyButton.isHidden, "the chip is still the block's Copy under the pointer")

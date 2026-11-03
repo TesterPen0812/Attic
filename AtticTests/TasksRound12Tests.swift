@@ -463,7 +463,10 @@ final class TasksRound12Tests: XCTestCase {
         func shownTab() -> Int? {
             host.layoutSubtreeIfNeeded()
             func lists(_ view: NSView) -> [NSScrollView] {
-                if let scroll = view as? NSScrollView { return [scroll] }
+                // Count Tasks' lists, including the two offscreen tabs.
+                // Draw also keeps its closed menu's scroller prepared (A11).
+                if let keeper = view as? TasksScrollKeeper.KeeperView,
+                   let scroll = keeper.enclosingScrollView { return [scroll] }
                 return view.subviews.flatMap(lists)
             }
             let all = lists(host).filter { $0.frame.height > host.bounds.height / 3 }

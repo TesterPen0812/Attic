@@ -53,13 +53,14 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 18)
         XCTAssertEqual(AtticRadius.control(height: 28), 14)
         XCTAssertEqual(AtticRadius.control(height: 18), 9)
+        XCTAssertEqual(NoteMonoCopyButton.radius, NoteMonoCopyButton.size / 2, "native code-copy controls follow the same half-height rule")
         XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4 on the 27 pt header)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
         // Menus back to 32 design px, 16 pt (Accepted 2026-10-31, "Owner
         // notes on Attic Wave 2", updating "Shapes"' 28).
-        XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [16, 24, 10, 8, 10])
+        XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [16, 24, 10, 6, 10])
     }
 
     /// Phase 0's qualities in Direction A (2026-09-26): the pin and the

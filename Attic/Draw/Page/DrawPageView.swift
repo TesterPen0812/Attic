@@ -1,4 +1,5 @@
 import Combine
+import QuartzCore
 import SwiftUI
 
 extension PanelBottomBarLook {
@@ -86,16 +87,21 @@ struct DrawPageHost: View {
             }
         }
         .overlay(alignment: .top) {
-            // The canvas menu: a card below the top row (the drawing's
-            // `dv.titleMenu`), its search field the first row. Pin, ••• and
-            // Search stay where they are, so nothing here can reach them.
-            if model.isFiltering, !model.isSearching {
+            // D4: the title capsule owns the filter. Its menu contains only
+            // canvases and actions, below the unchanged top-row controls.
+            if !model.isSearching {
                 DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
                     boardHeight: model.boardSize.height,
                     chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
-                    chromeBottom: model.clearInsets.left), onSearchEscape: model.closeFilter)
+                    chromeBottom: model.clearInsets.left), isActive: model.isFiltering)
                     .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
-                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                    // Retain the menu's native hierarchy between openings.
+                    // Opening only reveals it; focus, hit testing and AX stay off while closed.
+                    .opacity(model.isFiltering ? 1 : 0)
+                    .scaleEffect(model.isFiltering ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion), anchor: .bottom)
+                    .offset(y: model.isFiltering || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                    .allowsHitTesting(model.isFiltering)
+                    .accessibilityHidden(!model.isFiltering)
             }
         }
         .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
@@ -111,9 +117,9 @@ struct DrawPageHost: View {
 }
 
 /// The title: the canvas name with its ⌄ in a glass capsule, centred in the
-/// top row. A click opens the canvas menu, a card below the top row whose
-/// first row is its search field (the page draws it); the capsule stays as
-/// it is. The menu's Rename edits the name in the capsule.
+/// top row. A click turns it into the filter above the canvas menu.
+/// Its native input stays prepared between openings, disabled and hidden
+/// from accessibility while closed. Rename edits the name in the capsule.
 struct DrawTitleCapsule: View {
     @ObservedObject var model: DrawPageModel
     @ObservedObject var library: DrawLibraryMenuModel
@@ -133,27 +139,59 @@ struct DrawTitleCapsule: View {
                     .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
                     .accessibilityIdentifier("draw-title-rename")
             } else {
-                Button(action: { model.isFiltering ? model.closeFilter() : model.openFilter() }) {
-                    HStack(spacing: m.titleGap) {
-                        Text(verbatim: model.canvasName)
-                            .font(.system(size: m.titleFont, weight: .bold))
-                            .tracking(-0.015 * m.titleFont)
-                            .foregroundStyle(design.tokens.color(.heading))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        AtticIcon(systemName: "chevron.down", size: 6, weight: .semibold, ink: .chevron)
+                ZStack {
+                    HStack(spacing: 5) {
+                        AtticIcon(systemName: "magnifyingglass", size: 10, weight: .regular, ink: .helper)
+                            .accessibilityHidden(true)
+                        DrawTitleField(text: $library.filter, placeholder: model.canvasName,
+                            label: String(localized: "Find a canvas"), onReturn: library.openFirstMatch,
+                            onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil,
+                            alignment: .left, font: .systemFont(ofSize: m.titleFont), identifier: "draw-title-filter",
+                            requestsFocus: model.isFiltering && library.mode == .list)
+                            .accessibilityIdentifier("draw-title-filter")
+                        Button(action: model.closeFilter) {
+                            AtticIcon(systemName: "xmark", size: 8, weight: .medium, ink: .helper)
+                                .frame(width: 16, height: m.capsule)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!model.isFiltering)
+                        .accessibilityLabel(String(localized: "Close canvas menu"))
                     }
-                    .padding(.leading, m.titlePadding.leading)
-                    .padding(.trailing, m.titlePadding.trailing)
                     .frame(height: m.capsule)
-                    .contentShape(Capsule())
+                    .padding(.leading, m.titlePadding.leading)
+                    .padding(.trailing, 4)
+                    .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                    .frame(width: model.isFiltering ? nil : 0)
+                    .opacity(model.isFiltering ? 1 : 0)
+                    .allowsHitTesting(model.isFiltering)
+                    .accessibilityHidden(!model.isFiltering)
+
+                    Button(action: { model.isFiltering ? model.closeFilter() : model.openFilter() }) {
+                        HStack(spacing: m.titleGap) {
+                            Text(verbatim: model.canvasName)
+                                .font(.system(size: m.titleFont, weight: .bold))
+                                .tracking(-0.015 * m.titleFont)
+                                .foregroundStyle(design.tokens.color(.heading))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            AtticIcon(systemName: "chevron.down", size: 6, weight: .semibold, ink: .chevron)
+                        }
+                        .padding(.leading, m.titlePadding.leading)
+                        .padding(.trailing, m.titlePadding.trailing)
+                        .frame(height: m.capsule)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: flat))
+                    .help(model.canvasName)
+                    .accessibilityLabel(model.canvasName)
+                    .accessibilityHint(String(localized: "Opens the canvas menu"))
+                    .accessibilityAddTraits(model.isFiltering ? .isSelected : [])
+                    .accessibilityIdentifier("draw-title")
+                    .disabled(model.isFiltering)
+                    .opacity(model.isFiltering ? 0 : 1)
+                    .allowsHitTesting(!model.isFiltering)
+                    .accessibilityHidden(model.isFiltering)
                 }
-                .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: flat))
-                .help(model.canvasName)
-                .accessibilityLabel(model.canvasName)
-                .accessibilityHint(String(localized: "Opens the canvas menu"))
-                .accessibilityAddTraits(model.isFiltering ? .isSelected : [])
-                .accessibilityIdentifier("draw-title")
             }
         }
         .atticDesignCorners()
@@ -165,10 +203,11 @@ struct DrawTitleCapsule: View {
 struct DrawSearchField: View {
     @ObservedObject var model: DrawPageModel
     @ObservedObject var search: DrawSearchModel
+    @State private var searchFocused = true
 
     var body: some View {
         AtticTabsSearchField(placeholder: String(localized: "Search canvases"), text: $search.query,
-                             floating: true, onEscape: model.closeSearch, header: true)
+                             isFocused: $searchFocused, floating: true, onEscape: model.closeSearch, header: true)
             .atticDesignCorners()
             .onKeyPress(.upArrow) { search.moveHighlight(by: -1); return .handled }
             .onKeyPress(.downArrow) { search.moveHighlight(by: 1); return .handled }
@@ -245,11 +284,21 @@ struct DrawTitleField: NSViewRepresentable {
     var alignment: NSTextAlignment = .center
     var font: NSFont = .systemFont(ofSize: DrawPageMetrics.titleFont, weight: .bold)
     var identifier: String?
+    var requestsFocus = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    private final class PreparedField: NSTextField {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, window.fieldEditor(false, for: self) == nil else { return }
+            // Allocate the shared editor without claiming first responder.
+            _ = window.fieldEditor(true, for: self)
+        }
+    }
+
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField(string: text)
+        let field = PreparedField(string: text)
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -261,18 +310,31 @@ struct DrawTitleField: NSViewRepresentable {
         if let identifier { field.setAccessibilityIdentifier(identifier) }
         field.delegate = context.coordinator
         field.setAccessibilityLabel(label)
-        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        field.isEnabled = requestsFocus
+        if requestsFocus { context.coordinator.claimFocus(field) }
         return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
+        let takesFocus = requestsFocus && !context.coordinator.parent.requestsFocus
         context.coordinator.parent = self
+        field.isEnabled = requestsFocus
+        if takesFocus { context.coordinator.claimFocus(field) }
         if field.stringValue != text { field.stringValue = text }
+        if field.placeholderString != placeholder { field.placeholderString = placeholder }
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: DrawTitleField
         init(_ parent: DrawTitleField) { self.parent = parent }
+
+        func claimFocus(_ field: NSTextField) {
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self, self.parent.requestsFocus, let field, let window = field.window else { return }
+                window.makeFirstResponder(field)
+            }
+        }
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }

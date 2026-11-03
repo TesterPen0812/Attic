@@ -216,7 +216,7 @@ private struct NoteTagEditChip: View {
 
     var body: some View {
         let m = NoteTagLineEditorMetrics.self
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.control(height: m.chipHeight), style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: AtticRadius.control(height: m.chipHeight), exponent: AtticShape.controlExponent)
         HStack(spacing: 0) {
             AtticTagLabel(name: name, style: .tag, truncates: true)
                 .accessibilityHidden(true)
@@ -254,7 +254,7 @@ private struct NoteTagMatchButton: View {
     var body: some View {
         let m = NoteTagLineEditorMetrics.self
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.control(height: m.chipHeight), style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: AtticRadius.control(height: m.chipHeight), exponent: AtticShape.controlExponent)
         let hue = colouring.hue(for: match.name)
         Button(action: action) {
             HStack(spacing: m.countGap) {

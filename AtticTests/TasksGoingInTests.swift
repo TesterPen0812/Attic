@@ -49,6 +49,74 @@ final class TasksGoingInTests: XCTestCase {
         return id
     }
 
+    // A1: edits must reach the already mounted lazy row, including AX.
+    func testAuditA1MountedRowReadsEditedFields() throws {
+        try assertAuditRowRefresh(movingDay: true)
+    }
+
+    func testAuditA1SameDateGroupReadsEditedFields() throws {
+        try assertAuditRowRefresh(movingDay: false)
+    }
+
+    private func assertAuditRowRefresh(movingDay: Bool) throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousAX = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previousAX, forAttribute: enhanced) }
+        let id = try add("Audit original", due: -1)
+        let size = CGSize(width: 320, height: 460)
+        let window = NSPanel(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let pointer = TasksPointer()
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+            addBarFocused: .constant(false), pointer: pointer)
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = true
+        let host = NSHostingView(rootView: page.atticDesign(design)
+            .frame(width: size.width, height: size.height))
+        window.contentView = host
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertTrue(labels(host).contains { $0.contains("Audit original") }, "the original row is mounted before the edit")
+        do {
+            self.model.beginEditingTitle(id)
+            self.model.editingTitle = "Audit revised"
+            XCTAssertTrue(self.model.commitTitle())
+            if movingDay { XCTAssertTrue(self.model.setDueDay(self.day(3), for: [id]).isApplied) }
+            XCTAssertTrue(self.model.setPriority(.high, for: [id]).isApplied)
+            XCTAssertTrue(self.model.toggleTag("home", for: [id]).isApplied)
+        }
+        XCTAssertEqual(model.rows(for: .now).first?.model.title, "Audit revised")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        host.layoutSubtreeIfNeeded()
+        func labels(_ element: AnyObject, depth: Int = 0) -> [String] {
+            guard depth < 40 else { return [] }
+            let own = [(element.accessibilityLabel?() ?? nil) ?? ""]
+            return own + ((element.accessibilityChildren?() ?? nil) ?? []).flatMap { labels($0 as AnyObject, depth: depth + 1) }
+        }
+        let shown = labels(host)
+        print("AUDIT_A1_AX", shown.filter { $0.contains("Audit") })
+        XCTAssertTrue(shown.contains { $0.contains("Audit revised") }, "the mounted row and VoiceOver read the durable edit")
+        XCTAssertFalse(shown.contains { $0.contains("Audit original") }, "the original row does not remain visible")
+        XCTAssertEqual(shown.filter { $0.contains("Audit revised") }.count, 1, "one accessible task after moving")
+        if movingDay {
+            XCTAssertFalse(shown.contains("Overdue"), "the empty old date group leaves with its header")
+            let group = try XCTUnwrap(model.sections(for: .now).groups.first)
+            XCTAssertTrue(shown.contains(group.title), "the new date header is mounted")
+            let header = try XCTUnwrap(pointer.headerFrames[group.key])
+            let row = try XCTUnwrap(pointer.frames[TasksRowID(tab: .now, id: id)])
+            XCTAssertGreaterThanOrEqual(row.minY + 0.5, header.maxY, "the task is under its new header")
+        }
+    }
+
     // MARK: - The ›
 
     func testTheOpenButtonShowsOnHoverOrSelectionAndNeverWhileRenaming() {

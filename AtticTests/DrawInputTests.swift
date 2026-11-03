@@ -124,7 +124,13 @@ final class DrawInputTests: XCTestCase {
         if let ns = NSEvent(cgEvent: event), ns.window === panel,
            hypot(ns.locationInWindow.x - point.x, ns.locationInWindow.y - point.y) < 0.5 { return ns }
         event.location = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - point.y)
-        let ns = try XCTUnwrap(NSEvent(cgEvent: event))
+        var ns = try XCTUnwrap(NSEvent(cgEvent: event))
+        // Do not assume AppKit's coordinate basis for a recorded gesture.
+        // Translate by its measured error, preserving every
+        // touch, phase, delta and magnification sample in the recording.
+        let correction = CGPoint(x: point.x - ns.locationInWindow.x, y: point.y - ns.locationInWindow.y)
+        event.location = CGPoint(x: event.location.x + correction.x, y: event.location.y - correction.y)
+        ns = try XCTUnwrap(NSEvent(cgEvent: event))
         XCTAssertEqual(ns.locationInWindow.x, point.x, accuracy: 0.5, "the event lands at the point (window \(String(describing: ns.window)))")
         XCTAssertEqual(ns.locationInWindow.y, point.y, accuracy: 0.5)
         return ns
@@ -722,7 +728,7 @@ final class DrawInputTests: XCTestCase {
         return rig.panel.convertFromScreen(screen)
     }
 
-    func testTheMenuCardClearsPinMoreAndSearchAtEveryWidth() throws {
+    func testTheMenuCardAndTitleFilterClearPinMoreAndSearchAtEveryWidth() throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
@@ -734,8 +740,8 @@ final class DrawInputTests: XCTestCase {
             rig.model.openFilter()
             spin(0.6)
             let card = try XCTUnwrap(frame(of: "draw-library-menu", in: rig), "\(width): the menu card")
-            let field = try XCTUnwrap(frame(of: "draw-library-search", in: rig), "\(width): the card's search field")
-            let title = try XCTUnwrap(frame(of: "draw-title", in: rig), "\(width): the title capsule stays a capsule")
+            let field = try XCTUnwrap(frame(of: "draw-title-filter", in: rig), "\(width): the title filter")
+            let title = try XCTUnwrap(frame(of: "draw-title-filter", in: rig), "\(width): the title capsule is the filter")
             for id in ["panel-pin-button", "panel-settings-button", "draw-search-button"] {
                 let control = try XCTUnwrap(frame(of: id, in: rig), "\(width): \(id)")
                 XCTAssertFalse(card.intersects(control), "\(width): the card clears \(id) (\(card) / \(control))")
@@ -743,24 +749,27 @@ final class DrawInputTests: XCTestCase {
                 XCTAssertLessThanOrEqual(card.maxY, control.minY + 0.5, "\(width): the card starts below the top row")
             }
             XCTAssertLessThanOrEqual(card.maxY, title.minY + 0.5, "\(width): below the title")
-            XCTAssertTrue(card.insetBy(dx: -0.5, dy: -0.5).contains(field), "\(width): the field is in the card")
-            XCTAssertLessThan(card.maxY - field.maxY, DrawLibraryMetrics.searchRowHeight, "\(width): the card's first row")
+            XCTAssertFalse(card.intersects(field), "\(width): filtering stays in the title, above the card")
+            XCTAssertNil(frame(of: "draw-library-search", in: rig), "D4 removes the duplicate search row")
+            XCTAssertLessThanOrEqual(field.height, DrawPageMetrics.capsule + 1)
             XCTAssertEqual(card.midX, title.midX, accuracy: 1, "\(width): centred under the title")
         }
     }
 
     private func searchField(in rig: Rig) throws -> NSTextField {
         func find(_ view: NSView) -> NSTextField? {
-            if let field = view as? NSTextField, field.accessibilityIdentifier() == "draw-library-search" { return field }
+            if let field = view as? NSTextField, field.accessibilityIdentifier() == "draw-title-filter" { return field }
             for child in view.subviews { if let found = find(child) { return found } }
             return nil
         }
-        return try XCTUnwrap(rig.panel.contentView.flatMap(find), "the card's search field")
+        return try XCTUnwrap(rig.panel.contentView.flatMap(find), "the title's filter field")
     }
 
-    func testTheCardsSearchFiltersReturnOpensAndNewCanvasStillWork() throws {
+    func testTheTitleFilterReturnOpensAndNewCanvasStillWork() throws {
+        try requireKeyWindowTests()
         let rig = try makeRig()
         defer { close(rig) }
+        rig.panel.makeKeyAndOrderFront(nil)
         let model = rig.model
         for name in ["Alpha", "Beta"] {
             model.newCanvas(name: name)
@@ -802,10 +811,10 @@ final class DrawInputTests: XCTestCase {
         XCTAssertFalse(model.isFiltering, "Escape closes the menu")
     }
 
-    func testTheMenusListRoomAllowsForTheSearchRow() {
-        let before = DrawPageMetrics.menuListRoom(boardHeight: 700, chromeTop: 15.5, chromeBottom: 15.5)
-        XCTAssertEqual(before, 700 - 15.5 - DrawPageMetrics.capsule - DrawPageMetrics.menuGap - DrawLibraryMetrics.searchRowHeight
-                       - DrawLibraryMetrics.searchRowGap - 15.5 - AtticGlassMenuShape.inset + DrawPageMetrics.bottomGrace, accuracy: 0.01,
-                       "the card: its search row over the top inset, 3 pt, the list, the bottom inset")
+    func testTheMenusListRoomUsesTheSpaceRecoveredFromTheSearchRow() {
+        let room = DrawPageMetrics.menuListRoom(boardHeight: 700, chromeTop: 15.5, chromeBottom: 15.5)
+        XCTAssertEqual(room, 700 - 15.5 - DrawPageMetrics.capsule - DrawPageMetrics.menuGap - 15.5
+                       - AtticGlassMenuShape.inset * 2 + DrawPageMetrics.bottomGrace, accuracy: 0.01,
+                       "D4 keeps both card insets and gives the old search row's height to the list")
     }
 }

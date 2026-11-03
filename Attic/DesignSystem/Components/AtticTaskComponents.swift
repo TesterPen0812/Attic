@@ -2040,19 +2040,21 @@ private struct AtticDetailsCountButton: View {
         let m = AtticSubtaskChecklistMetrics.self
         let radius = AtticRadius.control(height: m.height)
         let hover = !disabled && (forced == .hover || hovered)
+        let metaInk = TasksPanelDesign.toneInk(.meta, tokens: design.tokens,
+            overlays: hover ? [design.tokens.hover, design.tokens.chipHover] : [])
         Button(action: action) {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
-                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                    .colour(disabled ? nil : metaInk)
                     .frame(width: m.iconSlot)
                 // The design's 11 pt meta text in the meta grey.
                 AtticText(verbatim: count, style: .taskMeta, ink: disabled ? .disabledText : .helper)
-                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                    .colour(disabled ? nil : metaInk)
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
             .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent)
                     .fill((hover ? design.tokens.chipHover : .clear).color)
             )
             .contentShape(Rectangle())
@@ -2393,7 +2395,7 @@ struct AtticQuickLook: View {
                     } ?? 0)
                     .background {
                         if drag?.id == subtask.id {
-                            RoundedRectangle(cornerRadius: AtticRadius.contentCard).fill(design.tokens.recessed.color)
+                            Squircle(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent).fill(design.tokens.recessed.color)
                                 .offset(y: translation)
                         }
                     }
@@ -2494,7 +2496,7 @@ struct AtticQuietAction: View {
             .padding(.trailing, trailing)
             .frame(height: m.height)
             .background(
-                RoundedRectangle(cornerRadius: AtticRadius.control(height: m.height), style: .continuous)
+                Squircle(cornerRadius: AtticRadius.control(height: m.height), exponent: AtticShape.controlExponent)
                     .fill((hover ? design.tokens.chipHover : .clear).color)
             )
             .padding(.leading, -leading)
@@ -2720,7 +2722,7 @@ struct AtticTagLabel: View {
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
             .colour(disabled ? nil : TasksPanelDesign.tagInk(hue, tokens: tokens))
             .background(
-                RoundedRectangle(cornerRadius: AtticTagMetrics.inlineFillRadius, style: .continuous)
+                Squircle(cornerRadius: .greatestFiniteMagnitude, exponent: AtticShape.controlExponent)
                     .fill(fill.color)
                     .padding(.horizontal, -AtticTagMetrics.inlineFillOutset)
             )

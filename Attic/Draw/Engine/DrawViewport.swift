@@ -3,7 +3,7 @@ import CoreGraphics
 /// What part of the world the board shows: screen = world × zoom + offset,
 /// in points with y down (the drawing's own axes). Pure value math, shared
 /// by the page model, the board view and the renderer.
-struct DrawViewport: Equatable, Sendable {
+struct DrawViewport: Equatable, Codable, Sendable {
     var x: CGFloat = 0
     var y: CGFloat = 0
     var zoom: CGFloat = 1

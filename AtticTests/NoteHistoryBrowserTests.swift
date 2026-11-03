@@ -6,6 +6,76 @@ import XCTest
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testAuditB6InternalLinkOpensTheRealTargetWithoutLosingCurrentWriting() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
+        try type("Source\nUnpublished writing")
+        let source = try XCTUnwrap(controller.active)
+        let target = UUID()
+        _ = try store.createDocumentNote(id: target, document: NoteDocument(blocks: [.text("Target"), .text("Actual target writing")])).get()
+        var navigations = 0
+        controller.didFollowNoteLink = { navigations += 1 }
+        source.engine.openLink(NoteLinkPolicy.noteURL(target))
+        for _ in 0..<100 where controller.active?.noteID != target { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(controller.active?.noteID, target)
+        XCTAssertEqual(controller.active?.engine.document().title, "Target")
+        XCTAssertEqual(navigations, 1)
+        XCTAssertEqual(store.loadDocument(noteID: source.noteID)?.content.document?.blocks.last?.text, "Unpublished writing")
+    }
+
+    func testAuditA3DeleteAfterBoldUndoAndHistoryDoesNotConflictWithOwnSave() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try type("Audit title\nAudit writing")
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let session = try XCTUnwrap(controller.active)
+        _ = session.engine.makeView()
+        XCTAssertTrue(session.engine.perform(.mark(.bold), selection: NSRange(location: 12, length: 5)))
+        XCTAssertTrue(session.engine.undoCommand())
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertNil(store.note(withID: session.noteID), store.lastErrorMessage ?? "deleted")
+    }
+
+    func testAuditA3FailedDeleteKeepsStandaloneRedoAndRetryRestoresTheRightWriting() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try type("Audit title\nAudit writing")
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let session = try XCTUnwrap(controller.active)
+        _ = session.engine.makeView()
+        XCTAssertTrue(session.engine.perform(.mark(.bold), selection: NSRange(location: 12, length: 5)))
+        let bold = session.engine.document()
+        XCTAssertTrue(session.engine.undoCommand())
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        let expected = session.engine.document()
+        let redoCount = session.engine.history.redoOps.count
+        XCTAssertGreaterThan(redoCount, 0)
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertEqual(session.engine.document(), expected)
+        XCTAssertEqual(session.engine.history.redoOps.count, redoCount)
+        XCTAssertNil(session.engine.history.workspace, "failed deletion keeps the standalone editor's history")
+        XCTAssertTrue(controller.active === session)
+        XCTAssertTrue(session.engine.redoCommand())
+        XCTAssertEqual(session.engine.document(), bold)
+        XCTAssertTrue(session.engine.undoCommand())
+        XCTAssertEqual(session.engine.document(), expected)
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertTrue(store.restoreDeleted(noteID: session.noteID))
+        XCTAssertEqual(try XCTUnwrap(store.loadDocument(noteID: session.noteID)).content.document, expected)
+    }
+
     func testU17PermanentPurgeReleasesDisplacedVersionRestoreSession() async throws {
         weak var displaced: NoteSession?
         var noteID: UUID!

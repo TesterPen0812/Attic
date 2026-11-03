@@ -570,7 +570,7 @@ extension NotesPageController {
             }
             guard retireWholeItemRecovery(session) else { throw WorkspaceFoundationError.pendingPublication }
         }
-        guard let histories = reserveTaskNoteInput(Set(sessions.map(\.noteID))) else { throw WorkspaceFoundationError.conflict }
+        guard let histories = reserveTaskNoteInput(Set(sessions.map(\.noteID)), preservingStandaloneRedo: true) else { throw WorkspaceFoundationError.conflict }
         return { histories.forEach { $0.releaseInput() } }
     }
 }

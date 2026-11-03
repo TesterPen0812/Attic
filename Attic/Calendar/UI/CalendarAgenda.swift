@@ -181,11 +181,14 @@ enum CalendarAgenda {
         return result
     }
 
-    /// The search's window around today: a year back, two years ahead.
+    /// Search covers the complete date domain accepted by DueDay, rather
+    /// than a moving horizon around today. Live reads stream bounded spans.
     static func searchInterval(today: DueDay, calendar: Calendar) -> DateInterval? {
-        guard let start = today.startDate(in: calendar),
-              let from = calendar.date(byAdding: .year, value: -CalendarDesign.searchYearsBack, to: start),
-              let to = calendar.date(byAdding: .year, value: CalendarDesign.searchYearsAhead, to: start) else { return nil }
-        return DateInterval(start: from, end: to)
+        let gregorian = DueDay.storageCalendar(matching: calendar)
+        guard let first = DueDay(year: 1, month: 1, day: 1)?.startDate(in: gregorian),
+              let last = DueDay(year: 9999, month: 12, day: 31)?.startDate(in: gregorian),
+              let end = gregorian.date(byAdding: .day, value: 1, to: last) else { return nil }
+        return DateInterval(start: first, end: end)
     }
+
 }

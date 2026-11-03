@@ -23,6 +23,43 @@ struct DrawKey: Equatable {
 /// state and tell the board view what moved; they never raster, wait or
 /// rebuild the board (restart plan §2).
 extension DrawPageModel {
+    /// B4: top-to-bottom rows whose centres are within 30 pt (60 design
+    /// px), left-to-right inside each row. Layer order does not change it.
+    var objectNavigationIDs: [UUID] {
+        if let cached = objectNavigationCache, cached.revision == contentRevision { return cached.ids }
+        let positioned = objects.filter { $0.deletedAt == nil }.map { (id: $0.id, rect: DrawGeometry.bounds($0)) }.sorted {
+            if $0.rect.midY != $1.rect.midY { return $0.rect.midY < $1.rect.midY }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        var rows: [[(id: UUID, rect: CGRect)]] = []
+        var rowMiddle: CGFloat = 0
+        for item in positioned {
+            if !rows.isEmpty, abs(item.rect.midY - rowMiddle) < 30 { rows[rows.count - 1].append(item) }
+            else { rows.append([item]); rowMiddle = item.rect.midY }
+        }
+        let ids = rows.flatMap { row in row.sorted {
+            if $0.rect.minX != $1.rect.minX { return $0.rect.minX < $1.rect.minX }
+            if $0.rect.midY != $1.rect.midY { return $0.rect.midY < $1.rect.midY }
+            return $0.id.uuidString < $1.id.uuidString
+        }.map(\.id) }
+        objectNavigationCache = (contentRevision, ids)
+        return ids
+    }
+
+    private func moveObjectFocus(by delta: Int, leavesBoard: Bool) -> Bool {
+        guard editing == nil, live == nil, let canvasID else { return false }
+        let ids = objectNavigationIDs
+        guard !ids.isEmpty else { return false }
+        let current = selection.count == 1 ? ids.firstIndex(of: selection[0]) : nil
+        let next = current.map { $0 + delta } ?? (delta > 0 ? 0 : ids.count - 1)
+        guard ids.indices.contains(next) else {
+            if leavesBoard { select([]); return false }
+            return true
+        }
+        reveal(canvasID: canvasID, objectID: ids[next])
+        return true
+    }
+
     /// The working file's 8 px pick tolerance.
     var pickTolerance: CGFloat { 4 / viewport.zoom }
 
@@ -238,6 +275,7 @@ extension DrawPageModel {
     /// Escape: the innermost open thing closes, then the selection clears.
     @discardableResult
     func escape() -> Bool {
+        if isSearching { closeSearch(); return true }
         if editing != nil { endEditing(); return true }
         if isFiltering { closeFilter(); return true }
         if isSelectionStyleOpen { isSelectionStyleOpen = false; return true }
@@ -252,7 +290,7 @@ extension DrawPageModel {
         let k = key.characters
         if key.command, !key.option, !key.control {
             switch (k, key.shift) {
-            case ("z", false): undo()
+            case ("z", false): if !library.undoDeletionIfOffered() { undo() }
             case ("z", true): redo()
             case ("a", false): selectAll()
             case ("d", false): duplicateSelection()
@@ -264,6 +302,11 @@ extension DrawPageModel {
             return true
         }
         guard !key.command, !key.control, !key.option else { return false }
+        if key.keyCode == 48 { return moveObjectFocus(by: key.shift ? -1 : 1, leavesBoard: true) }
+        if !key.shift {
+            if key.keyCode == 123 || key.keyCode == 126 { return moveObjectFocus(by: -1, leavesBoard: false) }
+            if key.keyCode == 124 || key.keyCode == 125 { return moveObjectFocus(by: 1, leavesBoard: false) }
+        }
         if key.keyCode == DrawKey.escapeCode { return escape() }
         if key.keyCode == DrawKey.deleteCode || key.keyCode == DrawKey.forwardDeleteCode {
             guard !selection.isEmpty else { return false }

@@ -6,8 +6,6 @@ struct GeneralSettingsView: View {
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var globalHotKey: GlobalHotKey
 
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-
     var body: some View {
         SettingsPage(section: .general) {
             SettingsGroup(
@@ -42,16 +40,12 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            SettingsGroup(
-                title: String(localized: "Behaviour"),
-                footnote: SettingsVisibility.behaviourFootnote(systemReducesMotion: systemReduceMotion)
-            ) {
+            SettingsGroup(title: String(localized: "Behaviour")) {
                 AtticSwitchRow(
                     title: String(localized: "Haptics"),
                     isOn: $settings.hapticsEnabled,
                     identifier: "setting-haptics"
                 )
-                .help(String(localized: "A light tap on the trackpad when you complete a task or drop something into place"))
                 AtticGroupDivider()
                 // Lively (the default) or Subtle springs, or Reduced to
                 // crossfades and instant changes (round 9, owner item 26;
@@ -62,7 +56,6 @@ struct GeneralSettingsView: View {
                     selection: $settings.animations,
                     identifier: "setting-animations"
                 )
-                .help(String(localized: "Lively springs things in and away. Subtle does the same more quietly. Reduced fades or changes at once instead of moving."))
                 AtticGroupDivider()
                 // The four hide animations, a user choice (owner, 2026-10-19).
                 AtticPopUpRow(

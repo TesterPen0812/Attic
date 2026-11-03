@@ -2921,6 +2921,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), priority: .high, tags: ["historical"]))
         XCTAssertTrue(notes.store.recordVersion(noteID: session.noteID, reason: .pause))
         let version = try XCTUnwrap(notes.store.versions(noteID: session.noteID).first)
+        let view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        view.insertText("\nChanged writing", replacementRange: view.selectedRange())
+        await XCTAssertTrueAsync(await notes.preserveAllDurably())
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "C2 current head", priority: .low, tags: ["current"]))
         let taskBefore = try WorkspaceModelToken.read(.init(entity: .task, id: id), in: ModelContext(container))
         let associationBefore = try WorkspaceScopeToken.read(.taskAssociations(id), in: ModelContext(container))
@@ -2928,6 +2932,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(historyOpened)
         let browser = try XCTUnwrap(notes.historyBrowser)
         notes.selectHistoryVersion(try XCTUnwrap(browser.entries.firstIndex { $0.id == version.id }))
+        XCTAssertTrue(browser.canRestoreSelected, "B7: restoring writing is meaningful even when task details also differ")
         let preview = try XCTUnwrap(notes.historyBrowser?.preview?.engine.textStorage.string)
         XCTAssertTrue(preview.contains("High priority"))
         XCTAssertTrue(preview.contains("#historical"))

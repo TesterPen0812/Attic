@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 // MARK: - Where a dragged block lands (DG1)
 
@@ -133,7 +134,7 @@ extension NoteEditorTextView {
 /// following the pointer changes no view frame and lays nothing out.
 @MainActor
 final class NoteBlockDragStage: NSView {
-    let card = CALayer()
+    let card = CAShapeLayer()
     private let image = CALayer()
     /// The card's room around its snapshot.
     let padding = CGSize(width: 6, height: 4)
@@ -150,17 +151,15 @@ final class NoteBlockDragStage: NSView {
         wantsLayer = true
         let cardSize = CGSize(width: size.width + padding.width * 2, height: size.height + padding.height * 2)
         card.bounds = CGRect(origin: .zero, size: cardSize)
-        card.backgroundColor = tokens.popoverFill.nsColor.cgColor
-        card.cornerRadius = NoteDragLiftView.cornerRadius
-        card.cornerCurve = .continuous
-        card.borderWidth = AtticHairline.width
-        card.borderColor = tokens.popoverOuterRim.nsColor.cgColor
+        card.fillColor = tokens.popoverFill.nsColor.cgColor
+        card.path = Squircle(cornerRadius: NoteDragLiftView.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: card.bounds).cgPath
+        card.lineWidth = AtticHairline.width
+        card.strokeColor = tokens.popoverOuterRim.nsColor.cgColor
         card.shadowColor = tokens.dropdownShadow.nsColor.withAlphaComponent(1).cgColor
         card.shadowOpacity = shadowOpacity
         card.shadowRadius = AtticShadows.dropdown.radius / 2
         card.shadowOffset = CGSize(width: 0, height: -AtticShadows.dropdown.y / 2)
-        card.shadowPath = CGPath(roundedRect: card.bounds, cornerWidth: NoteDragLiftView.cornerRadius,
-                                 cornerHeight: NoteDragLiftView.cornerRadius, transform: nil)
+        card.shadowPath = card.path
         card.contentsScale = scale
         image.contents = snapshot
         image.contentsGravity = .resize

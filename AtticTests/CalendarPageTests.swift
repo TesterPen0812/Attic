@@ -232,8 +232,26 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertTrue(CalendarAgenda.searchGroups(query: "  ", clock: clock, matchingEvents: matching, tasks: [open],
                                                   calendar: calendar).isEmpty)
         let window = CalendarAgenda.searchInterval(today: today, calendar: calendar)!
-        XCTAssertEqual(window.start, date(2025, 10, 29))
-        XCTAssertEqual(window.end, date(2028, 10, 29))
+        XCTAssertEqual(window.start, date(1, 1, 1))
+        XCTAssertEqual(window.end, date(10000, 1, 1))
+    }
+
+    func testAuditA9SearchIncludesEventsOutsideTheOldThreeYearWindow() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let store = try makeTestStore()
+        let source = CalendarEventSourceStub(events: [
+            event("old", "Audit milestone", start: date(1992, 1, 10, 8), end: date(1992, 1, 10, 9)),
+            event("future", "Audit milestone", start: date(2052, 1, 10, 8), end: date(2052, 1, 10, 9))
+        ])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        model.setQuery("milestone")
+        model.commitSearch()
+        XCTAssertEqual(model.snapshot.groups.map(\.day), [day(1992, 1, 10), day(2052, 1, 10)])
     }
 
     func testModelSearchesEventsAndOpenTasksAndShowsNoMatches() async throws {

@@ -71,6 +71,11 @@ protocol DrawBoardSink: AnyObject {
     func drawSelectionChanged()
     func drawEditingChanged(replacingText: Bool)
     func drawVisibilityChanged()
+    func drawReturnKeyboard()
+}
+
+extension DrawBoardSink {
+    func drawReturnKeyboard() {}
 }
 
 /// The viewport and the zoom pill (D5), observed only by the overlays that
@@ -131,6 +136,7 @@ final class DrawPageModel: ObservableObject {
     private(set) var objects: [DrawObject] = []
     /// Advances with every change the board must redraw.
     private(set) var contentRevision = 0
+    var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
     private(set) var editing: DrawTextEdit?
     private(set) var isShown = false
@@ -158,6 +164,11 @@ final class DrawPageModel: ObservableObject {
     }
 
     private var viewports: [UUID: DrawViewport] = [:]
+    private var initialFitPending = false
+    private var boardHasRoom: Bool {
+        boardSize.width > clearInsets.left + clearInsets.right + 2 * DrawViewport.fitPadding
+            && boardSize.height > clearInsets.top + clearInsets.bottom + 2 * DrawViewport.fitPadding
+    }
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
     private var flashGeneration = 0
@@ -177,8 +188,18 @@ final class DrawPageModel: ObservableObject {
     /// couldn't be added: shown in the same notice, without Retry.
     @Published private var actionProblem: String?
 
-    init(store: any DrawStoreProtocol) {
+    private let resumeDefaults: UserDefaults?
+    private var viewportMemorySave: DispatchWorkItem?
+
+    init(store: any DrawStoreProtocol, resumeDefaults: UserDefaults? = nil) {
+        self.resumeDefaults = resumeDefaults
         self.store = store
+        if let data = resumeDefaults?.data(forKey: "AtticDraw.viewports"),
+           let saved = try? JSONDecoder().decode([UUID: DrawViewport].self, from: data) {
+            viewports = saved.filter { _, v in
+                v.x.isFinite && v.y.isFinite && v.zoom.isFinite && (DrawViewport.minZoom...DrawViewport.maxZoom).contains(v.zoom)
+            }
+        }
         observeStore()
         appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.appearanceChanged() } }
@@ -211,8 +232,8 @@ final class DrawPageModel: ObservableObject {
     private(set) static var shared = DrawPageModel(store: DrawInMemoryStore())
 
     /// Called once by the app with its own container, only while the setting is on.
-    static func install(container: ModelContainer) {
-        shared = DrawPageModel(store: DrawPersistentStore(container: container))
+    static func install(container: ModelContainer, resumeDefaults: UserDefaults? = nil) {
+        shared = DrawPageModel(store: DrawPersistentStore(container: container), resumeDefaults: resumeDefaults)
     }
 
     #if DEBUG
@@ -275,6 +296,7 @@ final class DrawPageModel: ObservableObject {
     /// reconciled. False while one is still unsaved (quit stops).
     func prepareToQuit() async -> Bool {
         finishLiveInput()
+        flushViewportMemory()
         while let next = imports.values.first { await next.value }
         flushThumbnail()
         for render in thumbnailRenders.values { await render.task.value }
@@ -439,7 +461,9 @@ final class DrawPageModel: ObservableObject {
     /// The first visit: the newest canvas, or a new empty one.
     func start() {
         guard canvasID == nil else { return }
-        if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
+        if let raw = resumeDefaults?.string(forKey: "AtticDraw.lastCanvas"), let id = UUID(uuidString: raw),
+           (try? store.open(id)) != nil { open(id) }
+        else if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
     }
 
     func open(_ id: UUID) {
@@ -448,8 +472,10 @@ final class DrawPageModel: ObservableObject {
         // The canvas being left gets its thumbnail now.
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
+        flushViewportMemory()
         guard let snapshot = try? store.open(id) else { return }
         canvasID = id
+        resumeDefaults?.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
         canvasName = snapshot.canvas.name
         library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
@@ -458,10 +484,13 @@ final class DrawPageModel: ObservableObject {
         isSelectionStyleOpen = false
         closeFilter()
         appliedRevision = store.revision
+        initialFitPending = false
         if let kept = viewports[id] {
             setViewport(kept, byUser: false)
         } else {
-            setViewport(objects.isEmpty ? DrawViewport() : DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
+            initialFitPending = !objects.isEmpty && !boardHasRoom
+            setViewport(objects.isEmpty || initialFitPending ? DrawViewport()
+                : DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
         }
         userMovedView = false
         refreshHistory()
@@ -509,6 +538,10 @@ final class DrawPageModel: ObservableObject {
         guard changed else { return }
         boardSize = size
         clearInsets = insets
+        if initialFitPending, boardHasRoom {
+            initialFitPending = false
+            setViewport(DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)
+        }
         updateLost()
     }
 
@@ -852,6 +885,7 @@ final class DrawPageModel: ObservableObject {
         isFiltering = false
         library.closeTags()
         if !library.filter.isEmpty { library.filter = "" }
+        board?.drawReturnKeyboard()
     }
 
     func openSearch() {
@@ -867,11 +901,29 @@ final class DrawPageModel: ObservableObject {
     // MARK: Viewport
 
     func setViewport(_ next: DrawViewport, byUser: Bool) {
-        if byUser { userMovedView = true }
+        if byUser { userMovedView = true; initialFitPending = false }
         guard next != viewportState.viewport else { return }
         viewportState.viewport = next
+        if let canvasID {
+            viewports[canvasID] = next
+            if resumeDefaults != nil {
+                viewportMemorySave?.cancel()
+                let save = DispatchWorkItem { [weak self] in self?.flushViewportMemory() }
+                viewportMemorySave = save
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: save)
+            }
+        }
         updateLost()
         board?.drawViewportChanged()
+    }
+
+    /// Coalesced off the pan/zoom input path, and explicitly flushed on
+    /// canvas switches and both quit routes.
+    func flushViewportMemory() {
+        viewportMemorySave?.cancel()
+        viewportMemorySave = nil
+        guard let resumeDefaults, let data = try? JSONEncoder().encode(viewports) else { return }
+        resumeDefaults.set(data, forKey: "AtticDraw.viewports")
     }
 
     /// ⇧1 and a click on the pill.

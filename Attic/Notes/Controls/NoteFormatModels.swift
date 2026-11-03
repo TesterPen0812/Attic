@@ -495,6 +495,11 @@ final class NoteSlashListModel: ObservableObject {
     var separatorCount: Int { items.indices.filter(startsGroup(at:)).count }
 }
 
+struct NoteLinkCandidate: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+}
+
 /// The date card and the link card (one at a time, anchored at the text).
 @MainActor
 final class NoteFormatCardModel: ObservableObject {
@@ -514,8 +519,50 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var dateText = ""
     /// Typing again clears a bad address's error (N3: the field's red ring).
     @Published var linkText = "" {
-        didSet { if linkError != nil, linkText != oldValue { linkError = nil } }
+        didSet {
+            guard linkText != oldValue else { return }
+            linkError = nil
+            linkSuggestionIndex = 0
+            refreshLinkSuggestions()
+        }
     }
+    @Published var linkSuggestions: [NoteLinkCandidate] = []
+    @Published var linkSuggestionIndex = 0
+    var noteCandidates: (() -> [NoteLinkCandidate])?
+    var onLinkSuggestionsChange: (() -> Void)?
+
+    func refreshLinkSuggestions() {
+        let query = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let web = URL(string: Self.normalizedURL(query)).flatMap { url -> URL? in
+            guard url.host?.contains(".") == true, !query.contains(" ") else { return nil }
+            return NoteLinkPolicy.url(url.absoluteString)
+        } != nil
+        let next: [NoteLinkCandidate]
+        if case .link = card, !query.isEmpty, !web, !query.contains("://") {
+            next = Array((noteCandidates?() ?? []).filter { $0.title.localizedStandardContains(query) }.prefix(4))
+        } else { next = [] }
+        guard next != linkSuggestions else { return }
+        linkSuggestions = next
+        linkSuggestionIndex = min(linkSuggestionIndex, max(0, next.count - 1))
+        onLinkSuggestionsChange?()
+    }
+
+    func moveLinkSuggestion(by delta: Int) {
+        guard !linkSuggestions.isEmpty else { return }
+        linkSuggestionIndex = min(max(linkSuggestionIndex + delta, 0), linkSuggestions.count - 1)
+    }
+
+    func chooseNote(_ index: Int) {
+        guard linkSuggestions.indices.contains(index) else { return }
+        // Re-read current candidates so a deleted/renamed target cannot be committed stale.
+        let candidate = linkSuggestions[index]
+        guard noteCandidates?().contains(where: { $0.id == candidate.id }) == true else {
+            refreshLinkSuggestions()
+            return
+        }
+        _ = onCommitLink?(NoteLinkPolicy.noteURL(candidate.id))
+    }
+
     @Published var linkError: String?
     @Published var today = Date()
     @Published var calendar = Calendar.current
@@ -555,12 +602,20 @@ final class NoteFormatCardModel: ObservableObject {
     }
 
     func openLink(url: String?) {
-        linkText = url ?? ""
+        let noteID = url.flatMap(NoteLinkPolicy.noteID)
+        if let noteID {
+            linkText = noteCandidates?().first(where: { $0.id == noteID })?.title ?? ""
+        } else { linkText = url ?? "" }
         linkError = nil
         card = .link(hasLink: url != nil)
+        refreshLinkSuggestions()
+        if let noteID, let index = linkSuggestions.firstIndex(where: { $0.id == noteID }) {
+            linkSuggestionIndex = index
+        }
     }
 
     func submitLink() {
+        if !linkSuggestions.isEmpty { chooseNote(linkSuggestionIndex); return }
         let url = Self.normalizedURL(linkText)
         if onCommitLink?(url) == true { return }
         linkError = String(localized: "Enter a web address, like example.com.")

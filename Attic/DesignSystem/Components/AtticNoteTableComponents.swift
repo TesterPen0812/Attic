@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 /// A note table's hover-free controls (sheet 3, panel 2), drawn from the
 /// tokens: the column and row grips (a pill with three dots), the "+" chips
@@ -176,7 +177,7 @@ final class AtticNoteTableGripView: AtticNoteTableControlView {
         let radius = min(rect.width, rect.height) / 2
         let fill = isHovered ? tokens.tableGripDot.withAlpha(tokens.tableGripFill.alpha * 1.6) : tokens.tableGripFill
         fill.nsColor.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        NSBezierPath(cgPath: Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).path(in: rect).cgPath).fill()
         tokens.tableGripDot.nsColor.setFill()
         let dot: CGFloat = 2, gap: CGFloat = 2
         let span = dot * 3 + gap * 2
@@ -191,7 +192,7 @@ final class AtticNoteTableGripView: AtticNoteTableControlView {
 }
 
 /// The "+" at the end of the last column or under the last row: a 14 pt
-/// disc with an 8 pt plus.
+/// curve-1.4 control with an 8 pt plus.
 @MainActor
 final class AtticNoteTableAddChipView: AtticNoteTableControlView {
     override init(frame: NSRect) {
@@ -207,7 +208,7 @@ final class AtticNoteTableAddChipView: AtticNoteTableControlView {
     override func draw(_ dirtyRect: NSRect) {
         let rect = drawnRect
         (isHovered ? tokens.tableGripFill : tokens.tableAddFill).nsColor.setFill()
-        NSBezierPath(ovalIn: rect).fill()
+        NSBezierPath(cgPath: Squircle(cornerRadius: rect.height / 2, exponent: AtticShape.controlExponent).path(in: rect).cgPath).fill()
         let glyph = AtticNoteTableMetrics.addChipGlyph
         let path = NSBezierPath()
         path.move(to: CGPoint(x: rect.midX - glyph / 2, y: rect.midY))

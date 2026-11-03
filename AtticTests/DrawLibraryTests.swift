@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -30,6 +31,19 @@ final class DrawLibraryTests: XCTestCase {
         AtticDraw.enabledOverride = nil
         DrawLibraryHub.register(nil)
         try await super.tearDown()
+    }
+
+    func testAuditB7NewCanvasNamesAvoidBothDraftAndSavedNames() {
+        let repository = DrawMemoryRepository()
+        let store = DrawStore(repository: repository)
+        let first = store.create()
+        XCTAssertEqual(first.name, "Untitled")
+        XCTAssertEqual(store.create().name, "Untitled 2", "drafts reserve their visible names")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Saved"))]), on: first.id).isSaved)
+        let relaunched = DrawStore(repository: repository)
+        XCTAssertEqual(relaunched.create().name, "Untitled 2", "persisted names also reserve their suffix")
+        XCTAssertEqual(relaunched.create(name: "Chosen name").name, "Chosen name")
+        XCTAssertEqual(relaunched.create(name: " ").name, "Untitled 3")
     }
 
     private func actions(export: Bool = false) -> DrawLibraryActions {
@@ -78,6 +92,24 @@ final class DrawLibraryTests: XCTestCase {
 
     private func canvasTitles(_ model: DrawLibraryMenuModel) -> [String] {
         model.rows.compactMap { $0.canvas == nil ? nil : $0.title }
+    }
+
+    func testAuditA11MenuHighlightDoesNotRefetchUnchangedLibraryMetadata() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = DrawPersistentStore(container: container)
+        let canvas = store.create(name: "Audit canvas")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Audit writing"))]), on: canvas.id).isSaved)
+        let model = DrawLibraryMenuModel(store: store, actions: actions())
+        model.currentCanvasID = canvas.id
+        store.metrics.reset()
+        let rows = model.rows
+        for row in rows where row.isEnabled {
+            model.hover(row, inside: true)
+            XCTAssertEqual(model.rows.map(\.id), rows.map(\.id))
+        }
+        XCTAssertEqual(store.metrics.metadataRowsRead, 1, "hover and layout reuse the opening's library snapshot")
+        XCTAssertTrue(store.perform(.rename("Revised canvas"), on: canvas.id).isSaved)
+        XCTAssertTrue(model.rows.contains { $0.title == "Revised canvas" }, "a durable change invalidates the snapshot")
     }
 
     // MARK: The menu

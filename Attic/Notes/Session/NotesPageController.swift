@@ -305,6 +305,7 @@ final class NotesPageController: ObservableObject {
     /// The identity's own defaults (nil in tests and previews); the
     /// notes list's layout is kept here too.
     let defaults: UserDefaults?
+    var didFollowNoteLink: (() -> Void)?
     private let saveDelay: Duration
     private let durabilityDelay: Duration
     private let pauseVersionDelay: Duration
@@ -1788,6 +1789,22 @@ final class NotesPageController: ObservableObject {
 
     private func wire(_ session: NoteSession) {
         let engine = session.engine
+        engine.linkableNotes = { [weak self, weak session] in
+            guard let self, let session else { return [] }
+            return self.store.notes.filter { $0.id != session.noteID && $0.deletedAt == nil }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .map { NoteLinkCandidate(id: $0.id, title: $0.title.isEmpty ? String(localized: "Untitled") : $0.title) }
+        }
+        engine.onOpenNoteLink = { [weak self] id in
+            guard let self, let target = self.store.note(withID: id) else { return }
+            if TaskNoteWindows.shared.bringForward(noteID: id) { return }
+            if let taskID = target.taskID, self.openTaskPage?(taskID) == true { self.didFollowNoteLink?(); return }
+            if self.cache[id]?.workspacePage?.activeLease != nil {
+                self.active?.showNotice(NoteNotice(kind: .notAvailable, detail: "This note is already open in another editor."))
+                return
+            }
+            Task { if await self.openFromLibrary(noteID: id) { self.didFollowNoteLink?() } }
+        }
         engine.permitsReadOnlyLifecycleReplay = { [weak session] redo in
             guard let session, session.isItemDeleted, let history = session.engine.history.workspace,
                   let step = history.route.steps(in: history.historyID, redo: redo).last,
@@ -3590,8 +3607,7 @@ extension NotesPageController {
     }
 
     func restoreHistoryVersionDurably() async -> Bool {
-        guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
-              !browser.isRestoring, !browser.showsCurrent else { return false }
+        guard let browser = historyBrowser, let selected = browser.selected, browser.canRestoreSelected else { return false }
         // A task's page restores its note's version through its own session
         // (Phase 3): the note only; the task, its subtasks and the
         // association are never rewound (§ 2.10, S4).
@@ -4327,10 +4343,19 @@ extension NotesPageController {
 
     /// Hold every cached writer until the committed materialization has
     /// been adopted. Plain typing queues; other mutations refuse visibly.
-    func reserveTaskNoteInput(_ noteIDs: Set<UUID>) -> [WorkspaceHistory]? {
+    func reserveTaskNoteInput(_ noteIDs: Set<UUID>, preservingStandaloneRedo: Bool = false) -> [WorkspaceHistory]? {
         var reserved: [WorkspaceHistory] = []
         for session in cache.values where noteIDs.contains(session.noteID) {
             let adapter = session.engine.history
+            // Synchronous deletion cannot receive intervening editor input.
+            // Keep a standalone redo tail intact: attaching it to a workspace
+            // would discard that history (and is deliberately forbidden).
+            if preservingStandaloneRedo, adapter.workspace == nil, !adapter.redoOps.isEmpty {
+                guard adapter.canPrepareWorkspaceCommand else {
+                    reserved.forEach { $0.releaseInput() }; return nil
+                }
+                continue
+            }
             let taskID = store.note(withID: session.noteID)?.taskID
             let history = adapter.workspace
                 ?? taskID.flatMap { undoRoute.existingWorkspace(for: .taskWorkspace($0)) }

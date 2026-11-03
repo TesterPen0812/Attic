@@ -13,8 +13,7 @@ struct PanelSettingsView: View {
             // key, and can answer only on chosen displays. The menu bar
             // icon and the quick capture shortcut always open the panel.
             SettingsGroup(
-                title: String(localized: "Corner"),
-                footnote: PanelSettingsText.cornerFootnote(settings.cornerRevealPolicy, connected: displays)
+                title: String(localized: "Corner")
             ) {
                 AtticSwitchRow(
                     title: String(localized: "Reveal on hover"),
@@ -88,8 +87,7 @@ struct PanelSettingsView: View {
             }
 
             SettingsGroup(
-                title: String(localized: "Shape"),
-                footnote: String(localized: "You can also drag the panel's inward edge. The docked corner stays put.")
+                title: String(localized: "Shape")
             ) {
                 AtticSliderRow(
                     label: String(localized: "Corner size"),

@@ -102,8 +102,26 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     /// Where Delete posts its Undo toast (the panel's, from the view).
     weak var toasts: PanelToastCenter?
+    private var deletionToastID: UUID?
+
+    /// Only the still-offered canvas deletion owns the board's Undo key.
+    func undoDeletionIfOffered() -> Bool {
+        guard let toasts, let deletionToastID, toasts.current?.id == deletionToastID,
+              toasts.current?.answersUndoKey == true else { return false }
+        _ = toasts.performAction()
+        return true
+    }
     private let now: () -> Date
     private let calendar: Calendar
+
+    private struct RowsKey: Equatable {
+        let revision: UInt64
+        let query: String
+        let canvasID: UUID?
+        let today: DueDay
+        let environment: DatePresentationEnvironment
+    }
+    private var rowsCache: (key: RowsKey, rows: [Row])?
 
     init(store: any DrawStoreProtocol, actions: DrawLibraryActions,
          now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent) {
@@ -145,11 +163,22 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     var rows: [Row] {
         guard AtticDraw.isEnabled else { return [] }
+        let instant = now()
+        let key = RowsKey(revision: store.revision, query: query, canvasID: currentCanvasID,
+            today: DueDay(date: instant, calendar: calendar),
+            environment: DatePresentationEnvironment(calendar: calendar, locale: .current))
+        if let rowsCache, rowsCache.key == key { return rowsCache.rows }
+        let rows = makeRows(at: instant)
+        rowsCache = (key, rows)
+        return rows
+    }
+
+    private func makeRows(at instant: Date) -> [Row] {
         let query = query
         let found = canvases
         var rows = found.map { canvas in
             Row(kind: .canvas(canvas), title: Self.displayName(canvas.name),
-                detail: NotesLibraryModel.time(canvas.updatedAt, now: now(), calendar: calendar),
+                detail: NotesLibraryModel.time(canvas.updatedAt, now: instant, calendar: calendar),
                 isOpen: canvas.id == currentCanvasID)
         }
         if !query.isEmpty, found.isEmpty {
@@ -297,6 +326,7 @@ final class DrawLibraryMenuModel: ObservableObject {
                 return .failed(CommandFailure(message))
             }
         }
+        deletionToastID = toasts?.current?.id
     }
 
     // MARK: Rename

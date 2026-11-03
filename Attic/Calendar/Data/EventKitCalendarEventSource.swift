@@ -74,8 +74,15 @@ protocol AsyncCalendarEventReading: AnyObject {
     func loadEvents(in interval: DateInterval) async -> [CalendarEvent]
 }
 
+/// Search streams matching batches so an all-date scan never blocks the
+/// main actor or queues a long scan ahead of ordinary agenda reads.
 @MainActor
-final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEventReading {
+protocol AsyncCalendarEventSearching: AnyObject {
+    func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]>
+}
+
+@MainActor
+final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEventReading, AsyncCalendarEventSearching {
     /// EventKit matches at most four years per predicate; stay well inside it.
     nonisolated static let maximumFetchSpan: TimeInterval = 3 * 365 * 86_400
     /// Fallback when a calendar reports no colour.
@@ -216,6 +223,11 @@ final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEvent
         return Task.isCancelled ? [] : events
     }
 
+    func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
+        guard accessState == .granted else { return AsyncStream { $0.finish() } }
+        return worker.search(query, in: interval, around: date)
+    }
+
     /// Lists need unique ids; two different occurrences sharing an identifier
     /// and start (rare detached repeats) get a stable suffix in agenda order.
     nonisolated static func uniquingIDs(_ events: [CalendarEvent]) -> [CalendarEvent] {
@@ -252,6 +264,54 @@ private final class CalendarEventReadWorker: @unchecked Sendable {
     }
 
     func eventsSynchronously(in interval: DateInterval) -> [CalendarEvent] { queue.sync { read(interval) } }
+
+    /// Mutable scan state is confined to `queue`; cancellation alone crosses
+    /// queues, through a lock. Each span yields the queue to agenda requests.
+    private final class Search: @unchecked Sendable {
+        let query: String
+        let interval: DateInterval
+        let continuation: AsyncStream<[CalendarEvent]>.Continuation
+        var spans: [DateInterval] = []
+        var index = 0
+        var seen = Set<CalendarEvent>()
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+        init(query: String, interval: DateInterval, continuation: AsyncStream<[CalendarEvent]>.Continuation) {
+            self.query = query; self.interval = interval; self.continuation = continuation
+        }
+    }
+
+    func search(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
+        AsyncStream { continuation in
+            let scan = Search(query: query, interval: interval, continuation: continuation)
+            continuation.onTermination = { _ in scan.cancel() }
+            queue.async { [self] in
+                // Nearby dates arrive first, with the same complete domain.
+                scan.spans = EventKitCalendarEventSource.fetchSpans(for: interval).sorted {
+                    abs($0.start.timeIntervalSince(date)) < abs($1.start.timeIntervalSince(date))
+                }
+                continueSearch(scan)
+            }
+        }
+    }
+
+    private func continueSearch(_ scan: Search) {
+        queue.async { [self] in
+            guard !scan.isCancelled, scan.index < scan.spans.count else { scan.continuation.finish(); return }
+            let span = scan.spans[scan.index]
+            scan.index += 1
+            var matches: [CalendarEvent] = []
+            for occurrence in store.occurrences(from: span.start, to: span.end) {
+                let event = CalendarEventMapper(calendar: calendar).event(from: occurrence)
+                guard event.overlaps(scan.interval), event.matches(scan.query), scan.seen.insert(event).inserted else { continue }
+                matches.append(event)
+            }
+            if !matches.isEmpty, !scan.isCancelled { scan.continuation.yield(matches) }
+            continueSearch(scan)
+        }
+    }
 
     private func read(_ interval: DateInterval) -> [CalendarEvent] {
         var seen = Set<CalendarEvent>()

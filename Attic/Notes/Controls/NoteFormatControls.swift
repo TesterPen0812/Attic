@@ -29,6 +29,10 @@ final class NoteFormatControls: NSObject {
     private let cardHost: AtticOverlayHostingView
     private let hintHost: NoteSlashHintLabel
     private let addressHost: AtticOverlayHostingView
+    private let linkSuggestionsHost: AtticOverlayHostingView
+    private var linkRoom: CGFloat = 0
+    private var linkRoomMinimum: NSSize?
+    private var changingLinkRoom = false
     private(set) var design: AtticDesignContext
 
     /// ⌘T, and Aa's own button: the page's format row.
@@ -98,6 +102,7 @@ final class NoteFormatControls: NSObject {
         cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         hintHost = NoteSlashHintLabel()
         addressHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        linkSuggestionsHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         super.init()
         formatModel.router = router
         formatModel.linkCard = cardModel
@@ -109,7 +114,7 @@ final class NoteFormatControls: NSObject {
         cardHost.contentInset = AtticDropdownMetrics.shadowRoom
         hintHost.isHidden = true
         AtticOverlayHierarchy.attach(hintHost, to: textView)
-        for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
+        for host in [barHost, slashHost, cardHost, addressHost, linkSuggestionsHost] { host.isHidden = true }
         rebuildRoots()
         wire()
         Self.active = self
@@ -128,6 +133,8 @@ final class NoteFormatControls: NSObject {
         router.requestFile = { [weak self] in self?.requestFile?(nil) }
         slashModel.onPick = { [weak self] kind in self?.pickSlash(kind) }
         cardModel.onCommitDate = { [weak self] date in self?.commitDate(date) }
+        cardModel.onLinkSuggestionsChange = { [weak self] in self?.updateLinkSuggestions() }
+        cardModel.noteCandidates = { [weak engine] in engine?.linkableNotes?() ?? [] }
         cardModel.onCommitLink = { [weak self] url in self?.commitLink(url) ?? false }
         cardModel.onRemoveLink = { [weak self] in self?.removeLink() }
         cardModel.onCancel = { [weak self] in self?.cancelCard() }
@@ -201,6 +208,9 @@ final class NoteFormatControls: NSObject {
     }
 
     func invalidate() {
+        setLinkSuggestionRoom(0)
+        engine.linkSuggestionGap = nil
+        cardModel.onLinkSuggestionsChange = nil
         for observer in [selectionObserver, boundsObserver, resignObserver].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -227,7 +237,7 @@ final class NoteFormatControls: NSObject {
         textView?.onLayout = previousLayout
         textView?.onMouseSelectionTracking = previousMouseTracking
         textView?.contextMenuProvider = nil
-        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { AtticOverlayHierarchy.remove(host) }
+        for host in [hintHost, barHost, slashHost, cardHost, addressHost, linkSuggestionsHost] { AtticOverlayHierarchy.remove(host) }
         if Self.active === self { Self.active = nil }
     }
 
@@ -243,6 +253,8 @@ final class NoteFormatControls: NSObject {
         let design = design
         formatModel.highlightSwatch = AtticColorTokens.resolve(design).highlightMarker(NoteHighlightColour.oneClick)
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
+        linkSuggestionsHost.rootView = AnyView(NoteLinkSuggestionsView(model: cardModel).atticDesign(design))
+        linkSuggestionsHost.isInteractive = true
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
         cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
             .environment(\.atticDropdownContentHeightChanged, { [weak self] height in
@@ -610,6 +622,7 @@ final class NoteFormatControls: NSObject {
         }
         if flips { formatModel.barBelow = placement.below }
         barCover = placement.frame
+        placeLinkSuggestions()
         return true
     }
 
@@ -629,6 +642,12 @@ final class NoteFormatControls: NSObject {
     func handleKey(_ event: NSEvent) -> Bool {
         if event.keyCode == 53, let closed = closeInnermostOnEscape(event) { return closed }
         guard let textView, let window = textView.window, event.window === window else { return false }
+        if cardModel.card != nil, cardHasKeyboard, !cardModel.linkSuggestions.isEmpty,
+           event.modifierFlags.intersection([.command, .option, .shift, .control]).isEmpty,
+           (window.firstResponder as? NSTextView)?.hasMarkedText() != true {
+            if event.keyCode == 126 { cardModel.moveLinkSuggestion(by: -1); return true }
+            if event.keyCode == 125 { cardModel.moveLinkSuggestion(by: 1); return true }
+        }
         let inTable = keyboardInTable
         guard window.firstResponder === textView || inTable, !textView.hasMarkedText(),
               (window.firstResponder as? NSTextView)?.hasMarkedText() != true else { return false }
@@ -1087,7 +1106,81 @@ final class NoteFormatControls: NSObject {
         return true
     }
 
+    private func updateLinkSuggestions() {
+        guard cardModel.card != nil else { return }
+        let height = cardModel.linkSuggestions.isEmpty ? 0 : CGFloat(cardModel.linkSuggestions.count) * 23 + 2
+        setLinkSuggestionRoom(height)
+        if !linkInBar { placeCard(); return }
+        placeBar()
+        placeLinkSuggestions()
+    }
+
+    private func placeLinkSuggestions() {
+        guard linkInBar, linkRoom > 0, let cover = barCover else {
+            linkSuggestionsHost.isHidden = true
+            return
+        }
+        let room = AtticNoteFormatMetrics.shadowRoom
+        placeOverlay(linkSuggestionsHost, rect: NSRect(x: cover.minX, y: cover.minY - linkRoom,
+            width: cover.width, height: linkRoom).insetBy(dx: -room, dy: -room))
+        linkSuggestionsHost.isHidden = false
+    }
+
+    /// Presentation-only TextKit fragment margin: no attributed text, document
+    /// bytes, edit generation or Undo entry changes when suggestions appear.
+    private func setLinkSuggestionRoom(_ height: CGFloat) {
+        guard !changingLinkRoom, height != linkRoom, let textView, let scrollView else { return }
+        changingLinkRoom = true
+        defer { changingLinkRoom = false }
+        let anchor = cellLinkTarget.flatMap { engine.tableAttachment(id: $0.tableID)?.1 }
+            ?? linkTarget?.range ?? barAnchor ?? selection
+        guard anchor.location < engine.textStorage.length else {
+            // A replacement/import may remove the captured target while its
+            // field is open. Dismissal still retires all presentation state.
+            if height == 0 {
+                linkRoom = 0
+                engine.linkSuggestionGap = nil
+                if let minimum = linkRoomMinimum { textView.minSize = minimum }
+                linkRoomMinimum = nil
+                textView.sizeToFit()
+            }
+            return
+        }
+        let before = textView.firstRect(forCharacterRange: anchor, actualRange: nil)
+        if linkRoomMinimum == nil { linkRoomMinimum = textView.minSize }
+        linkRoom = height
+        let paragraph = (engine.textStorage.string as NSString).paragraphRange(for: NSRange(location: anchor.location, length: 0))
+        engine.linkSuggestionGap = height > 0 ? (paragraph.location, height) : nil
+        if height > 0 {
+            textView.minSize.height = max(linkRoomMinimum?.height ?? 0, scrollView.contentView.bounds.height + height)
+            textView.setFrameSize(NSSize(width: textView.frame.width, height: max(textView.frame.height, textView.minSize.height)))
+        } else if let minimum = linkRoomMinimum {
+            textView.minSize = minimum
+            linkRoomMinimum = nil
+        }
+        // The displayed paragraph's fragment type/margins changed. Invalidate
+        // its presentation element as well as layout; layout invalidation alone
+        // reuses a previously plain NSTextLayoutFragment with zero margins.
+        engine.textStorage.edited(.editedAttributes, range: paragraph, changeInLength: 0)
+        engine.invalidateLayout(NSRange(location: 0, length: engine.textStorage.length))
+        if let range = engine.textRange(for: anchor) { engine.layoutManager?.ensureLayout(for: range) }
+        textView.layoutSubtreeIfNeeded()
+        if let target = cellLinkTarget, let table = engine.tableAttachment(id: target.tableID)?.0.hostedView,
+           let rects = engine.cellTextRects(target.range, in: table, textView: textView) {
+            barCellAnchor = rects
+            cellCardAnchor = rects.first.union(rects.last)
+        }
+        let after = textView.firstRect(forCharacterRange: anchor, actualRange: nil)
+        let delta = before.minY - after.minY
+        let currentOrigin = scrollView.contentView.bounds.origin
+        scrollView.contentView.scroll(to: CGPoint(x: currentOrigin.x, y: currentOrigin.y + delta))
+        if height == 0 { textView.sizeToFit() }
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     private func closeLinkField() {
+        setLinkSuggestionRoom(0)
+        linkSuggestionsHost.isHidden = true
         guard linkInBar else { return }
         linkInBar = false
         barAnchor = nil
@@ -1305,7 +1398,8 @@ final class NoteFormatControls: NSObject {
                 let host = self?.linkHost
                 guard let self, let host, self.cardModel.card != nil, event.window === host.window else { return event }
                 let point = host.convert(event.locationInWindow, from: nil)
-                let inside = host.contentRect.contains(point)
+                let suggestions = self.linkSuggestionsHost
+                let inside = host.contentRect.contains(point) || (!suggestions.isHidden && suggestions.contentRect.contains(suggestions.convert(event.locationInWindow, from: nil)))
                 if !inside { self.cancelCard(refocus: false) }
                 return event
             }
@@ -1338,6 +1432,7 @@ final class NoteFormatControls: NSObject {
         let fromBar = linkInBar
         closeLinkField()
         cardModel.card = nil
+        cardModel.linkSuggestions = []
         cardCover = nil
         cardHost.isInteractive = false
         cardAnchor = nil
@@ -1437,7 +1532,7 @@ final class NoteFormatControls: NSObject {
             for item in menu.items where system.contains(item.title) { menu.removeItem(item) }
             top += nativeItems([
                 AtticMenuCommand("Open Link", isDisabled: NoteLinkPolicy.url(url) == nil, identifier: "notes-link-open") {
-                    NoteLinkPolicy.open(url)
+                    self.engine.openLink(url)
                 },
                 AtticMenuCommand("Edit Link…", identifier: "notes-link-edit") { [weak self] in
                     guard let self else { return }
@@ -1589,43 +1684,9 @@ final class NoteFormatControls: NSObject {
         character == 0x0A || character == 0x0D || character == 0x2029 || character == 0x2028
     }
 
-    /// The hint shows on an empty Body line with the caret in it (a line
-    /// already given a style, or a list item, keeps its own look), never
-    /// during a composition, the `/` list or a card.
-    private func updateHint() {
-        guard let textView else { return }
-        let current = selection
-        let show = !engine.isReadOnly && caretOnEmptyLine(current) && engine.paragraphStyle(at: current.location) == .body
-            && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
-        if show, let rect = caretRect() {
-            let size = hintHost.fittingSize
-            // O18-04: the hint's first baseline is the line's own, as
-            // TextKit laid the line out (typed text lands there), measured
-            // from the hint itself rather than estimated from font metrics.
-            var y = rect.minY + (rect.height - size.height) / 2
-            if let line = NoteLineGeometry.line(at: rect, in: textView) {
-                // On the device pixel the line's glyphs are drawn on, so
-                // the hint is crisp and its letters share their row.
-                y = NoteLineGeometry.drawnBaseline(line.baseline, in: textView) - hintBaselineOffset(height: size.height)
-            }
-            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height)
-            if hintHost.frame != frame { hintHost.frame = frame }
-            if !hintShown {
-                hintHost.isHidden = false
-                hintShown = true
-                // A hint, not content: VoiceOver reads it after the text.
-                textView.setAccessibilityHelp(NoteSlashHintView.text)
-            }
-        } else if hintShown {
-            hideHint()
-        }
-    }
-
-    /// The hint's first text baseline below its view's top: it draws its
-    /// letters on exactly that baseline (`NoteSlashHintLabel`), so the hint
-    /// stands on the line's own baseline on every OS (a hosting view's
-    /// reported baseline differed between macOS 26 and 27).
-    private func hintBaselineOffset(height: CGFloat) -> CGFloat { hintHost.baselineOffset }
+    /// Accepted B3 removes the empty-line instruction, including its AX help.
+    /// Slash commands remain available through typing and the Format button.
+    private func updateHint() { hideHint() }
 
     private func hideHint() {
         hintHost.isHidden = true

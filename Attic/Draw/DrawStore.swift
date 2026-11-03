@@ -74,7 +74,17 @@ class DrawStore: DrawStoreProtocol {
 
     func create(name: String? = nil) -> DrawCanvas {
         let date = now()
-        let canvas = DrawCanvas(name: Self.name(name), createdAt: date, updatedAt: date)
+        let explicit = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolved: String
+        if explicit.isEmpty {
+            let base = String(localized: "Untitled")
+            let saved = (try? repository.library()) ?? []
+            let names = Set((saved + states.values.map(\.canvas)).filter { $0.deletedAt == nil }.map(\.name))
+            var next = base, suffix = 2
+            while names.contains(next) { next = "\(base) \(suffix)"; suffix += 1 }
+            resolved = next
+        } else { resolved = explicit }
+        let canvas = DrawCanvas(name: resolved, createdAt: date, updatedAt: date)
         states[canvas.id] = State(canvas: canvas)
         return canvas
     }

@@ -59,6 +59,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     var reviewMark: NoteReviewMark?
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
+    var linkSuggestionRoom: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
     /// `NoteTextStyle.baselineShift`): the quote's bar follows the draft's.
     var boxShift: CGFloat = 0
@@ -95,9 +96,11 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     // line's baseline shift, the bottom one takes it). A callout's sides
     // are its paragraph's indents; its top and bottom padding work as code's.
     override var topMargin: CGFloat {
-        if let mono { return mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
-        if let callout { return callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
-        return super.topMargin
+        let own: CGFloat
+        if let mono { own = mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
+        else if let callout { own = callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
+        else { own = super.topMargin }
+        return own + linkSuggestionRoom
     }
     override var bottomMargin: CGFloat {
         let own: CGFloat
@@ -337,7 +340,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
             // Draft N5 B: rgba(52,168,83,0.1) / rgba(214,52,58,0.07) on a 6 pt
             // squircle, a 1.5 pt bar; the system colours keep dark mode.
             let tint: NSColor = mark == .added ? .systemGreen : .systemRed
-            let path = CGPath(roundedRect: band, cornerWidth: 6, cornerHeight: 6, transform: nil)
+            let path = Squircle(cornerRadius: AtticRadius.small, exponent: AtticShape.surfaceExponent).path(in: band).cgPath
             context.saveGState()
             context.addPath(path)
             context.clip()
@@ -485,7 +488,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                 let origin = line.typographicBounds.origin
                 let rect = CGRect(x: point.x + origin.x + startX - padding, y: point.y + centreY - T.inlineCodeChipHeight / 2,
                                   width: width + 2 * padding, height: T.inlineCodeChipHeight)
-                context.addPath(CGPath(roundedRect: rect, cornerWidth: T.inlineCodeChipRadius, cornerHeight: T.inlineCodeChipRadius, transform: nil))
+                context.addPath(Squircle(cornerRadius: T.inlineCodeChipRadius, exponent: AtticShape.surfaceExponent).path(in: rect).cgPath)
             }
         }
         context.fillPath()
@@ -651,6 +654,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
                            textLayoutFragmentFor location: any NSTextLocation,
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
+        let linkRoom = linkSuggestionGap?.offset == offset ? linkSuggestionGap?.height ?? 0 : 0
         let changed = historyDifferenceOffsets.contains(offset)
         let review = reviewMarkOffsets[offset]
         let inStorage = offset > 0 && offset < textStorage.length
@@ -658,10 +662,11 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
         let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil ? .plain : nil)) else {
+              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil || linkRoom > 0 ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
+        fragment.linkSuggestionRoom = linkRoom
         if let lastLine {
             fragment.lastLine = lastLine
             let kind = pendingParagraphStyle.map { NoteParagraphKind.of(
@@ -922,7 +927,7 @@ final class NoteMonoCopyButton: NSView {
     private var resetWork: DispatchWorkItem?
 
     static var size: CGFloat { T.monoCopySize }
-    static var radius: CGFloat { size / 3 }
+    static var radius: CGFloat { AtticRadius.control(height: size) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -969,7 +974,7 @@ final class NoteMonoCopyButton: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius)
+        let shape = NSBezierPath(cgPath: Squircle(cornerRadius: Self.radius, exponent: AtticShape.controlExponent).path(in: bounds).cgPath)
         (hovered ? hoverFill : fill).setFill()
         shape.fill()
         let configuration = NSImage.SymbolConfiguration(pointSize: T.monoCopyGlyph, weight: .regular)
@@ -1456,7 +1461,7 @@ final class NoteDropLineView: NSView {
 /// shadow, which follow the panel's look), so nothing under it shows
 /// through and no text is drawn twice. Moves are Core Animation's.
 final class NoteDragLiftView: NSView {
-    static let cornerRadius: CGFloat = 8
+    static let cornerRadius: CGFloat = AtticRadius.row
     /// The card's room around its snapshot.
     let padding: CGSize
     private let image = CALayer()
@@ -1465,13 +1470,15 @@ final class NoteDragLiftView: NSView {
         self.padding = padding
         super.init(frame: CGRect(origin: .zero, size: CGSize(width: size.width + padding.width * 2,
                                                              height: size.height + padding.height * 2)))
+        let card = CAShapeLayer()
+        layer = card
         wantsLayer = true
-        guard let layer else { return }
-        layer.backgroundColor = tokens.popoverFill.nsColor.cgColor
-        layer.cornerRadius = Self.cornerRadius
-        layer.cornerCurve = .continuous
-        layer.borderWidth = AtticHairline.width
-        layer.borderColor = tokens.popoverOuterRim.nsColor.cgColor
+        card.fillColor = tokens.popoverFill.nsColor.cgColor
+        card.path = Squircle(cornerRadius: Self.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: bounds).cgPath
+        card.lineWidth = AtticHairline.width
+        card.strokeColor = tokens.popoverOuterRim.nsColor.cgColor
+        card.shadowPath = card.path
+        let layer = card
         layer.shadowColor = tokens.dropdownShadow.nsColor.withAlphaComponent(1).cgColor
         layer.shadowOpacity = Float(tokens.dropdownShadow.alpha)
         layer.shadowRadius = AtticShadows.dropdown.radius / 2
@@ -1486,6 +1493,16 @@ final class NoteDragLiftView: NSView {
     required init?(coder: NSCoder) { fatalError("not archived") }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard let card = layer as? CAShapeLayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.path = Squircle(cornerRadius: Self.cornerRadius, exponent: AtticShape.surfaceExponent).path(in: bounds).cgPath
+        card.shadowPath = card.path
+        CATransaction.commit()
+    }
 
     /// Shows `image` on the card instead, cross-fading (`animated`) or at
     /// once (a dragged table row taking or leaving the header's look).

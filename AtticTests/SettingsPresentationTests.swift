@@ -369,19 +369,17 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertTrue(SettingsPointFormat.spokenSeconds(0.3).hasSuffix(" seconds"))
     }
 
-    /// A width larger than the attached displays is a legitimate choice made on
-    /// another monitor and must survive. A magnitude no display could justify
-    /// is corruption and must not reach layout or the readout.
+    /// B2 caps saved widths at the reading width; corrupt dimensions still fall back.
     @MainActor
-    func testPanelDimensionRestorationKeepsLargeChoicesAndRejectsCorruptMagnitudes() throws {
+    func testPanelDimensionRestorationCapsWidthAndRejectsCorruptMagnitudes() throws {
         let suite = "AppSettingsRestoration.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let oversizedButPlausible = PanelContentSize.max + 400
         defaults.set(oversizedButPlausible, forKey: "panelContentSize")
-        XCTAssertEqual(AppSettings(defaults: defaults).panelContentSize, oversizedButPlausible,
-                       "a width chosen on a bigger display must not be rewritten")
+        XCTAssertEqual(AppSettings(defaults: defaults).panelContentSize, PanelContentSize.max,
+                       "B2 keeps content within the reading width")
 
         for corrupt in [1e30, AppSettings.maximumRestorableDimension + 1, Double.infinity, Double.nan] {
             defaults.set(corrupt, forKey: "panelContentSize")

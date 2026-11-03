@@ -1455,6 +1455,8 @@ struct TasksPage: View {
         // A group's fold turn (fix round 2), read here as a value: the
         // list's content is redrawn only when what it captures changes.
         let turn = model.foldTurn.flatMap { $0.tab == tab ? $0 : nil }
+        let entries = TasksDateListEntry.entries(sections)
+        let turningPlaces = turn.map { foldPlaces(sections.groupRows[$0.key] ?? [], in: tab) } ?? [:]
         // The list's top, read here as a value for the same reason: it
         // grows while the tag chip row is open (owner, 2026-10-28: read
         // inside the closure, it stayed shut and the chips covered rows).
@@ -1472,48 +1474,47 @@ struct TasksPage: View {
                     }
                     // The date groups (the owner's panel design): a header
                     // folds or unfolds its rows.
-                    ForEach(sections.groups, id: \.key) { dateGroup in
+                    ForEach(entries) { entry in
+                        let dateGroup = entry.group
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
-                        if dateGroup.showsHeader {
-                            // A row dragged into this day marks its header
-                            // (Adaptive picks), read in the header's own body.
-                            TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
-                                TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
-                                                 overdue: dateGroup.isOverdue, isDropTarget: targeted) {
-                                    toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                        if let row = entry.row {
+                            cell(row, tab: tab, group: entry.reorderIDs, drawn: drawn)
+                                .id(row.id)
+                                .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
+                                // A moved row pops back in with the feel (1, none, in Calm).
+                                .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
+                                // A turning group's body closes or opens over
+                                // its rows (fix round 2).
+                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id]))
+                                // A row added or leaving drops into or rises
+                                // out of its place (round 9).
+                                .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
+                        } else {
+                            if dateGroup.showsHeader {
+                                // A row dragged into this day marks its header
+                                // (Adaptive picks), read in the header's own body.
+                                TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
+                                    TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
+                                                     overdue: dateGroup.isOverdue, isDropTarget: targeted) {
+                                        toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                                    }
                                 }
-                            }
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer, tab, key = dateGroup.key] frame in
-                                if tab == .now { pointer.headerFrames[key] = frame }
-                            }
-                            .onDisappear { [pointer, tab, key = dateGroup.key] in
-                                if tab == .now { pointer.headerFrames[key] = nil }
-                            }
-                            .id("group:" + dateGroup.key)
-                            .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer, tab, key = dateGroup.key] frame in
+                                    if tab == .now { pointer.headerFrames[key] = frame }
+                                }
+                                .onDisappear { [pointer, tab, key = dateGroup.key] in
+                                    if tab == .now { pointer.headerFrames[key] = nil }
+                                }
+                                .id("group:" + dateGroup.key)
+                                .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                         }
-                        // The next event at the top of Today (read-only; a
-                        // click opens that day on the Calendar page).
-                        if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
-                            TasksNextEventRow(event: event, open: { model.openNextEvent() })
-                                .id("next-event")
+                            // The next event at the top of Today (read-only; a
+                            // click opens that day on the Calendar page).
+                            if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
+                                TasksNextEventRow(event: event, open: { model.openNextEvent() })
+                                    .id("next-event")
                         }
-                        let drawnRows = sections.groupRows[dateGroup.key] ?? []
-                        let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
-                        let places = turning ? foldPlaces(drawnRows, in: tab) : [:]
-                        ForEach(drawnRows) { row in
-                        cell(row, tab: tab, group: byStatus[row.status] ?? [], drawn: drawn)
-                            .id(row.id)
-                            .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
-                            // A moved row pops back in with the feel (1, none, in Calm).
-                            .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
-                            // A turning group's body closes or opens over
-                            // its rows (fix round 2).
-                            .modifier(Self.foldBody(turning ? turn : nil, place: places[row.id]))
-                            // A row added or leaving drops into or rises
-                            // out of its place (round 9).
-                            .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                         }
                     }
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {
