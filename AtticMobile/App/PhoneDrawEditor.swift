@@ -189,7 +189,29 @@ struct PhoneDrawEditor: View {
                 }
             )
             .accessibilityLabel("Drawing board")
-            .accessibilityHint("Draw with a finger or Apple Pencil. Use two fingers to pan or pinch to zoom.")
+            .accessibilityValue(accessibilityBoardStatus)
+            .accessibilityHint("Draw with a finger or Apple Pencil. Use actions to select objects, or adjust to zoom.")
+            .accessibilityIdentifier("phone-draw-board")
+            .accessibilityAction(named: "Next object") { selectAccessibleObject(forward: true) }
+            .accessibilityAction(named: "Previous object") { selectAccessibleObject(forward: false) }
+            .accessibilityAction(named: "Edit selected text") {
+                if selection.count == 1, let object = selectedObjects.first, case .text = object.content {
+                    editText(object)
+                }
+            }
+            .accessibilityAction(named: "Delete selection") { deleteSelection() }
+            .accessibilityAction(named: "Move selection left") { moveAccessibleSelection(dx: -10, dy: 0) }
+            .accessibilityAction(named: "Move selection right") { moveAccessibleSelection(dx: 10, dy: 0) }
+            .accessibilityAction(named: "Move selection up") { moveAccessibleSelection(dx: 0, dy: -10) }
+            .accessibilityAction(named: "Move selection down") { moveAccessibleSelection(dx: 0, dy: 10) }
+            .accessibilityAction(named: "Zoom to fit") { fitCurrentCanvas(); flashZoom() }
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: adjustZoom(by: 1.25)
+                case .decrement: adjustZoom(by: 0.8)
+                @unknown default: break
+                }
+            }
 
             selectionOverlay(in: size)
                 .allowsHitTesting(false)
@@ -279,6 +301,36 @@ struct PhoneDrawEditor: View {
     }
 
     private var selectedObjects: [DrawObject] { objects.filter { selection.contains($0.id) } }
+
+    private var accessibilityBoardStatus: String {
+        let level = "\(Int((viewport.zoom * 100).rounded())) percent zoom"
+        if selection.count > 1 { return "\(selection.count) objects selected, \(level)" }
+        guard let selected = selectedObjects.first else { return "\(objects.count) objects, \(level)" }
+        switch selected.content {
+        case .text(let text): return "Selected text: \(text.prefix(100)), \(level)"
+        case .stroke: return "Stroke selected, \(level)"
+        case .shape(let shape): return "\(shape.rawValue.capitalized) selected, \(level)"
+        case .image: return "Image selected, \(level)"
+        }
+    }
+
+    private func selectAccessibleObject(forward: Bool) {
+        let current = selection.count == 1 ? selection.first : nil
+        guard let id = PhoneDrawSelectionGeometry.nextID(in: objects, after: current, forward: forward) else { return }
+        finishInput()
+        tool = .select
+        strip = nil
+        addToSelection = false
+        selectionStyleOpen = false
+        selection = [id]
+        UIAccessibility.post(notification: .announcement, argument: accessibilityBoardStatus)
+    }
+
+    private func moveAccessibleSelection(dx: CGFloat, dy: CGFloat) {
+        guard tool == .select, input == nil, !selectedObjects.isEmpty else { return }
+        let offset = DrawPoint(x: dx / viewport.zoom, y: dy / viewport.zoom)
+        command(.put(selectedObjects.map { $0.translated(by: offset, id: $0.id) }))
+    }
 
     private var displayedSelection: [DrawObject] {
         switch input {
@@ -537,93 +589,11 @@ struct PhoneDrawEditor: View {
     private var nextZ: Int64 { (objects.map(\.zIndex).max() ?? 0) + 1 }
 
     private func handleLocations() -> [(handle: PhoneDrawHandle, point: CGPoint)] {
-        guard let bounds = selectedBounds, !selection.isEmpty else { return [] }
-        if displayedSelection.count == 1, let object = displayedSelection.first {
-            if case .shape(let kind) = object.content, kind == .line || kind == .arrow {
-                let (start, end) = DrawGeometry.endpoints(object.frame)
-                return [(.start, viewport.screen(start)), (.end, viewport.screen(end))]
-            }
-            if case .text = object.content {
-                let rect = viewport.screen(bounds).insetBy(dx: -4, dy: -4)
-                return [(.left, CGPoint(x: rect.minX, y: rect.midY)),
-                        (.right, CGPoint(x: rect.maxX, y: rect.midY))]
-            }
-        }
-        let rect = viewport.screen(bounds).insetBy(dx: -4, dy: -4)
-        return [(.topLeft, CGPoint(x: rect.minX, y: rect.minY)),
-                (.topRight, CGPoint(x: rect.maxX, y: rect.minY)),
-                (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY)),
-                (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY))]
+        PhoneDrawSelectionGeometry.handles(for: displayedSelection, in: viewport)
     }
 
     private func resized(_ originals: [DrawObject], handle: PhoneDrawHandle, delta: CGPoint) -> [DrawObject] {
-        guard let first = originals.first else { return [] }
-        if originals.count == 1 {
-            switch handle {
-            case .start, .end:
-                var copy = first
-                let (a, b) = DrawGeometry.endpoints(first.frame)
-                let shifted = handle == .start
-                    ? CGPoint(x: a.x + delta.x, y: a.y + delta.y)
-                    : CGPoint(x: b.x + delta.x, y: b.y + delta.y)
-                copy.frame = handle == .start ? DrawGeometry.lineFrame(from: shifted, to: b)
-                                              : DrawGeometry.lineFrame(from: a, to: shifted)
-                return [copy]
-            case .left, .right:
-                var copy = first
-                let width = max(4, CGFloat(first.frame.width) + (handle == .right ? delta.x : -delta.x))
-                if handle == .left { copy.frame.x = first.frame.x + first.frame.width - width }
-                copy.textWidth = width
-                measureText(&copy)
-                return [copy]
-            default:
-                break
-            }
-        }
-        guard let bounds = DrawGeometry.union(originals) else { return originals }
-        let left = handle == .topLeft || handle == .bottomLeft
-        let top = handle == .topLeft || handle == .topRight
-        let anchor = CGPoint(x: left ? bounds.maxX : bounds.minX,
-                             y: top ? bounds.maxY : bounds.minY)
-        let sx = max(4, bounds.width + (left ? -delta.x : delta.x)) / max(bounds.width, 0.001)
-        let sy = max(4, bounds.height + (top ? -delta.y : delta.y)) / max(bounds.height, 0.001)
-        let uniform = originals.count > 1 || first.isImage || bounds.width < 0.001 || bounds.height < 0.001
-        let scale = abs(sx - 1) >= abs(sy - 1) ? sx : sy
-        let xScale = uniform ? scale : sx
-        let yScale = uniform ? scale : sy
-        func map(_ p: CGPoint) -> CGPoint {
-            CGPoint(x: anchor.x + (p.x - anchor.x) * xScale,
-                    y: anchor.y + (p.y - anchor.y) * yScale)
-        }
-        return originals.map { original in
-            var copy = original
-            let rect = DrawGeometry.frame(original.frame)
-            switch original.content {
-            case .stroke(let points):
-                let converted = points.map {
-                    let p = map(CGPoint(x: $0.x, y: $0.y))
-                    return DrawPoint(x: p.x, y: p.y)
-                }
-                copy.content = .stroke(converted)
-                copy.frame = DrawGeometry.strokeFrame(converted)
-            case .shape(let kind) where kind == .line || kind == .arrow:
-                let (a, b) = DrawGeometry.endpoints(original.frame)
-                copy.frame = DrawGeometry.lineFrame(from: map(a), to: map(b))
-            case .text:
-                let origin = map(rect.origin)
-                copy.frame.x = origin.x
-                copy.frame.y = origin.y
-                let amount = min(xScale, yScale)
-                copy.textScale = (original.textScale ?? 1) * amount
-                copy.textWidth = original.textWidth.map { $0 * amount }
-                measureText(&copy)
-            default:
-                let a = map(CGPoint(x: rect.minX, y: rect.minY))
-                let b = map(CGPoint(x: rect.maxX, y: rect.maxY))
-                copy.frame = DrawGeometry.boxFrame(from: a, to: b)
-            }
-            return copy
-        }
+        PhoneDrawSelectionGeometry.resized(originals, handle: handle, delta: delta)
     }
 
     private func duplicateSelection() {
@@ -779,6 +749,16 @@ struct PhoneDrawEditor: View {
         userMovedBoard = false
     }
 
+    private func adjustZoom(by factor: CGFloat) {
+        let clear = clearBoardRect()
+        let centre = CGPoint(x: clear.midX, y: clear.midY)
+        let next = viewport.zoomed(to: viewport.zoom * factor, around: centre)
+        guard next != viewport else { return }
+        viewport = next
+        userMovedBoard = true
+        flashZoom()
+    }
+
     private var lost: Bool {
         userMovedBoard && !objects.isEmpty &&
         !viewport.anyInView(objects.map { DrawGeometry.bounds($0) }, clear: clearBoardRect())
@@ -810,6 +790,8 @@ struct PhoneDrawEditor: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Zoom to fit")
+        .accessibilityValue(lost && !zoomFlashing ? "Drawing outside view" :
+                            "\(Int((viewport.zoom * 100).rounded())) percent")
         .accessibilityIdentifier("phone-draw-zoom")
         .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
     }
@@ -972,7 +954,10 @@ struct PhoneDrawEditor: View {
                 tool = choice
                 strip = nil
             }
-            if tool != .select { selection.removeAll() }
+            if tool != .select {
+                selection.removeAll()
+                addToSelection = false
+            }
             selectionStyleOpen = false
         } label: {
             Image(systemName: choice == .shape ? shape.symbolForDraw : choice.symbol)
@@ -1008,6 +993,12 @@ struct PhoneDrawEditor: View {
 
     private func toolVariantsForSize(text: Bool) -> some View {
         HStack(spacing: 0) {
+            Button { strip = nil } label: {
+                Image(systemName: text ? PhoneDrawTool.text.symbol : PhoneDrawTool.pen.symbol)
+                    .frame(width: 40, height: 44)
+                    .background(Color.primary.opacity(0.1), in: Capsule())
+            }
+            .accessibilityLabel(text ? "Close text sizes" : "Close pen widths")
             ForEach(DrawSize.allCases, id: \.self) { choice in
                 Button {
                     if text { textSize = choice } else { strokeSize = choice }
@@ -1097,14 +1088,21 @@ struct PhoneDrawEditor: View {
 
     // MARK: Store commands
 
-    private func openCanvas(_ id: UUID, fitting: Bool) {
-        if activeID != id { finishInput(); finishTextEditing(); queueThumbnail(immediately: true) }
-        activeID = id
+    private func openCanvas(_ id: UUID, fitting: Bool, thumbnailPrevious: Bool = true) {
+        if activeID != id {
+            finishInput()
+            finishTextEditing()
+            if thumbnailPrevious { queueThumbnail(immediately: true) }
+            else { thumbnailTask?.cancel() }
+        }
         do {
             let snapshot = try state.draw.open(id)
+            activeID = id
             canvas = snapshot.canvas
             objects = snapshot.objects.filter { $0.deletedAt == nil }
             selection.removeAll()
+            addToSelection = false
+            selectionStyleOpen = false
             strip = nil
             input = nil
             textEdit = nil
@@ -1122,8 +1120,6 @@ struct PhoneDrawEditor: View {
                 fitCurrentCanvas()
             }
         } catch {
-            canvas = nil
-            objects = []
             issue = "Could not open this canvas: \(error.localizedDescription)"
             state.errorMessage = issue
         }
@@ -1143,12 +1139,12 @@ struct PhoneDrawEditor: View {
         refreshSnapshot()
     }
 
-    private func handle(_ result: DrawSaveResult) {
+    private func handle(_ result: DrawSaveResult, thumbnail: Bool = true) {
         switch result {
         case .saved:
             issue = nil
             state.refresh()
-            queueThumbnail()
+            if thumbnail { queueThumbnail() }
         case .unchanged:
             break
         case .retry(let message):
@@ -1190,15 +1186,18 @@ struct PhoneDrawEditor: View {
     }
 
     private func deleteCanvas() {
+        finishInput()
+        finishTextEditing()
+        thumbnailTask?.cancel()
         let old = activeID
         let result = state.draw.perform(.deleteCanvas, on: old)
-        handle(result)
+        handle(result, thumbnail: false)
         guard result.isSaved else { refreshSnapshot(); return }
         if let next = try? state.draw.library().first {
-            openCanvas(next.id, fitting: true)
+            openCanvas(next.id, fitting: true, thumbnailPrevious: false)
         } else {
             let fresh = state.draw.create()
-            openCanvas(fresh.id, fitting: true)
+            openCanvas(fresh.id, fitting: true, thumbnailPrevious: false)
         }
         state.refresh()
     }
@@ -1314,7 +1313,140 @@ private extension DrawSize {
     }
 }
 
-private enum PhoneDrawHandle { case topLeft, topRight, bottomLeft, bottomRight, start, end, left, right }
+enum PhoneDrawHandle: Hashable {
+    case topLeft, top, topRight, left, right, bottomLeft, bottom, bottomRight, start, end
+}
+
+/// Screen-space handles and world-space transforms shared by touch and
+/// accessibility controls. A text box keeps its two width handles; line ends
+/// preserve their direction. Other objects have the eight handles in D3.
+enum PhoneDrawSelectionGeometry {
+    static func handles(for objects: [DrawObject], in viewport: DrawViewport)
+        -> [(handle: PhoneDrawHandle, point: CGPoint)] {
+        guard let bounds = DrawGeometry.union(objects) else { return [] }
+        if objects.count == 1, let object = objects.first {
+            if case .shape(let kind) = object.content, kind == .line || kind == .arrow {
+                let (start, end) = DrawGeometry.endpoints(object.frame)
+                return [(.start, viewport.screen(start)), (.end, viewport.screen(end))]
+            }
+        }
+        let rect = viewport.screen(bounds).insetBy(dx: -4, dy: -4)
+        if objects.count == 1, case .text = objects[0].content {
+            return [(.left, CGPoint(x: rect.minX, y: rect.midY)),
+                    (.right, CGPoint(x: rect.maxX, y: rect.midY))]
+        }
+        return [(.topLeft, CGPoint(x: rect.minX, y: rect.minY)),
+                (.top, CGPoint(x: rect.midX, y: rect.minY)),
+                (.topRight, CGPoint(x: rect.maxX, y: rect.minY)),
+                (.left, CGPoint(x: rect.minX, y: rect.midY)),
+                (.right, CGPoint(x: rect.maxX, y: rect.midY)),
+                (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY)),
+                (.bottom, CGPoint(x: rect.midX, y: rect.maxY)),
+                (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY))]
+    }
+
+    static func nextID(in objects: [DrawObject], after id: UUID?, forward: Bool) -> UUID? {
+        guard !objects.isEmpty else { return nil }
+        guard let id, let index = objects.firstIndex(where: { $0.id == id }) else {
+            return forward ? objects.first?.id : objects.last?.id
+        }
+        let step = forward ? 1 : objects.count - 1
+        return objects[(index + step) % objects.count].id
+    }
+
+    static func resized(_ originals: [DrawObject], handle: PhoneDrawHandle, delta: CGPoint) -> [DrawObject] {
+        guard let first = originals.first else { return [] }
+        guard delta != .zero else { return originals }
+        if originals.count == 1 {
+            switch handle {
+            case .start, .end:
+                var copy = first
+                let (a, b) = DrawGeometry.endpoints(first.frame)
+                let shifted = handle == .start
+                    ? CGPoint(x: a.x + delta.x, y: a.y + delta.y)
+                    : CGPoint(x: b.x + delta.x, y: b.y + delta.y)
+                copy.frame = handle == .start ? DrawGeometry.lineFrame(from: shifted, to: b)
+                                              : DrawGeometry.lineFrame(from: a, to: shifted)
+                return [copy]
+            case .left, .right:
+                if case .text = first.content {
+                    var copy = first
+                    let width = max(4, CGFloat(first.frame.width) + (handle == .right ? delta.x : -delta.x))
+                    if handle == .left { copy.frame.x = first.frame.x + first.frame.width - width }
+                    copy.textWidth = width
+                    measureText(&copy)
+                    return [copy]
+                }
+            default:
+                break
+            }
+        }
+        guard let bounds = DrawGeometry.union(originals) else { return originals }
+        let horizontal: CGFloat = switch handle {
+        case .topLeft, .left, .bottomLeft: -1
+        case .topRight, .right, .bottomRight: 1
+        default: 0
+        }
+        let vertical: CGFloat = switch handle {
+        case .topLeft, .top, .topRight: -1
+        case .bottomLeft, .bottom, .bottomRight: 1
+        default: 0
+        }
+        let anchor = CGPoint(x: horizontal < 0 ? bounds.maxX : horizontal > 0 ? bounds.minX : bounds.midX,
+                             y: vertical < 0 ? bounds.maxY : vertical > 0 ? bounds.minY : bounds.midY)
+        var sx = horizontal == 0 ? 1 : max(4, bounds.width + horizontal * delta.x) / max(bounds.width, 0.001)
+        var sy = vertical == 0 ? 1 : max(4, bounds.height + vertical * delta.y) / max(bounds.height, 0.001)
+        let uniform = originals.count > 1 || first.isImage || bounds.width < 0.001 || bounds.height < 0.001
+        if uniform {
+            let scale = horizontal == 0 ? sy : vertical == 0 ? sx : abs(sx - 1) >= abs(sy - 1) ? sx : sy
+            sx = scale
+            sy = scale
+        }
+        func map(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: anchor.x + (p.x - anchor.x) * sx,
+                    y: anchor.y + (p.y - anchor.y) * sy)
+        }
+        return originals.map { original in
+            var copy = original
+            let rect = DrawGeometry.frame(original.frame)
+            switch original.content {
+            case .stroke(let points):
+                let converted = points.map {
+                    let p = map(CGPoint(x: $0.x, y: $0.y))
+                    return DrawPoint(x: p.x, y: p.y)
+                }
+                copy.content = .stroke(converted)
+                copy.frame = DrawGeometry.strokeFrame(converted)
+            case .shape(let kind) where kind == .line || kind == .arrow:
+                let (a, b) = DrawGeometry.endpoints(original.frame)
+                copy.frame = DrawGeometry.lineFrame(from: map(a), to: map(b))
+            case .text:
+                let origin = map(rect.origin)
+                copy.frame.x = origin.x
+                copy.frame.y = origin.y
+                let amount = min(sx, sy)
+                let total = (original.textScale ?? 1) * amount
+                copy.textScale = abs(total - 1) < 0.000_001 ? nil : total
+                copy.textWidth = original.textWidth.map { $0 * amount }
+                measureText(&copy)
+            default:
+                let a = map(CGPoint(x: rect.minX, y: rect.minY))
+                let b = map(CGPoint(x: rect.maxX, y: rect.maxY))
+                copy.frame = DrawGeometry.boxFrame(from: a, to: b)
+            }
+            return copy
+        }
+    }
+
+    private static func measureText(_ object: inout DrawObject) {
+        let size = DrawText.size(of: object.text,
+                                 fontSize: CGFloat(object.style.size.textSize),
+                                 width: object.textWidth.map { CGFloat($0) },
+                                 scale: CGFloat(object.textScale ?? 1))
+        object.frame.width = size.width
+        object.frame.height = size.height
+    }
+}
 
 private struct PhoneDrawResize {
     let handle: PhoneDrawHandle
