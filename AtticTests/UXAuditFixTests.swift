@@ -327,6 +327,26 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAcceptedShapesNativeTableAddButtonsAreWholeControls() throws {
+        let button = AtticNoteTableAddChipView(frame: .zero)
+        button.design.reduceMotion = true
+        button.design.reduceTransparency = false
+        button.frame = CGRect(origin: .zero, size: button.drawnSize)
+        let scale: CGFloat = 4
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(button.bounds.width * scale), pixelsHigh: Int(button.bounds.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
+        button.draw(button.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        let expected = try shapeBitmap(Squircle(cornerRadius: button.bounds.height / 2, exponent: AtticShape.controlExponent)
+            .fill(button.tokens.tableAddFill.color).frame(width: button.bounds.width, height: button.bounds.height))
+        assertCornerAlpha(bitmap, expected, extent: 2.5)
+    }
+
     private func shapeBitmap<V: View>(_ view: V, scale: CGFloat = 4) throws -> NSBitmapImageRep {
         let renderer = ImageRenderer(content: view)
         renderer.scale = scale
