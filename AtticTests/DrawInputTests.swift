@@ -766,8 +766,10 @@ final class DrawInputTests: XCTestCase {
     }
 
     func testTheTitleFilterReturnOpensAndNewCanvasStillWork() throws {
+        try requireKeyWindowTests()
         let rig = try makeRig()
         defer { close(rig) }
+        rig.panel.makeKeyAndOrderFront(nil)
         let model = rig.model
         for name in ["Alpha", "Beta"] {
             model.newCanvas(name: name)

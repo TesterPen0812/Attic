@@ -77,7 +77,9 @@ final class NotesV2TablesFeatureTests: XCTestCase {
                                                      tokens: AtticColorTokens.resolve(.default), animated: false, below: nil))
         XCTAssertEqual(view.canvas.alphaValue, 0, "the strips stand in for the cells while dragging")
         let card = try XCTUnwrap(textView.subviews.compactMap { $0 as? NoteDragLiftView }.first, "the lifted column")
-        XCTAssertNotNil(card.layer?.backgroundColor, "the card has a backing")
+        let backing = try XCTUnwrap(card.layer as? CAShapeLayer)
+        XCTAssertGreaterThan(try XCTUnwrap(backing.fillColor).alpha, 0, "the card has an opaque backing")
+        XCTAssertTrue(try XCTUnwrap(backing.path).contains(CGPoint(x: card.bounds.midX, y: card.bounds.midY)))
         // From the grip over column 3 to over column 0.
         let canvas = view.canvas
         let start = CGPoint(x: widths.prefix(3).reduce(0, +) + widths[3] / 2, y: 10)
