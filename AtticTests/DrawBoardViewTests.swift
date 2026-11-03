@@ -33,6 +33,77 @@ final class DrawBoardViewTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAuditB4TabAndArrowsVisitObjectsInReadingOrderWithoutEditingThem() throws {
+        let text = DrawObject(frame: DrawFrame(x: 30, y: 100, width: 80, height: 30), zIndex: 9, content: .text("Launch plan"))
+        let ink = DrawObject(frame: DrawFrame(x: 200, y: 90, width: 30, height: 20), zIndex: 1,
+            content: .stroke([DrawPoint(x: 0, y: 0), DrawPoint(x: 30, y: 20)]))
+        let rectangle = DrawObject(frame: DrawFrame(x: 20, y: 180, width: 80, height: 80), zIndex: 3, content: .shape(.rectangle))
+        let ellipse = DrawObject(frame: DrawFrame(x: 200, y: 190, width: 80, height: 80), zIndex: 0, content: .shape(.ellipse))
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.put([ellipse, rectangle, text, ink]), on: id).isSaved)
+        model.open(id)
+        let before = try store.open(id).objects
+        let revision = store.revision
+        let ordered = [text.id, ink.id, rectangle.id, ellipse.id]
+        for expected in ordered {
+            XCTAssertTrue(model.handleKey(DrawKey(characters: "\t", keyCode: 48)))
+            XCTAssertEqual(model.selection, [expected])
+        }
+        XCTAssertFalse(model.handleKey(DrawKey(characters: "\t", keyCode: 48)), "Tab past the last object leaves the board")
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "\t", keyCode: 48, shift: true)))
+        XCTAssertEqual(model.selection, [ellipse.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "", keyCode: 123)))
+        XCTAssertEqual(model.selection, [rectangle.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "", keyCode: 126)))
+        XCTAssertEqual(model.selection, [ink.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "", keyCode: 125)))
+        XCTAssertEqual(model.selection, [rectangle.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "", keyCode: 124)))
+        XCTAssertEqual(model.selection, [ellipse.id])
+        XCTAssertFalse(model.handleKey(DrawKey(characters: "", keyCode: 123, option: true)))
+        XCTAssertEqual(try store.open(id).objects, before)
+        XCTAssertEqual(store.revision, revision, "navigation changes selection and viewport, never the drawing")
+    }
+
+    func testAuditB4VoiceOverNamesEveryObjectAndKeepsStableLiveFrames() throws {
+        let objects: [DrawObject] = [
+            .init(frame: DrawFrame(x: 20, y: 40), content: .text("Launch plan")),
+            .init(frame: DrawFrame(x: 20, y: 110), content: .shape(.rectangle)),
+            .init(frame: DrawFrame(x: 180, y: 110), content: .shape(.ellipse)),
+            .init(frame: DrawFrame(x: 20, y: 180), content: .shape(.line)),
+            .init(frame: DrawFrame(x: 180, y: 180), content: .shape(.arrow)),
+            .init(frame: DrawFrame(x: 20, y: 250), content: .stroke([.init(x: 0, y: 0), .init(x: 20, y: 20)])),
+            .init(frame: DrawFrame(x: 180, y: 250), content: .image(.init(original: Data(), pixelWidth: 20, pixelHeight: 20)))
+        ]
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.put(objects), on: id).isSaved)
+        model.open(id)
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        defer { window.close() }
+        let children = board.accessibilityChildren() as? [NSAccessibilityElement] ?? []
+        XCTAssertEqual(children.count, objects.count)
+        let first = try XCTUnwrap(children.first)
+        let names = children.compactMap { $0.accessibilityLabel() }.joined(separator: " ")
+        for kind in ["Launch plan", "Rectangle", "Ellipse", "Line", "Arrow", "Pen stroke", "Image"] {
+            XCTAssertTrue(names.contains(kind), "every kind has a useful name: \(kind)")
+        }
+        XCTAssertTrue(first.accessibilityPerformPress())
+        XCTAssertEqual(model.selection, [objects[0].id])
+        let before = first.accessibilityFrame()
+        XCTAssertGreaterThan(before.width, 0)
+        XCTAssertGreaterThan(before.height, 0)
+        model.setViewport(DrawViewport(x: 27, y: -35, zoom: 1.4), byUser: true)
+        let again = try XCTUnwrap((board.accessibilityChildren() as? [NSAccessibilityElement])?.first)
+        XCTAssertTrue(first === again, "viewport updates retain the element identity")
+        XCTAssertNotEqual(again.accessibilityFrame(), before)
+        model.deleteSelection()
+        XCTAssertEqual(board.accessibilityChildren()?.count, objects.count - 1)
+        XCTAssertFalse(first.accessibilityPerformPress(), "a removed element cannot select a stale object")
+    }
+
     /// Board points are y-down; AppKit's view points are y-up.
     private func mouse(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: board.bounds.height - point.y),
