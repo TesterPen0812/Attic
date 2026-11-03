@@ -142,10 +142,10 @@ struct AtticPanelView: View {
             }
         }
         .overlay {
-            // Over the bar, never in it: the bar stays still while the "+"
-            // grows into the card and back.
+            // Over the bar, never in it: the card takes the bar's row (P4)
+            // while the bar's own pills and "+" fade out under it.
             if uiState.isPageContentLoaded {
-                ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome)
+                ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome, room: composerState.room)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -343,7 +343,8 @@ struct AtticPanelView: View {
             },
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
-            })
+            },
+            drafts: ComposerDraftStore(defaults: settings.userDefaults))
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
@@ -555,6 +556,7 @@ struct AtticPanelView: View {
             .environment(\.panelTopRowState, topRowState)
             .environment(\.panelSharedChrome, sharedChrome)
             .environment(\.panelComposer, composerRoute)
+            .environment(\.panelComposerRoom, composerState.room)
             // The Tall island (Accepted 2026-10-31) is another window: its
             // clicks come here, to the one page-switch path, and pointing
             // at it builds the other pages early, as the old switch did.

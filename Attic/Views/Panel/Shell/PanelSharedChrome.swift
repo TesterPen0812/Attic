@@ -21,9 +21,9 @@ final class PanelSharedChrome: ObservableObject {
     @Published private(set) var topRows: [PanelPage: PanelTopRowLook] = [:]
     /// The pages a task's page covers (its own bars replace the shared ones).
     @Published private(set) var covered: Set<PanelPage> = []
-    /// The "+" card's grow draws the "+" from the moment it opens until its
-    /// shrink ends: the bar keeps the slot but draws nothing there, so there
-    /// is never a second "+" under the card.
+    /// The "+" card has the bar's row (Accepted 2026-11-03, P4): the bar's
+    /// middle (the tag pills, Today) and "+" fade out under it as it opens
+    /// and come back as it folds.
     @Published var plusHandedOver = false
 
     /// What the controls do, per page. Not observable: only a click reads them.
@@ -254,20 +254,26 @@ struct PanelSharedBottomBar: View {
         let side = AtticControlSize.headerControl
         let gap = TasksDesignMetrics.footerGap
         let folded = look.folded
+        let taken = chrome.plusHandedOver
         #if DEBUG
-        let _ = Self.drawsPlus = look.plus != nil && !folded && !chrome.plusHandedOver
+        let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
         #endif
         HStack(alignment: .bottom, spacing: 0) {
             HStack(spacing: gap) {
                 // Accessibility state goes on each control, never on this
                 // stack (which would make it an element wearing the
                 // switch's identifier).
-                middle(look.middle, actions: actions, hidden: folded || !look.shown)
+                middle(look.middle, actions: actions, hidden: folded || !look.shown || taken)
             }
+            // P4: the card takes the row; the pills slide 6 pt toward the
+            // bar's start as they fade (the design's 12 px).
+            .opacity(taken ? 0 : 1)
+            .offset(x: taken ? -Self.takenSlide : 0)
+            .animation(Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
-            .allowsHitTesting(!folded)
+            .allowsHitTesting(!folded && !taken)
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
@@ -277,10 +283,11 @@ struct PanelSharedBottomBar: View {
                                           action: actions.plus)
                             .atticDesignCorners()
                             .modifier(PanelPlusFocus(requests: actions.focusRequests, action: actions.plus))
-                            .opacity(chrome.plusHandedOver ? 0 : 1)
-                            .animation(nil, value: chrome.plusHandedOver)
+                            .opacity(taken ? 0 : 1)
+                            .animation(Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
+                            .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)
-                            .accessibilityHidden(!look.shown)
+                            .accessibilityHidden(!look.shown || taken)
                             .transition(.opacity)
                     }
                 }
@@ -297,6 +304,16 @@ struct PanelSharedBottomBar: View {
         .opacity(look.shown ? 1 : 0)
         .allowsHitTesting(look.shown)
         .animation(PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
+    }
+
+    /// How far the pills move as the card takes the row (12 design px).
+    static let takenSlide: CGFloat = 6
+    /// The row going under the card: the quick leave. Coming back as the
+    /// card folds: the popover's show, 90 ms in, so the pills return as the
+    /// card has gone (the design's `transition-delay: 90ms`).
+    static func rowAnimation(taken: Bool, reduceMotion: Bool) -> Animation? {
+        let animation = AtticMotionPreset.popover.animation(reduceMotion: reduceMotion, showing: !taken)
+        return taken || reduceMotion ? animation : animation?.delay(0.09)
     }
 
     /// Where the bar sits in the panel; the "+" card grows from this

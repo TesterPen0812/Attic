@@ -56,6 +56,10 @@ struct AtticTokenFieldActions {
     var fileDragTargeted: ((Bool) -> Void)? = nil
     /// Refuses a native edit before the field or its draft history changes.
     var admitEdit: (() -> Bool)? = nil
+    /// Tab (false) or ⇧Tab (true) outside a suggestion list: true when the
+    /// owner moved the keyboard itself (the "+" card keeps Tab inside its
+    /// fields); nil or false moves along the window's key loop.
+    var tab: ((_ backward: Bool) -> Bool)? = nil
 }
 
 /// A recognised piece of typed text (`#tag`, a date, `!`, `!!`) and how it
@@ -856,10 +860,12 @@ final class AtticTokenTextView: NSTextView {
     /// One line: Tab moves the keyboard on, as in a text field (review 15:
     /// outside a suggestion list Tab is focus navigation).
     override func insertTab(_ sender: Any?) {
+        if owner?.parent.actions.tab?(false) == true { return }
         window?.selectNextKeyView(self)
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if owner?.parent.actions.tab?(true) == true { return }
         window?.selectPreviousKeyView(self)
     }
 

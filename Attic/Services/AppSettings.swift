@@ -341,6 +341,8 @@ final class AppSettings: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    /// The defaults these settings live in (the "+" card keeps its draft beside them).
+    var userDefaults: UserDefaults { defaults }
 
     init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable) {
         self.defaults = defaults

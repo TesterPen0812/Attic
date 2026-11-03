@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// How a page asks the panel for the "+" card (Phase B): the shell owns one
@@ -28,6 +29,21 @@ extension EnvironmentValues {
 @MainActor
 final class PanelComposerState: ObservableObject {
     private(set) var model: ComposerModel?
+    /// The room the page's list keeps for the open card (P4).
+    let room = PanelComposerRoom()
+    nonisolated(unsafe) private var quitting: NSObjectProtocol?
+
+    init() {
+        // A draft still in the card when the app quits is kept (A2).
+        quitting = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model?.saveKeptDraft() }
+        }
+    }
+
+    deinit {
+        if let quitting { NotificationCenter.default.removeObserver(quitting) }
+    }
 
     func model(tasks: TasksPageModel, services: @autoclosure () -> ComposerServices) -> ComposerModel {
         if let model, model.tasks === tasks { return model }
@@ -37,9 +53,10 @@ final class PanelComposerState: ObservableObject {
     }
 }
 
-/// The "+" growing into the card and back (the HTML's `cp` box: 54 → 578
+/// The "+" corner growing into the card and back (P4's `p1c` box: 54 → 578
 /// design px wide, radius 32 → 44, i.e. 27 → 289 pt and 16 → 22 pt), all on
-/// curve 1.4. One progress drives size and radius, so they move together.
+/// curve 1.4. One progress drives size, radius and opacity, so they move
+/// together.
 enum ComposerGrow {
     static let closedSide = AtticControlSize.headerControl
     static let closedRadius: CGFloat = 16
@@ -64,10 +81,53 @@ enum ComposerGrow {
     }
 }
 
-/// Size, radius and material from one animatable progress.
+/// The room a page's list keeps for the open card (Accepted 2026-11-03,
+/// "The '+' card takes over the bar's row", P4): while it is open the list's
+/// bottom clearance is at least the card's height, so the last rows scroll
+/// up instead of being covered. Observed only by the pieces that use it
+/// (a list's end padding and its scroll keeper), never by a whole page.
+@MainActor
+final class PanelComposerRoom: ObservableObject {
+    /// The card's height while it is open or folding; 0 once it has folded.
+    @Published private(set) var height: CGFloat = 0
+    /// Whether the card is open: a list resting at its end follows it.
+    @Published private(set) var isOpen = false
+
+    #if DEBUG
+    /// Test seam: the last room any panel asked for.
+    static var lastSet: (height: CGFloat, open: Bool)?
+    #endif
+
+    func set(height: CGFloat, open: Bool) {
+        #if DEBUG
+        Self.lastSet = (height, open)
+        #endif
+        if self.height != height { self.height = height }
+        if isOpen != open { isOpen = open }
+    }
+}
+
+private struct PanelComposerRoomKey: EnvironmentKey {
+    static let defaultValue: PanelComposerRoom? = nil
+}
+
+extension EnvironmentValues {
+    /// Set by the panel shell; nil where a page is hosted alone.
+    var panelComposerRoom: PanelComposerRoom? {
+        get { self[PanelComposerRoomKey.self] }
+        set { self[PanelComposerRoomKey.self] = newValue }
+    }
+}
+
+/// Size, radius and material from one animatable progress. The card fades
+/// in as it grows from the "+" corner and out as it folds back (P4: the
+/// bar's own "+" fades out under it, so there is no second "+" to draw).
 private struct ComposerGrowFrame: ViewModifier, Animatable {
     var progress: CGFloat
     let card: CGSize
+    /// Whether the surface is drawn at all: only while open or folding, so a
+    /// closed card costs nothing but its (kept) views.
+    let drawn: Bool
 
     var animatableData: CGFloat {
         get { progress }
@@ -77,30 +137,41 @@ private struct ComposerGrowFrame: ViewModifier, Animatable {
     func body(content: Content) -> some View {
         let geometry = ComposerGrow.geometry(progress: progress, card: card)
         #if DEBUG
-        let _ = ComposerOverlay.surfaces.append(geometry)
+        if drawn { let _ = ComposerOverlay.surfaces.append(geometry) }
         #endif
         let shape = AtticControlShape.shape(cornerRadius: geometry.cornerRadius, exponent: AtticShape.controlExponent)
         content
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomTrailing)
             .clipShape(shape)
-            .atticRaisedMaterial(cornerRadius: geometry.cornerRadius, interactive: false)
+            .background {
+                if drawn {
+                    Color.clear.atticRaisedMaterial(cornerRadius: geometry.cornerRadius, interactive: false)
+                }
+            }
             .atticDesignCorners()
+            .opacity(Double(min(max(progress, 0), 1)))
     }
 }
 
-/// The scrim and the card over the panel, anchored on the shared "+".
-/// The bottom bar is not part of it, so it never moves while the card opens.
+/// The card on the bar's own row (P4), anchored on the shared "+": it grows
+/// from the "+" corner and its bottom edge lands on the bar's bottom edge,
+/// while the bar's tag pills and "+" fade out under it. Nothing dims. The
+/// card is built once, with the page content, and kept: opening only grows
+/// and fades it (A11, the opening hitch was the card being built).
 struct ComposerOverlay: View {
     @ObservedObject var model: ComposerModel
     let layout: PanelPageLayout
-    /// Told when the grow takes the "+" over and hands it back.
+    /// Told when the card takes the bar's row and gives it back.
     var chrome: PanelSharedChrome? = nil
+    /// Told the room the page's list keeps for the card.
+    var room: PanelComposerRoom? = nil
 
+    /// Open or folding: the surface is drawn and the card is on screen.
     @State private var presented = false
     @State private var expanded = false
 
     #if DEBUG
-    /// Test seams: whether the grow is drawn, and each frame it drew.
+    /// Test seams: whether the card is on screen, and each frame it drew.
     static var isPresented = false
     static var surfaces: [ComposerGrow.Geometry] = [] {
         didSet { if surfaces.count > AtticDiagnosticHistory.capacity { surfaces.removeFirst(surfaces.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
@@ -109,82 +180,64 @@ struct ComposerOverlay: View {
         didSet { if corners.count > AtticDiagnosticHistory.capacity { corners.removeFirst(corners.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
     }
     #endif
-    /// The card's own size, measured at full width (it grows with its
-    /// writing); a first guess before the first measure.
-    @State private var card = CGSize(width: ComposerMetrics.width, height: 130)
+    /// The card's own size, measured at full width; the design's 90 pt
+    /// before the first measure.
+    @State private var card = CGSize(width: ComposerMetrics.width, height: ComposerMetrics.height)
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            if presented {
-                Color(nsColor: .windowBackgroundColor)
-                    .opacity(expanded ? 0.6 : 0)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.close() }
-                    .accessibilityHidden(true)
-                ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: ComposerGrow.closedSide, height: ComposerGrow.closedSide)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .scaleEffect(expanded ? 0.5 : 1)
-                        .opacity(expanded ? 0 : 1)
-                        .accessibilityHidden(true)
-                    ComposerCard(model: model, drawsChrome: false)
-                        .fixedSize(horizontal: false, vertical: true)
-                        // A right-click on a row outside the card is a click
-                        // outside: the card closes, keeping its draft, and
-                        // the row's menu opens (orchestrator decision under
-                        // Accepted "The '+' card").
-                        .background(AtticPressShieldView(isActive: { [model] in model.isOpen },
-                                                         onOutsidePress: { [model] in model.close() })
-                            .accessibilityHidden(true))
-                        .onGeometryChange(for: CGSize.self, of: \.size) { size in
-                            if size != card { card = size }
-                        }
-                        .opacity(expanded ? 1 : 0)
-                        .allowsHitTesting(expanded)
+            ComposerCard(model: model, drawsChrome: false)
+                .fixedSize(horizontal: false, vertical: true)
+                // A click anywhere else in the app folds it, keeping the
+                // draft; a right-click on a row also opens the row's menu.
+                .background(AtticPressShieldView(isActive: { [model] in model.isOpen },
+                                                 onOutsidePress: { [model] in model.close() })
+                    .accessibilityHidden(true))
+                .onGeometryChange(for: CGSize.self, of: \.size) { size in
+                    if size != card { card = size }
                 }
-                .modifier(ComposerGrowFrame(progress: expanded ? 1 : 0, card: card))
-                #if DEBUG
-                .onGeometryChange(for: CGPoint.self, of: { CGPoint(x: $0.frame(in: .global).maxX, y: $0.frame(in: .global).maxY) }) {
-                    Self.corners.append($0)
-                }
-                #endif
-                .padding(ComposerGrow.anchor(layout: layout))
-            }
+                .allowsHitTesting(expanded)
+                .accessibilityHidden(!presented)
         }
+        .modifier(ComposerGrowFrame(progress: expanded ? 1 : 0, card: card, drawn: presented))
+        #if DEBUG
+        .onGeometryChange(for: CGPoint.self, of: { CGPoint(x: $0.frame(in: .global).maxX, y: $0.frame(in: .global).maxY) }) {
+            Self.corners.append($0)
+        }
+        #endif
+        .allowsHitTesting(presented)
+        .padding(ComposerGrow.anchor(layout: layout))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .onChange(of: model.isOpen, initial: true) { _, open in transition(open) }
+        .onChange(of: card.height) { _, height in
+            if presented { room?.set(height: height, open: model.isOpen) }
+        }
         #if DEBUG
         .onChange(of: presented, initial: true) { _, now in Self.isPresented = now }
         #endif
     }
 
     private func transition(_ open: Bool) {
+        if chrome?.plusHandedOver != open { chrome?.plusHandedOver = open }
         guard let animation = ComposerMotion.animation(showing: open) else {
-            present(open)
+            presented = open
             expanded = open
+            room?.set(height: open ? card.height : 0, open: open)
             return
         }
         if open {
-            present(true)
-            // One frame at the "+" first, then the grow.
-            DispatchQueue.main.async {
-                guard model.isOpen else { return }
-                withAnimation(animation) { expanded = true }
-            }
+            presented = true
+            room?.set(height: card.height, open: true)
+            withAnimation(animation) { expanded = true }
         } else {
+            room?.set(height: card.height, open: false)
             withAnimation(animation, completionCriteria: .logicallyComplete) {
                 expanded = false
             } completion: {
-                if !model.isOpen { present(false) }
+                guard !model.isOpen else { return }
+                presented = false
+                room?.set(height: 0, open: false)
             }
         }
-    }
-
-    /// The grow and the bar's "+" swap in one update: one "+" at a time.
-    private func present(_ shown: Bool) {
-        presented = shown
-        if chrome?.plusHandedOver != shown { chrome?.plusHandedOver = shown }
     }
 }

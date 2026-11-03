@@ -1567,8 +1567,9 @@ struct TasksPage: View {
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
-                // of the list, not margin (see `TasksViewport.bottomMargin`).
-                .padding(.bottom, bottomClearance - bottomMargin)
+                // of the list, not margin (see `TasksViewport.bottomMargin`);
+                // the open "+" card adds its own (P4).
+                .modifier(TasksComposerRoomPadding(base: bottomClearance - bottomMargin, stack: bottomControlsHeight))
             }
             .scrollIndicators(.automatic)
             .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
@@ -4877,6 +4878,32 @@ private struct TasksDragOutStateProbe: View {
 }
 #endif
 
+/// A list's end room, plus the open "+" card's (P4). Only this observes the
+/// card's room, so opening the card never rebuilds the page.
+private struct TasksComposerRoomPadding: ViewModifier {
+    let base: CGFloat
+    let stack: CGFloat
+    @Environment(\.panelComposerRoom) private var room
+
+    func body(content: Content) -> some View {
+        if let room {
+            content.modifier(Observed(room: room, base: base, stack: stack))
+        } else {
+            content.padding(.bottom, base)
+        }
+    }
+
+    private struct Observed: ViewModifier {
+        @ObservedObject var room: PanelComposerRoom
+        let base: CGFloat
+        let stack: CGFloat
+
+        func body(content: Content) -> some View {
+            content.padding(.bottom, base + TasksViewport.composerExtra(room: room.height, stackHeight: stack))
+        }
+    }
+}
+
 extension View {
     /// The control layer remains outside the list's AppKit containers.
     func tasksListEdges(top: CGFloat, listTop: CGFloat,
@@ -4977,6 +5004,14 @@ enum TasksViewport {
     /// and the 16 pt the list keeps from the bar.
     static func bottomClearance(stackHeight: CGFloat, bottomInset: CGFloat) -> CGFloat {
         max(stackHeight, AtticControlSize.addBarHeight) + bottomInset + AtticLayout.contentToAddBar
+    }
+
+    /// The open "+" card's extra room at the end of a list (Accepted
+    /// 2026-11-03, P4): the card stands on the bar's row, so the list keeps
+    /// the card's height clear instead of the bar's; nothing more when the
+    /// bar's stack is taller already.
+    static func composerExtra(room: CGFloat, stackHeight: CGFloat) -> CGFloat {
+        max(0, room - max(stackHeight, AtticControlSize.addBarHeight))
     }
 
     /// The lists' bottom content margin: only the add bar's own zone. A

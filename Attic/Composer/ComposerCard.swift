@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// The design's numbers for the "+" card (`Preview - settings at bottom`,
-/// `cp.*`, drawn at 2x; halved here).
+/// The design's numbers for the "+" card (P4 in `plus-inline-drafts.html`,
+/// P1's in-page card `.ic`/`.ib`, drawn at 2x; halved here): 289 × 90 pt.
 enum ComposerMetrics {
     static let width: CGFloat = 289
+    /// 9 + 20 (title) + 5 + 15 (writing) + 5 + 28 (Create) + 8.
+    static let height: CGFloat = 90
     /// Curve 1.4, as the "+" it grows out of (Shapes; owner notes 31 Oct).
     static let radius: CGFloat = ComposerGrow.openRadius
-    static let padding = EdgeInsets(top: 11, leading: 14, bottom: 11, trailing: 11)
+    static let padding = EdgeInsets(top: 9, leading: 14, bottom: 8, trailing: 11)
     static let kindInset: CGFloat = 2
     static let kindButton: CGFloat = 18
     static let kindGap: CGFloat = 1
@@ -14,12 +16,15 @@ enum ComposerMetrics {
     static let markSlot: CGFloat = 14
     static let markGap: CGFloat = 8
     static let titleHeight: CGFloat = 20
-    static let writingTop: CGFloat = 2
+    static let writingTop: CGFloat = 5
     static let writingLeading: CGFloat = markSlot + markGap
     static let writingMinHeight: CGFloat = 15
     static let writingMaxLines = 5
-    /// The gap above the chips that keeps the card at the Tasks height.
-    static let actionsTop: CGFloat = 43
+    /// The gap above the chips (`.ic .acts` margin-top 10 px).
+    static let actionsTop: CGFloat = 5
+    /// A long title wraps onto a second line in the writing line's space
+    /// (B1), so the card keeps its height.
+    static let titleMaxLines = 2
     static let chipHeight: CGFloat = 26
     static let chipPadding: CGFloat = 5
     static let chipGap: CGFloat = 2
@@ -67,6 +72,8 @@ struct ComposerCard: View {
     @Environment(\.atticDesign) private var design
     @State private var titleFocused = true
     @FocusState private var writingFocused: Bool
+    /// The title field's wrapped height (one line: `titleHeight`).
+    @State private var titleFieldHeight = ComposerMetrics.titleHeight
     @State private var open: Chip?
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
@@ -85,9 +92,11 @@ struct ComposerCard: View {
         let kind = model.kind
         VStack(alignment: .leading, spacing: 0) {
             titleLine(kind)
-            writingLine(kind)
-                .padding(.top, ComposerMetrics.writingTop)
-                .padding(.leading, ComposerMetrics.writingLeading)
+            if !titleTakesWritingSpace {
+                writingLine(kind)
+                    .padding(.top, ComposerMetrics.writingTop)
+                    .padding(.leading, ComposerMetrics.writingLeading)
+            }
             actions(kind)
                 .padding(.top, ComposerMetrics.actionsTop)
         }
@@ -118,6 +127,41 @@ struct ComposerCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "New \(kind.title)"))
         .accessibilityIdentifier("composer-card")
+    }
+
+    /// B1: a title too long for one line wraps into the writing line's
+    /// space while the writing is empty and not being typed in, so the card
+    /// keeps its height. With writing, the card grows by the line instead.
+    private var titleWraps: Bool { titleFieldHeight > ComposerMetrics.titleHeight + 0.5 }
+    private var titleTakesWritingSpace: Bool {
+        Self.titleTakesWritingSpace(titleWraps: titleWraps, writing: model.writing, writingFocused: writingFocused)
+    }
+
+    nonisolated static func titleTakesWritingSpace(titleWraps: Bool, writing: String, writingFocused: Bool) -> Bool {
+        titleWraps && writing.isEmpty && !writingFocused
+    }
+
+    /// The title line's height: one line, or two in the writing line's room.
+    private var titleLineHeight: CGFloat {
+        guard titleWraps else { return ComposerMetrics.titleHeight }
+        return titleTakesWritingSpace
+            ? ComposerMetrics.titleHeight + ComposerMetrics.writingTop + ComposerMetrics.writingMinHeight
+            : titleFieldHeight
+    }
+
+    /// Tab and ⇧Tab stay inside the card (A4): the title and the writing
+    /// line take turns.
+    private func moveKeyboard(toWriting: Bool) {
+        if toWriting {
+            titleFocused = false
+            writingFocused = true
+        } else {
+            writingFocused = false
+            titleFocused = true
+            if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
+                window.makeFirstResponder(field)
+            }
+        }
     }
 
     // MARK: Kind switch
@@ -169,9 +213,10 @@ struct ComposerCard: View {
     // MARK: Title
 
     private func titleLine(_ kind: ComposerKind) -> some View {
-        HStack(spacing: ComposerMetrics.markGap) {
+        HStack(alignment: .top, spacing: ComposerMetrics.markGap) {
             mark(kind)
                 .frame(width: ComposerMetrics.markSlot, height: ComposerMetrics.markSlot)
+                .frame(height: ComposerMetrics.titleHeight)
             AtticTokenField(
                 text: $title.text.text,
                 chips: model.chips,
@@ -182,9 +227,11 @@ struct ComposerCard: View {
                 ink: .heading,
                 pieceInk: .placeholder,
                 editor: model.editor,
-                accessibilityIdentifier: "composer-title"
+                accessibilityIdentifier: "composer-title",
+                growth: AtticTokenFieldGrowth(height: $titleFieldHeight, minHeight: ComposerMetrics.titleHeight,
+                                              maxLines: ComposerMetrics.titleMaxLines)
             )
-            .frame(height: ComposerMetrics.titleHeight)
+            .frame(height: titleLineHeight, alignment: .top)
             .overlay(alignment: .leading) {
                 if title.text.text.isEmpty {
                     AtticText(verbatim: kind.placeholder, style: .composerTitle, ink: .placeholder)
@@ -257,7 +304,11 @@ struct ComposerCard: View {
             redoDraft: { title.redoDraft() },
             selectionMoved: { title.selection = $0 },
             undoFallback: { model.undoPage() },
-            redoFallback: { model.redoPage() }
+            redoFallback: { model.redoPage() },
+            tab: { _ in
+                moveKeyboard(toWriting: true)
+                return true
+            }
         )
     }
 
@@ -299,6 +350,11 @@ struct ComposerCard: View {
             .lineLimit(1...ComposerMetrics.writingMaxLines)
             .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
             .focused($writingFocused)
+            // Tab and ⇧Tab (backtab) go back to the title, never out of the card.
+            .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")], phases: .down) { _ in
+                moveKeyboard(toWriting: false)
+                return .handled
+            }
             .onKeyPress(.return, phases: .down) { press in
                 if press.modifiers.contains(.shift) && !press.modifiers.contains(.command) { return .ignored }
                 model.submit(openingPage: press.modifiers.contains(.command))
