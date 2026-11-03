@@ -126,9 +126,13 @@ final class NotesPageRenderTests: XCTestCase {
         spin()
         let writing = try XCTUnwrap(harness.controller.active?.engine.scrollView)
         let resting = writing.contentInsets.bottom
+        writing.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: writing)))
+        writing.reflectScrolledClipView(writing.contentView)
         for height: CGFloat in [90, 152] {
             room.set(height: height, open: true); spin()
             XCTAssertEqual(writing.contentInsets.bottom - resting, height - AtticControlSize.addBarHeight, accuracy: 1)
+            XCTAssertEqual(writing.contentView.bounds.origin.y, TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: writing), accuracy: 1,
+                "the last writing follows the growing card")
         }
         room.set(height: 0, open: false); spin()
         XCTAssertEqual(writing.contentInsets.bottom, resting, accuracy: 1)

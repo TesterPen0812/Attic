@@ -489,15 +489,21 @@ final class CalendarPageTests: XCTestCase {
         func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.3)); host.layoutSubtreeIfNeeded() }
         for _ in 0..<5 { settle() }
         let scroll = try XCTUnwrap(Self.scrollView(in: host))
-        func extent() -> CGFloat { (scroll.documentView?.frame.height ?? 0) + scroll.contentInsets.bottom }
-        let closed = extent()
+        // Lazy rows refine their estimated document height as they mount;
+        // the native scroll inset is the exact clearance we are testing.
+        let closed = scroll.contentInsets.bottom
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)))
+        scroll.reflectScrolledClipView(scroll.contentView); settle()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)))
         for height: CGFloat in [90, 152] {
             room.set(height: height, open: true); settle()
-            print("FOLLOWUP_CALENDAR height=\(height) doc=\(String(describing: scroll.documentView?.frame)) insets=\(scroll.contentInsets) clip=\(scroll.contentView.bounds) closed=\(closed)")
-            XCTAssertEqual(extent() - closed, height - AtticControlSize.addBarHeight, accuracy: 1)
+            XCTAssertEqual(scroll.contentInsets.bottom - closed, height - AtticControlSize.addBarHeight, accuracy: 1)
+            XCTAssertEqual(scroll.contentView.bounds.origin.y, TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll), accuracy: 1,
+                "the last agenda rows follow the growing card")
         }
         room.set(height: 0, open: false); settle()
-        XCTAssertEqual(extent(), closed, accuracy: 1)
+        XCTAssertEqual(scroll.contentInsets.bottom, closed, accuracy: 1)
+
     }
 
     func testHostedPageSettlesAndUpdatesBoundedly() throws {
