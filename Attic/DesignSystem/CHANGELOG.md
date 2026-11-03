@@ -1,3 +1,8 @@
+## 2026-11-03 · Complete failure messages
+
+Panel failure notices wrap to their full message at narrow widths, so the
+next step remains readable.
+
 ## 2026-11-02 · Draw cursors keep their screen size
 
 The pen uses a fixed 6 pt coloured dot with the existing 0.6 pt white

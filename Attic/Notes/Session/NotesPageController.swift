@@ -4327,10 +4327,19 @@ extension NotesPageController {
 
     /// Hold every cached writer until the committed materialization has
     /// been adopted. Plain typing queues; other mutations refuse visibly.
-    func reserveTaskNoteInput(_ noteIDs: Set<UUID>) -> [WorkspaceHistory]? {
+    func reserveTaskNoteInput(_ noteIDs: Set<UUID>, preservingStandaloneRedo: Bool = false) -> [WorkspaceHistory]? {
         var reserved: [WorkspaceHistory] = []
         for session in cache.values where noteIDs.contains(session.noteID) {
             let adapter = session.engine.history
+            // Synchronous deletion cannot receive intervening editor input.
+            // Keep a standalone redo tail intact: attaching it to a workspace
+            // would discard that history (and is deliberately forbidden).
+            if preservingStandaloneRedo, adapter.workspace == nil, !adapter.redoOps.isEmpty {
+                guard adapter.canPrepareWorkspaceCommand else {
+                    reserved.forEach { $0.releaseInput() }; return nil
+                }
+                continue
+            }
             let taskID = store.note(withID: session.noteID)?.taskID
             let history = adapter.workspace
                 ?? taskID.flatMap { undoRoute.existingWorkspace(for: .taskWorkspace($0)) }

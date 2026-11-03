@@ -117,8 +117,7 @@ private struct AtticToastButton: View {
 /// could not finish): raised over content like the toast, with the error's
 /// red icon, the store's sentence in body ink and the next step as a button. It stays until it is resolved or
 /// dismissed; a problem is never hidden. The message is the store's own
-/// sentence, so it may take two lines (the only wrapping panel text), and
-/// the full text is its tooltip and VoiceOver label.
+/// sentence and wraps to fit, with the same full text for VoiceOver.
 struct AtticNotice: View {
     let message: String
     /// "Retry" when the failed step can run again; nil offers only Dismiss.
@@ -138,8 +137,6 @@ struct AtticNotice: View {
             Text(verbatim: message)
                 .font(AtticTextStyle.toast.font)
                 .foregroundStyle(tokens.ink(.body).color)
-                .lineLimit(2)
-                .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(message)
