@@ -1,3 +1,9 @@
+## 2026-11-03 · Canvas filter in the title
+
+The title capsule becomes the canvas filter. The menu has no second search row
+and uses the recovered room for canvases and actions. Escape returns the keyboard
+to the board; Tags temporarily owns the field without competing with the filter.
+
 ## 2026-11-03 · Draw object navigation
 
 Tab/Shift-Tab and the arrow keys visit objects in reading order, with normal

@@ -197,19 +197,17 @@ final class UXAuditFixTests: XCTestCase {
         let model = DrawPageModel(store: DrawInMemoryStore())
         let state = PanelUIState()
         let size = CGSize(width: 320, height: 460)
+        let toasts = PanelToastCenter()
         try withHost(DrawPageHost(model: model, uiState: state,
-            layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size)).environment(\.atticPanelToasts, toasts)) { host in
             func fields(_ view: NSView) -> [NSTextField] {
                 (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
             }
-            let field = try XCTUnwrap(fields(host).first { $0.accessibilityIdentifier() == "draw-library-search" },
-                "prepare native menu layout before the first click")
-            XCTAssertFalse(field.isEnabled)
+            XCTAssertTrue(model.library.toasts === toasts, "the closed menu has mounted and prepared its hierarchy")
             XCTAssertNil(find("draw-library-menu", in: host), "the prepared menu is absent from VoiceOver until opened")
-            XCTAssertFalse(host.window?.firstResponder === field)
             model.openFilter()
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-            XCTAssertTrue(field.isEnabled)
+            XCTAssertTrue(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" }?.isEnabled == true)
             XCTAssertNotNil(find("draw-library-menu", in: host))
         }
     }
@@ -268,7 +266,7 @@ final class UXAuditFixTests: XCTestCase {
             let native = fields(host)
             let title = try XCTUnwrap(native.first { $0.accessibilityIdentifier() == "draw-title-filter" })
             XCTAssertNil(native.first { $0.accessibilityIdentifier() == "draw-library-search" })
-            let frame = host.convert(title.bounds, from: title)
+            let frame = title.convert(title.bounds, to: nil)
             XCTAssertGreaterThanOrEqual(frame.minY, size.height - layout.headerBottom)
             XCTAssertLessThanOrEqual(frame.maxY, size.height)
             XCTAssertTrue(title.isEnabled)
@@ -363,11 +361,24 @@ final class UXAuditFixTests: XCTestCase {
         model.closeSearch()
         model.openFilter()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let titleEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        let titleField = try XCTUnwrap(titleEditor.delegate as? NSTextField)
+        XCTAssertEqual(titleField.accessibilityIdentifier(), "draw-title-filter")
+        titleEditor.insertText("plan", replacementRange: titleEditor.selectedRange())
+        XCTAssertEqual(model.library.filter, "plan")
+        let filterEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
+        window.sendEvent(filterEscape)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertFalse(model.isFiltering)
+        XCTAssertTrue(window.firstResponder is DrawBoardView)
+        model.openFilter()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         model.library.perform(.tags)
         RunLoop.main.run(until: Date().addingTimeInterval(0.6))
         let tagEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let field = try XCTUnwrap(tagEditor.delegate as? NSTextField)
-        XCTAssertNotEqual(field.accessibilityIdentifier(), "draw-library-search", "Tags takes over from the canvas filter")
+        XCTAssertNotEqual(field.accessibilityIdentifier(), "draw-title-filter", "Tags takes over from the canvas filter")
         XCTAssertTrue(field.placeholderString?.localizedCaseInsensitiveContains("tag") == true)
     }
 

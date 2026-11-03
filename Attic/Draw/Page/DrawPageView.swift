@@ -86,14 +86,13 @@ struct DrawPageHost: View {
             }
         }
         .overlay(alignment: .top) {
-            // The canvas menu: a card below the top row (the drawing's
-            // `dv.titleMenu`), its search field the first row. Pin, ••• and
-            // Search stay where they are, so nothing here can reach them.
+            // D4: the title capsule owns the filter. Its menu contains only
+            // canvases and actions, below the unchanged top-row controls.
             if !model.isSearching {
                 DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
                     boardHeight: model.boardSize.height,
                     chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
-                    chromeBottom: model.clearInsets.left), onSearchEscape: model.closeFilter, isActive: model.isFiltering)
+                    chromeBottom: model.clearInsets.left), isActive: model.isFiltering)
                     .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
                     // Retain the menu's native hierarchy between openings.
                     // Opening only reveals it; focus, hit testing and AX stay off while closed.
@@ -138,6 +137,26 @@ struct DrawTitleCapsule: View {
                     .padding(.horizontal, m.titlePadding.leading)
                     .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
                     .accessibilityIdentifier("draw-title-rename")
+            } else if model.isFiltering {
+                HStack(spacing: 5) {
+                    AtticIcon(systemName: "magnifyingglass", size: 10, weight: .regular, ink: .helper)
+                        .accessibilityHidden(true)
+                    DrawTitleField(text: $library.filter, placeholder: model.canvasName,
+                        label: String(localized: "Find a canvas"), onReturn: library.openFirstMatch,
+                        onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil,
+                        alignment: .left, font: .systemFont(ofSize: m.titleFont), identifier: "draw-title-filter",
+                        requestsFocus: library.mode == .list)
+                    Button(action: model.closeFilter) {
+                        AtticIcon(systemName: "xmark", size: 8, weight: .medium, ink: .helper)
+                            .frame(width: 16, height: m.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "Close canvas menu"))
+                }
+                .frame(height: m.capsule)
+                .padding(.leading, m.titlePadding.leading)
+                .padding(.trailing, 4)
+                .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
             } else {
                 Button(action: { model.isFiltering ? model.closeFilter() : model.openFilter() }) {
                     HStack(spacing: m.titleGap) {

@@ -242,6 +242,19 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         queueCursorRefresh()
     }
 
+    func drawReturnKeyboard() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.model.isShown, !self.isHiddenOrHasHiddenAncestor,
+                  !self.model.isSearching, !self.model.isFiltering, !self.model.library.isRenaming,
+                  self.model.editing == nil, let window = self.window else { return }
+            if let text = window.firstResponder as? NSTextView {
+                let field = text.delegate as? NSTextField
+                guard ["draw-title-filter", "draw-library-search"].contains(field?.accessibilityIdentifier() ?? "") else { return }
+            }
+            window.makeFirstResponder(self)
+        }
+    }
+
     private func queueInitialKeyboardFocus() {
         // The shell clears the previous page's responder when switching.
         // Claim this window's responder after the new page is installed;

@@ -71,6 +71,11 @@ protocol DrawBoardSink: AnyObject {
     func drawSelectionChanged()
     func drawEditingChanged(replacingText: Bool)
     func drawVisibilityChanged()
+    func drawReturnKeyboard()
+}
+
+extension DrawBoardSink {
+    func drawReturnKeyboard() {}
 }
 
 /// The viewport and the zoom pill (D5), observed only by the overlays that
@@ -880,6 +885,7 @@ final class DrawPageModel: ObservableObject {
         isFiltering = false
         library.closeTags()
         if !library.filter.isEmpty { library.filter = "" }
+        board?.drawReturnKeyboard()
     }
 
     func openSearch() {
