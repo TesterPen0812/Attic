@@ -514,7 +514,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                           height: slice.height + (joinsAbove ? radius * 2 : 0) + (joinsBelow ? radius * 2 : 0))
         context.saveGState()
         context.clip(to: slice)
-        context.addPath(Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: full).cgPath)
+        context.addPath(CGPath(roundedRect: full, cornerWidth: radius, cornerHeight: radius, transform: nil))
         context.setFillColor(ink.cgColor)
         context.fillPath()
         context.restoreGState()
