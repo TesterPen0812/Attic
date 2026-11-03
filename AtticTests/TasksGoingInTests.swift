@@ -83,7 +83,7 @@ final class TasksGoingInTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         func labels(_ element: AnyObject, depth: Int = 0) -> [String] {
             guard depth < 40 else { return [] }
-            let own = [(element.accessibilityLabel?() ?? nil) ?? "", (element.accessibilityValue?() ?? nil) as? String ?? ""]
+            let own = [(element.accessibilityLabel?() ?? nil) ?? ""]
             return own + ((element.accessibilityChildren?() ?? nil) ?? []).flatMap { labels($0 as AnyObject, depth: depth + 1) }
         }
         let shown = labels(host)
