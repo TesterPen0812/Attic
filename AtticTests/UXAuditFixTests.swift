@@ -27,7 +27,7 @@ final class UXAuditFixTests: XCTestCase {
     }
 
     func testAuditA8HistoryRestoreClearsTheSharedPlusAt320Points() async throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store,
             journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AuditHistory")))
         await controller.startAndWait()
