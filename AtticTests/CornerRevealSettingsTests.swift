@@ -164,6 +164,48 @@ final class CornerRevealSettingsTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
+    /// WindowServer can remove a revealed panel from the current Space
+    /// without changing the hover machine's logical visibility. Replaying
+    /// that lost native presentation needs no new mouse event or activation.
+    func testASpaceChangeRepairsLostNativePresentationWithoutTakingTheKeyboard() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        let panel = rig.controller.panelForTesting
+        let active = NSRunningApplication.current.isActive
+        let responder = panel.firstResponder
+        XCTAssertFalse(rig.monitor.isHiddenForPerformanceProbe)
+        panel.orderOut(nil)
+        XCTAssertFalse(panel.isVisible)
+        let samples = rig.monitor.sampleCount
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertGreaterThan(rig.monitor.sampleCount, samples, "a Space change is an input even with a stationary pointer")
+        XCTAssertTrue(panel.isVisible, "the logical reveal must have native presentation in the new Space")
+        XCTAssertTrue(rig.controller.islandWindowsForTesting.isVisible)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertTrue(panel.firstResponder === responder)
+        XCTAssertEqual(NSRunningApplication.current.isActive, active)
+    }
+
+    func testSpaceChangesNeverReviveAHiddenOrStoppedPanel() throws {
+        let rig = try makePanel()
+        rig.settings.revealOnHover = false
+        rig.monitor.start()
+        let panel = rig.controller.panelForTesting
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertFalse(panel.isVisible)
+        rig.monitor.stop()
+        spin(0.4)
+        let samples = rig.monitor.sampleCount
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        spin()
+        XCTAssertEqual(rig.monitor.sampleCount, samples, "stop removes the workspace observer")
+        XCTAssertFalse(panel.isVisible)
+    }
+
     /// The monitor reads the rule as it changes: hover off, a key, chosen
     /// displays. Corners that don't answer are not even sampled closely.
     /// Explicit opens show the panel whatever the rule says.
