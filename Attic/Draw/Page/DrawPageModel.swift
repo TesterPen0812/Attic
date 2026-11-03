@@ -182,7 +182,10 @@ final class DrawPageModel: ObservableObject {
     /// couldn't be added: shown in the same notice, without Retry.
     @Published private var actionProblem: String?
 
-    init(store: any DrawStoreProtocol) {
+    private let resumeDefaults: UserDefaults?
+
+    init(store: any DrawStoreProtocol, resumeDefaults: UserDefaults? = nil) {
+        self.resumeDefaults = resumeDefaults
         self.store = store
         observeStore()
         appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in

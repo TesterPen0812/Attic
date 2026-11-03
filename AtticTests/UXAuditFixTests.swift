@@ -68,6 +68,44 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testAuditB5RelaunchRestoresTheLastPageAndTaskScroll() throws {
+        let suite = "AuditB5.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = PanelUIState(resumeDefaults: defaults)
+        first.selectSection(.calendar)
+        XCTAssertEqual(PanelUIState(resumeDefaults: defaults).selectedSection, .calendar)
+        let memory = TasksPageMemory(defaults: defaults)
+        let library = AtticLibrary(tasks: try makeTestStore())
+        let tasks = TasksPageModel(library: library, memory: memory)
+        tasks.scrollOffsets[.now] = 284
+        tasks.scrollOffsets[.backlog] = 123
+        let restored = TasksPageModel(library: library, memory: memory)
+        XCTAssertEqual(restored.scrollOffsets[.now], 284)
+        XCTAssertEqual(restored.scrollOffsets[.backlog], 123)
+        // Explicit capture continues to override the resumed page.
+        let reopened = PanelUIState(resumeDefaults: defaults)
+        reopened.selectSection(.tasks)
+        XCTAssertEqual(reopened.selectedSection, .tasks)
+    }
+
+    func testAuditB5DrawRestoresTheCanvasAndViewportAcrossModels() throws {
+        let suite = "AuditB5Draw.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DrawInMemoryStore()
+        let first = DrawPageModel(store: store, resumeDefaults: defaults)
+        first.start()
+        let wanted = try XCTUnwrap(first.canvasID)
+        let viewport = DrawViewport(x: -120, y: 87, zoom: 1.75)
+        first.setViewport(viewport, byUser: true)
+        _ = store.create(name: "Another canvas")
+        let restored = DrawPageModel(store: store, resumeDefaults: defaults)
+        restored.start()
+        XCTAssertEqual(restored.canvasID, wanted)
+        XCTAssertEqual(restored.viewport, viewport)
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }

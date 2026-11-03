@@ -33,6 +33,12 @@ final class TaskRenameDraft: ObservableObject {
 
 @MainActor
 final class PanelUIState: ObservableObject {
+    let resumeDefaults: UserDefaults?
+
+    init(resumeDefaults: UserDefaults? = nil) {
+        self.resumeDefaults = resumeDefaults
+    }
+
     @Published var isComposerPresented = false
     /// Whether the panel is the key window. Native Liquid Glass renders flat
     /// in a window that is not key, so while it is not (a hover reveal never
