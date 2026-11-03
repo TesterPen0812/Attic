@@ -49,7 +49,7 @@ final class NoteHistoryBrowserTests: XCTestCase {
         gate.shouldFail = false
         await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
         XCTAssertTrue(store.restoreDeleted(noteID: session.noteID))
-        XCTAssertEqual(try store.loadDocument(noteID: session.noteID).get().document, expected)
+        XCTAssertEqual(try XCTUnwrap(store.loadDocument(noteID: session.noteID)).document, expected)
     }
 
     func testU17PermanentPurgeReleasesDisplacedVersionRestoreSession() async throws {
