@@ -873,10 +873,6 @@ final class DrawPageModel: ObservableObject {
     // MARK: Title filter (D4) and search
 
     func openFilter() {
-        #if DEBUG
-        DrawMenuFocusProbe.record("filter.begin")
-        defer { DrawMenuFocusProbe.record("filter.end") }
-        #endif
         endEditing()
         strip = nil
         library.cancelRename()
