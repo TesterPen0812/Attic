@@ -77,7 +77,9 @@ final class TasksGoingInTests: XCTestCase {
         defer { window.close() }
         let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
             addBarFocused: .constant(false), pointer: TasksPointer())
-        let host = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = true
+        let host = NSHostingView(rootView: page.atticDesign(design)
             .frame(width: size.width, height: size.height))
         window.contentView = host
         window.orderFront(nil)
