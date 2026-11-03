@@ -9,7 +9,8 @@ the same contour. Proposal comparison uses a 34 pt track: 17 pt outer corners,
 native Tab/arrow keyboard behavior. Rings and coloured dots keep their circles;
 decorative quote rules retain their round caps. Popover highlights, task metadata
 controls, inline tag hover fills, native table grips and table add buttons use
-curve 1.4; unavailable
+curve 1.4. Metadata hover ink accounts for its row and control fills together;
+unavailable
 image and opaque-content placeholders follow their small-object, block or chip role.
 
 ## 2026-11-03 · Canvas filter in the title

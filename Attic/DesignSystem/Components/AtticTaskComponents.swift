@@ -2040,14 +2040,16 @@ private struct AtticDetailsCountButton: View {
         let m = AtticSubtaskChecklistMetrics.self
         let radius = AtticRadius.control(height: m.height)
         let hover = !disabled && (forced == .hover || hovered)
+        let metaInk = TasksPanelDesign.toneInk(.meta, tokens: design.tokens,
+            overlays: hover ? [design.tokens.hover, design.tokens.chipHover] : [])
         Button(action: action) {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
-                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                    .colour(disabled ? nil : metaInk)
                     .frame(width: m.iconSlot)
                 // The design's 11 pt meta text in the meta grey.
                 AtticText(verbatim: count, style: .taskMeta, ink: disabled ? .disabledText : .helper)
-                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                    .colour(disabled ? nil : metaInk)
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
