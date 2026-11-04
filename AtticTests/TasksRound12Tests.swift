@@ -29,7 +29,8 @@ final class TasksRound12Tests: XCTestCase {
                 hosted.spin(0.06)
                 let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: hosted.window.contentView!,
                     placeholder: hosted.model.searchPlaceholder(for: tab)))
-                let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView)
+                let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView,
+                    "Find tab=\(tab) selection=\(selection) first=\(String(describing: hosted.window.firstResponder)) key=\(hosted.window.isKeyWindow) fieldEnabled=\(field.isEnabled) fieldHidden=\(field.isHiddenOrHasHiddenAncestor) currentEditor=\(String(describing: field.currentEditor()))")
                 XCTAssertTrue(editor.delegate as? NSTextField === field, "Find acquired its own field before the retry")
                 editor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
                 editor.setSelectedRange(selection)

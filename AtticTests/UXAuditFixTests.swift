@@ -485,9 +485,30 @@ final class UXAuditFixTests: XCTestCase {
 
     private final class KeyPanel: NSPanel {
         override var canBecomeKey: Bool { true }
+        var recordsFocus = false
+        var focusTrace: [String] = []
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            func name(_ value: NSResponder?) -> String {
+                value.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil"
+            }
+            let before = recordsFocus ? name(firstResponder) : ""
+            let accepted = super.makeFirstResponder(responder)
+            if recordsFocus {
+                focusTrace.append("\(focusTrace.count): request=\(name(responder)) before=\(before) accepted=\(accepted) after=\(name(firstResponder))")
+            }
+            return accepted
+        }
     }
 
     func testAuditA5SearchAndTagsTakeTheKeyboardFromTheBoard() throws {
+        try assertDrawFilterKeyboardHandoff(iteration: 0)
+    }
+
+    func testBugs3RepeatedDrawFilterHandoffsKeepTheBoardKeyboard() throws {
+        for iteration in 1...24 { try assertDrawFilterKeyboardHandoff(iteration: iteration) }
+    }
+
+    private func assertDrawFilterKeyboardHandoff(iteration: Int) throws {
         try requireKeyWindowTests()
         AtticDraw.enabledOverride = true
         defer { AtticDraw.enabledOverride = nil }
@@ -499,6 +520,7 @@ final class UXAuditFixTests: XCTestCase {
         let window = KeyPanel(contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.recordsFocus = true
         defer { window.close() }
         window.contentView = NSHostingView(rootView: DrawPageHost(model: model, uiState: state, layout: layout)
             .atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
@@ -543,12 +565,14 @@ final class UXAuditFixTests: XCTestCase {
                 + " search=\(model.isSearching) filter=\(model.isFiltering) rename=\(model.library.isRenaming) edit=\(model.editing != nil)"
         }
         let beforeEscape = focusState()
+        DispatchQueue.main.async { window.focusTrace.append("queued-before: \(focusState())") }
         window.sendEvent(filterEscape)
         let immediatelyAfterEscape = focusState()
+        DispatchQueue.main.async { window.focusTrace.append("queued-after: \(focusState())") }
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         XCTAssertFalse(model.isFiltering)
         XCTAssertTrue(window.firstResponder is DrawBoardView,
-                      "Draw filter keyboard handoff: before=[\(beforeEscape)] immediate=[\(immediatelyAfterEscape)] after=[\(focusState())]")
+                      "Draw filter keyboard handoff iteration=\(iteration): before=[\(beforeEscape)] immediate=[\(immediatelyAfterEscape)] after=[\(focusState())] trace=\(window.focusTrace.suffix(30))")
         model.openFilter()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         model.library.perform(.tags)

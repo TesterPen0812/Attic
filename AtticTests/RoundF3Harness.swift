@@ -90,7 +90,9 @@ class RoundF3TestCase: XCTestCase {
         let frames = indicatorFrames(text)
         XCTAssertEqual(frames.count, 1, "exactly one native indicator", file: file, line: line)
         let frame = try XCTUnwrap(frames.first, file: file, line: line)
-        let baseline = try XCTUnwrap(NoteLineGeometry.line(at: frame, in: text)?.baseline, file: file, line: line)
+        let baseline = try XCTUnwrap(NoteLineGeometry.line(at: frame, in: text)?.baseline,
+            "native caret selection=\(text.selectedRange()) frame=\(frame) visible=\(text.visibleRect) bounds=\(text.bounds) first=\(String(describing: text.window?.firstResponder)) key=\(text.window?.isKeyWindow ?? false)",
+            file: file, line: line)
         return Caret(frame: frame, baseline: baseline)
     }
 
