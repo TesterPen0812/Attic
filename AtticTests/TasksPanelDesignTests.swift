@@ -240,7 +240,7 @@ final class TasksPanelDesignTests: XCTestCase {
 
     func testEmptyStatesUseTheDesignsCopy() {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false).title, "Nothing to do right now")
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing scheduled")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing for later")
         XCTAssertEqual(TasksPanelDesign.empty(tab: .done, query: "", filtered: false),
                        .init(title: "Nothing completed yet", body: "", canClear: false))
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: " milk ", filtered: false),

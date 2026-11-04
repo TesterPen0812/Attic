@@ -26,6 +26,36 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+    func testBugs3FirstVisitShowsSavedNotesInsteadOfAnUnrequestedBlankDraft() async throws {
+        let (id, _) = try store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Existing library note"), .text("Real writing")])).get()
+        let controller = makeController()
+        await controller.startAndWait()
+        XCTAssertTrue(controller.isLibraryPresented, "without a last-open note, show the real library")
+        XCTAssertNil(controller.active, "visiting Notes must not manufacture a blank editor over saved notes")
+        XCTAssertNotNil(store.note(withID: id))
+        controller.present()
+        XCTAssertTrue(controller.isLibraryPresented, "presentation must preserve the library")
+    }
+
+    func testBugs3FirstVisitRestoresTheLastOpenNoteWithItsWriting() async throws {
+        let suite = "Bugs3Notes.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (id, _) = try store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Last open"), .text("Real writing")])).get()
+        let first = NotesPageController(store: store, journal: nil, defaults: defaults)
+        XCTAssertTrue(first.open(noteID: id))
+        XCTAssertTrue(first.prepareToLeave(.pageSwitch))
+        let restored = NotesPageController(store: store, journal: nil, defaults: defaults)
+        await restored.startAndWait()
+        XCTAssertFalse(restored.isLibraryPresented)
+        XCTAssertEqual(restored.active?.noteID, id)
+        XCTAssertEqual(restored.active?.engine.plainText, "Last open\nReal writing")
+    }
+    #endif
+
+    #if !ATTIC_GENERATED_TESTS
     func testB01ReopenedStoredFilesCopyAsRTFDWithoutSavingTheNote() async throws {
         let image = try realImage(), data = Data("Stored file bytes ¬".utf8)
         let file = StagedNoteAttachment(id: UUID(), filename: "stored.txt", contentTypeIdentifier: "public.plain-text",

@@ -426,6 +426,15 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(Set(groups.map(\.id)).count, groups.count, "unique ids")
     }
 
+    func testBugs3AnEmptyTodayReadsLikeTheOtherEmptyDays() {
+        let today = day(2026, 10, 29)
+        let groups = CalendarAgenda.groups(selected: today,
+            clock: .init(today: today, now: date(2026, 10, 29, 12)),
+            events: [], tasks: [], calendar: calendar)
+        XCTAssertFalse(CalendarAgendaDay.hasCard(groups[0]), "no empty highlighted box on Today")
+        XCTAssertFalse(CalendarAgendaDay.hasCard(groups[1]))
+    }
+
     func testEveryDayHasItsGreyTileAndOnlyTodayHasASquircleCard() throws {
         let today = day(2026, 10, 29)
         let clock = CalendarAgenda.Clock(today: today, now: date(2026, 10, 29, 12))
