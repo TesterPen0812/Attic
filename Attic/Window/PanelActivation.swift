@@ -30,11 +30,31 @@ final class PanelActivation {
             terminated: { $0.isTerminated }, deactivate: { NSApp.deactivate() })
         }
 
-        /// The native preparation boundary, with window inventory supplied so
-        /// policy tests never borrow the test runner's keyboard or windows.
+        struct MainCandidate {
+            var isMain = false
+            var isMiniaturized = false
+            var isPanel = false
+            var isVisible = false
+            var canBecomeMain = false
+
+            static func snapshot(_ window: NSWindow) -> Self {
+                Self(isMain: window.isMainWindow, isMiniaturized: window.isMiniaturized,
+                     isPanel: window is AtticPanel, isVisible: window.isVisible,
+                     canBecomeMain: window.canBecomeMain)
+            }
+        }
+
+        /// Read OS state once; tests replace the requests, never the invisible
+        /// host's presentation safeguards.
         static func prepareForActivation(_ window: NSWindow, windows: [NSWindow]) {
-            window.makeKey()
-            window.makeMain()
+            prepareForActivation(otherWindows: windows.filter { $0 !== window }.map(MainCandidate.snapshot),
+                                 makeKey: { window.makeKey() }, makeMain: { window.makeMain() })
+        }
+
+        static func prepareForActivation(otherWindows: [MainCandidate],
+                                         makeKey: () -> Void, makeMain: () -> Void) {
+            makeKey()
+            makeMain()
         }
     }
 
