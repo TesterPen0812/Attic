@@ -12,9 +12,11 @@ final class LoginItemService: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration: UInt64 = 0
 
-    init(service: SMAppService = .mainApp, readStatus: (@Sendable () -> SMAppService.Status)? = nil) {
-        self.service = service
-        self.readStatus = readStatus ?? { service.status }
+    init(readStatus: (@Sendable () -> SMAppService.Status)? = nil) {
+        self.service = .mainApp
+        // Resolve the worker's service where it is used; never transfer the
+        // main actor's non-Sendable SMAppService into the status closure.
+        self.readStatus = readStatus ?? { SMAppService.mainApp.status }
         refresh()
     }
 
