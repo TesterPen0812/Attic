@@ -308,7 +308,7 @@ final class PanelUIState: ObservableObject {
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1
         let sliding = motion.travels
-        if isPageSwitchSliding != sliding { isPageSwitchSliding = sliding }
+        if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
         withAnimation(motion.animation) {
             selectSection(section)
             alongside()
@@ -317,13 +317,16 @@ final class PanelUIState: ObservableObject {
         let generation = pageSlideGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + motion.settleDuration) { [weak self] in
             guard let self, self.pageSlideGeneration == generation else { return }
-            self.isPageSwitchSliding = false
+            self.pageTransit.sliding = false
         }
     }
 
     /// A page switch's slide is running (Accepted 2026-11-04): the pages'
     /// scroll bars stay hidden meanwhile, so they never flash or cross.
-    @Published private(set) var isPageSwitchSliding = false
+    /// Its own object, so only the scroll bars redraw when it ends (a
+    /// change published here re-evaluated the whole panel as it settled).
+    let pageTransit = PanelPageTransit()
+    var isPageSwitchSliding: Bool { pageTransit.sliding }
     private var pageSlideGeneration = 0
 
     func selectSection(_ section: PanelSection) {

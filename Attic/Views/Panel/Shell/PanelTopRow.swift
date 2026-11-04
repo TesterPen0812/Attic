@@ -181,8 +181,14 @@ private struct PanelPageMotionKey: EnvironmentKey {
     static let defaultValue: PanelPageMotion = .instant
 }
 
-private struct PanelPagesInTransitKey: EnvironmentKey {
-    static let defaultValue = false
+private struct PanelPageTransitKey: EnvironmentKey {
+    static let defaultValue: PanelPageTransit? = nil
+}
+
+/// Whether a page switch's slide is running (`PanelUIState.switchPage`).
+@MainActor
+final class PanelPageTransit: ObservableObject {
+    @Published var sliding = false
 }
 
 extension EnvironmentValues {
@@ -200,10 +206,10 @@ extension EnvironmentValues {
         set { self[PanelPageMotionKey.self] = newValue }
     }
 
-    /// A page switch is sliding: scroll bars stay hidden.
-    var panelPagesInTransit: Bool {
-        get { self[PanelPagesInTransitKey.self] }
-        set { self[PanelPagesInTransitKey.self] = newValue }
+    /// The page switch's slide state: scroll bars stay hidden while it runs.
+    var panelPageTransit: PanelPageTransit? {
+        get { self[PanelPageTransitKey.self] }
+        set { self[PanelPageTransitKey.self] = newValue }
     }
 
     /// The page whose top row this is (nil outside a top row).
@@ -262,10 +268,22 @@ enum PanelTakeTurns {
 /// A page's scroll bars: hidden while a page switch slides, so the new
 /// page's never flashes or crosses the panel.
 struct PanelTransitScrollIndicators: ViewModifier {
-    @Environment(\.panelPagesInTransit) private var inTransit
+    @Environment(\.panelPageTransit) private var transit
 
     func body(content: Content) -> some View {
-        content.scrollIndicators(inTransit ? .never : .automatic)
+        if let transit {
+            content.modifier(Observing(transit: transit))
+        } else {
+            content
+        }
+    }
+
+    private struct Observing: ViewModifier {
+        @ObservedObject var transit: PanelPageTransit
+
+        func body(content: Content) -> some View {
+            content.scrollIndicators(transit.sliding ? .never : .automatic)
+        }
     }
 }
 

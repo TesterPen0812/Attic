@@ -133,7 +133,7 @@ struct AtticPanelView: View {
         }
         // While a switch slides, the pages' scroll bars stay hidden: they
         // never flash or cross the panel (Accepted 2026-11-04).
-        .environment(\.panelPagesInTransit, uiState.isPageSwitchSliding)
+        .environment(\.panelPageTransit, uiState.pageTransit)
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
             header.modifier(PanelHeaderDim(state: topRowState, page: currentPage))
