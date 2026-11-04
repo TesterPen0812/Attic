@@ -32,6 +32,24 @@ final class PanelShellTests: XCTestCase {
         indicators.stop()
     }
 
+    func testBugs4IndicatorRestorationUsesTheCurrentNativeAppearanceAndLeavesIdleChangesAlone() throws {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        scroll.hasVerticalScroller = true
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        scroller.alphaValue = 0.8
+        let transit = PanelPageTransit()
+        let indicators = PanelNativeScrollIndicators()
+        indicators.bind(scroll, transit: transit)
+        scroller.alphaValue = 0.6
+        transit.sliding = true
+        XCTAssertTrue(scroller.isHidden || scroller.alphaValue == 0)
+        transit.sliding = false
+        XCTAssertEqual(scroller.alphaValue, 0.6, "restore the appearance from this slide, not from initial binding")
+        scroller.alphaValue = 0.4
+        indicators.stop()
+        XCTAssertEqual(scroller.alphaValue, 0.4, "idle teardown must leave newer native appearance alone")
+    }
+
     private final class NativeTrackingView: NSView {
         var onDown: ((NSEvent) -> Void)?
         override func mouseDown(with event: NSEvent) { onDown?(event) }
