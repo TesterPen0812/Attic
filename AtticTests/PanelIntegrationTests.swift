@@ -103,6 +103,23 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.selectedSection, .tasks)
     }
 
+    func testBugs4IdlePageBuildWaitsForTheActivePanelInteraction() throws {
+        for reason in [PanelInteractionLockReason.panelSwipe, .menuTracking] {
+            let panel = try makePanel()
+            let delay = AtticPanelController.keptPagesBuildDelay
+            AtticPanelController.keptPagesBuildDelay = 0
+            defer { AtticPanelController.keptPagesBuildDelay = delay }
+            panel.uiState.setInteractionLock(reason, isActive: true)
+            defer { panel.uiState.setInteractionLock(reason, isActive: false) }
+            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+            spin(0.3)
+            XCTAssertEqual(panel.uiState.builtPages, [.tasks], "prewarming must not stall an active swipe or menu")
+            panel.uiState.setInteractionLock(reason, isActive: false)
+            spin(until: { panel.uiState.builtPages == Set(PanelPage.allCases) })
+            XCTAssertEqual(panel.uiState.builtPages, Set(PanelPage.allCases), "warm-up resumes once the interaction ends")
+        }
+    }
+
     func testBugs4IdleRevealBuildsColdNotesWithoutTakingItsInput() throws {
         let panel = try makePanel()
         let delay = AtticPanelController.keptPagesBuildDelay
