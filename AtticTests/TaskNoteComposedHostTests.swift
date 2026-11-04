@@ -66,6 +66,21 @@ final class TaskNoteComposedHostTests: XCTestCase {
         return hosting
     }
 
+    func testBugs3AcceptedHideReleasesTheTaskWritingCaretWithoutChangingItsText() async throws {
+        let id = try seed(.boundary), hosting = sectionHosting()
+        let presenter = try await mountTaskPage(id, in: hosting)
+        let text = presenter.host.textView
+        let window = try XCTUnwrap(text.window)
+        XCTAssertTrue(window.makeFirstResponder(text))
+        XCTAssertTrue(window.firstResponder === text)
+        let before = NSAttributedString(attributedString: text.attributedString())
+        let selection = text.selectedRange()
+        XCTAssertTrue(notes.prepareToLeave(.hide))
+        XCTAssertFalse(window.firstResponder === text, "the blue caret must not blink back over the writing during hide")
+        XCTAssertEqual(text.attributedString(), before)
+        XCTAssertEqual(text.selectedRange(), selection)
+    }
+
     func testTaskPageDraftCaretAndFoldSurviveTasksThenNotesWithANewContainer() async throws {
         let id = try seed(.boundary), hosting = sectionHosting()
         let uiState = PanelUIState()
