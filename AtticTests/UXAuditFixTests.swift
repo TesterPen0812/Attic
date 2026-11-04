@@ -529,10 +529,26 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertEqual(model.library.filter, "plan")
         let filterEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
+        func focusState() -> String {
+            let responder = window.firstResponder
+            let editor = responder as? NSTextView
+            let delegate = editor?.delegate
+            let field = delegate as? NSTextField
+            let board = model.board as? DrawBoardView
+            return "responder=\(responder.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil")"
+                + " delegate=\(delegate.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil")"
+                + " field=\(field?.accessibilityIdentifier() ?? "nil") enabled=\(titleField.isEnabled)"
+                + " shown=\(model.isShown) boardHidden=\(board?.isHiddenOrHasHiddenAncestor ?? true)"
+                + " sameWindow=\(board?.window === window) key=\(window.isKeyWindow)"
+                + " search=\(model.isSearching) filter=\(model.isFiltering) rename=\(model.library.isRenaming) edit=\(model.editing != nil)"
+        }
+        let beforeEscape = focusState()
         window.sendEvent(filterEscape)
+        let immediatelyAfterEscape = focusState()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         XCTAssertFalse(model.isFiltering)
-        XCTAssertTrue(window.firstResponder is DrawBoardView)
+        XCTAssertTrue(window.firstResponder is DrawBoardView,
+                      "Draw filter keyboard handoff: before=[\(beforeEscape)] immediate=[\(immediatelyAfterEscape)] after=[\(focusState())]")
         model.openFilter()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         model.library.perform(.tags)
