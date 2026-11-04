@@ -103,6 +103,7 @@ final class CornerHoverMonitor {
     /// `scheduleFollowUp`.
     private var followUpWork: DispatchWorkItem?
     private var lockObservation: AnyCancellable?
+    private var hideObservation: AnyCancellable?
     private var lockSampleScheduled = false
     private static let eventSampleInterval: TimeInterval = 1.0 / 30
     /// Test seam: how many full pointer samples ran.
@@ -186,6 +187,15 @@ final class CornerHoverMonitor {
         lockObservation = uiState.objectWillChange
             .sink { [weak self] _ in self?.scheduleLockSample() }
 
+        // A controller-owned hide can complete before the deferred Space
+        // observer (notably with Reduced Motion). Native hide completion is
+        // authoritative even when the request did not come from this monitor.
+        hideObservation = uiState.$hideCount.dropFirst().sink { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            self.stateMachine.forceHidden(untilHotspotExit: true)
+            self.refreshSamplingCadence(at: NSEvent.mouseLocation)
+        }
+
         panelController.buildTasksPageWhenIdle()
 
         // Establish the initial cadence synchronously. A pointer already near
@@ -206,6 +216,7 @@ final class CornerHoverMonitor {
         spaceChangeToken = nil
         cornerObservation = nil
         lockObservation = nil
+        hideObservation = nil
         trailingSampleWork?.cancel()
         trailingSampleWork = nil
         followUpWork?.cancel()
