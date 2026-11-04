@@ -232,6 +232,15 @@ final class FirstClickActivationRequestTests: XCTestCase {
         method_setImplementation(method, implementation)
         defer { method_setImplementation(method, original); imp_removeBlock(implementation) }
 
+        // Keep a competing surface present: the assertion below protects
+        // against raising that window. Panel-only no-op preparation has its
+        // own cases in PanelActivationPreparationTests.
+        let competing = AtticPanel(contentRect: CGRect(x: -4000, y: -4000, width: 100, height: 100),
+                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        competing.isReleasedWhenClosed = false
+        competing.orderFrontRegardless()
+        defer { competing.close() }
+
         for surface in ["docked", "island", "floating"] {
             let frame = CGRect(x: -4_000, y: -4_000, width: 200, height: 200)
             let window: NSPanel = surface == "island"
