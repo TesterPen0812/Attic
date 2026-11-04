@@ -70,7 +70,7 @@ final class PerformanceUITests: XCTestCase {
                 .appendingPathComponent("Library/Containers")
             for bundle in ["com.taha.Attic.perf.ui", "com.taha.Attic.ci.ui", "com.taha.Attic.preview.bugs3.perf"] {
                 let root = containers.appendingPathComponent(bundle)
-                    .appendingPathComponent("Data/Library/Application Support/AtticPerformanceStores/attic-perf-\(identifier)")
+                    .appendingPathComponent("Data/Library/Application Support/AtticPerformanceStores/attic-perf-ui-\(identifier)")
                 guard let owner = try? String(contentsOf: root.appendingPathComponent(".attic-perf-owner"), encoding: .utf8),
                       owner == identifier else { continue }
                 for file in ["phase.json", "phase-markers/hidden_idle.json", "phase-markers/tasks_open.json", "phase-markers/canvas_open.json"] {
