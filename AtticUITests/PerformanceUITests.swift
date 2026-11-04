@@ -123,7 +123,6 @@ final class PerformanceUITests: XCTestCase {
         let probe = makeApp(probe: true)
         app = probe
         probe.launch()
-        let picker = probe.descendants(matching: .any)["panel-section-picker"]
         let tasks = probe.buttons["panel-section-tasks"]
         // D4's resting island is dots, and the Pages group's centre can
         // be empty. Read the actual Tasks page rather than that group.
