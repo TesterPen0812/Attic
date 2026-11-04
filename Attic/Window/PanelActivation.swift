@@ -24,47 +24,11 @@ final class PanelActivation {
                 let app = NSWorkspace.shared.frontmostApplication
                 return app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
             }, windows: { NSApp.windows }, prepare: { window in
-                prepareForActivation(window, windows: NSApp.windows)
+                window.makeKey()
+                window.makeMain()
             }, activate: { NSRunningApplication.current.activate(options: []) }, yield: { NSApp.yieldActivation(to: $0) },
             restore: { $0.activate(from: .current, options: []) },
             terminated: { $0.isTerminated }, deactivate: { NSApp.deactivate() })
-        }
-
-        struct MainCandidate {
-            var isMain = false
-            var isMiniaturized = false
-            var isPanel = false
-            var isVisible = false
-            var canBecomeMain = false
-
-            static func snapshot(_ window: NSWindow) -> Self {
-                Self(isMain: window.isMainWindow, isMiniaturized: window.isMiniaturized,
-                     isPanel: window is AtticPanel, isVisible: window.isVisible,
-                     canBecomeMain: window.canBecomeMain)
-            }
-        }
-
-        /// Read OS state once; tests replace the requests, never the invisible
-        /// host's presentation safeguards.
-        static func prepareForActivation(_ window: NSWindow, windows: [NSWindow]) {
-            prepareForActivation(isAlreadyKey: window.isKeyWindow,
-                                 otherWindows: windows.filter { $0 !== window }.map(MainCandidate.snapshot),
-                                 makeKey: { window.makeKey() }, makeMain: { window.makeMain() })
-        }
-
-        static func prepareForActivation(isAlreadyKey: Bool, otherWindows: [MainCandidate],
-                                         makeKey: () -> Void, makeMain: () -> Void) {
-            if !isAlreadyKey { makeKey() }
-            // A panel-only click already got key on mouse-down. Promoting it
-            // to main needlessly re-enters native tooltip/focus layout before
-            // the click's changed frame. Preserve the main-window protection
-            // whenever another surface could be raised. Floating panels stay
-            // conservative even while unordered or between temporary leases.
-            if otherWindows.contains(where: {
-                $0.isMain || $0.isMiniaturized || $0.isPanel || ($0.isVisible && $0.canBecomeMain)
-            }) {
-                makeMain()
-            }
         }
     }
 
@@ -117,9 +81,9 @@ final class PanelActivation {
         previousApp = beforePress
         borrowedActivation = true
         awaitingActivation = true
-        // If another surface could be raised, temporarily make the clicked
-        // panel main too, so a document/Settings window cannot be raised (or
-        // pull us to its Space). Island clicks belong to their parent.
+        // Activation raises both key and main windows. Temporarily make the
+        // clicked panel both, so a document/Settings window cannot be raised
+        // (or pull us to its Space). Island clicks belong to their parent.
         let surface = (window as? PanelIslandWindow)?.parent ?? window
         activationWindow = surface
         system.prepare(surface)
