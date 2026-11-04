@@ -1385,7 +1385,8 @@ final class NotesPageController: ObservableObject {
 
     // MARK: Opening
 
-    /// Recovery first, then the last note viewed, else a new draft.
+    /// Recovery first, then the last note viewed, else the library when
+    /// there is saved writing or a new draft when there is none.
     func start() {
         guard !didStart else { return }
         startRequested = true
