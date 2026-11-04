@@ -8,6 +8,30 @@ import XCTest
 /// the agent's `show` tool.
 @MainActor
 final class PanelShellTests: XCTestCase {
+    func testBugs4HidingLegacyIndicatorsDoesNotReflowTheDocumentColumn() throws {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        scroll.scrollerStyle = .legacy
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = false
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 500, height: 1_000))
+        scroll.tile()
+        let width = scroll.contentSize.width
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        scroller.alphaValue = 0.8
+        let transit = PanelPageTransit()
+        let indicators = PanelNativeScrollIndicators()
+        indicators.bind(scroll, transit: transit)
+        transit.sliding = true
+        scroll.tile()
+        XCTAssertEqual(scroll.contentSize.width, width, "hiding the indicator must not rewrap a task note")
+        XCTAssertTrue(scroller.isHidden || scroller.alphaValue == 0, "the retained gutter must draw no scrollbar")
+        transit.sliding = false
+        scroll.tile()
+        XCTAssertEqual(scroll.contentSize.width, width)
+        XCTAssertEqual(scroller.alphaValue, 0.8)
+        indicators.stop()
+    }
+
     private final class NativeTrackingView: NSView {
         var onDown: ((NSEvent) -> Void)?
         override func mouseDown(with event: NSEvent) { onDown?(event) }
