@@ -54,6 +54,7 @@ final class TasksRound12Tests: XCTestCase {
                 let editor = try XCTUnwrap(field.currentEditor(),
                     "field discovery services the pending explicit request immediately")
                 XCTAssertTrue(window.firstResponder === editor)
+                XCTAssertTrue((editor as? NSTextView)?.delegate as? NSTextField === field)
                 editor.selectedRange = NSRange(location: 1, length: 3)
                 XCTAssertFalse(claim.takeKeyboard(request: request, in: window))
                 XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3),
