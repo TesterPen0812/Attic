@@ -63,20 +63,39 @@ final class PerformanceUITests: XCTestCase {
                       "App exited during \(name)")
     }
 
+    private func ownedPerformanceRoots() -> [(bundle: String, root: URL)] {
+        guard let identifier, UUID(uuidString: identifier) != nil,
+              let account = getpwuid(getuid()) else { return [] }
+        let containers = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
+            .appendingPathComponent("Library/Containers")
+        var roots: [(bundle: String, root: URL)] = []
+        for bundle in ["com.taha.Attic.perf.ui", "com.taha.Attic.ci.ui", "com.taha.Attic.preview.bugs3.perf"] {
+            let root = containers.appendingPathComponent(bundle)
+                .appendingPathComponent("Data/Library/Application Support/AtticPerformanceStores/attic-perf-ui-\(identifier)")
+            guard let owner = try? String(contentsOf: root.appendingPathComponent(".attic-perf-owner"), encoding: .utf8),
+                  owner == identifier else { continue }
+            roots.append((bundle, root))
+        }
+        return roots
+    }
+
+    private func visibleTasksPhase() -> [String: Any]? {
+        for (_, root) in ownedPerformanceRoots() {
+            guard let data = try? Data(contentsOf: root.appendingPathComponent("phase.json")),
+                  let phase = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  ["tasks_open", "tasks_open_end"].contains(phase["phase"] as? String ?? ""),
+                  phase["panel_visible"] as? Int == 1, phase["section_canvas"] as? Int == 0 else { continue }
+            return phase
+        }
+        return nil
+    }
+
     private func diagnoseTasksReadiness(_ application: XCUIApplication) {
         // Read only this test's UUID-owned diagnostics, never a normal store.
-        if let identifier, let account = getpwuid(getuid()) {
-            let containers = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
-                .appendingPathComponent("Library/Containers")
-            for bundle in ["com.taha.Attic.perf.ui", "com.taha.Attic.ci.ui", "com.taha.Attic.preview.bugs3.perf"] {
-                let root = containers.appendingPathComponent(bundle)
-                    .appendingPathComponent("Data/Library/Application Support/AtticPerformanceStores/attic-perf-ui-\(identifier)")
-                guard let owner = try? String(contentsOf: root.appendingPathComponent(".attic-perf-owner"), encoding: .utf8),
-                      owner == identifier else { continue }
-                for file in ["phase.json", "phase-markers/hidden_idle.json", "phase-markers/tasks_open.json", "phase-markers/canvas_open.json"] {
-                    if let data = try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) {
-                        print("PERF_PHASE_DIAG bundle=\(bundle) marker=\(file) \(data)")
-                    }
+        for (bundle, root) in ownedPerformanceRoots() {
+            for file in ["phase.json", "phase-markers/hidden_idle.json", "phase-markers/tasks_open.json", "phase-markers/canvas_open.json"] {
+                if let data = try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) {
+                    print("PERF_PHASE_DIAG bundle=\(bundle) marker=\(file) \(data)")
                 }
             }
         }
@@ -154,7 +173,20 @@ final class PerformanceUITests: XCTestCase {
         // D4's resting island is dots, and the Pages group's centre can
         // be empty. Read the actual Tasks page rather than that group.
         let pin = probe.buttons["panel-pin-button"]
-        let opened = waitUntil(timeout: 90) { pin.isHittable }
+        var pointerEnteredPanel = false
+        let opened = waitUntil(timeout: 90) {
+            if !pointerEnteredPanel {
+                guard let phase = visibleTasksPhase(), pin.exists, !pin.frame.isEmpty else { return false }
+                // The preceding navigation sample leaves the pointer at the
+                // expanded island's Canvas item. On this new, resting island
+                // that point is native padding; passthrough intentionally keeps
+                // the main panel ignored until real pointer movement enters it.
+                print("PERF_TASKS_POINTER phase=\(phase["phase"] ?? "") prior=(\(phase["pointer_x"] ?? ""),\(phase["pointer_y"] ?? "")) pin=\(pin.frame)")
+                pin.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+                pointerEnteredPanel = true
+            }
+            return pin.isHittable
+        }
         if !opened { diagnoseTasksReadiness(probe) }
         XCTAssertTrue(opened, "Tasks panel did not open")
         XCTAssertTrue(tasks.isSelected, "Tasks was not selected before the sample")
