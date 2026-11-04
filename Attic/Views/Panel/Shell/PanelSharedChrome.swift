@@ -259,15 +259,18 @@ struct PanelSharedBottomBar: View {
         let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
         #endif
         HStack(alignment: .bottom, spacing: 0) {
-            HStack(spacing: gap) {
-                // Accessibility state goes on each control, never on this
-                // stack (which would make it an element wearing the
-                // switch's identifier).
-                middle(look.middle, actions: actions, hidden: folded || !look.shown || taken)
-            }
             // P4: the card takes the row; the pills slide 6 pt toward the
-            // bar's start as they fade (the design's 12 px).
-            .opacity(taken ? 0 : 1)
+            // bar's start as they fade (the design's 12 px). Their glass
+            // goes too (a glass group ignores an opacity), so nothing
+            // peeks out under the card's corners (Accepted 2026-11-04).
+            PanelControlFold(folded: taken, animation: { Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                HStack(spacing: gap) {
+                    // Accessibility state goes on each control, never on this
+                    // stack (which would make it an element wearing the
+                    // switch's identifier).
+                    middle(look.middle, actions: actions, hidden: folded || !look.shown || taken)
+                }
+            }
             .offset(x: taken ? -Self.takenSlide : 0)
             .animation(Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
@@ -277,14 +280,14 @@ struct PanelSharedBottomBar: View {
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
-                        AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
-                                          help: plus.help, emphasisedGlyph: true,
-                                          flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
-                                          action: actions.plus)
-                            .atticDesignCorners()
-                            .modifier(PanelPlusFocus(requests: actions.focusRequests, action: actions.plus))
-                            .opacity(taken ? 0 : 1)
-                            .animation(Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
+                        PanelControlFold(folded: taken, animation: { Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                            AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
+                                              help: plus.help, emphasisedGlyph: true,
+                                              flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
+                                              action: actions.plus)
+                                .atticDesignCorners()
+                                .modifier(PanelPlusFocus(requests: actions.focusRequests, action: actions.plus))
+                        }
                             .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)
                             .accessibilityHidden(!look.shown || taken)
@@ -340,14 +343,21 @@ struct PanelSharedBottomBar: View {
                 .accessibilityHidden(!shown || hidden)
                 // Taking turns with the selection bar (T2), on its motion.
                 .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown), value: shown)
+                // Another page's tags are another bar: the two take turns,
+                // never cross-fading their words over each other.
+                .id(idPrefix)
+                .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion))
         case let .today(shown):
             // Built only while shown (the bar's outer accessibility state
             // must not reach a hidden Today), fading in and out on its own
-            // motion as before.
-            if shown {
-                CalendarTodayButton(isShown: !hidden, flat: design.effectiveControls != .liquidGlass, action: actions.today)
-                    .transition(.opacity)
+            // motion as before; it takes turns with another page's tags.
+            ZStack {
+                if shown {
+                    CalendarTodayButton(isShown: !hidden, flat: design.effectiveControls != .liquidGlass, action: actions.today)
+                        .transition(.opacity)
+                }
             }
+            .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion))
             Spacer(minLength: 0)
         }
     }
@@ -399,6 +409,8 @@ private struct PanelSharedTopControlsObserver: View {
 /// pin's does.
 struct PanelControlFold<Content: View>: View {
     let folded: Bool
+    /// The fold's motion, by `folded`: the search's unless given.
+    var animation: ((Bool) -> Animation?)? = nil
     @ViewBuilder var content: () -> Content
 
     @Environment(\.atticDesign) private var design
@@ -417,14 +429,20 @@ struct PanelControlFold<Content: View>: View {
     }
 
     /// The pin's: away on the search's opening ease, back on its quick fade.
-    private func animation(_ folded: Bool) -> Animation {
-        PanelTopRowLayout.searchAnimation(shown: folded, reduceMotion: design.reduceMotion)
+    private func animation(_ folded: Bool) -> Animation? {
+        if let animation = self.animation { return animation(folded) }
+        return PanelTopRowLayout.searchAnimation(shown: folded, reduceMotion: design.reduceMotion)
     }
 
     private func fold(_ folded: Bool) {
         guard folded != away else { return }
         if folded {
-            withAnimation(animation(true)) { away = true } completion: { if away { gone = true } }
+            guard let animation = animation(true) else {
+                away = true
+                gone = true
+                return
+            }
+            withAnimation(animation) { away = true } completion: { if away { gone = true } }
         } else {
             gone = false
             withAnimation(animation(false)) { away = false }
