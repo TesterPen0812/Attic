@@ -3109,6 +3109,9 @@ extension NoteSlice3bTests {
         let note = try XCTUnwrap(store.create(title: "Deleted", body: "Saved"))
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
         await controller.startAndWait()
+        // The race needs an intentional competing draft. A first visit with
+        // saved notes now shows the library (owner recording #1, 4 Nov).
+        XCTAssertTrue(controller.requestNewNote())
         await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: note.id))
         let step = try XCTUnwrap(controller.libraryUndoStepID), session = try XCTUnwrap(controller.active)
         XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft"), name: "Typing"))

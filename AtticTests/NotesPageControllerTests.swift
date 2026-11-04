@@ -1605,7 +1605,9 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(secondStore.note(withID: id)?.title, "Agent")
         XCTAssertTrue(secondStore.pendingEdits(noteID: id).isEmpty)
         XCTAssertTrue(try journal.entries().isEmpty)
-        XCTAssertFalse(controller.active.map { NoteSessionPolicy.needsAttention($0.state) } ?? true)
+        XCTAssertTrue(controller.isLibraryPresented, "the retired checkpoint leaves the saved library")
+        XCTAssertNil(controller.active, "no unrequested draft locks a note after recovery")
+        XCTAssertEqual(secondStore.agentWriteDisposition(id), .direct)
     }
 
     func testRecoveredFirstSaveCheckpointConflictsWithAlreadyCommittedAgentWrite() async throws {
@@ -1658,7 +1660,9 @@ final class NotesPageControllerTests: XCTestCase {
             staged: [], savedAt: Date()), staged: [])
         let relaunched = makeController(journal: journal)
         await relaunched.startAndWait()
-        XCTAssertFalse(relaunched.active.map { NoteSessionPolicy.needsAttention($0.state) } ?? true)
+        XCTAssertTrue(relaunched.isLibraryPresented, "a retired checkpoint returns to the saved library")
+        XCTAssertNil(relaunched.active)
+        XCTAssertEqual(store.agentWriteDisposition(id), .direct)
         XCTAssertEqual(store.note(withID: id)?.title, "Saved again")
         XCTAssertTrue(try journal.entries().isEmpty)
     }
@@ -1744,6 +1748,7 @@ final class NotesPageControllerTests: XCTestCase {
         let controller = makeController()
         await controller.startAndWait()
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        controller.dismissLibrary() // This test exercises a visible writing session.
         let session = try XCTUnwrap(controller.active)
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,

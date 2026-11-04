@@ -190,9 +190,13 @@ final class O14FirstMouseTests: XCTestCase {
             XCTFail("the demo has a task in Now")
         }
 
-        // Notes opens on a note; Back shows the list.
+        // Explicitly open a saved note; a first visit without a remembered
+        // note now starts in the library (owner recording #1, 4 Nov).
         state.selectSection(.notes)
         spin(1.5)
+        XCTAssertTrue(draft.pages.open(noteID: try XCTUnwrap(notes.notes.first?.id)))
+        draft.pages.dismissLibrary()
+        spin(0.3)
         XCTAssertFalse(draft.pages.isLibraryPresented, "a note is open")
         assertEveryViewAccepts("a note")
         XCTAssertTrue(draft.pages.showLibrary())
@@ -209,8 +213,12 @@ final class O14FirstMouseTests: XCTestCase {
         try press("calendar-search-button")
         assertEveryViewAccepts("Calendar search")
 
-        // Draw (2 Nov): the board, and its canvas menu open.
+        // The retained Draw model can inherit an open filter from another
+        // suite. Establish both scenes explicitly; the title button is
+        // disabled while that filter occupies its place.
         host.cancelActiveInteraction(reason: .lostWindow)
+        DrawPageModel.shared.closeFilter()
+        defer { DrawPageModel.shared.closeFilter() }
         state.selectSection(.canvas)
         spin(1.5)
         assertEveryViewAccepts("Draw")

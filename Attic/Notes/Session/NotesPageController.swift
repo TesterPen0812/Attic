@@ -1413,7 +1413,14 @@ final class NotesPageController: ObservableObject {
             if !recoveryWarnings.isEmpty { active?.showNotice(NoteNotice(kind: .damaged, detail: recoveryWarnings.joined(separator: " "))) }
             return
         }
-        _ = newNote()
+        // A first visit with existing writing belongs in the library. An
+        // empty draft is useful only when there are no notes to return to;
+        // recovered and explicitly requested drafts above still take priority.
+        if !store.notes.isEmpty && recoveryWarnings.isEmpty {
+            isLibraryPresented = true
+        } else {
+            _ = newNote()
+        }
         if !recoveryWarnings.isEmpty {
             active?.showNotice(NoteNotice(kind: .damaged, detail: recoveryWarnings.joined(separator: " ")))
         }
