@@ -37,8 +37,8 @@ final class PanelActivationTests: XCTestCase {
         PanelActivation.shared = PanelActivation(system: fixture.system)
     }
     override func tearDown() {
-        fixture.windows.forEach { $0.close() }
-        PanelActivation.shared = previous
+        fixture?.windows.forEach { $0.close() }
+        if let previous { PanelActivation.shared = previous }
         fixture = nil
         previous = nil
         AtticMotionPreference.systemReduceMotionOverride = nil

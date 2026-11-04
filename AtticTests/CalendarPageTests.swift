@@ -439,7 +439,10 @@ final class CalendarPageTests: XCTestCase {
         let today = day(2026, 10, 29)
         let clock = CalendarAgenda.Clock(today: today, now: date(2026, 10, 29, 12))
         let groups = CalendarAgenda.groups(selected: today, clock: clock, events: [], tasks: [], calendar: calendar)
-        XCTAssertEqual(groups.map(CalendarAgendaDay.hasCard), [true, false, false, false, false, false, false])
+        XCTAssertEqual(groups.map(CalendarAgendaDay.hasCard), [false, false, false, false, false, false, false])
+        var populatedToday = groups[0]
+        populatedToday.items.append(.task(CalendarTaskEntry(id: UUID(), title: "Today", due: today, isOpen: true)))
+        XCTAssertTrue(CalendarAgendaDay.hasCard(populatedToday), "today's real content keeps its card")
         let tile = try render(AnyView(CalendarDateTile(group: groups[2]) {}.frame(height: 40)),
                               size: CGSize(width: CalendarDesign.tileWidth, height: 40))
         XCTAssertEqual(try alpha(tile, px: Int((CalendarDesign.tileWidth - 4) * 2), py: 40), CalendarDesign.tileFill,
