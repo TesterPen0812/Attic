@@ -329,6 +329,9 @@ jobs:
         id: strict_build
         continue-on-error: true
         run: |
+          # This input-thread boundary must not transfer a non-Sendable service.
+          xcrun swiftc -typecheck -swift-version 6 \
+            -target "$(uname -m)-apple-macos26.0" Attic/Services/LoginItemService.swift
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
