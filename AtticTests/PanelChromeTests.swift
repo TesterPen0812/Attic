@@ -1151,7 +1151,7 @@ final class PanelChromeTests: XCTestCase {
                     spin(0.5)
                 }
                 let beforeNote = draft.pages.active?.noteID
-                let beforeDocument = draft.pages.active?.engine.document
+                let beforeDocument = draft.pages.active?.engine.document()
                 XCTAssertEqual(draft.pages.isLibraryPresented, library)
                 let plus = try XCTUnwrap(element("notes-new-note", in: host))
                 XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
@@ -1160,7 +1160,7 @@ final class PanelChromeTests: XCTestCase {
                                "Notes + opens the shared card on its own kind")
                 XCTAssertEqual(draft.pages.isLibraryPresented, library, "the card leaves its underlying page in place")
                 XCTAssertEqual(draft.pages.active?.noteID, beforeNote, "the card does not replace the current note")
-                XCTAssertEqual(draft.pages.active?.engine.document, beforeDocument, "the current writing is retained")
+                XCTAssertEqual(draft.pages.active?.engine.document(), beforeDocument, "the current writing is retained")
                 XCTAssertEqual(state.selectedSection, .notes)
             }
         }
