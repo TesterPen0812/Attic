@@ -13,6 +13,7 @@ final class TasksRound12Tests: XCTestCase {
     private final class ProbePanel: NSPanel {
         override var canBecomeKey: Bool { true }
     }
+    @MainActor private final class QueueTurn { var ran = false }
 
     func testBugs3AFieldAttachmentServicesThePendingExplicitFindWithoutWaitingForARetry() async throws {
         try requireKeyWindowTests()
@@ -71,15 +72,18 @@ final class TasksRound12Tests: XCTestCase {
         Hosted.pumpEvents()
     }
 
-    func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() throws {
+    func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() async throws {
         try requireKeyWindowTests()
         for tab in [TasksTab.now, .backlog] {
             for selection in [NSRange(location: 1, length: 3), NSRange(location: 2, length: 0)] {
                 let hosted = try Hosted(height: 520)
                 defer { hosted.window.contentView = nil; hosted.close() }
                 if tab != .now { hosted.go(to: tab) }
+                let turn = QueueTurn()
+                DispatchQueue.main.async { turn.ran = true }
                 sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
-                hosted.spin(0.06)
+                try await Task.sleep(for: .milliseconds(60))
+                XCTAssertTrue(turn.ran, "the native focus callbacks received their turn before acquisition is checked")
                 let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: hosted.window.contentView!,
                     placeholder: hosted.model.searchPlaceholder(for: tab)))
                 let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView,
@@ -87,7 +91,7 @@ final class TasksRound12Tests: XCTestCase {
                 XCTAssertTrue(editor.delegate as? NSTextField === field, "Find acquired its own field before the retry")
                 editor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
                 editor.setSelectedRange(selection)
-                hosted.spin(0.5)
+                try await Task.sleep(for: .milliseconds(500))
                 XCTAssertTrue(hosted.window.firstResponder === editor)
                 XCTAssertEqual(editor.selectedRange(), selection, "later retries must not move the caret: \(tab)")
                 editor.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -96,12 +100,12 @@ final class TasksRound12Tests: XCTestCase {
         }
     }
 
-    func testG08DismissingFindDuringRetriesDoesNotTakeTheNextFieldsKeyboard() throws {
+    func testG08DismissingFindDuringRetriesDoesNotTakeTheNextFieldsKeyboard() async throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.window.contentView = nil; hosted.close() }
         sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
-        hosted.spin(0.06)
+        try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue((hosted.window.firstResponder as? NSTextView)?.isFieldEditor == true)
         sendFindKey(hosted, characters: "\u{1b}", code: 53)
         let next = NSTextField(string: "Other field")
@@ -110,8 +114,9 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertTrue(hosted.window.makeFirstResponder(next))
         let editor = try XCTUnwrap(next.currentEditor())
         editor.selectedRange = NSRange(location: 2, length: 3)
-        hosted.spin(0.5)
+        try await Task.sleep(for: .milliseconds(500))
         XCTAssertTrue(next.currentEditor() === editor)
+        XCTAssertTrue((editor as? NSTextView)?.delegate as? NSTextField === next)
         XCTAssertEqual(editor.selectedRange, NSRange(location: 2, length: 3))
         XCTAssertEqual(hosted.model.searchQuery(for: .now), "")
     }
