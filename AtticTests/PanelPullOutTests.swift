@@ -419,15 +419,24 @@ final class PanelPullOutHostedTests: XCTestCase {
             let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
             let centre = CGPoint(x: floating.visibleFrame.midX, y: floating.visibleFrame.midY)
             XCTAssertTrue(rig.controller.containsScreenPoint(centre), "a floating panel is part of the panel")
-            let island = rig.island.islandFrame
-            let gap = CGPoint(x: island.minX - PanelIslandLayout.panelGap / 2, y: island.midY)
-            XCTAssertFalse(rig.panel.visibleContentFrame.contains(gap))
-            XCTAssertTrue(rig.controller.containsScreenPoint(gap), "the 8 pt gap to the island too")
-            rig.controller.updateMousePassthrough(at: gap)
-            XCTAssertFalse(rig.panel.ignoresMouseEvents)
-            let below = CGPoint(x: gap.x, y: island.minY - 20)
-            XCTAssertFalse(rig.panel.visibleContentFrame.insetBy(dx: -1, dy: 0).contains(below))
-            XCTAssertFalse(rig.controller.containsScreenPoint(below), "below the island the gap is outside")
+            for spot in [PanelIslandSpot.screenSideCornerEnd, .bottomEdge] {
+                rig.settings.islandSpot = spot
+                spin(until: { rig.island.spot == spot })
+                let island = rig.island.islandFrame
+                let panel = rig.panel.visibleContentFrame
+                // The default now lies below the panel; the standing gap is horizontal.
+                // Use the actual facing edges, independently of gapFrame's implementation.
+                let gap = spot.isFlat
+                    ? CGPoint(x: island.midX, y: (panel.minY + island.maxY) / 2)
+                    : CGPoint(x: (panel.maxX + island.minX) / 2, y: island.midY)
+                XCTAssertFalse(panel.contains(gap))
+                XCTAssertTrue(rig.controller.containsScreenPoint(gap), "the gap to the \(spot) island too")
+                rig.controller.updateMousePassthrough(at: gap)
+                XCTAssertFalse(rig.panel.ignoresMouseEvents)
+                let below = CGPoint(x: gap.x, y: island.minY - 20)
+                XCTAssertFalse(panel.insetBy(dx: -1, dy: 0).contains(below))
+                XCTAssertFalse(rig.controller.containsScreenPoint(below), "below the island the gap is outside")
+            }
             XCTAssertFalse(rig.controller.containsScreenPoint(CGPoint(x: floating.visibleFrame.minX - 30, y: centre.y)))
             // An editor or menu held in it holds the docked panel too.
             floating.uiState.setInteractionLock(.menuTracking, isActive: true)
