@@ -241,4 +241,35 @@ final class LoginItemRefreshTests: XCTestCase {
         XCTAssertEqual(probe.reads.count, 2)
         XCTAssertFalse(probe.reads.contains(true), "later activation refreshes must use the same input-safe path")
     }
+
+    func testBugs3RepeatedActivationCoalescesSlowReadsAndDiscardsAnOutdatedStatus() async {
+        final class Gate: @unchecked Sendable {
+            let mutex = NSLock()
+            var reads = 0
+            let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
+            func read() -> SMAppService.Status {
+                mutex.lock(); reads += 1; let index = reads; mutex.unlock()
+                // The synchronous red implementation must fail, not hang
+                // the test host while waiting for its own input thread.
+                if !Thread.isMainThread {
+                    _ = (index == 1 ? first : second).wait(timeout: .now() + 3)
+                }
+                return index == 1 ? .enabled : .requiresApproval
+            }
+            var count: Int { mutex.lock(); defer { mutex.unlock() }; return reads }
+        }
+        let gate = Gate()
+        defer { gate.first.signal(); gate.second.signal() }
+        let service = LoginItemService(readStatus: { gate.read() })
+        for _ in 0..<200 where gate.count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<20 { service.refresh() }
+        XCTAssertEqual(gate.count, 1, "activation notifications share the in-flight daemon read")
+        gate.first.signal()
+        for _ in 0..<200 where gate.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertFalse(service.isEnabled, "a read invalidated by a newer refresh must never publish its old enabled state")
+        gate.second.signal()
+        for _ in 0..<200 where !service.requiresApproval { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.requiresApproval)
+        XCTAssertEqual(gate.count, 2, "one follow-up reads the latest state after the invalidated request")
+    }
 }
