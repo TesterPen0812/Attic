@@ -24,11 +24,17 @@ final class PanelActivation {
                 let app = NSWorkspace.shared.frontmostApplication
                 return app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
             }, windows: { NSApp.windows }, prepare: { window in
-                window.makeKey()
-                window.makeMain()
+                prepareForActivation(window, windows: NSApp.windows)
             }, activate: { NSRunningApplication.current.activate(options: []) }, yield: { NSApp.yieldActivation(to: $0) },
             restore: { $0.activate(from: .current, options: []) },
             terminated: { $0.isTerminated }, deactivate: { NSApp.deactivate() })
+        }
+
+        /// The native preparation boundary, with window inventory supplied so
+        /// policy tests never borrow the test runner's keyboard or windows.
+        static func prepareForActivation(_ window: NSWindow, windows: [NSWindow]) {
+            window.makeKey()
+            window.makeMain()
         }
     }
 
