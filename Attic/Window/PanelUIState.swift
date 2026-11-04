@@ -36,7 +36,31 @@ final class TaskRenameDraft: ObservableObject {
 @MainActor
 final class PanelKeyState: ObservableObject {
     @Published private(set) var isKey = false
+    /// Created only by the UI-test label, never by native ownership checks.
+    private(set) lazy var diagnostic = PanelKeyDiagnosticState(state: self)
     func set(_ value: Bool) {
+        if isKey != value { isKey = value }
+    }
+}
+
+/// The accessibility diagnostic's display state is separate from actual
+/// keyboard ownership, so observing it need not add work to a native press.
+@MainActor
+final class PanelKeyDiagnosticState: ObservableObject {
+    @Published private(set) var isKey: Bool
+    private let schedule: (@escaping () -> Void) -> Void
+    private var subscription: AnyCancellable?
+
+    init(state: PanelKeyState,
+         schedule: @escaping (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async { action() } }) {
+        isKey = state.isKey
+        self.schedule = schedule
+        subscription = state.$isKey.removeDuplicates().dropFirst().sink { [weak self] value in
+            MainActor.assumeIsolated { self?.receive(value) }
+        }
+    }
+
+    private func receive(_ value: Bool) {
         if isKey != value { isKey = value }
     }
 }

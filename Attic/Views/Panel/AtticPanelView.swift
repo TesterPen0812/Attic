@@ -158,7 +158,7 @@ struct AtticPanelView: View {
                 // glass look) instead of waiting a fixed time.
                 // A static text: its words are what the tests read (the
                 // value of an empty element is not exposed on every runner).
-                PanelKeyStateLabel(state: uiState.keyState)
+                PanelKeyStateLabel(state: uiState.keyState.diagnostic)
             }
         }
         .overlay(alignment: .bottom) {
@@ -1002,7 +1002,7 @@ extension Notification.Name {
 
 /// Only this diagnostic label redraws when keyboard ownership changes.
 private struct PanelKeyStateLabel: View {
-    @ObservedObject var state: PanelKeyState
+    @ObservedObject var state: PanelKeyDiagnosticState
     var body: some View {
         Text(verbatim: state.isKey ? "key" : "not key")
             .font(.system(size: 1))

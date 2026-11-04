@@ -3,6 +3,63 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+@MainActor
+final class PanelKeyDiagnosticTests: XCTestCase {
+    func testOwnershipChangesImmediatelyButDiagnosticWaitsForTheNativeTransaction() {
+        let owner = PanelKeyState()
+        var queued: [() -> Void] = []
+        let diagnostic = PanelKeyDiagnosticState(state: owner, schedule: { queued.append($0) })
+        owner.set(true)
+        XCTAssertTrue(owner.isKey)
+        XCTAssertFalse(diagnostic.isKey)
+        XCTAssertEqual(queued.count, 1)
+        queued.first?()
+        XCTAssertTrue(diagnostic.isKey)
+    }
+
+    func testTransientOwnershipChangesCoalesceWithoutDiagnosticRedraws() {
+        let owner = PanelKeyState()
+        var queued: [() -> Void] = []
+        let diagnostic = PanelKeyDiagnosticState(state: owner, schedule: { queued.append($0) })
+        var published: [Bool] = []
+        let subscription = diagnostic.$isKey.dropFirst().sink { published.append($0) }
+        defer { subscription.cancel() }
+        owner.set(true)
+        owner.set(false)
+        XCTAssertTrue(published.isEmpty)
+        XCTAssertEqual(queued.count, 1)
+        queued.first?()
+        XCTAssertFalse(diagnostic.isKey)
+        XCTAssertTrue(published.isEmpty)
+    }
+
+    func testQueuedDiagnosticsDoNotKeepTheFormerPresentationAlive() {
+        let owner = PanelKeyState()
+        var queued: [() -> Void] = []
+        var diagnostic: PanelKeyDiagnosticState? = .init(state: owner, schedule: { queued.append($0) })
+        weak var former = diagnostic
+        owner.set(true)
+        XCTAssertEqual(queued.count, 1)
+        diagnostic = nil
+        XCTAssertNil(former)
+        queued.forEach { $0() }
+        XCTAssertNil(former)
+    }
+
+    func testLazyDiagnosticDoesNotExtendTheOwnershipModelsLifetime() {
+        weak var formerOwner: PanelKeyState?
+        weak var formerDiagnostic: PanelKeyDiagnosticState?
+        do {
+            let owner = PanelKeyState()
+            formerOwner = owner
+            formerDiagnostic = owner.diagnostic
+            owner.set(true)
+        }
+        XCTAssertNil(formerOwner)
+        XCTAssertNil(formerDiagnostic)
+    }
+}
+
 /// The Phase 1 shell: pages and the header, the Undo toast, the error
 /// notice, menus, the key-window treatment, releasing pages when hidden and
 /// the agent's `show` tool.
