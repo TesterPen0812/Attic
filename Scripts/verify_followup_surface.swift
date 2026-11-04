@@ -44,13 +44,14 @@ var failures = 0
 func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
 @MainActor func requireOwnForeground() throws {
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-    guard front == getpid() || front == preview?.processIdentifier else {
+    guard let front, front == getpid() || front == preview?.processIdentifier else {
         throw NSError(domain: "Air screen is in use by another app; stopped without input", code: 75)
     }
 }
 @MainActor func prepareBackdrop() async throws {
     try requireOwnForeground()
     for _ in 0..<5 {
+        try requireOwnForeground()
         activateBackdrop()
         await pause(0.3)
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() { return }
@@ -146,6 +147,7 @@ Task { @MainActor in
         let bundle = URL(fileURLWithPath: executable).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         for mode in ["light", "dark"] {
             for surface in ["glass", "frosted", "solid"] {
+                try requireOwnForeground()
                 let configuration = NSWorkspace.OpenConfiguration()
                 configuration.activates = false
                 configuration.createsNewApplicationInstance = true

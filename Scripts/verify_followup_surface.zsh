@@ -6,6 +6,7 @@ set -eu
 [[ ! -e "$2/driver.log" ]] || { print -u2 'Use a fresh evidence directory for each run'; exit 2; }
 root=${0:A:h:h}
 evidence=$2
+mkdir -p "$root/.build"
 preview_info=${1:A:h:h}/Info.plist
 [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$preview_info") == com.taha.Attic.preview.followup ]] || { print -u2 'Attic Bugs Two identity only'; exit 2; }
 owns_screen_lock=false
@@ -15,10 +16,9 @@ for attempt in {1..60}; do
         owns_screen_lock=true
         break
     fi
-    [[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == followup ]] && break
     sleep 1
 done
-[[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == followup ]] || { print -u2 'Air screen lock timed out'; exit 2; }
+$owns_screen_lock || { print -u2 'Air screen lock timed out'; exit 75; }
 release_screen_lock() {
     if $owns_screen_lock && [[ $(cat /tmp/attic-air-screen.lockdir/owner 2>/dev/null) == followup ]]; then
         if [[ -f "$evidence/driver.log" ]] && ! grep -q RESULT "$evidence/driver.log"; then
