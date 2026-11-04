@@ -227,6 +227,33 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertFalse(rig.controller.isPanelVisible)
     }
 
+    func testBugs3AnAutomaticHideDoesNotConsumeTheNextCornerEntry() throws {
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        let screen = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        let outside = CGPoint(x: screen.midX, y: screen.midY)
+        let corner = CGPoint(x: screen.maxX - 1, y: screen.maxY - 1)
+        XCTAssertTrue(rig.monitor.isInHotspotForTesting(corner, flags: []))
+        let time = ProcessInfo.processInfo.systemUptime + 10
+        // Let the normal hover machine request the hide after its grace.
+        // No mouse movement occurs after completion until the next entry.
+        rig.monitor.sampleForTesting(at: outside, uptime: time)
+        rig.monitor.sampleForTesting(at: outside, uptime: time + rig.settings.hideDelay + 1)
+        let deadline = Date().addingTimeInterval(2)
+        while rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe)
+        XCTAssertFalse(rig.controller.isPanelVisible)
+        rig.monitor.sampleForTesting(at: corner, uptime: time + 5)
+        rig.monitor.sampleForTesting(at: corner, uptime: time + 5 + rig.settings.revealDelay + 0.1)
+        XCTAssertFalse(rig.monitor.isHiddenForPerformanceProbe, "a completed auto-hide must not require an extra exit and re-entry")
+        XCTAssertTrue(rig.controller.isPanelVisible, "the first corner entry reveals the real native panel")
+    }
+
     func testAVisibleWindowOutsideTheActiveSpaceGetsFreshNativeAdmissionWithItsVisibleChildren() {
         final class SpacePanel: NSPanel {
             var activeSpace = false
