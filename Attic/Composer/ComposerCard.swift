@@ -122,6 +122,7 @@ struct ComposerCard: View {
             titleFocused = false
             writingFocused = false
         }
+        .onChange(of: model.kind) { _, _ in open = nil }
         .onChange(of: model.focusRequest) { _, _ in
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
@@ -374,7 +375,27 @@ struct ComposerCard: View {
 
     // MARK: Chips and Create
 
+    @ViewBuilder
     private func actions(_ kind: ComposerKind) -> some View {
+        if kind == .event { eventActions }
+        else { standardActions(kind) }
+    }
+
+    private var eventActions: some View {
+        VStack(alignment: .leading, spacing: ComposerMetrics.actionsTop) {
+            dateChip(model.values, flex: true)
+            if model.values.time != nil {
+                chip(.length, systemName: "clock", label: Self.length(model.eventLength), set: true)
+            }
+            HStack(spacing: ComposerMetrics.chipGap) {
+                calendarChip
+                createButton
+            }
+        }
+        .padding(.leading, ComposerMetrics.chipLeading)
+    }
+
+    private func standardActions(_ kind: ComposerKind) -> some View {
         let values = model.values
         return HStack(spacing: ComposerMetrics.chipGap) {
             HStack(spacing: ComposerMetrics.chipGap) {
@@ -390,11 +411,7 @@ struct ComposerCard: View {
                     }
                     if open != .priority { tagsChip(values) }
                 case .event:
-                    dateChip(values, flex: true)
-                    if values.time != nil {
-                        chip(.length, systemName: "clock", label: Self.length(model.eventLength), set: true)
-                    }
-                    calendarChip
+                    EmptyView() // Event uses the taller rows above.
                 case .note:
                     tagsChip(values).fixedSize()
                     chip(.pin, systemName: "pin", label: model.pinned ? String(localized: "Pinned") : String(localized: "Pin"),
@@ -407,7 +424,6 @@ struct ComposerCard: View {
             createButton
         }
         .animation(ComposerMotion.animation(), value: open == .priority)
-        .onChange(of: kind) { _, _ in open = nil }
     }
 
     private var priorityLevels: some View {

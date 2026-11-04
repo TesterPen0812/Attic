@@ -31,6 +31,7 @@ struct NotesEditorPage: View {
     private let taskStore: TaskStore?
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     @Environment(\.atticTagColouring) private var tagColouring
     @Environment(\.atticPanelToasts) private var toasts
     /// In the panel the shell draws the library's switch, tag bar and "+"
@@ -120,8 +121,10 @@ struct NotesEditorPage: View {
 
     private var pageContent: some View {
         ZStack(alignment: .bottom) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PanelComposerClearance { extra in
+                content(extraBottom: extra)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The note's variable blur behind the header (none behind the
             // bottom row, owner 2026-10-22), its own layer between the note and the controls (All notes and
             // history draw theirs under their own controls).
@@ -157,7 +160,7 @@ struct NotesEditorPage: View {
         // panel's swipe router: a pull past its threshold, never momentum;
         // it yields to sideways controls, a drag selection, and refuses
         // while text is being composed, as the button does).
-        .background(NotesPageSwipeMonitor(isLibraryPresented: controller.isLibraryPresented) { toggleLibrary() }
+        .background(NotesPageSwipeMonitor(isLibraryPresented: controller.isLibraryPresented) { if isCurrent { toggleLibrary() } }
             .accessibilityHidden(true))
         // The app's navigation slide between the note and All notes, and
         // for a new or another note (keystrokes are never held back: the
@@ -186,25 +189,26 @@ struct NotesEditorPage: View {
                 library.query = kept
             }
             controller.update(design: design)
-            controller.start()
-            controller.present()
-            chrome.claimPageCommands(owner: commandOwner, keyPressed: { bottomKeyPressed($0) })
-            chrome.menuCommands = { noteMenuCommands() }
-            chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
-            #if DEBUG
-            chrome.captureToggleLibrary = { toggleLibrary() }
-            chrome.captureImport = { [controller] urls in controller.importFiles(urls) }
-            #endif
+            if isCurrent {
+                controller.start()
+                controller.present()
+                installPageCommands()
+            }
             library.failedDraftText = { [controller, noteStore] id in
                 guard noteStore.note(withID: id) == nil,
                       let draft = controller.failedDrafts.first(where: { $0.noteID == id }) else { return nil }
                 return NoteTextExport.plainText(draft.engine.document())
             }
         }
-        .onDisappear {
-            if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
-            uiState.setInteractionLock(.notesFilePicker, isActive: false)
-            chrome.clearPageCommands(owner: commandOwner)
+        .onDisappear { releasePageCommands() }
+        .onChange(of: isCurrent) { _, current in
+            if current {
+                controller.start()
+                controller.present()
+                installPageCommands()
+            } else {
+                releasePageCommands()
+            }
         }
         .onChange(of: bottomFocus) { _, stop in
             // Back in the text (a click, ⌃Tab round): the buttons stop
@@ -248,7 +252,7 @@ struct NotesEditorPage: View {
         .onChange(of: controller.presentationCount) { _, _ in
             // Back on the page (a page switch, the panel shown again): the
             // keyboard returns to the note, where the caret was.
-            guard showsEditor else { return }
+            guard isCurrent, showsEditor else { return }
             DispatchQueue.main.async { chrome.focusText() }
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
@@ -299,6 +303,30 @@ struct NotesEditorPage: View {
         !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil
     }
 
+    private func installPageCommands() {
+        chrome.claimPageCommands(owner: commandOwner, keyPressed: { bottomKeyPressed($0) })
+        chrome.menuCommands = { noteMenuCommands() }
+        chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
+        #if DEBUG
+        chrome.captureToggleLibrary = { toggleLibrary() }
+        chrome.captureImport = { [controller] urls in controller.importFiles(urls) }
+        #endif
+    }
+
+    private func releasePageCommands() {
+        if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
+        uiState.setInteractionLock(.notesFilePicker, isActive: false)
+        chrome.clearPageCommands(owner: commandOwner)
+        chrome.controls?.cancelCard(refocus: false)
+        chrome.closeFormatBar()
+        chrome.tagEditor = nil
+        findOpen = false
+        searchFocused = false
+        bottomFocus = nil
+        pendingStop = nil
+        bottomStops = false
+    }
+
     /// A per-change review shows inside the note (N5, Idea B); a deletion or
     /// a workspace operation keeps its whole-page comparison.
     private var reviewsInPlace: Bool {
@@ -315,12 +343,12 @@ struct NotesEditorPage: View {
     // MARK: Content
 
     @ViewBuilder
-    private var content: some View {
+    private func content(extraBottom: CGFloat) -> some View {
         if let history = controller.historyBrowser {
             NoteHistoryPage(controller: controller, browser: history, layout: layout)
         } else if controller.isLibraryPresented {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
-                             bottomClearance: bottomInset, bottomControls: bottomControls, searchFocused: $searchFocused,
+                             bottomClearance: bottomInset + extraBottom, bottomControls: bottomControls, searchFocused: $searchFocused,
                              searchOpen: $searchOpen,
                              rowCommands: { id in rowCommands(id) },
                              libraryCommands: { Self.historyCommands(for: controller) },
@@ -331,17 +359,17 @@ struct NotesEditorPage: View {
                 .transition(slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
             NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
-                columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset,
+                columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset + extraBottom,
                 design: design)
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilitySortPriority(3)
         } else if let review = controller.proposalReview {
             NoteProposalComparison(controller: controller, store: noteStore, review: review,
-                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom,
+                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom + extraBottom,
                 design: design)
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
-                                    topInset: topInset, bottomInset: bottomControls + bottomInset, headerBottom: layout.headerBottom,
+                                    topInset: topInset, bottomInset: bottomControls + bottomInset + extraBottom, headerBottom: layout.headerBottom,
                                     design: design, tagEditor: { AnyView(tagEditor(for: session)) },
                                     tagCounts: { [noteStore] in
                                         noteStore.tagCounts

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// How a page asks the panel for the "+" card (Phase B): the shell owns one
@@ -104,6 +105,115 @@ final class PanelComposerRoom: ObservableObject {
         #endif
         if self.height != height { self.height = height }
         if isOpen != open { isOpen = open }
+    }
+}
+
+/// Observe only the content that needs the card's extra scroll clearance.
+struct PanelComposerClearance<Content: View>: View {
+    @Environment(\.panelComposerRoom) private var room
+    @ViewBuilder let content: (CGFloat) -> Content
+
+    var body: some View {
+        if let room { Observed(room: room, content: content) }
+        else { content(0) }
+    }
+
+    private struct Observed: View {
+        @ObservedObject var room: PanelComposerRoom
+        let content: (CGFloat) -> Content
+        var body: some View { content(max(0, room.height - AtticControlSize.addBarHeight)) }
+    }
+}
+
+/// Retain an end anchor only when the person was already at the end.
+/// The card publishes before layout; move after the new inset is installed.
+@MainActor
+final class PanelComposerEndFollower {
+    private weak var scroll: NSScrollView?
+    private weak var room: PanelComposerRoom?
+    private var subscription: AnyCancellable?
+    private var insetObservation: NSKeyValueObservation?
+    private let glide = TasksScrollGlide()
+    private var generation = 0
+    private var expectedBottomInset: CGFloat?
+    var isCurrent = true { didSet { if !isCurrent { expectedBottomInset = nil; glide.stop() } } }
+
+    func stop() {
+        generation += 1
+        expectedBottomInset = nil
+        subscription = nil
+        insetObservation = nil
+        glide.stop()
+    }
+
+    func bind(scroll: NSScrollView, room: PanelComposerRoom?) {
+        if self.scroll !== scroll {
+            self.scroll = scroll
+            insetObservation = scroll.observe(\.contentInsets, options: [.new]) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.moveAfterInsetLayout() }
+            }
+        }
+        guard self.room !== room else { return }
+        self.room = room
+        subscription = room?.$height.removeDuplicates().dropFirst().sink { [weak self] height in
+            MainActor.assumeIsolated { self?.heightWillChange(to: height) }
+        }
+    }
+
+    private func heightWillChange(to height: CGFloat) {
+        generation += 1
+        expectedBottomInset = nil
+        guard isCurrent, let scroll,
+              glide.isRunning || scroll.contentView.bounds.minY >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1 else { return }
+        let oldExtra = max(0, (room?.height ?? 0) - AtticControlSize.addBarHeight)
+        let newExtra = max(0, height - AtticControlSize.addBarHeight)
+        expectedBottomInset = scroll.contentInsets.bottom + newExtra - oldExtra
+        moveAfterInsetLayout()
+    }
+
+    private func moveAfterInsetLayout() {
+        guard isCurrent, let scroll, let expectedBottomInset,
+              abs(scroll.contentInsets.bottom - expectedBottomInset) < 0.5 else { return }
+        let ticket = generation
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.generation == ticket, self.isCurrent, let scroll = self.scroll,
+                  let expected = self.expectedBottomInset, abs(scroll.contentInsets.bottom - expected) < 0.5 else { return }
+            self.expectedBottomInset = nil
+            scroll.superview?.layoutSubtreeIfNeeded()
+            let target = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)
+            let delta = target - scroll.contentView.bounds.minY
+            guard abs(delta) > 0.5 else { return }
+            if AtticMotionPreference.reducesMotion {
+                scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: target))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            } else {
+                let spring = AtticMotionPreset.expand.spring(in: .current)
+                self.glide.run(by: delta, in: scroll, spring: Spring(duration: spring.response, bounce: spring.bounce))
+            }
+        }
+    }
+}
+
+/// Installed inside a SwiftUI scroll view's content, beside its resume keeper.
+struct PanelComposerScrollKeeper: NSViewRepresentable {
+    @Environment(\.panelComposerRoom) private var room
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+
+    final class Keeper: NSView {
+        let follower = PanelComposerEndFollower()
+        weak var room: PanelComposerRoom?
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); bind() }
+        override func layout() { super.layout(); bind() }
+        func bind() {
+            if let scroll = enclosingScrollView { follower.bind(scroll: scroll, room: room) }
+        }
+    }
+    static func dismantleNSView(_ view: Keeper, coordinator: ()) { view.follower.stop() }
+    func makeNSView(context: Context) -> Keeper { Keeper() }
+    func updateNSView(_ view: Keeper, context: Context) {
+        view.room = room
+        view.follower.isCurrent = isCurrent
+        view.bind()
     }
 }
 

@@ -473,6 +473,43 @@ final class CalendarPageTests: XCTestCase {
 
     // MARK: - Hosted: bounded updates, no layout loop
 
+    func testFollowupCalendarMakesRoomForTheMeasuredCardHeight() throws {
+        // Invisible windows receive no display-link frames; check the same end anchor under Reduce Motion.
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
+        let room = PanelComposerRoom()
+        let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
+            calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        let size = CGSize(width: 320, height: 460)
+        let page = CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 28, panelSize: size),
+            taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in })
+            .environment(\.panelComposerRoom, room)
+            .atticDesign(AtticDesignContext(controls: .craft)).frame(width: size.width, height: size.height)
+        let host = NSHostingView(rootView: page)
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.3)); host.layoutSubtreeIfNeeded() }
+        for _ in 0..<5 { settle() }
+        let scroll = try XCTUnwrap(Self.scrollView(in: host))
+        // Lazy rows refine their estimated document height as they mount;
+        // the native scroll inset is the exact clearance we are testing.
+        let closed = scroll.contentInsets.bottom
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)))
+        scroll.reflectScrolledClipView(scroll.contentView); settle()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)))
+        for height: CGFloat in [90, 152] {
+            room.set(height: height, open: true); settle()
+            XCTAssertEqual(scroll.contentInsets.bottom - closed, height - AtticControlSize.addBarHeight, accuracy: 1)
+            XCTAssertEqual(scroll.contentView.bounds.origin.y, TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll), accuracy: 1,
+                "the last agenda rows follow the growing card")
+        }
+        room.set(height: 0, open: false); settle()
+        XCTAssertEqual(scroll.contentInsets.bottom, closed, accuracy: 1)
+
+    }
+
     func testHostedPageSettlesAndUpdatesBoundedly() throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Water plants", dueDay: day(2026, 10, 30))])

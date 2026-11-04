@@ -491,6 +491,7 @@ final class NoteTableView: NSView {
 
     /// Puts the caret in `position` (the keyboard comes to the table).
     func activate(_ position: NoteTable.Position, caret: NoteTableCaret = .end) {
+        guard engine?.textView?.isSuspended != true else { return }
         guard table.contains(position) else { return }
         let changedCell = activeCell != position || !hasEditor
         if cellSelection != nil {
@@ -535,6 +536,7 @@ final class NoteTableView: NSView {
 
     /// Selects whole cells (the editor gives the keyboard to the grid).
     func selectCells(_ range: NoteTableCellRange) {
+        guard engine?.textView?.isSuspended != true else { return }
         guard table.contains(range.anchor), table.contains(range.head) else { return }
         cellSelection = range
         activeCell = nil
@@ -847,6 +849,7 @@ final class NoteTableCanvas: NSView {
     // MARK: Keys with whole cells selected
 
     override func keyDown(with event: NSEvent) {
+        guard table?.engine?.textView?.isSuspended != true else { return }
         guard let table, let engine = table.engine else { return super.keyDown(with: event) }
         if AtticPanel.isUndoKey(event) {
             // The note's history, never the panel's fallback.
@@ -858,6 +861,7 @@ final class NoteTableCanvas: NSView {
     }
 
     override func doCommand(by selector: Selector) {
+        guard table?.engine?.textView?.isSuspended != true else { return }
         guard let table, var range = table.cellSelection else { return super.doCommand(by: selector) }
         switch selector {
         case #selector(moveUp(_:)), #selector(moveDown(_:)), #selector(moveLeft(_:)), #selector(moveRight(_:)):
@@ -896,6 +900,7 @@ final class NoteTableCanvas: NSView {
     }
 
     override func insertText(_ insertString: Any) {
+        guard table?.engine?.textView?.isSuspended != true else { return }
         // Typing over selected cells edits the anchor cell, replacing its text.
         guard let table, let range = table.cellSelection else { return }
         let text = (insertString as? NSAttributedString)?.string ?? (insertString as? String) ?? ""

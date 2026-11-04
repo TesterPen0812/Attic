@@ -65,6 +65,7 @@ final class NotesPageChrome: ObservableObject {
     /// The note menu's commands for the note on screen (built by the page).
     var menuCommands: () -> [AtticMenuCommand] = { [] }
     private var commandOwner: UUID?
+    private var pageCommandsActive = true
     private var keyMonitor: Any?
     private var keyPressed: ((NSEvent) -> Bool)?
 
@@ -72,6 +73,7 @@ final class NotesPageChrome: ObservableObject {
     /// page's commands, even if both briefly share the chrome.
     func claimPageCommands(owner: UUID, keyPressed: @escaping (NSEvent) -> Bool) {
         commandOwner = owner
+        pageCommandsActive = true
         self.keyPressed = keyPressed
         if keyMonitor == nil {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -83,6 +85,7 @@ final class NotesPageChrome: ObservableObject {
     func clearPageCommands(owner: UUID) {
         guard commandOwner == owner else { return }
         commandOwner = nil
+        pageCommandsActive = false
         menuCommands = { [] }
         leaveEditor = nil
         #if DEBUG
@@ -139,7 +142,7 @@ final class NotesPageChrome: ObservableObject {
         tagEditor = .tags
     }
 
-    func focusText() { accessories?.focusText() }
+    func focusText() { if pageCommandsActive { accessories?.focusText() } }
 
     /// The keyboard back into the text from a bottom-row control (⌃Tab round
     /// the footer, OD-7), with the caret and selection it had. The control's
@@ -871,6 +874,8 @@ private struct NoteTagLineRoot: View {
 /// session.
 struct NoteEditorRepresentable: NSViewRepresentable {
     @Environment(\.atticTagColouring) private var colouring
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+    @Environment(\.panelComposerRoom) private var composerRoom
     let session: NoteSession
     let chrome: NotesPageChrome
     /// The text column's inset from each side of the panel.
@@ -890,6 +895,37 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         var controls: NoteFormatControls?
         var objects: NoteObjectControls?
         var tables: NoteTableChrome?
+        var isCurrent = true
+        @MainActor let composerFollower = PanelComposerEndFollower()
+        private var spelling: (checking: Bool, correction: Bool)?
+
+        @MainActor func setCurrent(_ current: Bool, in scrollView: NSScrollView) {
+            isCurrent = current
+            composerFollower.isCurrent = current
+            guard let engine, let text = engine.textView else { return }
+            if !current, !text.isSuspended {
+                spelling = (text.isContinuousSpellCheckingEnabled, text.isAutomaticSpellingCorrectionEnabled)
+                engine.find.close(returnFocus: false)
+                engine.dismissSlashSession()
+                controls?.cancelCard(refocus: false)
+                controls?.hideBar()
+                if let responder = scrollView.window?.firstResponder as? NSView,
+                   responder === text || responder.isDescendant(of: scrollView) {
+                    scrollView.window?.makeFirstResponder(nil)
+                }
+            }
+            text.isSuspended = !current
+            text.isEditable = current && !engine.isReadOnly
+            text.writingToolsBehavior = current && engine.writingToolsAvailable ? .complete : .none
+            if current, let spelling {
+                text.isContinuousSpellCheckingEnabled = spelling.checking
+                text.isAutomaticSpellingCorrectionEnabled = spelling.correction
+                self.spelling = nil
+            } else if !current {
+                text.isContinuousSpellCheckingEnabled = false
+                text.isAutomaticSpellingCorrectionEnabled = false
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -950,6 +986,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                           length: min(selection.length, max(0, length - selection.location))))
         engine.history.workspace?.inputClientDidAttach()
+        context.coordinator.setCurrent(isCurrent, in: scrollView)
+        context.coordinator.composerFollower.bind(scroll: scrollView, room: composerRoom)
         textView.presentWhenAttachedToWindow { [weak textView, weak scrollView, weak engine, weak session,
                                                weak chrome, weak coordinator = context.coordinator] in
             // A note switch can leave the old session's view attached for
@@ -957,7 +995,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             guard let textView, let scrollView, let engine, let session, let chrome, let coordinator,
                   let accessories = coordinator.accessories,
                   chrome.accessories === accessories,
-                  engine.textView === textView, engine.scrollView === scrollView else { return }
+                  engine.textView === textView, engine.scrollView === scrollView,
+                  coordinator.isCurrent, !textView.isSuspended else { return }
             if let scrollOverride {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollOverride))
             } else if session.scrollOffset > 0 {
@@ -982,6 +1021,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.setCurrent(isCurrent, in: scrollView)
+        context.coordinator.composerFollower.bind(scroll: scrollView, room: composerRoom)
         let insets = NSEdgeInsets(top: topInset + session.engine.find.clearance, left: 0, bottom: bottomInset, right: 0)
         session.engine.find.setGeometry(top: topInset, column: columnInset)
         if scrollView.contentInsets.top != insets.top || scrollView.contentInsets.bottom != insets.bottom {
@@ -999,6 +1040,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.composerFollower.stop()
         coordinator.accessories?.invalidate()
         coordinator.accessories = nil
         coordinator.controls?.invalidate()

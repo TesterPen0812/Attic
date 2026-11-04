@@ -787,11 +787,12 @@ private struct PanelIslandSurface: View {
     let cornerRadius: CGFloat
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticPanelSurfaceSize) private var panelSize
 
     var body: some View {
         let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.controlExponent)
         let shadow = PanelIslandLayout.contactShadow(dark: design.mode == .dark)
-        AtticSurfaceBackground(model: design.tokens.panel, shape: shape)
+        AtticSurfaceBackground(model: design.tokens.panel, shape: shape, nativeGlassSize: panelSize)
             .overlay { AtticPanelRim(cornerSize: cornerRadius, exponent: AtticShape.controlExponent) }
             .background {
                 // L4: the layers fall outside the capsule only, so a
@@ -929,9 +930,12 @@ private struct PanelIslandKeyed<Content: View>: View {
     let uiState: PanelUIState
     let content: Content
     @State private var isPanelKey = false
+    @State private var panelSize = AtticLayout.panelSize
 
     var body: some View {
         PanelIslandRoot(settings: settings, isPanelKey: isPanelKey, content: content)
+            .environment(\.atticPanelSurfaceSize, panelSize)
+            .onReceive(uiState.$panelSize.removeDuplicates()) { if panelSize != $0 { panelSize = $0 } }
             .onReceive(uiState.$isPanelKey.removeDuplicates()) { if isPanelKey != $0 { isPanelKey = $0 } }
     }
 }

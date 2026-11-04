@@ -260,8 +260,11 @@ final class FirstClickActivationRequestTests: XCTestCase {
             try send(.leftMouseUp, at: point)
             XCTAssertEqual(requests, 1, "\(surface): the release activates exactly once")
             // Empty glass has no first-mouse-refusing subview to install on.
-            try send(.leftMouseDown, at: CGPoint(x: 20, y: 20))
-            try send(.leftMouseUp, at: CGPoint(x: 20, y: 20))
+            // L4 widened the island's clear shadow margin to 22 pt.
+            let emptyInset: CGFloat = surface == "island" ? PanelIslandLayout.windowMargin + 4 : 20
+            let empty = CGPoint(x: emptyInset, y: emptyInset)
+            try send(.leftMouseDown, at: empty)
+            try send(.leftMouseUp, at: empty)
             XCTAssertEqual(requests, 2, "\(surface): empty glass activates too")
             try send(.leftMouseDown, at: CGPoint(x: 1, y: 1))
             try send(.leftMouseUp, at: CGPoint(x: 1, y: 1))

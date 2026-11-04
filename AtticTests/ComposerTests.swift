@@ -875,7 +875,64 @@ final class ComposerTests: XCTestCase {
         return view
     }
 
-    func testTheCardIsTheDesignsWidthAndKeepsTheTasksHeightForEveryKind() {
+    func testFollowupChangingKindsClosesThePreviousKindsInlinePicker() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let view = host(.task, on: .calendar(selected: today))
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        func element(_ id: String) -> AnyObject? {
+            view.layoutSubtreeIfNeeded()
+            return elements(view).first { $0.accessibilityIdentifier?() == id }
+        }
+        XCTAssertTrue(try XCTUnwrap(element("composer-chip-priority")).accessibilityPerformPress?() ?? false)
+        spin(0.1)
+        XCTAssertNotNil(element("composer-priority-low"))
+        model.choose(.event); spin(0.1)
+        model.choose(.task); spin(0.1)
+        XCTAssertNil(element("composer-priority-low"), "switching kind closes its old inline picker")
+        XCTAssertNotNil(element("composer-chip-date"))
+        XCTAssertNotNil(element("composer-chip-tags"))
+    }
+
+    func testFollowupEventGetsLengthAndCalendarRowsAndGrowsTheListRoom() async throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        model.open(on: .calendar(selected: today), as: .event)
+        await model.loadCalendars()
+        type("Appointment tomorrow at 10am")
+        let view = host(.event, on: .calendar(selected: today))
+        spin(0.2)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        let all = elements(view)
+        func frame(_ id: String) throws -> CGRect {
+            let element = try XCTUnwrap(all.first { $0.accessibilityIdentifier?() == id }, id)
+            return try XCTUnwrap(element.accessibilityFrame?())
+        }
+        let date = try frame("composer-chip-date"), length = try frame("composer-chip-length"), calendar = try frame("composer-chip-calendar")
+        XCTAssertGreaterThan(abs(date.midY - length.midY), 20, "length has its own row")
+        XCTAssertGreaterThan(abs(length.midY - calendar.midY), 20, "calendar has its own row")
+        XCTAssertGreaterThan(view.fittingSize.height, ComposerMetrics.height + 40)
+        XCTAssertGreaterThan(calendar.width, 150, "calendar names have room")
+        let room = PanelComposerRoom()
+        let overlay = NSHostingView(rootView: ComposerOverlay(model: model,
+            layout: PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 352, height: 520)), room: room)
+            .frame(width: 352, height: 520))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 352, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = overlay; windows.append(window)
+        spin(0.4); overlay.layoutSubtreeIfNeeded(); spin(0.1)
+        XCTAssertEqual(room.height, view.fittingSize.height, accuracy: 1, "the inset follows the actual Event card")
+    }
+
+    func testTheCardKeepsTheTasksHeightExceptForEvents() {
         let task = host(nil, on: .calendar(selected: today)).fittingSize
         XCTAssertEqual(task.width, ComposerMetrics.width, accuracy: 0.5)
         var heights: [CGFloat] = []
@@ -884,7 +941,8 @@ final class ComposerTests: XCTestCase {
             let view = host(kind, on: .calendar(selected: today))
             heights.append(view.fittingSize.height)
         }
-        XCTAssertEqual(Set(heights.map { ($0 * 2).rounded() }).count, 1, "\(heights)")
+        XCTAssertEqual(heights[0], heights[2], accuracy: 1, "Task and Note keep the compact card")
+        XCTAssertGreaterThan(heights[1], heights[0], "P4 supersedes the old same-height Event card")
         // P4: 9 + 20 + 5 + 15 + 5 + 28 + 8 = 90 (the design's 180 px).
         XCTAssertEqual(heights[0], ComposerMetrics.height, accuracy: 1)
         XCTAssertEqual(ComposerMetrics.height, 90)

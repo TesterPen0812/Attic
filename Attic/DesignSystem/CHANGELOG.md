@@ -1,3 +1,14 @@
+## 2026-11-03 · Combined panel follow-ups
+
+The island crops a panel-sized native glass surface into its capsule, keeping
+native glass from selecting the dark treatment used for narrow controls.
+Palette backing, Tint and the panel rim still draw in the capsule itself.
+Notes retains its editor after its first visit and suspends native input,
+menus and focus callbacks while another page is showing. Navigation still
+owns saving and presentation refresh. Notes and Calendar reserve the shared
+card's measured height. Calendar events give Date, Length (when timed) and
+Calendar separate rows; Task and Note keep the 90 pt card.
+
 ## 2026-11-03 · Glass before the first click
 
 The docked panel and its island request active native Liquid Glass from
