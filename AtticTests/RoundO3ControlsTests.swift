@@ -114,6 +114,7 @@ final class RoundO3ControlsTests: XCTestCase {
         let view = host(root, design: design)
         let note = try XCTUnwrap(store.notes.first)
         XCTAssertTrue(noteDraft.pages.open(noteID: note.id))
+        noteDraft.pages.dismissLibrary()
         spin(0.3)
         view.layoutSubtreeIfNeeded()
         return (view, noteDraft.pages)

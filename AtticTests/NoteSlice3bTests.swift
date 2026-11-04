@@ -3508,6 +3508,7 @@ extension NoteSlice3bTests {
         let controller = NotesPageController(store: reopened, journal: nil, saveDelay: .seconds(60))
         await controller.startAndWait()
         await XCTAssertTrueAsync(await controller.openDurably(noteID: destID))
+        controller.dismissLibrary() // Private paste requires the visible writing route.
         let target = try XCTUnwrap(controller.active).engine
         reopened.clearVerifiedAttachmentCache()
         XCTAssertNil(controller.attachmentBytes(forAttachment: item.id))

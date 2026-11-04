@@ -120,6 +120,7 @@ final class NotesOwnerFeedbackTests: XCTestCase {
         let controller = noteDraft.pages
         spin()
         XCTAssertTrue(controller.open(noteID: id))
+        controller.dismissLibrary()
         spin()
         let session = try XCTUnwrap(controller.active)
         let textView = try XCTUnwrap(session.engine.textView)

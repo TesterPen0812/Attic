@@ -596,6 +596,7 @@ final class NotesLibraryModelTests: XCTestCase {
         enum Exit: CaseIterable { case dismiss, newNote, duplicate, openNote, failedDraft }
         for route in Exit.allCases {
             let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+            XCTAssertTrue(controller.requestNewNote()) // Each route starts with an intentional draft.
             await controller.startAndWait()
             let initial = try XCTUnwrap(controller.active)
             _ = initial.engine.performEdit(NSRange(location: 0, length: 0),

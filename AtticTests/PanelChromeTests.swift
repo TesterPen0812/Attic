@@ -266,6 +266,7 @@ final class PanelChromeTests: XCTestCase {
         let settings = AppSettings(defaults: defaults)
         let tasksState = TasksPageState()
         let draft = NoteDraftController(noteStore: notes)
+        XCTAssertTrue(draft.pages.requestNewNote()) // Chrome fixtures exercise the writing/Back scene.
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),

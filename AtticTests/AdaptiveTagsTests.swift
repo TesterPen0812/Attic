@@ -77,6 +77,7 @@ final class AdaptiveTagsTests: XCTestCase {
         spin()
         let note = try XCTUnwrap(store.notes.first { $0.title == title })
         XCTAssertTrue(noteDraft.pages.open(noteID: note.id))
+        noteDraft.pages.dismissLibrary() // Match a person opening saved writing.
         spin(0.4)
         host.layoutSubtreeIfNeeded()
         let session = try XCTUnwrap(noteDraft.pages.active)
