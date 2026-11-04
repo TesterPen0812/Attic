@@ -118,6 +118,47 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertFalse(panel.uiState.isPanelKey)
     }
 
+    func testBugs4ColdPrewarmRestoresSavedViewportWithoutTakingFocus() throws {
+        let suite = "Bugs4Viewport.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text("Kept viewport")] + (0..<100).map { .text("Paragraph \($0) with enough writing to scroll") })
+        guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("seed note") }
+        defaults.set(["location": 5, "length": 0, "scroll": 120.0], forKey: "notes.viewState.\(id.uuidString)")
+        let controller = NotesPageController(store: store, journal: nil, defaults: defaults)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertEqual(session.scrollOffset, 120)
+        let chrome = NotesPageChrome()
+        func root(current: Bool) -> AnyView {
+            AnyView(NoteEditorRepresentable(session: session, chrome: chrome, columnInset: 20,
+                topInset: 60, bottomInset: 60, headerBottom: 40, design: .default,
+                tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] })
+                .environment(\.atticPanelPageIsCurrent, current))
+        }
+        let host = NSHostingView(rootView: root(current: false))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 320, height: 520),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        let editor = try XCTUnwrap(session.engine.textView)
+        let scroll = try XCTUnwrap(session.engine.scrollView)
+        XCTAssertTrue(editor.isSuspended)
+        XCTAssertFalse(window.firstResponder === editor, "warming must not claim native focus")
+        host.rootView = root(current: true)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertTrue(session.engine.textView === editor)
+        XCTAssertTrue(session.engine.scrollView === scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 120, accuracy: 1, "the one-shot presentation must retain the saved viewport when warmed hidden")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0))
+    }
+
     func testBugs4NotesNativeScrollerDisappearsOnlyDuringPageSlide() async throws {
         let (panel, session, _) = try await followupNotes()
         let scroll = try XCTUnwrap(session.engine.scrollView)
