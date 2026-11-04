@@ -875,6 +875,30 @@ final class ComposerTests: XCTestCase {
         return view
     }
 
+    func testFollowupChangingKindsClosesThePreviousKindsInlinePicker() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let view = host(.task, on: .calendar(selected: today))
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        func element(_ id: String) -> AnyObject? {
+            view.layoutSubtreeIfNeeded()
+            return elements(view).first { $0.accessibilityIdentifier?() == id }
+        }
+        XCTAssertTrue(try XCTUnwrap(element("composer-chip-priority")).accessibilityPerformPress?() ?? false)
+        spin(0.1)
+        XCTAssertNotNil(element("composer-priority-low"))
+        model.choose(.event); spin(0.1)
+        model.choose(.task); spin(0.1)
+        XCTAssertNil(element("composer-priority-low"), "switching kind closes its old inline picker")
+        XCTAssertNotNil(element("composer-chip-date"))
+        XCTAssertNotNil(element("composer-chip-tags"))
+    }
+
     func testFollowupEventGetsLengthAndCalendarRowsAndGrowsTheListRoom() async throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
