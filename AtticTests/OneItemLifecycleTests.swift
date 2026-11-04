@@ -60,6 +60,11 @@ final class OneItemLifecycleTests: XCTestCase {
     }
 
     func testRepeatedWritingAdmissionReusesBytesButStillReadsFreshReplicas() throws {
+        let context = ModelContext(container)
+        let writing = try context.fetch(FetchDescriptor<NoteItem>())
+        let original = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Parent"), .text("Writing \(UUID())")], requires: ["taskNote"]))
+        for row in writing { row.content = original }
+        try context.save()
         let before = TaskNoteConversion.writingDecodeCount
         for _ in 0..<6 {
             XCTAssertTrue(TaskNoteConversion.hasWriting(root, in: ModelContext(container)))
@@ -69,8 +74,6 @@ final class OneItemLifecycleTests: XCTestCase {
 
         // A writer can reuse a revision token. Exact bytes, not that token,
         // decide admission; every physical replica is read in a fresh context.
-        let context = ModelContext(container)
-        let writing = try context.fetch(FetchDescriptor<NoteItem>())
         let empty = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Parent")], requires: ["taskNote"]))
         for row in writing { row.content = empty }
         try context.save()
