@@ -16,6 +16,39 @@ final class PanelSharedChromeTests: XCTestCase {
         return [root] + children.flatMap { elements($0 as AnyObject) }
     }
 
+    func testBugs4TaskPageTakesTheSharedGlassAwayBeforeDrawingItsOwnControls() throws {
+        let chrome = PanelSharedChrome()
+        let state = PanelTopRowState()
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let root = VStack {
+            PanelSharedTopControls(page: .tasks).atticMaterialProbe("task-cover-top")
+            PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout).atticMaterialProbe("task-cover-bottom")
+        }
+        .environment(\.panelSharedChrome, chrome)
+        .environment(\.panelTopRowState, state)
+        .atticDesign(.default)
+        let host = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        AtticMaterialProbe.reset()
+        spin(0.3)
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-top"], .init(away: false, gone: false))
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-bottom"], .init(away: false, gone: false))
+        chrome.setCovered(true, page: .tasks)
+        host.layoutSubtreeIfNeeded()
+        spin(0.02)
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-top"], .init(away: true, gone: true), "the shared Settings glass must not fade over the task's inline menu")
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-bottom"], .init(away: true, gone: true), "native glass ignores the bar's outer opacity and must give Back its row")
+        chrome.setCovered(false, page: .tasks)
+        spin(0.3)
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-top"], .init(away: false, gone: false))
+        XCTAssertEqual(AtticMaterialProbe.states["task-cover-bottom"], .init(away: false, gone: false))
+    }
+
     /// An element's frame in the host's top-left space.
     private func frame(of identifier: String, in host: NSView) -> CGRect? {
         host.layoutSubtreeIfNeeded()
