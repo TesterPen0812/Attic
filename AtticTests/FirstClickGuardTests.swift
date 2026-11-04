@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import XCTest
 @testable import Attic
 
@@ -27,7 +28,13 @@ final class FirstClickWindowServerTests: XCTestCase {
         // Keep the original scan and repeat it in reverse. A miss at the
         // first queried point can otherwise look like a corner-geometry bug
         // when native input publication is actually catching up during scan.
-        for (reduceMotion, reverseSurfaceOrder) in [(false, false), (true, false), (false, true), (true, true)] {
+        let controls: [(Bool, Bool, FirstMousePublicationProbe)] = [
+            (false, false, .none), (true, false, .none),
+            (false, true, .none), (true, true, .none)
+        ] + FirstMousePublicationProbe.allCases.filter { $0 != .none }.flatMap { probe in
+            [(false, false, probe), (true, false, probe)]
+        }
+        for (reduceMotion, reverseSurfaceOrder, publication) in controls {
             try FirstClickHarness.withController(self, reduceMotion: reduceMotion) { harness in
                 for section in [PanelSection.tasks, .notes, .calendar, .canvas] {
                     harness.state.selectSection(section)
@@ -39,10 +46,12 @@ final class FirstClickWindowServerTests: XCTestCase {
                     // A reveal from hidden, as the corner or the shortcut
                     // shows it: the panel isn't key.
                     try harness.reveal()
+                    publication.apply(to: harness.panel)
                     for (index, wait) in [0.02, 0.06, 0.12, 0.25, 1.0].enumerated() {
                         harness.spin(wait)
                         let name = "\(section), Reduce Motion \(reduceMotion ? "on" : "off"), sample \(index)"
                             + (reverseSurfaceOrder ? ", reversed surface scan" : "")
+                            + (publication == .none ? "" : ", publication \(publication.rawValue)")
                         misses += harness.windowServerMisses(name, reverseSurfaceOrder: reverseSurfaceOrder)
                     }
                 }
@@ -375,6 +384,25 @@ final class FirstClickActivationTests: XCTestCase {
 
 /// A panel controller on screen (key-window runs), its island, and the
 /// window server's view of where clicks go.
+/// Controlled diagnostics: no sleeps and no discarded hit-test results.
+/// The unfenced original scan remains in the same assertion above.
+@MainActor
+private enum FirstMousePublicationProbe: String, CaseIterable {
+    case none, transaction, displayTransaction, applicationUpdate, windowOrderRead
+
+    func apply(to window: NSWindow) {
+        switch self {
+        case .none: break
+        case .transaction: CATransaction.flush()
+        case .displayTransaction:
+            window.displayIfNeeded()
+            CATransaction.flush()
+        case .applicationUpdate: NSApp.updateWindows()
+        case .windowOrderRead: _ = NSWindow.windowNumbers(options: [.allApplications])
+        }
+    }
+}
+
 @MainActor
 final class FirstClickHarness {
     let controller: AtticPanelController
