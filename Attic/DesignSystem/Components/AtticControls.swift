@@ -1187,15 +1187,17 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
             attachmentGeneration += 1
             guard let window else { claim?.cancelFocusRequest(); return }
             let attachment = attachmentGeneration
-            let request = claim?.focusGeneration
             // Resolve this probe's field after layout, but never replay an
             // old attachment's focus request into a different field/window.
+            // onAppear may register the explicit request after attachment:
+            // discovery services that current pending request, not generation 0.
             DispatchQueue.main.async { [weak self, weak window] in
                 guard let self, let window, self.window === window,
-                      self.attachmentGeneration == attachment, let field = self.ownField() else { return }
-                self.claim?.field = field
-                guard let request, self.wanted(), window.isKeyWindow || window.canBecomeKey else { return }
-                self.claim?.takeKeyboard(request: request, in: window)
+                      self.attachmentGeneration == attachment, let field = self.ownField(),
+                      let claim = self.claim else { return }
+                claim.field = field
+                guard self.wanted(), window.isKeyWindow || window.canBecomeKey else { return }
+                claim.takeKeyboard(request: claim.focusGeneration, in: window)
             }
         }
 

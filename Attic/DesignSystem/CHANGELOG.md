@@ -3,6 +3,7 @@
 - Date-group headings hide the task row's date without removing it from the row's spoken description.
 - The shared date grid uses Calendar's very short weekday letters, retaining the locale's first weekday.
 - Later's empty state reads “Nothing for later”. Calendar's empty Today keeps the same date tile as other empty days, without an empty raised card or lone now line.
+- Search-field discovery services the current pending focus request, retaining cancellation and selection guards.
 
 ## 2026-11-03 · Combined panel follow-ups
 
