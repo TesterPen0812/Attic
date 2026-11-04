@@ -459,8 +459,9 @@ struct TaskNotePage: View {
         .onChange(of: chrome.formatRow.isOpen) { _, open in
             chrome.controls?.isFormatBarOpen = open
             if !open {
+                let generation = presenter.host.writingFocusGeneration
                 DispatchQueue.main.async {
-                    guard presenter.lease != nil else { return }
+                    guard presenter.lease != nil, presenter.host.writingFocusGeneration == generation else { return }
                     presenter.host.focusWriting(atTop: false)
                 }
             }
@@ -1101,8 +1102,10 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         textView.escapeFallback = onEscape
         // The page's first frame: the open request's interval ends there.
         CATransaction.setCompletionBlock { MainActor.assumeIsolated { PerformanceSignposts.taskPageDidDraw() } }
+        let focusGeneration = host.writingFocusGeneration
         DispatchQueue.main.async {
-            guard presenter.lease != nil, host.engine === engine, host.textView === textView else { return }
+            guard presenter.lease != nil, host.engine === engine, host.textView === textView,
+                  host.writingFocusGeneration == focusGeneration else { return }
             presenter.restoreViewStateOnMount()
             if !engine.isReadOnly { textView.window?.makeFirstResponder(textView) }
         }

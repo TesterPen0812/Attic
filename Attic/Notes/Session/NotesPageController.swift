@@ -2014,6 +2014,11 @@ final class NotesPageController: ObservableObject {
             if session.isUntouchedDraft { cache[session.noteID] = nil }
             session.pauseTask?.cancel()
         }
+        // A task's composed editor stays mounted while the panel collapses.
+        // Once preservation accepts a hide, end its native writing focus so
+        // the blue insertion point cannot blink over the shrinking text.
+        // The caret/selection stay in the warm host for the next real click.
+        if reason == .hide { taskNotePresenter?.host.relinquishWritingFocus() }
         if reason == .pageSwitch || reason == .hide || reason == .quit {
             taskNotePresenter?.model.setFocusInside(false)
             taskNotePresenter?.model.setPointerInside(false)
