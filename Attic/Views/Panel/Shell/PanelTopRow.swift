@@ -189,15 +189,19 @@ private struct PanelPageMotionKey: EnvironmentKey {
 final class PanelNativeScrollIndicators {
     private weak var scroll: NSScrollView?
     private weak var transit: PanelPageTransit?
+    private weak var vertical: NSScroller?
+    private weak var horizontal: NSScroller?
     private var subscription: AnyCancellable?
-    private var original: (vertical: Bool, horizontal: Bool)?
+    private var original: (verticalAlpha: CGFloat, horizontalAlpha: CGFloat)?
 
     func bind(_ scroll: NSScrollView, transit: PanelPageTransit?) {
-        guard self.scroll !== scroll || self.transit !== transit else { return }
+        guard self.scroll !== scroll || self.transit !== transit
+                || vertical !== scroll.verticalScroller || horizontal !== scroll.horizontalScroller else { return }
         stop()
         self.scroll = scroll
         self.transit = transit
-        original = (scroll.hasVerticalScroller, scroll.hasHorizontalScroller)
+        vertical = scroll.verticalScroller
+        horizontal = scroll.horizontalScroller
         subscription = transit?.$sliding.removeDuplicates().sink { [weak self] sliding in
             MainActor.assumeIsolated { self?.apply(sliding) }
         }
@@ -207,16 +211,26 @@ final class PanelNativeScrollIndicators {
         subscription = nil
         apply(false)
         original = nil
+        vertical = nil
+        horizontal = nil
         scroll = nil
         transit = nil
     }
 
     private func apply(_ sliding: Bool) {
-        guard let scroll, let original else { return }
-        let vertical = original.vertical && !sliding
-        let horizontal = original.horizontal && !sliding
-        if scroll.hasVerticalScroller != vertical { scroll.hasVerticalScroller = vertical }
-        if scroll.hasHorizontalScroller != horizontal { scroll.hasHorizontalScroller = horizontal }
+        // Removing a legacy scroller also removes its gutter and rewraps
+        // the document. Keep native geometry and hide only its drawing.
+        if sliding {
+            if original == nil {
+                original = (vertical?.alphaValue ?? 1, horizontal?.alphaValue ?? 1)
+            }
+            vertical?.alphaValue = 0
+            horizontal?.alphaValue = 0
+        } else if let original {
+            vertical?.alphaValue = original.verticalAlpha
+            horizontal?.alphaValue = original.horizontalAlpha
+            self.original = nil
+        }
     }
 }
 

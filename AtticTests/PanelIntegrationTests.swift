@@ -185,7 +185,8 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(scroll.hasVerticalScroller)
         panel.uiState.pageTransit.sliding = true
         spin(0.1)
-        XCTAssertFalse(scroll.hasVerticalScroller, "AppKit must follow the same page transit as SwiftUI")
+        XCTAssertTrue(scroll.verticalScroller.map { $0.isHidden || $0.alphaValue == 0 } ?? true,
+                      "AppKit must follow the same page transit as SwiftUI without removing its gutter")
         panel.uiState.pageTransit.sliding = false
         spin(0.1)
         XCTAssertTrue(scroll.hasVerticalScroller)
@@ -201,7 +202,7 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(scroll.hasVerticalScroller)
         panel.uiState.pageTransit.sliding = true
         spin(0.1)
-        XCTAssertFalse(scroll.hasVerticalScroller)
+        XCTAssertTrue(scroll.verticalScroller.map { $0.isHidden || $0.alphaValue == 0 } ?? true)
         panel.uiState.pageTransit.sliding = false
         spin(0.1)
         XCTAssertTrue(scroll.hasVerticalScroller)
