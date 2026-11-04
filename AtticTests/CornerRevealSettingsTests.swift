@@ -207,6 +207,11 @@ final class CornerRevealSettingsTests: XCTestCase {
     }
 
     func testASpaceChangeDoesNotCancelAnAcceptedHide() throws {
+        // Match CI: the zero-duration hide can complete before the deferred
+        // Space observer runs. A lost-native-window repair is a different case.
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
         let rig = try makePanel()
         rig.monitor.start()
         defer { rig.monitor.stop(); spin(0.4) }
@@ -217,6 +222,8 @@ final class CornerRevealSettingsTests: XCTestCase {
         let deadline = Date().addingTimeInterval(3)
         while !hidden, Date() < deadline { spin(0.02) }
         XCTAssertTrue(hidden, "Space repair must not supersede the accepted hide")
+        spin(0.1)
+        XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe, "native hide completion must update logical visibility")
         XCTAssertFalse(rig.controller.isPanelVisible)
     }
 
