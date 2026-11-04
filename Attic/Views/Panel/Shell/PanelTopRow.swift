@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// The panel's top row on every page (Accepted 2026-10-29/30, "Top row and
@@ -179,6 +181,57 @@ private struct PanelPageTravelKey: EnvironmentKey {
 
 private struct PanelPageMotionKey: EnvironmentKey {
     static let defaultValue: PanelPageMotion = .instant
+}
+
+/// The two native editor hosts follow transit directly, without publishing
+/// through their page models or rebuilding TextKit on each slide boundary.
+@MainActor
+final class PanelNativeScrollIndicators {
+    private weak var scroll: NSScrollView?
+    private weak var transit: PanelPageTransit?
+    private weak var vertical: NSScroller?
+    private weak var horizontal: NSScroller?
+    private var subscription: AnyCancellable?
+    private var original: (verticalAlpha: CGFloat, horizontalAlpha: CGFloat)?
+
+    func bind(_ scroll: NSScrollView, transit: PanelPageTransit?) {
+        guard self.scroll !== scroll || self.transit !== transit
+                || vertical !== scroll.verticalScroller || horizontal !== scroll.horizontalScroller else { return }
+        stop()
+        self.scroll = scroll
+        self.transit = transit
+        vertical = scroll.verticalScroller
+        horizontal = scroll.horizontalScroller
+        subscription = transit?.$sliding.removeDuplicates().sink { [weak self] sliding in
+            MainActor.assumeIsolated { self?.apply(sliding) }
+        }
+    }
+
+    func stop() {
+        subscription = nil
+        apply(false)
+        original = nil
+        vertical = nil
+        horizontal = nil
+        scroll = nil
+        transit = nil
+    }
+
+    private func apply(_ sliding: Bool) {
+        // Removing a legacy scroller also removes its gutter and rewraps
+        // the document. Keep native geometry and hide only its drawing.
+        if sliding {
+            if original == nil {
+                original = (vertical?.alphaValue ?? 1, horizontal?.alphaValue ?? 1)
+            }
+            vertical?.alphaValue = 0
+            horizontal?.alphaValue = 0
+        } else if let original {
+            vertical?.alphaValue = original.verticalAlpha
+            horizontal?.alphaValue = original.horizontalAlpha
+            self.original = nil
+        }
+    }
 }
 
 private struct PanelPageTransitKey: EnvironmentKey {

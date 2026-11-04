@@ -56,7 +56,7 @@ final class TasksPagerSpan: ObservableObject {
     /// it starts to move (each build took 50–100 ms on screen, the lag the
     /// owner felt). Hidden ones are hidden in AppKit (their scroll views),
     /// so they draw nothing, take no clicks and are not read by VoiceOver.
-    /// Let go when the panel hides or another page of the shell is shown.
+    /// Let go when the panel hides; a shell switch retains the warm lists.
     @Published var warm: ClosedRange<Int>?
 }
 
@@ -124,18 +124,20 @@ final class TasksPagerMotion: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Lets the kept pages go (the panel hid, or another page is shown).
-    func coolDown() {
+    /// Stops scheduled warming, optionally releasing the kept pages on hide.
+    func coolDown(releasingPages: Bool = true) {
         warmWork?.cancel()
         warmWork = nil
-        if span?.warm != nil { span?.warm = nil }
+        if releasingPages, span?.warm != nil { span?.warm = nil }
     }
 
     private func warmStep(_ isAllowed: @escaping () -> Bool) {
         warmWork = nil
         guard warms, let span, isAllowed() else { return }
+        // Returning to an already-warm page schedules no idle polling.
+        if span.warm == 0...max(count - 1, 0) { return }
         // Something moves, or the person is typing or pointing: later.
-        if isSettling || isTracking?() == true || Self.recentInput() {
+        if isSettling || isTracking?() == true || recentInput() {
             warmUp(after: Self.warmStep, isAllowed: isAllowed)
             return
         }
@@ -154,10 +156,18 @@ final class TasksPagerMotion: ObservableObject {
     /// The fingers are on a swipe (the swipe tells the motion).
     var isTracking: (() -> Bool)?
 
-    /// Input in the last quarter of a second (keys, the pointer, scrolling).
-    private static func recentInput() -> Bool {
-        guard let any = CGEventType(rawValue: ~0) else { return false }
-        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) < 0.25
+    /// Event ages are injectable so idle warming can be tested without
+    /// posting input into the user's session.
+    var inputAge: (CGEventType) -> TimeInterval = {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
+    }
+
+    /// Typing, scrolling and presses keep the click's frame free. Merely
+    /// moving toward a tab must not continually postpone its idle build.
+    private func recentInput() -> Bool {
+        guard NSEvent.pressedMouseButtons == 0 else { return true }
+        return [CGEventType.keyDown, .scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            .contains { inputAge($0) < 0.25 }
     }
 
     /// Draws the pages from `lower` to `upper` (clamped), if they are not
@@ -1155,7 +1165,9 @@ extension TasksPageModel {
     /// its gesture and settle, and rests on the model's tab at once.
     func suspendPager() {
         pagerSwipe.suspend()
-        pagerSwipe.motion.coolDown()
+        // A covered Tasks page keeps its already-built lists for Back and
+        // the next tab click. Hiding the panel still releases them.
+        pagerSwipe.motion.coolDown(releasingPages: isHidden)
         showPagerPage(animated: false)
     }
 

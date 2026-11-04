@@ -254,7 +254,10 @@ struct PanelSharedBottomBar: View {
         let side = AtticControlSize.headerControl
         let gap = TasksDesignMetrics.footerGap
         let folded = look.folded
-        let taken = chrome.plusHandedOver
+        // A task page's own controls arrive at once. Its shared glass must
+        // leave at once too; opacity outside a glass group cannot hide it.
+        let covered = chrome.covered.contains(page)
+        let taken = chrome.plusHandedOver || covered
         #if DEBUG
         let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
         #endif
@@ -263,7 +266,7 @@ struct PanelSharedBottomBar: View {
             // bar's start as they fade (the design's 12 px). Their glass
             // goes too (a glass group ignores an opacity), so nothing
             // peeks out under the card's corners (Accepted 2026-11-04).
-            PanelControlFold(folded: taken, animation: { Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+            PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
                 HStack(spacing: gap) {
                     // Accessibility state goes on each control, never on this
                     // stack (which would make it an element wearing the
@@ -272,7 +275,7 @@ struct PanelSharedBottomBar: View {
                 }
             }
             .offset(x: taken ? -Self.takenSlide : 0)
-            .animation(Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
+            .animation(covered ? nil : Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
@@ -280,7 +283,7 @@ struct PanelSharedBottomBar: View {
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
-                        PanelControlFold(folded: taken, animation: { Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                        PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
                             AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
                                               help: plus.help, emphasisedGlyph: true,
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
@@ -306,7 +309,7 @@ struct PanelSharedBottomBar: View {
         .padding(.bottom, Self.plusInsets(layout: layout).bottom)
         .opacity(look.shown ? 1 : 0)
         .allowsHitTesting(look.shown)
-        .animation(PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
+        .animation(covered ? nil : PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
     }
 
     /// How far the pills move as the card takes the row (12 design px).
@@ -390,11 +393,12 @@ private struct PanelSharedTopControlsObserver: View {
     var body: some View {
         let look = chrome.topRow(for: page)
         let searching = state.isSearching(page)
+        let covered = chrome.covered.contains(page)
         HStack(spacing: PanelTopRowLayout.gap) {
-            PanelControlFold(folded: searching || !look.shown) {
+            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
                 PanelTopRowMoreButton(shared: true)
             }
-            PanelControlFold(folded: searching || !look.shown) {
+            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
                 PanelTopRowSearchButton(label: look.searchLabel, identifier: look.searchIdentifier, shared: true) {
                     chrome.search(on: page)
                 }

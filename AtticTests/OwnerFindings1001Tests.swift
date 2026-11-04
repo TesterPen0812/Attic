@@ -340,7 +340,7 @@ final class O14FirstClickKeyLookTests: XCTestCase {
                     }
                     let pinned = state.isPanelPinned, section = state.selectedSection
                     var looks: [Bool] = []
-                    let watch = state.$isPanelKey.dropFirst().sink { looks.append($0) }
+                    let watch = state.keyState.$isKey.dropFirst().sink { looks.append($0) }
                     try send(.leftMouseDown)
                     harness.spin(0.1)
                     XCTAssertEqual(looks, [], "\(surface) \(target): no key look redraws while the button is down")

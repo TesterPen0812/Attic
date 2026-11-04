@@ -18,6 +18,40 @@ final class TasksRound11Tests: XCTestCase {
         return hosted.lists(in: content).filter { $0.frame.height > content.bounds.height / 2 }
     }
 
+    func testBugs4HoveringCannotStarveTheNextTabsIdleWarmup() {
+        let swipe = TasksPagerSwipe(count: 3)
+        defer { swipe.motion.coolDown() }
+        swipe.motion.inputAge = { type in
+            type == .mouseMoved || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        let end = Date().addingTimeInterval(1)
+        while swipe.span.warm != 0...2, Date() < end { spinWarmRunLoop() }
+        XCTAssertEqual(swipe.span.warm, 0...2, "moving toward a tab must not leave its construction on the click")
+    }
+
+    func testBugs4TypingStillPostponesWarmingUntilTheInputIsIdle() {
+        let swipe = TasksPagerSwipe(count: 3)
+        defer { swipe.motion.coolDown() }
+        swipe.motion.inputAge = { type in
+            type == .keyDown || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(swipe.span.warm)
+        swipe.motion.inputAge = { type in
+            type == .mouseMoved || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        let end = Date().addingTimeInterval(1)
+        while swipe.span.warm != 0...2, Date() < end { spinWarmRunLoop() }
+        XCTAssertEqual(swipe.span.warm, 0...2)
+    }
+
+    private func spinWarmRunLoop() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+
     /// Once idle, all three pages are built; the ones not shown hide their
     /// lists (nothing drawn, nothing read), and the page shown reads its rows.
     func testThePagesBesideTheOneShownAreBuiltHiddenOnceIdle() throws {
@@ -54,6 +88,23 @@ final class TasksRound11Tests: XCTestCase {
         hosted.go(to: .now)
         XCTAssertEqual(hosted.shownPage(), 0, "and back again")
         XCTAssertEqual(pageLists(hosted).filter { !$0.isHidden }.count, 1, "only Now draws")
+    }
+
+    func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsUntilHide() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        let before = Set(pageLists(hosted).map(ObjectIdentifier.init))
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2)
+        hosted.model.isPageShown = false
+        hosted.spin(0.1)
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "a shell switch must not put construction back on the next tab click")
+        hosted.model.isPageShown = true
+        hosted.model.pageDidReturn()
+        hosted.go(to: .backlog)
+        XCTAssertEqual(Set(pageLists(hosted).map(ObjectIdentifier.init)), before)
+        hosted.model.pageDidHide()
+        XCTAssertNil(hosted.model.pagerSwipe.span.warm, "hidden panels still release the background tabs")
     }
 
     /// Hiding the panel lets the kept pages go; the next reveal builds them

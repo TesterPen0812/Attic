@@ -8,6 +8,48 @@ import XCTest
 /// the agent's `show` tool.
 @MainActor
 final class PanelShellTests: XCTestCase {
+    func testBugs4HidingLegacyIndicatorsDoesNotReflowTheDocumentColumn() throws {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        scroll.scrollerStyle = .legacy
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = false
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 500, height: 1_000))
+        scroll.tile()
+        let width = scroll.contentSize.width
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        scroller.alphaValue = 0.8
+        let transit = PanelPageTransit()
+        let indicators = PanelNativeScrollIndicators()
+        indicators.bind(scroll, transit: transit)
+        transit.sliding = true
+        scroll.tile()
+        XCTAssertEqual(scroll.contentSize.width, width, "hiding the indicator must not rewrap a task note")
+        XCTAssertTrue(scroller.isHidden || scroller.alphaValue == 0, "the retained gutter must draw no scrollbar")
+        transit.sliding = false
+        scroll.tile()
+        XCTAssertEqual(scroll.contentSize.width, width)
+        XCTAssertEqual(scroller.alphaValue, 0.8)
+        indicators.stop()
+    }
+
+    func testBugs4IndicatorRestorationUsesTheCurrentNativeAppearanceAndLeavesIdleChangesAlone() throws {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        scroll.hasVerticalScroller = true
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        scroller.alphaValue = 0.8
+        let transit = PanelPageTransit()
+        let indicators = PanelNativeScrollIndicators()
+        indicators.bind(scroll, transit: transit)
+        scroller.alphaValue = 0.6
+        transit.sliding = true
+        XCTAssertTrue(scroller.isHidden || scroller.alphaValue == 0)
+        transit.sliding = false
+        XCTAssertEqual(scroller.alphaValue, 0.6, "restore the appearance from this slide, not from initial binding")
+        scroller.alphaValue = 0.4
+        indicators.stop()
+        XCTAssertEqual(scroller.alphaValue, 0.4, "idle teardown must leave newer native appearance alone")
+    }
+
     private final class NativeTrackingView: NSView {
         var onDown: ((NSEvent) -> Void)?
         override func mouseDown(with event: NSEvent) { onDown?(event) }
@@ -84,6 +126,18 @@ final class PanelShellTests: XCTestCase {
         panel.sendEvent(up)
         panel.sendEvent(try event(.mouseMoved))
         XCTAssertEqual(releases, 1, "late events cannot finalise the same press twice")
+    }
+
+    func testBugs4FirstPressKeyStateDoesNotInvalidateEveryPanelPage() {
+        let state = PanelUIState()
+        var invalidations = 0
+        let token = state.objectWillChange.sink { invalidations += 1 }
+        state.setPanelKey(true)
+        XCTAssertTrue(state.isPanelKey)
+        state.setPanelKey(false)
+        XCTAssertFalse(state.isPanelKey)
+        XCTAssertEqual(invalidations, 0, "controls keep the same native glass; key ownership must not rebuild the whole panel on release")
+        withExtendedLifetime(token) {}
     }
 
     // MARK: Pages and the header

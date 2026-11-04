@@ -31,6 +31,16 @@ final class TaskRenameDraft: ObservableObject {
     @Published var focusRequest: UInt64 = 0
 }
 
+/// Keyboard ownership changes after a first press. It does not change the
+/// controls' material, and must not invalidate every kept page on release.
+@MainActor
+final class PanelKeyState: ObservableObject {
+    @Published private(set) var isKey = false
+    func set(_ value: Bool) {
+        if isKey != value { isKey = value }
+    }
+}
+
 @MainActor
 final class PanelUIState: ObservableObject {
     let resumeDefaults: UserDefaults?
@@ -45,10 +55,10 @@ final class PanelUIState: ObservableObject {
     }
 
     @Published var isComposerPresented = false
-    /// Whether the panel is the key window. Native Liquid Glass renders flat
-    /// in a window that is not key, so while it is not (a hover reveal never
-    /// takes the keyboard) the shell draws its controls in the Craft style.
-    @Published private(set) var isPanelKey = false
+    /// Native controls keep their glass independently of keyboard ownership.
+    /// Only consumers that display key state observe this separate object.
+    let keyState = PanelKeyState()
+    var isPanelKey: Bool { keyState.isKey }
     /// Bumped when an explicit open (Show Attic, quick capture) should put
     /// the keyboard in the current page's primary input (the Tasks add bar).
     @Published private(set) var primaryInputFocusRequest: UInt64 = 0
@@ -226,12 +236,23 @@ final class PanelUIState: ObservableObject {
 
     static func keepsBuilt(_ page: PanelPage) -> Bool { true }
 
-    /// Notes starts only on its first real visit; after that it stays built.
-    static func prewarms(_ page: PanelPage) -> Bool { page != .notes }
+    /// Every page can warm behind the current one. Notes' native input and
+    /// commands remain suspended until navigation presents it normally.
+    static func prewarms(_ page: PanelPage) -> Bool { true }
+
+    /// Focus alone can keep a panel open without making it busy. Actual
+    /// gestures, menus and gated work keep background construction away.
+    private static let pageBuildBlockers: Set<PanelInteractionLockReason> = [
+        .panelSwipe, .menuTracking, .windowMove, .windowResize, .blockingSave,
+        .notesImport, .notesFilePicker, .canvasConfirmation
+    ]
+    var canPrepareBuiltPages: Bool {
+        interactionLockReasons.isDisjoint(with: Self.pageBuildBlockers) && !pageTransit.sliding
+    }
 
     /// Builds `page` behind the current one (the pointer is on the switch).
     func prepareBuiltPage(_ page: PanelPage) {
-        guard isPageContentLoaded, Self.prewarms(page), !builtPages.contains(page) else { return }
+        guard isPageContentLoaded, canPrepareBuiltPages, !isElsewhere(page.section), Self.prewarms(page), !builtPages.contains(page) else { return }
         builtPages.insert(page)
     }
 
@@ -252,8 +273,7 @@ final class PanelUIState: ObservableObject {
     }
 
     func setPanelKey(_ isKey: Bool) {
-        guard isPanelKey != isKey else { return }
-        isPanelKey = isKey
+        keyState.set(isKey)
     }
 
     func requestPrimaryInputFocus() {
