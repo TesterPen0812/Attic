@@ -133,7 +133,9 @@ final class RoundO3ControlsTests: XCTestCase {
             scroll.contentView.scroll(to: CGPoint(x: 0, y: 160))
             scroll.reflectScrolledClipView(scroll.contentView)
             spin(0.2)
+            XCTAssertEqual(scroll.contentView.bounds.minY, 160, accuracy: 1, "\(name): the requested reading position is established before capture")
             let rep = try bitmap(view)
+            XCTAssertEqual(scroll.contentView.bounds.minY, 160, accuracy: 1, "\(name): capturing must not replay the initial caret/viewport restore")
             write(rep, "o17-01-notes-\(name)")
             let layout = PanelPageLayout(cornerSize: 52, panelSize: Self.size)
             let bottom = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
