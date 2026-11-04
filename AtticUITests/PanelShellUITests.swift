@@ -171,7 +171,7 @@ final class PanelShellUITests: XCTestCase {
         XCTAssertEqual(page("tasks").frame.midY, page("canvas").frame.midY, accuracy: 1.5)
         XCTAssertLessThan(page("tasks").frame.midX, page("canvas").frame.midX)
         for name in ["tasks", "notes", "calendar", "canvas"] {
-            XCTAssertTrue(page(name).isHittable, "\(name) is always on the island")
+            XCTAssertTrue(page(name).isHittable, "\(name) takes clicks on the awake island")
         }
         XCTAssertEqual(page("notes").label, "Notes")
         assertOnlySelected("tasks")
@@ -188,8 +188,8 @@ final class PanelShellUITests: XCTestCase {
         assertOnlySelected("tasks")
     }
 
-    /// Focus rings are for keyboard navigation only: clicking pages leaves
-    /// the page button looking exactly as it did once the pointer leaves.
+    /// Clicking pages leaves no focus ring in the same awake scene. Keep
+    /// the pointer on Tasks at both captures to isolate the click's effect.
     func testClickingThePageButtonShowsNoFocusRing() throws {
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
         closeTheCardIfOpen()
