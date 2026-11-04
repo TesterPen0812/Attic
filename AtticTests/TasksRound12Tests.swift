@@ -14,7 +14,7 @@ final class TasksRound12Tests: XCTestCase {
         override var canBecomeKey: Bool { true }
     }
 
-    func testBugs3AFieldAttachmentServicesThePendingExplicitFindWithoutWaitingForARetry() throws {
+    func testBugs3AFieldAttachmentServicesThePendingExplicitFindWithoutWaitingForARetry() async throws {
         try requireKeyWindowTests()
         for canceled in [false, true] {
             let window = ProbePanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 120),
@@ -42,7 +42,8 @@ final class TasksRound12Tests: XCTestCase {
             let request = claim.beginFocusRequest()
             XCTAssertFalse(claim.takeKeyboard(request: request, in: window))
             if canceled { claim.cancelFocusRequest() }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            try await Task.sleep(for: .milliseconds(20))
+            XCTAssertTrue(claim.field === field, "native discovery ran before focus admission is checked")
             if canceled {
                 XCTAssertTrue(window.firstResponder === previousEditor,
                               "a canceled discovery cannot take another field's keyboard")
