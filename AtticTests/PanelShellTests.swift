@@ -93,29 +93,57 @@ final class PanelShellTests: XCTestCase {
     /// Before, the shell crossfaded for 180 ms whatever the feel, and only
     /// the first visit to Notes looked sprung (the editor's own slide for
     /// the note its session started on).
-    /// "Motion: page switch and hide" (Accepted 2026-11-02), option A: the
-    /// new page moves only about 30 pt from its side in the page order, and
-    /// the old page fades out before the new one fades in, so two pages
-    /// never show at once. Reduce Motion and Animations: Reduced stay
-    /// instant. The top row changes in place (`panelPageTravel`).
-    func testOptionAThePageMovesAbout30ptAndThePagesNeverShowTogether() {
-        let motion = PanelPageMotion.current(reduceMotion: false)
+    /// Accepted 2026-11-04 ("Owner notes on Attic Follow Up"): the old
+    /// full-width slide comes back, refined and slightly faster. The pages
+    /// travel the panel's whole width edge to edge, both fully drawn (no
+    /// crossfade, so never two pages see-through at once): the new one
+    /// shows at once outside the glass, the old one goes once the slide has
+    /// settled. The spring is the feel's at 83 % of its duration (about
+    /// 17 % sooner to settle). Only the top row's in-place part fades
+    /// (out, then in). Reduce Motion and Animations: Reduced stay instant.
+    func testThePageSwitchSlidesTheWholeWidthQuickerWithNoCrossfade() throws {
+        let tuning = AtticMotionTuning.lively
+        let motion = PanelPageMotion.current(reduceMotion: false, tuning: tuning)
+        let base = AtticMotionPreset.pageSwitch.spring(in: tuning)
+        let spring = try XCTUnwrap(motion.spring)
         XCTAssertTrue(motion.travels)
-        XCTAssertEqual(PanelPageMotion.travel, 30, "about 30 pt, not the panel's width")
-        XCTAssertEqual(motion.restingOffset(side: 1), 30)
-        XCTAssertEqual(motion.restingOffset(side: -1), -30)
-        XCTAssertGreaterThan(PanelPageMotion.fadeOut, 0)
-        XCTAssertGreaterThanOrEqual(PanelPageMotion.fadeInDelay, PanelPageMotion.fadeOut,
-                                    "the new page starts fading in once the old one has gone")
-        XCTAssertNotNil(motion.opacityAnimation(incoming: true))
-        XCTAssertNotNil(motion.opacityAnimation(incoming: false))
-        XCTAssertNotEqual(motion.opacityAnimation(incoming: true), motion.opacityAnimation(incoming: false))
+        XCTAssertEqual(motion.restingOffset(side: 1, width: 352), 352, "the panel's whole width, not 30 pt")
+        XCTAssertEqual(motion.restingOffset(side: -1, width: 352), -352)
+        XCTAssertEqual(spring.bounce, base.bounce, "the feel's bounce")
+        XCTAssertEqual(spring.response, base.response * 0.83, accuracy: 0.0001)
+        let a20 = Spring(duration: base.response, bounce: base.bounce).settlingDuration
+        let shorter = 1 - motion.settleDuration / a20
+        XCTAssertGreaterThanOrEqual(shorter, 0.15, "at least 15 % shorter to settle than A20")
+        XCTAssertLessThanOrEqual(shorter, 0.20, "at most 20 % shorter")
+        XCTAssertEqual(motion.animation, .spring(duration: spring.response, bounce: spring.bounce), "no delay: it moves at once")
+        XCTAssertNil(motion.pageOpacityAnimation(incoming: true), "the new page is drawn whole at once")
+        XCTAssertEqual(motion.pageOpacityAnimation(incoming: false),
+                       .linear(duration: 0.001).delay(motion.settleDuration), "the old page stays whole until it is out")
+        XCTAssertNotNil(motion.inPlaceOpacityAnimation(incoming: true))
+        XCTAssertNotEqual(motion.inPlaceOpacityAnimation(incoming: true), motion.inPlaceOpacityAnimation(incoming: false))
         let instant = PanelPageMotion.current(reduceMotion: true)
         XCTAssertFalse(instant.travels)
-        XCTAssertEqual(instant.restingOffset(side: 1), 0)
-        XCTAssertNil(instant.opacityAnimation(incoming: true), "Reduce Motion: instant")
-        XCTAssertNil(instant.opacityAnimation(incoming: false))
+        XCTAssertEqual(instant.restingOffset(side: 1, width: 352), 0)
         XCTAssertNil(instant.animation)
+        XCTAssertNil(instant.pageOpacityAnimation(incoming: false), "Reduce Motion: instant")
+        XCTAssertNil(instant.inPlaceOpacityAnimation(incoming: true))
+        XCTAssertEqual(instant.settleDuration, 0)
+    }
+
+    /// While a switch slides, the pages' scroll bars stay hidden (they never
+    /// flash or cross); an instant switch never hides them.
+    func testScrollBarsHideOnlyWhileTheSlideRuns() {
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        ui.switchPage(to: .notes, motion: motion)
+        XCTAssertTrue(ui.isPageSwitchSliding)
+        let settled = expectation(description: "the slide settles")
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.settleDuration + 0.1) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+        XCTAssertFalse(ui.isPageSwitchSliding)
+        ui.switchPage(to: .tasks, motion: .instant)
+        XCTAssertFalse(ui.isPageSwitchSliding)
     }
 
     func testEveryPageSwitchUsesTheFeelsMotionEveryTime() throws {
@@ -133,13 +161,13 @@ final class PanelShellTests: XCTestCase {
                 used.append(try XCTUnwrap(ui.lastPageSwitch))
             }
             XCTAssertEqual(used.map(\.to), route)
-            let spring = feel.feel.tuning.slide
+            let base = feel.feel.tuning.slide
+            let spring = AtticMotionSpring(response: base.response * PanelPageMotion.speed, bounce: base.bounce)
             XCTAssertGreaterThan(spring.bounce, 0, "\(feel): never a plain fade")
             for (index, record) in used.enumerated() {
                 XCTAssertEqual(record.motion, PanelPageMotion(spring: spring), "\(feel) switch \(index) to \(record.to)")
-                // Option A: the spring starts once the old page has faded.
-                XCTAssertEqual(record.motion.animation,
-                               .spring(duration: spring.response, bounce: spring.bounce).delay(PanelPageMotion.fadeInDelay))
+                // The slide moves at once, a little quicker than A20's.
+                XCTAssertEqual(record.motion.animation, .spring(duration: spring.response, bounce: spring.bounce))
                 XCTAssertNotEqual(record.motion.animation, .spring(duration: 0.18, bounce: 0), "the old crossfade")
             }
             // First and repeated visits to Notes are the same switch.

@@ -372,6 +372,46 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.writing, "kept")
     }
 
+    /// Accepted 2026-11-04 (#9): a page switch closes the card at once and
+    /// whole; Escape and a click outside fold it back into "+". The draft
+    /// is kept either way.
+    func testAPageSwitchClosesTheCardAtOnceKeepingItsDraft() {
+        model.open(on: .tasks(.now))
+        type("Draft")
+        model.close(atOnce: true)
+        XCTAssertFalse(model.isOpen)
+        XCTAssertTrue(model.closedAtOnce)
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar.text, "Draft")
+        model.close()
+        XCTAssertFalse(model.closedAtOnce, "Escape folds it")
+    }
+
+    /// Accepted 2026-11-04: a press anywhere outside the open card closes
+    /// it (keeping its draft); a press on the card keeps it.
+    func testAPressOutsideTheCardClosesIt() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 400))
+        window.contentView = content
+        let watcher = ComposerOutsideClick.Watcher(frame: NSRect(x: 100, y: 20, width: 289, height: 90))
+        content.addSubview(watcher)
+        var open = true
+        watcher.isOpen = { open }
+        func press(_ point: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                             clickCount: 1, pressure: 1))
+        }
+        XCTAssertFalse(watcher.closes(on: try press(NSPoint(x: 150, y: 60))), "on the card")
+        XCTAssertTrue(watcher.closes(on: try press(NSPoint(x: 150, y: 300))), "on the list above it")
+        XCTAssertTrue(watcher.closes(on: try press(NSPoint(x: 20, y: 30))), "on the bar beside it")
+        open = false
+        XCTAssertFalse(watcher.closes(on: try press(NSPoint(x: 150, y: 300))), "a closed card closes nothing")
+    }
+
     /// Accepted 2026-11-03 (P4): Return or Create adds the task and the card
     /// stays open, empty, its title asked for the keyboard again; ⌘Return
     /// opens the task's page, so the card folds.

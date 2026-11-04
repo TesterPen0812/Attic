@@ -126,8 +126,9 @@ final class PanelIslandImprovedTests: XCTestCase {
     }
 
     /// It wakes when the pointer comes within 16 pt, on a click, or while a
-    /// page is dragged near; 800 ms after the pointer leaves it settles.
-    func testItWakesNearThePointerAndSettlesAfter800ms() {
+    /// page is dragged near; 300 ms after the pointer leaves it settles
+    /// (Accepted 2026-11-04: quicker than D4's 800 ms).
+    func testItWakesNearThePointerAndSettlesAfter300ms() {
         let clock = Clock()
         let island = model(clock)
         XCTAssertFalse(island.isAwake, "at rest when not in use")
@@ -140,14 +141,14 @@ final class PanelIslandImprovedTests: XCTestCase {
         island.track(pointer: CGPoint(x: awake.maxX + 10, y: awake.minY + 5), rest: rest, awake: awake)
         XCTAssertTrue(island.isAwake, "awake, the zone is the whole island's")
         island.track(pointer: CGPoint(x: awake.maxX + 40, y: awake.midY), rest: rest, awake: awake)
-        clock.advance(0.79)
+        clock.advance(0.29)
         XCTAssertTrue(island.isAwake)
         clock.advance(0.02)
-        XCTAssertFalse(island.isAwake, "800 ms after the pointer leaves")
+        XCTAssertFalse(island.isAwake, "300 ms after the pointer leaves")
         // Coming back before it settles keeps it awake.
         island.wake()
         island.track(pointer: CGPoint(x: awake.maxX + 40, y: awake.midY), rest: rest, awake: awake)
-        clock.advance(0.5)
+        clock.advance(0.2)
         island.track(pointer: CGPoint(x: awake.midX, y: awake.midY), rest: rest, awake: awake)
         clock.advance(1)
         XCTAssertTrue(island.isAwake)
@@ -157,7 +158,7 @@ final class PanelIslandImprovedTests: XCTestCase {
         clock.advance(1)
         XCTAssertTrue(island.isAwake, "the snap ring keeps it awake")
         island.setSnapTarget(false)
-        clock.advance(0.81)
+        clock.advance(0.31)
         XCTAssertFalse(island.isAwake)
         // A click wakes it.
         island.click(.notes)

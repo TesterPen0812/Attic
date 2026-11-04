@@ -111,16 +111,15 @@ final class PanelIslandPositionTests: XCTestCase {
         case .right:
             XCTAssertGreaterThan(panel.midX, island.midX, "\(what): the panel is right", file: file, line: line)
             eq(label.minX - island.maxX, 6, "the label, right")
-        case .above:
-            XCTAssertTrue(spot.isFlat && (top || screenEnd), "\(what)", file: file, line: line)
-            eq(label.minY - island.maxY, 6, "the label, above")
-            eq(label.midX, island.midX, "the labels over their items")
-            XCTAssertTrue(label.intersects(panel), "\(what): over the panel", file: file, line: line)
-        case .below:
-            XCTAssertTrue(spot.isFlat && !top && !screenEnd, "\(what)", file: file, line: line)
-            eq(island.minY - label.maxY, 6, "the label, below")
-            eq(label.midX, island.midX, "the labels over their items")
-            XCTAssertTrue(label.intersects(panel), "\(what): over the panel", file: file, line: line)
+        case .above, .below:
+            // Lying flat (Accepted 2026-11-04, #11): beside the island at its
+            // own height, never over the panel's bottom edge, bar or list.
+            XCTAssertTrue(spot.isFlat, "\(what)", file: file, line: line)
+            eq(label.minY, island.minY, "the label, at the island's height")
+            eq(label.height, island.height, "the label, at the island's height")
+            eq(label.midX, island.midX, "a name on either end")
+            eq(island.minX - label.minX, 6 + 120, "room for a name on the left")
+            XCTAssertFalse(label.intersects(panel), "\(what): never over the panel", file: file, line: line)
         }
         // At the largest size the area allows, the island still fits on screen.
         let area = L.panelArea(in: visible, corner: corner, spot: spot)

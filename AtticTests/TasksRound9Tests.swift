@@ -276,6 +276,44 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(swipe.span.pages, 0...0, "placed at once: only Now")
     }
 
+    /// Accepted 2026-11-04: Done → Now (and Now → Done) never passes
+    /// Later. The page left is placed beside the new one for the move and
+    /// the two travel edge to edge; Later is never drawn on the way.
+    func testAJumpOverAPageNeverDrawsThePageBetween() {
+        let motion = swipe.motion
+        model.select(tab: .done)
+        model.showPagerPage(animated: false)
+        XCTAssertEqual(swipe.span.pages, 2...2)
+        model.select(tab: .now)
+        model.showPagerPage()
+        XCTAssertEqual(motion.place(of: 2), 1, "Done is drawn beside Now for the move")
+        XCTAssertEqual(motion.place(of: 0), 0)
+        XCTAssertEqual(swipe.span.skipped, 1, "Later is not drawn on the way")
+        XCTAssertEqual(motion.position, 1, "the move starts where Done is drawn: no jump on screen")
+        motion.stop()
+        XCTAssertNil(swipe.span.skipped, "a stopped move puts every page back in its own place")
+        XCTAssertEqual(motion.place(of: 2), 2)
+        // Next to each other: a plain slide, nothing skipped.
+        model.select(tab: .backlog)
+        model.showPagerPage()
+        XCTAssertNil(swipe.span.skipped)
+        XCTAssertEqual(motion.place(of: 0), 0)
+        motion.stop()
+    }
+
+    /// Accepted 2026-11-04 (Now → Later "landed, jumped back and slid
+    /// again"): the settle's clock advances at most two frames per frame
+    /// shown, so a late first frame (the page coming in drawn for the
+    /// first time) holds the page instead of jumping it most of the way.
+    func testALateFrameHoldsTheSettleInsteadOfJumpingIt() {
+        var clock = TasksPagerClock()
+        let frame = 1.0 / 60
+        XCTAssertEqual(clock.time(now: 0, display: frame, interval: frame), frame, accuracy: 1e-9)
+        // A 130 ms stall (the recording's): two frames' worth, not 130 ms.
+        XCTAssertEqual(clock.time(now: 0.13, display: 0.13 + frame, interval: frame), frame * 3, accuracy: 1e-9)
+        XCTAssertEqual(clock.time(now: 0.13 + frame, display: 0.13 + 2 * frame, interval: frame), frame * 4, accuracy: 1e-9)
+    }
+
     // MARK: - A wheel: one page per burst
 
     /// A mouse's horizontal wheel (or any scroll without trackpad phases,
