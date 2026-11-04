@@ -1138,6 +1138,34 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
+    func testFollowupNotesPlusOpensTheNoteCardFromWritingAndLibrary() throws {
+        for library in [true, false] {
+            try withPanel { host, state, _, _, draft, _ in
+                state.selectSection(.notes)
+                spin(1.5)
+                XCTAssertTrue(draft.pages.showLibrary())
+                spin(0.5)
+                if !library {
+                    let row = try XCTUnwrap(element("notes-library-row", in: host))
+                    XCTAssertTrue(row.accessibilityPerformPress?() ?? false)
+                    spin(0.5)
+                }
+                let beforeNote = draft.pages.active?.noteID
+                let beforeDocument = draft.pages.active?.engine.document
+                XCTAssertEqual(draft.pages.isLibraryPresented, library)
+                let plus = try XCTUnwrap(element("notes-new-note", in: host))
+                XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+                spin(0.7)
+                XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Note",
+                               "Notes + opens the shared card on its own kind")
+                XCTAssertEqual(draft.pages.isLibraryPresented, library, "the card leaves its underlying page in place")
+                XCTAssertEqual(draft.pages.active?.noteID, beforeNote, "the card does not replace the current note")
+                XCTAssertEqual(draft.pages.active?.engine.document, beforeDocument, "the current writing is retained")
+                XCTAssertEqual(state.selectedSection, .notes)
+            }
+        }
+    }
+
     func testTheCalendarPlusOpensTheCardOnEventAndReduceMotionIsInstant() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
