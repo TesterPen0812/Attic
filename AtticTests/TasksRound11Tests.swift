@@ -18,6 +18,40 @@ final class TasksRound11Tests: XCTestCase {
         return hosted.lists(in: content).filter { $0.frame.height > content.bounds.height / 2 }
     }
 
+    func testBugs4HoveringCannotStarveTheNextTabsIdleWarmup() {
+        let swipe = TasksPagerSwipe(count: 3)
+        defer { swipe.motion.coolDown() }
+        swipe.motion.inputAge = { type in
+            type == .mouseMoved || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        let end = Date().addingTimeInterval(1)
+        while swipe.span.warm != 0...2, Date() < end { spinWarmRunLoop() }
+        XCTAssertEqual(swipe.span.warm, 0...2, "moving toward a tab must not leave its construction on the click")
+    }
+
+    func testBugs4TypingStillPostponesWarmingUntilTheInputIsIdle() {
+        let swipe = TasksPagerSwipe(count: 3)
+        defer { swipe.motion.coolDown() }
+        swipe.motion.inputAge = { type in
+            type == .keyDown || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(swipe.span.warm)
+        swipe.motion.inputAge = { type in
+            type == .mouseMoved || type.rawValue == ~UInt32(0) ? 0 : 10
+        }
+        swipe.motion.warmUp(after: 0, isAllowed: { true })
+        let end = Date().addingTimeInterval(1)
+        while swipe.span.warm != 0...2, Date() < end { spinWarmRunLoop() }
+        XCTAssertEqual(swipe.span.warm, 0...2)
+    }
+
+    private func spinWarmRunLoop() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+
     /// Once idle, all three pages are built; the ones not shown hide their
     /// lists (nothing drawn, nothing read), and the page shown reads its rows.
     func testThePagesBesideTheOneShownAreBuiltHiddenOnceIdle() throws {

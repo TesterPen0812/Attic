@@ -135,7 +135,7 @@ final class TasksPagerMotion: ObservableObject {
         warmWork = nil
         guard warms, let span, isAllowed() else { return }
         // Something moves, or the person is typing or pointing: later.
-        if isSettling || isTracking?() == true || Self.recentInput() {
+        if isSettling || isTracking?() == true || recentInput() {
             warmUp(after: Self.warmStep, isAllowed: isAllowed)
             return
         }
@@ -154,10 +154,16 @@ final class TasksPagerMotion: ObservableObject {
     /// The fingers are on a swipe (the swipe tells the motion).
     var isTracking: (() -> Bool)?
 
+    /// Event ages are injectable so idle warming can be tested without
+    /// posting input into the user's session.
+    var inputAge: (CGEventType) -> TimeInterval = {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
+    }
+
     /// Input in the last quarter of a second (keys, the pointer, scrolling).
-    private static func recentInput() -> Bool {
+    private func recentInput() -> Bool {
         guard let any = CGEventType(rawValue: ~0) else { return false }
-        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) < 0.25
+        return inputAge(any) < 0.25
     }
 
     /// Draws the pages from `lower` to `upper` (clamped), if they are not
