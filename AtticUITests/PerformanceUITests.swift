@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 
 /// Instruments-style XCTest metrics are recorded, not compared to a laptop's
@@ -60,6 +61,32 @@ final class PerformanceUITests: XCTestCase {
         }
         XCTAssertTrue(application.state == .runningForeground || application.state == .runningBackground,
                       "App exited during \(name)")
+    }
+
+    private func diagnoseTasksReadiness(_ application: XCUIApplication) {
+        // Read only this test's UUID-owned diagnostics, never a normal store.
+        if let identifier, let account = getpwuid(getuid()) {
+            let containers = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
+                .appendingPathComponent("Library/Containers")
+            for bundle in ["com.taha.Attic.perf.ui", "com.taha.Attic.ci.ui", "com.taha.Attic.preview.bugs3.perf"] {
+                let root = containers.appendingPathComponent(bundle)
+                    .appendingPathComponent("Data/Library/Application Support/AtticPerformanceStores/attic-perf-\(identifier)")
+                guard let owner = try? String(contentsOf: root.appendingPathComponent(".attic-perf-owner"), encoding: .utf8),
+                      owner == identifier else { continue }
+                for file in ["phase.json", "phase-markers/hidden_idle.json", "phase-markers/tasks_open.json", "phase-markers/canvas_open.json"] {
+                    if let data = try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) {
+                        print("PERF_PHASE_DIAG bundle=\(bundle) marker=\(file) \(data)")
+                    }
+                }
+            }
+        }
+        let pins = application.buttons.matching(identifier: "panel-pin-button")
+        let pin = pins.firstMatch
+        let tasks = application.buttons.matching(identifier: "panel-section-tasks").firstMatch
+        let selection = tasks.exists ? String(tasks.isSelected) : "absent"
+        print("PERF_TASKS_DIAG appState=\(application.state.rawValue) pins=\(pins.count) exists=\(pin.exists) tasksSelected=\(selection)")
+        if pin.exists { print("PERF_TASKS_DIAG pinFrame=\(pin.frame) hittable=\(pin.isHittable)") }
+        print("PERF_TASKS_DIAG AX_TREE \(application.debugDescription)")
     }
 
     func testSeededLaunchMetricAndNavigation() throws {
@@ -127,7 +154,9 @@ final class PerformanceUITests: XCTestCase {
         // D4's resting island is dots, and the Pages group's centre can
         // be empty. Read the actual Tasks page rather than that group.
         let pin = probe.buttons["panel-pin-button"]
-        XCTAssertTrue(waitUntil(timeout: 90) { pin.isHittable }, "Tasks panel did not open")
+        let opened = waitUntil(timeout: 90) { pin.isHittable }
+        if !opened { diagnoseTasksReadiness(probe) }
+        XCTAssertTrue(opened, "Tasks panel did not open")
         XCTAssertTrue(tasks.isSelected, "Tasks was not selected before the sample")
         measureState("Tasks open", application: probe)
         XCTAssertTrue(pin.isHittable, "Tasks panel hid during the sample")
