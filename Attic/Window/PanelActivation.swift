@@ -34,7 +34,7 @@ final class PanelActivation {
         /// Replace the OS requests in policy tests, keeping the invisible
         /// host's keyboard/presentation safeguards intact.
         static func prepareForActivation(isAlreadyKey: Bool, makeKey: () -> Void, makeMain: () -> Void) {
-            makeKey()
+            if !isAlreadyKey { makeKey() }
             makeMain()
         }
     }
