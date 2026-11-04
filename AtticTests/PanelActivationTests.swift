@@ -44,6 +44,20 @@ final class PanelActivationTests: XCTestCase {
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
     }
+    func testTearDownAfterSkippedSetupDoesNotReplaceSharedActivation() {
+        let savedFixture = fixture, savedPrevious = previous
+        let installed = PanelActivation.shared
+        fixture = nil
+        previous = nil
+        defer {
+            fixture = savedFixture
+            previous = savedPrevious
+        }
+        // XCTest calls tearDown even when setUpWithError throws XCTSkip.
+        tearDown()
+        XCTAssertTrue(PanelActivation.shared === installed)
+    }
+
     private func panel() -> AtticPanel {
         let window = AtticPanel(contentRect: CGRect(x: -4000, y: -4000, width: 200, height: 200),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
