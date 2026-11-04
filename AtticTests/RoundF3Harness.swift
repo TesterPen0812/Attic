@@ -84,14 +84,17 @@ class RoundF3TestCase: XCTestCase {
     /// The caret at the selection: AppKit's indicator (exactly one), and the
     /// baseline of the line TextKit laid it on.
     struct Caret { var frame: CGRect; var baseline: CGFloat }
+    @MainActor private final class QueueTurn { var ran = false }
     func caret(_ text: NSTextView, file: StaticString = #filePath, line: UInt = #line) throws -> Caret {
         try requireKeyWindowTests()
+        let turn = QueueTurn()
+        DispatchQueue.main.async { turn.ran = true }
         settle(text)
         let frames = indicatorFrames(text)
         XCTAssertEqual(frames.count, 1, "exactly one native indicator", file: file, line: line)
         let frame = try XCTUnwrap(frames.first, file: file, line: line)
         let baseline = try XCTUnwrap(NoteLineGeometry.line(at: frame, in: text)?.baseline,
-            "native caret selection=\(text.selectedRange()) frame=\(frame) visible=\(text.visibleRect) bounds=\(text.bounds) first=\(String(describing: text.window?.firstResponder)) key=\(text.window?.isKeyWindow ?? false)",
+            "native caret queueTurn=\(turn.ran) selection=\(text.selectedRange()) frame=\(frame) visible=\(text.visibleRect) bounds=\(text.bounds) first=\(String(describing: text.window?.firstResponder)) key=\(text.window?.isKeyWindow ?? false)",
             file: file, line: line)
         return Caret(frame: frame, baseline: baseline)
     }
