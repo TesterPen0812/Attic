@@ -81,6 +81,20 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(text.selectedRange(), selection)
     }
 
+    func testBugs3QueuedWritingFocusCannotReclaimTheCaretAfterAnAcceptedHide() async throws {
+        let id = try seed(.boundary), hosting = sectionHosting()
+        let presenter = try await mountTaskPage(id, in: hosting)
+        let text = presenter.host.textView
+        let window = try XCTUnwrap(text.window)
+        presenter.host.focusWriting(atTop: false)
+        XCTAssertTrue(notes.prepareToLeave(.hide))
+        for _ in 0..<3 { await Task.yield() }
+        XCTAssertFalse(window.firstResponder === text, "a queued focus repair cannot undo accepted hide")
+        XCTAssertTrue(text.isEditable, "a later real click must still be able to edit")
+        XCTAssertTrue(window.makeFirstResponder(text))
+        XCTAssertTrue(window.firstResponder === text)
+    }
+
     func testTaskPageDraftCaretAndFoldSurviveTasksThenNotesWithANewContainer() async throws {
         let id = try seed(.boundary), hosting = sectionHosting()
         let uiState = PanelUIState()
