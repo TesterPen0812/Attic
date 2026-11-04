@@ -120,7 +120,7 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(headers(.now), ["Overdue", "Today", "Tomorrow", "No date"])
         XCTAssertEqual(titles(.now), ["Late", "Current", "Next", "Undated"], "the keyboard walks the groups' order")
         let tomorrow = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Next" })
-        XCTAssertNil(tomorrow.model.due, "under a day header a row shows no date (Attic's tasks have no time)")
+        XCTAssertNil(tomorrow.model.trailingDue, "under a day header a row shows no date (Attic's tasks have no time)")
         XCTAssertEqual(model.rows(for: .now).first?.model.due?.tone, .overdue)
         // Later is the backlog (Accepted 2026-10-29): one list, no date
         // groups; a dated task goes to Now under its day.
