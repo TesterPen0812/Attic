@@ -240,9 +240,19 @@ final class PanelUIState: ObservableObject {
     /// commands remain suspended until navigation presents it normally.
     static func prewarms(_ page: PanelPage) -> Bool { true }
 
+    /// Focus alone can keep a panel open without making it busy. Actual
+    /// gestures, menus and gated work keep background construction away.
+    private static let pageBuildBlockers: Set<PanelInteractionLockReason> = [
+        .panelSwipe, .menuTracking, .windowMove, .windowResize, .blockingSave,
+        .notesImport, .notesFilePicker, .canvasConfirmation
+    ]
+    var canPrepareBuiltPages: Bool {
+        interactionLockReasons.isDisjoint(with: Self.pageBuildBlockers) && !pageTransit.sliding
+    }
+
     /// Builds `page` behind the current one (the pointer is on the switch).
     func prepareBuiltPage(_ page: PanelPage) {
-        guard isPageContentLoaded, !isElsewhere(page.section), Self.prewarms(page), !builtPages.contains(page) else { return }
+        guard isPageContentLoaded, canPrepareBuiltPages, !isElsewhere(page.section), Self.prewarms(page), !builtPages.contains(page) else { return }
         builtPages.insert(page)
     }
 

@@ -134,6 +134,8 @@ final class TasksPagerMotion: ObservableObject {
     private func warmStep(_ isAllowed: @escaping () -> Bool) {
         warmWork = nil
         guard warms, let span, isAllowed() else { return }
+        // Returning to an already-warm page schedules no idle polling.
+        if span.warm == 0...max(count - 1, 0) { return }
         // Something moves, or the person is typing or pointing: later.
         if isSettling || isTracking?() == true || recentInput() {
             warmUp(after: Self.warmStep, isAllowed: isAllowed)
@@ -160,10 +162,12 @@ final class TasksPagerMotion: ObservableObject {
         CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
     }
 
-    /// Input in the last quarter of a second (keys, the pointer, scrolling).
+    /// Typing, scrolling and presses keep the click's frame free. Merely
+    /// moving toward a tab must not continually postpone its idle build.
     private func recentInput() -> Bool {
-        guard let any = CGEventType(rawValue: ~0) else { return false }
-        return inputAge(any) < 0.25
+        guard NSEvent.pressedMouseButtons == 0 else { return true }
+        return [CGEventType.keyDown, .scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            .contains { inputAge($0) < 0.25 }
     }
 
     /// Draws the pages from `lower` to `upper` (clamped), if they are not

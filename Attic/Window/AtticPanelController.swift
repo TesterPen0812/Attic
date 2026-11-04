@@ -1955,26 +1955,36 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// current one, one per main-thread turn, so a first ⌘1–⌘3 or click
     /// only shows them. A hidden Canvas decodes no images until it shows
     /// (`atticPanelPageIsCurrent`), and the hidden release frees them.
-    /// A one-shot per reveal, not a timer.
+    /// One generation per reveal, stopped when hidden or complete.
     static var keptPagesBuildDelay: TimeInterval = 0.6
 
+    private var keptPagesBuildGeneration = 0
+
     private func buildKeptPagesAfterReveal() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keptPagesBuildDelay) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
-                let current = PanelPage(self.uiState.selectedSection)
-                let pending = PanelPage.allCases.filter {
-                    $0 != current && PanelUIState.prewarms($0) && !self.uiState.builtPages.contains($0)
-                }
-                for (index, page) in pending.enumerated() {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) { [weak self] in
-                        MainActor.assumeIsolated {
-                            guard let self, self.panel.isVisible else { return }
-                            self.uiState.prepareBuiltPage(page)
-                        }
-                    }
-                }
+        keptPagesBuildGeneration &+= 1
+        scheduleKeptPagesBuild(generation: keptPagesBuildGeneration, after: Self.keptPagesBuildDelay)
+    }
+
+    /// One page per idle turn. A gesture or menu can outlive the initial
+    /// deadline; resume afterwards instead of building through its frames.
+    private func scheduleKeptPagesBuild(generation: Int, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.keptPagesBuildGeneration == generation,
+                  self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
+            let current = PanelPage(self.uiState.selectedSection)
+            guard let page = PanelPage.allCases.first(where: {
+                $0 != current && !self.uiState.isElsewhere($0.section)
+                    && PanelUIState.prewarms($0) && !self.uiState.builtPages.contains($0)
+            }) else { return }
+            let inputBusy = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.25
+                || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .scrollWheel) < 0.25
+            guard !self.isPanelMotionActive, !self.isInteractiveDismissal, !self.panel.isPressing,
+                  self.uiState.canPrepareBuiltPages, !inputBusy else {
+                self.scheduleKeptPagesBuild(generation: generation, after: 0.05)
+                return
             }
+            self.uiState.prepareBuiltPage(page)
+            self.scheduleKeptPagesBuild(generation: generation, after: 0.05)
         }
     }
 
