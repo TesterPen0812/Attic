@@ -47,11 +47,12 @@ final class PanelActivation {
         /// Read OS state once; tests replace the requests, never the invisible
         /// host's presentation safeguards.
         static func prepareForActivation(_ window: NSWindow, windows: [NSWindow]) {
-            prepareForActivation(otherWindows: windows.filter { $0 !== window }.map(MainCandidate.snapshot),
+            prepareForActivation(isAlreadyKey: window.isKeyWindow,
+                                 otherWindows: windows.filter { $0 !== window }.map(MainCandidate.snapshot),
                                  makeKey: { window.makeKey() }, makeMain: { window.makeMain() })
         }
 
-        static func prepareForActivation(otherWindows: [MainCandidate],
+        static func prepareForActivation(isAlreadyKey: Bool, otherWindows: [MainCandidate],
                                          makeKey: () -> Void, makeMain: () -> Void) {
             makeKey()
             makeMain()

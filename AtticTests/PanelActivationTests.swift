@@ -12,6 +12,7 @@ final class PanelActivationPreparationTests: XCTestCase {
         var reportsMain = false
         var mainEligible = false
         var reportsMiniaturized = false
+        var alreadyKey = false
         var requests: [String] = []
         var floating = false
         var candidate: PanelActivation.System.MainCandidate {
@@ -23,8 +24,25 @@ final class PanelActivationPreparationTests: XCTestCase {
     private func window() -> Window { Window() }
 
     private func prepare(_ clicked: Window, windows: [Window]) {
-        PanelActivation.System.prepareForActivation(otherWindows: windows.filter { $0 !== clicked }.map(\.candidate),
+        PanelActivation.System.prepareForActivation(isAlreadyKey: clicked.alreadyKey,
+            otherWindows: windows.filter { $0 !== clicked }.map(\.candidate),
             makeKey: { clicked.requests.append("key") }, makeMain: { clicked.requests.append("main") })
+    }
+
+    func testBugs4ReleaseDoesNotRepeatTheKeyRequestAlreadyDeliveredOnMouseDown() {
+        let clicked = window()
+        clicked.alreadyKey = true
+        prepare(clicked, windows: [clicked])
+        XCTAssertEqual(clicked.requests, [], "the first press already acquired key ownership")
+    }
+
+    func testBugs4AnAlreadyKeyPanelStillProtectsAgainstRaisingSettings() {
+        let clicked = window(), settings = window()
+        clicked.alreadyKey = true
+        settings.reportsVisible = true
+        settings.mainEligible = true
+        prepare(clicked, windows: [clicked, settings])
+        XCTAssertEqual(clicked.requests, ["main"])
     }
 
     func testBugs4PanelOnlyActivationDoesNotReenterMainWindowLayout() {
