@@ -961,7 +961,9 @@ final class ComposerTests: XCTestCase {
         XCTAssertGreaterThan(abs(date.midY - length.midY), 20, "length has its own row")
         XCTAssertGreaterThan(abs(length.midY - calendar.midY), 20, "calendar has its own row")
         XCTAssertGreaterThan(view.fittingSize.height, ComposerMetrics.height + 40)
-        XCTAssertGreaterThan(calendar.width, 150, "calendar names have room")
+        // The chip hugs its name (Accepted 2026-11-04: the Date hover was
+        // far too wide); the row leaves a long name its room before Create.
+        XCTAssertGreaterThan(try frame("composer-create").minX - calendar.minX, 150, "calendar names have room")
         let room = PanelComposerRoom()
         let overlay = NSHostingView(rootView: ComposerOverlay(model: model,
             layout: PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 352, height: 520)), room: room)

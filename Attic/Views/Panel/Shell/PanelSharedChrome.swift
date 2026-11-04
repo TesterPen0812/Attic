@@ -343,9 +343,9 @@ struct PanelSharedBottomBar: View {
                 .accessibilityHidden(!shown || hidden)
                 // Taking turns with the selection bar (T2), on its motion.
                 .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown), value: shown)
-                // Another page's tags are another bar: the two take turns,
-                // never cross-fading their words over each other.
-                .id(idPrefix)
+                // Another page's middle (Calendar's Today) takes turns with
+                // the tags, never cross-fading over them; between two pages
+                // with tags the card itself stays.
                 .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion))
         case let .today(shown):
             // Built only while shown (the bar's outer accessibility state

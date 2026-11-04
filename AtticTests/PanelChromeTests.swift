@@ -1079,8 +1079,16 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(opening.last?.size.width ?? 0, 289, accuracy: 0.5)
             ComposerOverlay.surfaces = []
             counting = false
-            // Closing through a page switch.
-            try sample(plus: "calendar-new-task") { state.selectSection(.calendar) }
+            // Closing by a press outside the card (Accepted 2026-11-04). A
+            // page switch closes it at once instead (ComposerTests).
+            @MainActor func watcher(in view: NSView?) -> ComposerOutsideClick.Watcher? {
+                guard let view else { return nil }
+                if let found = view as? ComposerOutsideClick.Watcher { return found }
+                for child in view.subviews { if let found = watcher(in: child) { return found } }
+                return nil
+            }
+            let outside = try XCTUnwrap(watcher(in: host.window?.contentView ?? host), "the card watches for a press outside it")
+            try sample(plus: "tasks-new-task") { outside.close() }
             spin(0.3)
             let closing = ComposerOverlay.surfaces
             XCTAssertTrue(closing.contains { $0.size.width > 30 && $0.size.width < 285 },
