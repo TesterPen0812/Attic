@@ -54,8 +54,17 @@ final class PanelActivation {
 
         static func prepareForActivation(isAlreadyKey: Bool, otherWindows: [MainCandidate],
                                          makeKey: () -> Void, makeMain: () -> Void) {
-            makeKey()
-            makeMain()
+            if !isAlreadyKey { makeKey() }
+            // A panel-only click already got key on mouse-down. Promoting it
+            // to main needlessly re-enters native tooltip/focus layout before
+            // the click's changed frame. Preserve the main-window protection
+            // whenever another surface could be raised. Floating panels stay
+            // conservative even while unordered or between temporary leases.
+            if otherWindows.contains(where: {
+                $0.isMain || $0.isMiniaturized || $0.isPanel || ($0.isVisible && $0.canBecomeMain)
+            }) {
+                makeMain()
+            }
         }
     }
 
@@ -108,9 +117,9 @@ final class PanelActivation {
         previousApp = beforePress
         borrowedActivation = true
         awaitingActivation = true
-        // Activation raises both key and main windows. Temporarily make the
-        // clicked panel both, so a document/Settings window cannot be raised
-        // (or pull us to its Space). Island clicks belong to their parent.
+        // If another surface could be raised, temporarily make the clicked
+        // panel main too, so a document/Settings window cannot be raised (or
+        // pull us to its Space). Island clicks belong to their parent.
         let surface = (window as? PanelIslandWindow)?.parent ?? window
         activationWindow = surface
         system.prepare(surface)

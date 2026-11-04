@@ -3,7 +3,9 @@
 Notes warms behind the current page with native input suspended. Keyboard
 ownership no longer invalidates the full panel; Tasks retains warmed tabs
 across shell-page switches and releases them on hide. Hovering no longer
-starves tab warming; typing and scrolling still defer it. Reveal-time background pages
+starves tab warming; typing and scrolling still defer it. Single-panel clicks
+avoid repeating key/main preparation; other windows keep conservative protection.
+Reveal-time background pages
 wait for panel motion, gestures and menus to end before they build. Opening a task page
 closes the shared card and removes the covered shared glass at once, so Back
 and the task menu keep their places. Native note and task
