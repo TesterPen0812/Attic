@@ -508,7 +508,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Build the pages now, before the first frame is shown, so the panel
         // never slides in empty; the reveal signpost includes it.
         buildPagesIfNeeded()
-        defer { buildKeptPagesAfterReveal() }
+        defer {
+            buildKeptPagesAfterReveal()
+            // Publish the ordered window and its presentation together before
+            // returning to input delivery. A pending collapse transaction can
+            // otherwise leave WindowServer routing the first click behind it,
+            // even while AppKit already reports the panel visible.
+            if panel.isVisible { CATransaction.flush() }
+        }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
