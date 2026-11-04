@@ -129,8 +129,9 @@ enum PanelIslandLayout {
     static let restDotInk: Double = 0.32
     /// It wakes when the pointer comes within 16 pt.
     static let wakeDistance: CGFloat = 16
-    /// It settles 800 ms after the pointer leaves.
-    static let settleDelay: TimeInterval = 0.8
+    /// It settles 300 ms after the pointer leaves (Accepted 2026-11-04:
+    /// "Island settling is quicker", was D4's 800 ms).
+    static let settleDelay: TimeInterval = 0.3
     /// L8: the first name waits 400 ms; another within 500 ms shows at once.
     static let labelDelay: TimeInterval = 0.4
     static let labelFollow: TimeInterval = 0.5
@@ -357,19 +358,25 @@ enum PanelIslandLayout {
         }
     }
 
-    /// The label window, on the panel's side: beside a standing island and
-    /// as tall as it, or over the panel above or below a flat one, wide
-    /// enough for a name centred on either end item.
+    /// The label window, on the panel's side beside a standing island and
+    /// as tall as it. Lying flat, beside the island at its own height, on
+    /// both ends (a name shows at the end nearer its item), never over the
+    /// panel's bottom edge, its bar or its list (Accepted 2026-11-04, #11).
     static func labelWindowFrame(island: CGRect, corner: ScreenCorner,
                                  spot: PanelIslandSpot = .defaultSpot) -> CGRect {
         switch labelSide(corner: corner, spot: spot) {
         case .left: return CGRect(x: island.minX - labelGap - labelRoom, y: island.minY, width: labelRoom, height: island.height)
         case .right: return CGRect(x: island.maxX + labelGap, y: island.minY, width: labelRoom, height: island.height)
         case .above, .below:
-            let width = island.width + labelRoom
-            let y = labelSide(corner: corner, spot: spot) == .above ? island.maxY + labelGap : island.minY - labelGap - labelHeight
-            return CGRect(x: island.midX - width / 2, y: y, width: width, height: labelHeight)
+            let width = island.width + 2 * (labelGap + labelRoom)
+            return CGRect(x: island.midX - width / 2, y: island.minY, width: width, height: island.height)
         }
+    }
+
+    /// Lying flat, the end of the island a page's name shows at: the
+    /// first half's on the left, the rest on the right.
+    static func flatLabelOnLeft(_ page: PanelPage) -> Bool {
+        (pages.firstIndex(of: page) ?? 0) < (pages.count + 1) / 2
     }
 
     /// How the island's stand-in keeps its place on the surface as the
@@ -541,7 +548,7 @@ final class PanelIslandModel: ObservableObject {
     }
 
     /// The pointer moved: within 16 pt of the capsule as it is now, the
-    /// island wakes; away from it, it settles 800 ms later.
+    /// island wakes; away from it, it settles 300 ms later.
     func track(pointer: CGPoint, rest: CGRect, awake: CGRect) {
         let zone = (isAwake ? awake : rest).insetBy(dx: -PanelIslandLayout.wakeDistance, dy: -PanelIslandLayout.wakeDistance)
         let near = zone.contains(pointer)
@@ -554,7 +561,7 @@ final class PanelIslandModel: ObservableObject {
         }
     }
 
-    /// Settles in 800 ms unless something holds it awake by then.
+    /// Settles in 300 ms unless something holds it awake by then.
     private func settleIfAway() {
         guard isAwake, !pointerNear, !isSnapTarget, !isPulling else { return }
         settleTurn &+= 1
@@ -826,45 +833,55 @@ struct PanelIslandLabels: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
+    /// The last name shown, kept while it fades out.
+    @State private var lastPage: PanelPage?
 
     private typealias L = PanelIslandLayout
 
+    /// One label, never one per item: pointing at another item moves it
+    /// and changes its name at once, so two names never show together,
+    /// even while one fades (Accepted 2026-11-04, #11).
     var body: some View {
-        Group {
-            if model.isFlat {
-                // Over the panel, each name centred over its item.
-                HStack(spacing: L.gap) {
-                    ForEach(L.pages) { page in
-                        label(page).frame(width: L.flatItemWidth, height: L.labelHeight)
-                    }
-                }
-                .frame(width: L.flatLength() + L.labelRoom, height: L.labelHeight)
-            } else {
-                let alignment: Alignment = model.labelSide == .left ? .trailing : .leading
-                VStack(spacing: L.gap) {
-                    ForEach(L.pages) { page in
-                        label(page)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-                            .frame(height: L.item)
-                    }
-                }
-                .padding(.vertical, L.inset)
-                .frame(width: L.labelRoom, height: L.height())
+        let shownPage = model.isAwake ? model.labelPage : nil
+        let page = shownPage ?? lastPage
+        let size = model.isFlat
+            ? CGSize(width: L.flatLength() + 2 * (L.labelGap + L.labelRoom), height: L.width)
+            : CGSize(width: L.labelRoom, height: L.height())
+        ZStack(alignment: .topLeading) {
+            if let page {
+                label(page, shown: shownPage != nil)
+                    .frame(width: slot(page, in: size).width, height: slot(page, in: size).height,
+                           alignment: alignment(page))
+                    .offset(x: slot(page, in: size).minX, y: slot(page, in: size).minY)
             }
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(false)
+        .onChange(of: model.labelPage, initial: true) { _, now in
+            if let now, lastPage != now { lastPage = now }
+        }
+    }
+
+    /// Where a page's name sits in the label window.
+    private func slot(_ page: PanelPage, in size: CGSize) -> CGRect {
+        if model.isFlat {
+            let side = L.labelRoom
+            return CGRect(x: L.flatLabelOnLeft(page) ? 0 : size.width - side, y: 0, width: side, height: size.height)
+        }
+        let index = CGFloat(L.pages.firstIndex(of: page) ?? 0)
+        return CGRect(x: 0, y: L.inset + index * (L.item + L.gap), width: size.width, height: L.item)
+    }
+
+    private func alignment(_ page: PanelPage) -> Alignment {
+        if model.isFlat { return L.flatLabelOnLeft(page) ? .trailing : .leading }
+        return model.labelSide == .left ? .trailing : .leading
     }
 
     /// A page's name: it slides in 4 pt from the island's side.
-    private func label(_ page: PanelPage) -> some View {
-        // L8: the first name waits; awake only (D4).
-        let shown = model.labelPage == page && model.isAwake
-        let towardIsland: CGSize = switch model.labelSide {
-        case .left: CGSize(width: L.labelSlide, height: 0)
-        case .right: CGSize(width: -L.labelSlide, height: 0)
-        case .above: CGSize(width: 0, height: L.labelSlide)
-        case .below: CGSize(width: 0, height: -L.labelSlide)
-        }
+    private func label(_ page: PanelPage, shown: Bool) -> some View {
+        let towardIsland: CGSize = model.isFlat
+            ? CGSize(width: L.flatLabelOnLeft(page) ? L.labelSlide : -L.labelSlide, height: 0)
+            : (model.labelSide == .left ? CGSize(width: L.labelSlide, height: 0) : CGSize(width: -L.labelSlide, height: 0))
         return Text(page.title)
             .font(.system(size: L.labelFontSize, weight: .medium))
             .foregroundStyle(design.tokens.ink(.heading).color)
@@ -876,9 +893,8 @@ struct PanelIslandLabels: View {
                                               cornerRadius: L.labelHeight / 2))
             .opacity(shown ? 1 : 0)
             .offset(shown ? .zero : towardIsland)
-            .animation(shown || L.labelFadesOut(pointed: model.labelPage)
-                       ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown) : nil,
-                       value: shown)
+            // Only showing and going animate; a new name is there at once.
+            .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown), value: shown)
             .accessibilityHidden(true)
     }
 }
