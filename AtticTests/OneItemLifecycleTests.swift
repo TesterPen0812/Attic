@@ -59,6 +59,30 @@ final class OneItemLifecycleTests: XCTestCase {
         return try JSONDecoder().decode(UUID?.self, from: field)
     }
 
+    func testRepeatedWritingAdmissionReusesBytesButStillReadsFreshReplicas() throws {
+        let before = TaskNoteConversion.writingDecodeCount
+        for _ in 0..<6 {
+            XCTAssertTrue(TaskNoteConversion.hasWriting(root, in: ModelContext(container)))
+        }
+        XCTAssertEqual(TaskNoteConversion.writingDecodeCount - before, 1,
+                       "Rebuilding library commands must not decode identical writing on every body update")
+
+        // A writer can reuse a revision token. Exact bytes, not that token,
+        // decide admission; every physical replica is read in a fresh context.
+        let context = ModelContext(container)
+        let writing = try context.fetch(FetchDescriptor<NoteItem>())
+        let empty = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Parent")], requires: ["taskNote"]))
+        for row in writing { row.content = empty }
+        try context.save()
+        XCTAssertFalse(TaskNoteConversion.hasWriting(root, in: ModelContext(container)))
+        writing[0].content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Parent"), .text("Changed writing")], requires: ["taskNote"]))
+        try context.save()
+        XCTAssertTrue(TaskNoteConversion.hasWriting(root, in: ModelContext(container)), "A divergent writing replica remains writing")
+        for task in try context.fetch(FetchDescriptor<TaskItem>()) where task.id == root { task.deletedAt = date }
+        try context.save()
+        XCTAssertFalse(TaskNoteConversion.hasWriting(root, in: ModelContext(container)), "Cached bytes cannot bypass current lifecycle checks")
+    }
+
     func testTaskDeleteFansOutS10AndRestoreReturnsExactPlacement() throws {
         XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
         let (t, n) = try rows()

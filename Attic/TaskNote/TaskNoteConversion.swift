@@ -359,12 +359,16 @@ extension TaskNoteConversion {
             deletedAt: date, in: context, provenance: "circle removed")
     }
 
+    private(set) static var writingDecodeCount = 0
+
     static func hasWriting(_ taskID: UUID, in context: ModelContext) -> Bool {
         guard let roots = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })),
               !roots.isEmpty, roots.allSatisfy({ $0.parentID == nil && $0.deletedAt == nil }),
               let writing = try? WorkspaceItemLifecycle.writing(taskIDs: [taskID], in: context) else { return false }
         return writing.contains { row in
-            guard row.deletedAt == nil, let doc = row.content.flatMap({ NoteContentCodec.decode($0).document }) else { return false }
+            guard row.deletedAt == nil, let bytes = row.content else { return false }
+            writingDecodeCount += 1
+            guard let doc = NoteContentCodec.decode(bytes).document else { return false }
             return documentHasWriting(doc)
         }
     }
