@@ -84,53 +84,70 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-/// How the shell moves between pages: "Motion: page switch and hide",
-/// option A (Accepted 2026-11-02), replacing A20's full-width slide. Every
-/// switch, by every route and between every pair, uses it: the old page
-/// fades out in place, then the new page fades in while it moves about
-/// 30 pt in from its side in the page order, on the feel's navigation
-/// spring (`AtticMotionPreset.pageSwitch`). Two pages never show at once,
-/// so neither their scroll bars nor their bottom bars cross. Reduce Motion
-/// and Animations: Reduced switch at once.
+/// How the shell moves between pages: the full-width slide (A20) back,
+/// refined and slightly faster (Accepted 2026-11-04, "Owner notes on Attic
+/// Follow Up", replacing option A of 2 Nov). Every switch, by every route
+/// and between every pair, uses it: the new page travels in from its side
+/// in the page order across the panel's whole width while the old page
+/// travels out the other way, edge to edge, both fully drawn. Neither
+/// fades, so two pages never show through each other; the old page goes
+/// once the slide has settled. The top row changes in place: what differs
+/// fades out, then in (`PanelInPlaceFade`). Reduce Motion and Animations:
+/// Reduced switch at once.
 ///
-/// A20 carried the pages the panel's full width (352 pt) on the spring
-/// while they crossfaded: 70 % of the travel by 100 ms and both pages
-/// through each other for about 100 ms (the owner's recording, 2 Nov).
+/// A20 crossfaded the two pages while they travelled (both see-through for
+/// about 100 ms, the owner's recording, 2 Nov); option A moved the new
+/// page only 30 pt, cut at its own edge inside the glass (4 Nov, #10).
 struct PanelPageMotion: Equatable {
     /// The spring, or nil for an instant switch.
     let spring: AtticMotionSpring?
 
     static let instant = PanelPageMotion(spring: nil)
 
-    /// How far the new page moves in.
-    static let travel: CGFloat = 30
-    /// The old page's fade out.
+    /// "Slightly faster" than A20's slide: the feel's navigation spring at
+    /// 83 % of its duration, so it settles about 17 % sooner (same bounce).
+    static let speed: Double = 0.83
+
+    /// The top row's own change in place (option A's sequence, kept): what
+    /// differs fades out, then the new page's fades in.
     static let fadeOut: TimeInterval = 0.09
-    /// The new page starts once the old one has gone…
     static let fadeInDelay: TimeInterval = fadeOut
-    /// …and fades in over this.
     static let fadeIn: TimeInterval = 0.16
 
     /// The motion for a switch now, in the current feel.
     static func current(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> PanelPageMotion {
-        reduceMotion ? .instant : PanelPageMotion(spring: AtticMotionPreset.pageSwitch.spring(in: tuning))
+        guard !reduceMotion else { return .instant }
+        let base = AtticMotionPreset.pageSwitch.spring(in: tuning)
+        return PanelPageMotion(spring: AtticMotionSpring(response: base.response * speed, bounce: base.bounce))
     }
 
     /// Whether the pages move at all (they do whenever the switch animates).
     var travels: Bool { spring != nil }
 
     /// Where a page rests out of view on `side` (-1 left, 1 right) of the
-    /// current one.
-    func restingOffset(side: CGFloat) -> CGFloat { travels ? side * Self.travel : 0 }
+    /// current one: a whole panel width away.
+    func restingOffset(side: CGFloat, width: CGFloat) -> CGFloat { travels ? side * width : 0 }
 
     /// The switch's transaction, which moves the pages (and the top row's
-    /// counter-move with them): the spring, once the old page has gone.
+    /// counter-move with them).
     var animation: Animation? {
-        spring.map { Animation.spring(duration: $0.response, bounce: $0.bounce).delay(Self.fadeInDelay) }
+        spring.map { Animation.spring(duration: $0.response, bounce: $0.bounce) }
     }
 
-    /// A page's own fade: out at once, or in once the old page has gone.
-    func opacityAnimation(incoming: Bool) -> Animation? {
+    /// How long the slide takes to settle (0 when instant).
+    var settleDuration: TimeInterval {
+        spring.map { Spring(duration: $0.response, bounce: $0.bounce).settlingDuration } ?? 0
+    }
+
+    /// A page's own visibility: the page coming in shows at once (it starts
+    /// outside the glass), the page going stays drawn until it is out.
+    func pageOpacityAnimation(incoming: Bool) -> Animation? {
+        guard travels else { return nil }
+        return incoming ? nil : .linear(duration: 0.001).delay(settleDuration)
+    }
+
+    /// The top row's in-place fade: out at once, in once the old has gone.
+    func inPlaceOpacityAnimation(incoming: Bool) -> Animation? {
         guard travels else { return nil }
         return incoming ? .easeOut(duration: Self.fadeIn).delay(Self.fadeInDelay) : .easeIn(duration: Self.fadeOut)
     }

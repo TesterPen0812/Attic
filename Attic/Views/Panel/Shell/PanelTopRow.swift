@@ -177,6 +177,14 @@ private struct PanelPageTravelKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
+private struct PanelPageMotionKey: EnvironmentKey {
+    static let defaultValue: PanelPageMotion = .instant
+}
+
+private struct PanelPagesInTransitKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// How far the shell has moved this page sideways for a page switch
     /// (0 at rest). The top row moves back by as much, in the same
@@ -184,6 +192,18 @@ extension EnvironmentValues {
     var panelPageTravel: CGFloat {
         get { self[PanelPageTravelKey.self] }
         set { self[PanelPageTravelKey.self] = newValue }
+    }
+
+    /// The last page switch's motion, for what changes in place.
+    var panelPageMotion: PanelPageMotion {
+        get { self[PanelPageMotionKey.self] }
+        set { self[PanelPageMotionKey.self] = newValue }
+    }
+
+    /// A page switch is sliding: scroll bars stay hidden.
+    var panelPagesInTransit: Bool {
+        get { self[PanelPagesInTransitKey.self] }
+        set { self[PanelPagesInTransitKey.self] = newValue }
     }
 
     /// The page whose top row this is (nil outside a top row).
@@ -206,7 +226,46 @@ struct PanelChangesInPlace: ViewModifier {
     @Environment(\.panelPageTravel) private var travel
 
     func body(content: Content) -> some View {
-        content.offset(x: -travel)
+        content.offset(x: -travel).modifier(PanelInPlaceFade(away: travel != 0))
+    }
+}
+
+/// What changes in place on a page switch takes turns (Accepted
+/// 2026-11-04: one state at a time): the old page's fades out at once,
+/// then the new page's fades in, never both drawn over each other. A page
+/// away from the current one (moved for a switch) is the old.
+struct PanelInPlaceFade: ViewModifier {
+    let away: Bool
+    @Environment(\.panelPageMotion) private var motion
+
+    func body(content: Content) -> some View {
+        content.animation(motion.inPlaceOpacityAnimation(incoming: !away)) { $0.opacity(away ? 0 : 1) }
+    }
+}
+
+/// Two states of one place take turns (Accepted 2026-11-04, "one state at
+/// a time"): the old leaves at once on a quick fade and the new comes in
+/// once it has gone, so their texts are never drawn over each other (the
+/// owner's recording: "#eeJul 20Pin", "NoneJul 2027", "All #ee" under
+/// "6 Nov"). Reduce Motion: at once.
+enum PanelTakeTurns {
+    static let out: TimeInterval = PanelPageMotion.fadeOut
+    static let `in`: TimeInterval = PanelPageMotion.fadeIn
+
+    static func transition(reduceMotion: Bool, after delay: TimeInterval = out) -> AnyTransition {
+        guard !reduceMotion else { return .identity }
+        return .asymmetric(insertion: .opacity.animation(.easeOut(duration: Self.in).delay(delay)),
+                           removal: .opacity.animation(.easeIn(duration: out)))
+    }
+}
+
+/// A page's scroll bars: hidden while a page switch slides, so the new
+/// page's never flashes or crosses the panel.
+struct PanelTransitScrollIndicators: ViewModifier {
+    @Environment(\.panelPagesInTransit) private var inTransit
+
+    func body(content: Content) -> some View {
+        content.scrollIndicators(inTransit ? .never : .automatic)
     }
 }
 
@@ -268,9 +327,10 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
         .padding(.trailing, layout.chromeInsets.trailing)
         .frame(maxWidth: .infinity, alignment: .top)
         // Owner, 2026-10-31: the row stays in place through a page switch;
-        // only what differs (the page's switch and leading text) changes,
-        // fading with its page.
+        // only what differs (the page's switch and leading text) changes:
+        // the old fades out, then the new fades in (Accepted 2026-11-04).
         .offset(x: -travel)
+        .modifier(PanelInPlaceFade(away: travel != 0))
         .onChange(of: searchOpen, initial: true) { _, open in state?.setSearching(open, on: page) }
         .onAppear { chrome?.setTopRowShown(true, for: page) }
         .onDisappear {

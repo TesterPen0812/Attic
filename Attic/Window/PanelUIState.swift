@@ -306,11 +306,25 @@ final class PanelUIState: ObservableObject {
     func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
         guard selectedSection != section, !routeElsewhere(section) else { return }
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
+        pageSlideGeneration &+= 1
+        let sliding = motion.travels
+        if isPageSwitchSliding != sliding { isPageSwitchSliding = sliding }
         withAnimation(motion.animation) {
             selectSection(section)
             alongside()
         }
+        guard sliding else { return }
+        let generation = pageSlideGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.settleDuration) { [weak self] in
+            guard let self, self.pageSlideGeneration == generation else { return }
+            self.isPageSwitchSliding = false
+        }
     }
+
+    /// A page switch's slide is running (Accepted 2026-11-04): the pages'
+    /// scroll bars stay hidden meanwhile, so they never flash or cross.
+    @Published private(set) var isPageSwitchSliding = false
+    private var pageSlideGeneration = 0
 
     func selectSection(_ section: PanelSection) {
         guard selectedSection != section, !routeElsewhere(section) else { return }

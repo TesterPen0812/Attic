@@ -190,20 +190,24 @@ struct TasksPage: View {
         // blur (owner, 2026-10-17) and sharp at the bottom (2026-10-22). The controls retain their page-level layer
         // and hit points; the lifted card stays above both.
         ZStack(alignment: .top) {
-            // Floating controls (owner, 2026-10-14): the rows run on under
-            // the controls, into the top variable blur, drawn once for the
-            // whole pager. The native soft edge stays off.
-            pager
-            TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
+            ZStack(alignment: .top) {
+                // Floating controls (owner, 2026-10-14): the rows run on under
+                // the controls, into the top variable blur, drawn once for the
+                // whole pager. The native soft edge stays off.
+                pager
+                TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
+            }
+            // The neighbours are drawn only as they slide in, never past the
+            // page's edge (the panel's shadow margin lies beyond it). Here, not
+            // on the pager, so the lists still run under the controls.
+            .clipped()
             // The controls float over the lists in both, in the page's own
-            // layer.
+            // layer. Outside the page's clip: on a page switch the top row
+            // stays in place while the page slides away (Accepted
+            // 2026-11-04), so it is cut by the glass, never by the page.
             tabsBand
             tabs
         }
-        // The neighbours are drawn only as they slide in, never past the
-        // page's edge (the panel's shadow margin lies beyond it). Here, not
-        // on the pager, so the lists still run under the controls.
-        .clipped()
 
         // Where a row dragged into another day would land (Adaptive picks),
         // under the lifted card.
@@ -1508,6 +1512,11 @@ struct TasksPage: View {
                                 }
                                 .id("group:" + dateGroup.key)
                                 .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
+                                // A new day's heading comes in once the one
+                                // it replaces in that place has moved on
+                                // (Accepted 2026-11-04: one state at a time).
+                                .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion,
+                                                                      after: AtticMotionPreset.settle.duration * 0.6))
                         }
                             // The next event at the top of Today (read-only; a
                             // click opens that day on the Calendar page).
@@ -1572,7 +1581,7 @@ struct TasksPage: View {
                 // the open "+" card adds its own (P4).
                 .modifier(TasksComposerRoomPadding(base: bottomClearance - bottomMargin, stack: bottomControlsHeight))
             }
-            .scrollIndicators(.automatic)
+            .modifier(PanelTransitScrollIndicators())
             .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                             bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack)
             .onChange(of: focusedRow) { _, focus in

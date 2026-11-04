@@ -472,7 +472,7 @@ struct NotesLibraryView: View {
             .contentMargins(.bottom, bottomControls + bottomClearance, for: .scrollContent)
             .contentMargins(.top, restTop, for: .scrollIndicators)
             .contentMargins(.bottom, bottomControls, for: .scrollIndicators)
-            .scrollIndicators(.automatic)
+            .modifier(PanelTransitScrollIndicators())
             .scrollEdgeEffectHidden(true, for: .all)
             // Floating controls (owner, 2026-10-14), as on Tasks: rows run
             // on under the label line, visible through the variable blur
