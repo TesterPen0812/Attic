@@ -1148,6 +1148,7 @@ final class PanelChromeTests: XCTestCase {
                 if !library {
                     let note = try XCTUnwrap(draft.noteStore.notes.first { $0.title == "Launch plan" })
                     XCTAssertTrue(draft.pages.open(noteID: note.id))
+                    draft.pages.dismissLibrary()
                     spin(0.5)
                 }
                 let beforeNote = draft.pages.active?.noteID
