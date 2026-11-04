@@ -7,7 +7,7 @@ import XCTest
 final class PanelKeyDiagnosticTests: XCTestCase {
     func testOwnershipChangesImmediatelyButDiagnosticWaitsForTheNativeTransaction() {
         let owner = PanelKeyState()
-        var queued: [() -> Void] = []
+        var queued: [PanelKeyDiagnosticState.Update] = []
         let diagnostic = PanelKeyDiagnosticState(state: owner, schedule: { queued.append($0) })
         owner.set(true)
         XCTAssertTrue(owner.isKey)
@@ -19,7 +19,7 @@ final class PanelKeyDiagnosticTests: XCTestCase {
 
     func testTransientOwnershipChangesCoalesceWithoutDiagnosticRedraws() {
         let owner = PanelKeyState()
-        var queued: [() -> Void] = []
+        var queued: [PanelKeyDiagnosticState.Update] = []
         let diagnostic = PanelKeyDiagnosticState(state: owner, schedule: { queued.append($0) })
         var published: [Bool] = []
         let subscription = diagnostic.$isKey.dropFirst().sink { published.append($0) }
@@ -35,7 +35,7 @@ final class PanelKeyDiagnosticTests: XCTestCase {
 
     func testQueuedDiagnosticsDoNotKeepTheFormerPresentationAlive() {
         let owner = PanelKeyState()
-        var queued: [() -> Void] = []
+        var queued: [PanelKeyDiagnosticState.Update] = []
         var diagnostic: PanelKeyDiagnosticState? = .init(state: owner, schedule: { queued.append($0) })
         weak var former = diagnostic
         owner.set(true)

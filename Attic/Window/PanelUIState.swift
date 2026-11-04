@@ -47,12 +47,14 @@ final class PanelKeyState: ObservableObject {
 /// keyboard ownership, so observing it need not add work to a native press.
 @MainActor
 final class PanelKeyDiagnosticState: ObservableObject {
+    typealias Update = @MainActor @Sendable () -> Void
     @Published private(set) var isKey: Bool
-    private let schedule: (@escaping () -> Void) -> Void
+    private let schedule: (@escaping Update) -> Void
     private var subscription: AnyCancellable?
+    private var pendingKey: Bool?
 
     init(state: PanelKeyState,
-         schedule: @escaping (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async { action() } }) {
+         schedule: @escaping (@escaping Update) -> Void = { action in DispatchQueue.main.async { action() } }) {
         isKey = state.isKey
         self.schedule = schedule
         subscription = state.$isKey.removeDuplicates().dropFirst().sink { [weak self] value in
@@ -61,7 +63,14 @@ final class PanelKeyDiagnosticState: ObservableObject {
     }
 
     private func receive(_ value: Bool) {
-        if isKey != value { isKey = value }
+        let alreadyScheduled = pendingKey != nil
+        pendingKey = value
+        guard !alreadyScheduled else { return }
+        schedule { [weak self] in
+            guard let self, let latest = self.pendingKey else { return }
+            self.pendingKey = nil
+            if self.isKey != latest { self.isKey = latest }
+        }
     }
 }
 
