@@ -1874,13 +1874,23 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidChangeScreen(_ notification: Notification) {
+        let destinationScreen = (notification.object as? NSWindow)?.screen ?? panel.screen
+        // AppKit may deliver a delayed notification for an already-placed
+        // window. It must not cancel an accepted hide when neither the
+        // effective screen, its work area nor the panel's placement changed.
+        if let screen = destinationScreen ?? currentScreen,
+           screen === currentScreen,
+           let lastUsableFrame,
+           lastUsableFrame == usableFrame(on: screen, corner: currentCorner),
+           framesMatch(panel.visibleContentFrame, frame(in: lastUsableFrame, corner: currentCorner)) {
+            return
+        }
         panel.cancelTrackpadSwipe()
         // A pointer-driven cross-display move is still the same gesture.
         // Actual display reconfiguration is cancelled by the separate
         // didChangeScreenParameters observer.
         guard !isWindowDragging else { return }
         hostingView.cancelActiveInteraction(reason: .screenChanged)
-        let destinationScreen = (notification.object as? NSWindow)?.screen ?? panel.screen
         recoverPanelInsideUsableArea(preferredScreen: destinationScreen)
     }
 
