@@ -32,20 +32,23 @@ final class TasksRound12Tests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             XCTAssertTrue(window.makeFirstResponder(other))
             let previousEditor = try XCTUnwrap(other.currentEditor())
+            previousEditor.selectedRange = NSRange(location: 1, length: 3)
             let claim = AtticFieldClaim()
-            var wanted = true
             let probe = AtticFieldClaimProbe.ProbeView(frame: field.frame)
-            probe.configure(claim: claim, placeholder: "Find pending", wanted: { wanted })
+            probe.configure(claim: claim, placeholder: "Find pending", wanted: { true })
             root.addSubview(probe)
             // Attachment has queued discovery; the explicit request arrives
             // before that queue drains, and its first attempt has no field yet.
             let request = claim.beginFocusRequest()
             XCTAssertFalse(claim.takeKeyboard(request: request, in: window))
-            if canceled { wanted = false; claim.cancelFocusRequest() }
+            if canceled { claim.cancelFocusRequest() }
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
             if canceled {
                 XCTAssertTrue(window.firstResponder === previousEditor,
                               "a canceled discovery cannot take another field's keyboard")
+                XCTAssertTrue((window.firstResponder as? NSTextView)?.delegate as? NSTextField === other,
+                              "the shared editor still belongs to the other field")
+                XCTAssertEqual(previousEditor.selectedRange, NSRange(location: 1, length: 3))
             } else {
                 let editor = try XCTUnwrap(field.currentEditor(),
                     "field discovery services the pending explicit request immediately")
