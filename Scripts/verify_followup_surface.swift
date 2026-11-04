@@ -42,7 +42,14 @@ backdrop.contentView = view
 var preview: NSRunningApplication!
 var failures = 0
 func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
+@MainActor func requireOwnForeground() throws {
+    let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    guard front == getpid() || front == preview?.processIdentifier else {
+        throw NSError(domain: "Air screen is in use by another app; stopped without input", code: 75)
+    }
+}
 @MainActor func prepareBackdrop() async throws {
+    try requireOwnForeground()
     for _ in 0..<5 {
         activateBackdrop()
         await pause(0.3)
@@ -83,7 +90,8 @@ func windows() -> [[String: Any]] {
     }
 }
 func record(_ text: String) { print(text); fflush(stdout) }
-func capture(_ name: String, checksPresence: Bool = false) async throws {
+@MainActor func capture(_ name: String, checksPresence: Bool = false) async throws {
+    try requireOwnForeground()
     let path = output + "/" + name + ".png"
     try "\(preview.processIdentifier)\n\(getpid())\n\(path)".write(toFile: output + "/capture-request", atomically: true, encoding: .utf8)
     for _ in 0..<100 {
@@ -150,6 +158,7 @@ Task { @MainActor in
                 move(CGPoint(x: screen.frame.maxX - 1, y: 1))
                 await pause(2)
                 for light in [false, true] {
+                    try requireOwnForeground()
                     view.light = light
                     kill(preview.processIdentifier, SIGWINCH)
                     await pause(0.25)

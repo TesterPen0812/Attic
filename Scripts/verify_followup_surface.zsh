@@ -29,6 +29,11 @@ release_screen_lock() {
     fi
 }
 trap release_screen_lock EXIT
+front_bundle=$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')
+if [[ $front_bundle != com.taha.Attic.preview.followup && $front_bundle != com.taha.followup-screen-check ]]; then
+    print -u2 "Air screen is in use ($front_bundle); no app launched or input sent"
+    exit 75
+fi
 driver="$root/.build/FollowupSurfaceCheck.app"
 mkdir -p "$driver/Contents/MacOS" "$2"
 cat > "$driver/Contents/Info.plist" <<'PLIST'
