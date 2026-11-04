@@ -1,6 +1,7 @@
 import AppKit
 import ObjectiveC
 import XCTest
+import ServiceManagement
 @testable import Attic
 
 @MainActor
@@ -211,5 +212,33 @@ final class PanelActivationTests: XCTestCase {
         let window = panel(); fixture.active = true
         try click(window); window.orderOut(nil)
         XCTAssertTrue(fixture.events.isEmpty)
+    }
+}
+
+/// Activation refreshes Login Items even while the retained Settings view is
+/// hidden. Its daemon may be slow; it must never hold the first panel click.
+@MainActor
+final class LoginItemRefreshTests: XCTestCase {
+    private final class Probe: @unchecked Sendable {
+        let mutex = NSLock()
+        var onMain: [Bool] = []
+        func read() -> SMAppService.Status {
+            mutex.lock(); onMain.append(Thread.isMainThread); mutex.unlock()
+            return .enabled
+        }
+        var reads: [Bool] { mutex.lock(); defer { mutex.unlock() }; return onMain }
+    }
+
+    func testBugs3LoginStatusRefreshDoesNotRunDaemonIPCOnTheInputThread() async {
+        let probe = Probe()
+        let service = LoginItemService(readStatus: { probe.read() })
+        for _ in 0..<200 where !service.isEnabled { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.isEnabled, "the asynchronously read status still reaches Settings")
+        XCTAssertFalse(probe.reads.isEmpty)
+        XCTAssertFalse(probe.reads.contains(true), "SMAppService.status is synchronous IPC; activation must not wait for it")
+        service.refresh()
+        for _ in 0..<200 where probe.reads.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(probe.reads.count, 2)
+        XCTAssertFalse(probe.reads.contains(true), "later activation refreshes must use the same input-safe path")
     }
 }

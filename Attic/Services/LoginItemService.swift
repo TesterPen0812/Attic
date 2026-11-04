@@ -8,9 +8,11 @@ final class LoginItemService: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let service: SMAppService
+    private let readStatus: @Sendable () -> SMAppService.Status
 
-    init(service: SMAppService = .mainApp) {
+    init(service: SMAppService = .mainApp, readStatus: (@Sendable () -> SMAppService.Status)? = nil) {
         self.service = service
+        self.readStatus = readStatus ?? { service.status }
         refresh()
     }
 
@@ -29,7 +31,7 @@ final class LoginItemService: ObservableObject {
     }
 
     func refresh() {
-        let status = service.status
+        let status = readStatus()
         isEnabled = status == .enabled
         requiresApproval = status == .requiresApproval
     }
