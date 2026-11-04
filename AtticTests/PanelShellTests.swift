@@ -86,6 +86,18 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(releases, 1, "late events cannot finalise the same press twice")
     }
 
+    func testBugs4FirstPressKeyStateDoesNotInvalidateEveryPanelPage() {
+        let state = PanelUIState()
+        var invalidations = 0
+        let token = state.objectWillChange.sink { invalidations += 1 }
+        state.setPanelKey(true)
+        XCTAssertTrue(state.isPanelKey)
+        state.setPanelKey(false)
+        XCTAssertFalse(state.isPanelKey)
+        XCTAssertEqual(invalidations, 0, "controls keep the same native glass; key ownership must not rebuild the whole panel on release")
+        withExtendedLifetime(token) {}
+    }
+
     // MARK: Pages and the header
 
     /// A20: every switch, the first and every later one, between every pair

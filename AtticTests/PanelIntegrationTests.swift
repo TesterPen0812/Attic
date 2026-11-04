@@ -95,11 +95,55 @@ final class PanelIntegrationTests: XCTestCase {
         panel.uiState.openTaskNote(task.id, from: .tasks, backTitle: "Back to Now")
         spin(until: { element("task-note-back") != nil })
         XCTAssertNil(element("composer-title"), "the card must give Back its row when a task page opens")
+        XCTAssertNil(element("panel-settings-button"), "only the task page's note menu is drawn while it covers the list")
         let back = try XCTUnwrap(element("task-note-back"))
         XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
         spin(until: { panel.uiState.openTaskNoteID == nil })
         XCTAssertNil(panel.uiState.openTaskNoteID)
         XCTAssertEqual(panel.uiState.selectedSection, .tasks)
+    }
+
+    func testBugs4IdleRevealBuildsColdNotesWithoutTakingItsInput() throws {
+        let panel = try makePanel()
+        let delay = AtticPanelController.keptPagesBuildDelay
+        AtticPanelController.keptPagesBuildDelay = 0
+        defer { AtticPanelController.keptPagesBuildDelay = delay }
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(until: { panel.uiState.builtPages == Set(PanelPage.allCases)
+            && panel.noteDraft.pages.active?.engine.textView != nil }, timeout: 3)
+        XCTAssertEqual(panel.uiState.builtPages, Set(PanelPage.allCases), "first island click must only reveal a built page")
+        let text = try XCTUnwrap(panel.noteDraft.pages.active?.engine.textView, "cold Notes has real content before its first click")
+        XCTAssertTrue(text.isSuspended, "warming Notes cannot own native input")
+        XCTAssertEqual(panel.uiState.selectedSection, .tasks)
+        XCTAssertFalse(panel.uiState.isPanelKey)
+    }
+
+    func testBugs4NotesNativeScrollerDisappearsOnlyDuringPageSlide() async throws {
+        let (panel, session, _) = try await followupNotes()
+        let scroll = try XCTUnwrap(session.engine.scrollView)
+        XCTAssertTrue(scroll.hasVerticalScroller)
+        panel.uiState.pageTransit.sliding = true
+        spin(0.1)
+        XCTAssertFalse(scroll.hasVerticalScroller, "AppKit must follow the same page transit as SwiftUI")
+        panel.uiState.pageTransit.sliding = false
+        spin(0.1)
+        XCTAssertTrue(scroll.hasVerticalScroller)
+    }
+
+    func testBugs4TaskNativeScrollerDisappearsOnlyDuringPageSlide() async throws {
+        let panel = try makePanel()
+        let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Scroller target")])?.first)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.openTaskNote(task.id, from: .tasks, backTitle: "Back to Now")
+        spin(until: { panel.noteDraft.pages.taskNotePresenter?.lease != nil })
+        let scroll = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter?.host.scrollView)
+        XCTAssertTrue(scroll.hasVerticalScroller)
+        panel.uiState.pageTransit.sliding = true
+        spin(0.1)
+        XCTAssertFalse(scroll.hasVerticalScroller)
+        panel.uiState.pageTransit.sliding = false
+        spin(0.1)
+        XCTAssertTrue(scroll.hasVerticalScroller)
     }
 
     // Retaining Notes must retain its native editor without retaining input ownership.

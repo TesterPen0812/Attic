@@ -56,6 +56,23 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertEqual(pageLists(hosted).filter { !$0.isHidden }.count, 1, "only Now draws")
     }
 
+    func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsUntilHide() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        let before = Set(pageLists(hosted).map(ObjectIdentifier.init))
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2)
+        hosted.model.isPageShown = false
+        hosted.spin(0.1)
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "a shell switch must not put construction back on the next tab click")
+        hosted.model.isPageShown = true
+        hosted.model.pageDidReturn()
+        hosted.go(to: .backlog)
+        XCTAssertEqual(Set(pageLists(hosted).map(ObjectIdentifier.init)), before)
+        hosted.model.pageDidHide()
+        XCTAssertNil(hosted.model.pagerSwipe.span.warm, "hidden panels still release the background tabs")
+    }
+
     /// Hiding the panel lets the kept pages go; the next reveal builds them
     /// again once idle.
     func testHidingLetsTheKeptPagesGo() throws {
