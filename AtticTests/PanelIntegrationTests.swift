@@ -241,6 +241,25 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(session.engine.document(), before, "a queued slash click cannot insert on hidden Notes")
     }
 
+    func testFollowupNotesTaskRouteKeepsItsWarmOwnerButUnmountsNativeInput() async throws {
+        let (panel, _, _) = try await followupNotes()
+        let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Task note")])?.first)
+        panel.uiState.openTaskNote(task.id, from: .notes, backTitle: "Back to Notes")
+        spin(until: { panel.noteDraft.pages.taskNotePresenter?.host.textView.window != nil })
+        let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
+        let editor = presenter.host.textView
+        XCTAssertNotNil(editor.window)
+        followupSwitch(panel, to: .tasks)
+        XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
+        XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
+        XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
+        followupSwitch(panel, to: .notes)
+        spin(until: { editor.window != nil })
+        XCTAssertTrue(panel.noteDraft.pages.taskNotePresenter === presenter)
+        XCTAssertTrue(presenter.host.textView === editor, "the composed task editor is already warm")
+        XCTAssertNotNil(editor.window)
+    }
+
     private func spin(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
