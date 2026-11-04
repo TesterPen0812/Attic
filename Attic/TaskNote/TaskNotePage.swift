@@ -1062,6 +1062,7 @@ struct TaskNotePage: View {
 /// The composed host inside SwiftUI. The host (and so the text view) belongs
 /// to the presenter: SwiftUI may rebuild this representable, never the editor.
 struct TaskNoteHostRepresentable: NSViewRepresentable {
+    @Environment(\.panelPageTransit) private var pageTransit
     let presenter: TaskNotePresenter
     let chrome: NotesPageChrome
     let columnInset: CGFloat
@@ -1078,8 +1079,10 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         var objects: NoteObjectControls?
         var titleAccessories: NoteTitleAccessories?
         weak var engine: NoteEditorEngine?
+        let scrollIndicators = PanelNativeScrollIndicators()
 
         func invalidate() {
+            scrollIndicators.stop()
             controls?.invalidate()
             objects?.invalidate()
             titleAccessories?.invalidate()
@@ -1109,6 +1112,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
             presenter.restoreViewStateOnMount()
             if !engine.isReadOnly { textView.window?.makeFirstResponder(textView) }
         }
+        context.coordinator.scrollIndicators.bind(host.scrollView, transit: pageTransit)
         return host.scrollView
     }
 
@@ -1160,6 +1164,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard presenter.lease != nil else { return }
         configureControls(context.coordinator)
+        context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
         presenter.host.textView.escapeFallback = onEscape
         presenter.host.setContentInsets(top: topInset, bottom: bottomInset)
         presenter.host.columnInset = columnInset

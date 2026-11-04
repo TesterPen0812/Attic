@@ -938,21 +938,19 @@ private struct PanelIslandRoot<Content: View>: View {
     }
 }
 
-/// Feeds the root the panel's key state without observing all of
-/// `PanelUIState` (whose other changes must not redraw the island).
+/// Feeds the root the panel size without observing all of `PanelUIState`.
+/// Its controls retain native glass independently of key ownership.
 private struct PanelIslandKeyed<Content: View>: View {
     let settings: AppSettings
     let model: PanelIslandModel
     let uiState: PanelUIState
     let content: Content
-    @State private var isPanelKey = false
     @State private var panelSize = AtticLayout.panelSize
 
     var body: some View {
-        PanelIslandRoot(settings: settings, isPanelKey: isPanelKey, content: content)
+        PanelIslandRoot(settings: settings, isPanelKey: false, content: content)
             .environment(\.atticPanelSurfaceSize, panelSize)
             .onReceive(uiState.$panelSize.removeDuplicates()) { if panelSize != $0 { panelSize = $0 } }
-            .onReceive(uiState.$isPanelKey.removeDuplicates()) { if isPanelKey != $0 { isPanelKey = $0 } }
     }
 }
 

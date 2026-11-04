@@ -1,3 +1,13 @@
+## 2026-11-04 · First visits and task-page controls
+
+Notes warms behind the current page with native input suspended. Keyboard
+ownership no longer invalidates the full panel; Tasks retains warmed tabs
+across shell-page switches and releases them on hide. Opening a task page
+closes the shared card and removes the covered shared glass at once, so Back
+and the task menu keep their places. Native note and task
+editor scroll bars now hide during the accepted page slide, as SwiftUI's do.
+The page spring, take-turns fades, island settle and card motion are unchanged.
+
 ## 2026-11-04 · Owner recording bug fixes
 
 - Date-group headings hide the task row's date without removing it from the row's spoken description.

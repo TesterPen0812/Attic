@@ -873,6 +873,7 @@ private struct NoteTagLineRoot: View {
 /// released on dismantle; the text, caret and undo history stay in the
 /// session.
 struct NoteEditorRepresentable: NSViewRepresentable {
+    @Environment(\.panelPageTransit) private var pageTransit
     @Environment(\.atticTagColouring) private var colouring
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     @Environment(\.panelComposerRoom) private var composerRoom
@@ -897,6 +898,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         var tables: NoteTableChrome?
         var isCurrent = true
         @MainActor let composerFollower = PanelComposerEndFollower()
+        @MainActor let scrollIndicators = PanelNativeScrollIndicators()
         private var spelling: (checking: Bool, correction: Bool)?
 
         @MainActor func setCurrent(_ current: Bool, in scrollView: NSScrollView) {
@@ -995,8 +997,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             guard let textView, let scrollView, let engine, let session, let chrome, let coordinator,
                   let accessories = coordinator.accessories,
                   chrome.accessories === accessories,
-                  engine.textView === textView, engine.scrollView === scrollView,
-                  coordinator.isCurrent, !textView.isSuspended else { return }
+                  engine.textView === textView, engine.scrollView === scrollView else { return }
+            // Hidden prewarming still consumes this one-shot attachment.
+            // Restore geometry now; only native focus waits for a real visit.
             if let scrollOverride {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollOverride))
             } else if session.scrollOffset > 0 {
@@ -1006,9 +1009,10 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                 textView.scrollRangeToVisible(textView.selectedRange())
             }
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            textView.restoreInputFocus()
             coordinator.accessories?.layout()
+            if coordinator.isCurrent, !textView.isSuspended { textView.restoreInputFocus() }
         }
+        context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
         return scrollView
     }
 
@@ -1021,6 +1025,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
         context.coordinator.setCurrent(isCurrent, in: scrollView)
         context.coordinator.composerFollower.bind(scroll: scrollView, room: composerRoom)
         let insets = NSEdgeInsets(top: topInset + session.engine.find.clearance, left: 0, bottom: bottomInset, right: 0)
@@ -1041,6 +1046,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.composerFollower.stop()
+        coordinator.scrollIndicators.stop()
         coordinator.accessories?.invalidate()
         coordinator.accessories = nil
         coordinator.controls?.invalidate()

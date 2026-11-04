@@ -1951,7 +1951,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     /// Once the panel has been shown for a moment: build the pages the
-    /// switch leads to (Canvas, and Tasks from another page) behind the
+    /// switch leads to (including Notes) behind the
     /// current one, one per main-thread turn, so a first ⌘1–⌘3 or click
     /// only shows them. A hidden Canvas decodes no images until it shows
     /// (`atticPanelPageIsCurrent`), and the hidden release frees them.

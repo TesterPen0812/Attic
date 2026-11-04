@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// The panel's top row on every page (Accepted 2026-10-29/30, "Top row and
@@ -179,6 +181,43 @@ private struct PanelPageTravelKey: EnvironmentKey {
 
 private struct PanelPageMotionKey: EnvironmentKey {
     static let defaultValue: PanelPageMotion = .instant
+}
+
+/// The two native editor hosts follow transit directly, without publishing
+/// through their page models or rebuilding TextKit on each slide boundary.
+@MainActor
+final class PanelNativeScrollIndicators {
+    private weak var scroll: NSScrollView?
+    private weak var transit: PanelPageTransit?
+    private var subscription: AnyCancellable?
+    private var original: (vertical: Bool, horizontal: Bool)?
+
+    func bind(_ scroll: NSScrollView, transit: PanelPageTransit?) {
+        guard self.scroll !== scroll || self.transit !== transit else { return }
+        stop()
+        self.scroll = scroll
+        self.transit = transit
+        original = (scroll.hasVerticalScroller, scroll.hasHorizontalScroller)
+        subscription = transit?.$sliding.removeDuplicates().sink { [weak self] sliding in
+            MainActor.assumeIsolated { self?.apply(sliding) }
+        }
+    }
+
+    func stop() {
+        subscription = nil
+        apply(false)
+        original = nil
+        scroll = nil
+        transit = nil
+    }
+
+    private func apply(_ sliding: Bool) {
+        guard let scroll, let original else { return }
+        let vertical = original.vertical && !sliding
+        let horizontal = original.horizontal && !sliding
+        if scroll.hasVerticalScroller != vertical { scroll.hasVerticalScroller = vertical }
+        if scroll.hasHorizontalScroller != horizontal { scroll.hasHorizontalScroller = horizontal }
+    }
 }
 
 private struct PanelPageTransitKey: EnvironmentKey {

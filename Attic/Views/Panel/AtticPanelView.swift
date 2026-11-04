@@ -158,13 +158,7 @@ struct AtticPanelView: View {
                 // glass look) instead of waiting a fixed time.
                 // A static text: its words are what the tests read (the
                 // value of an empty element is not exposed on every runner).
-                Text(verbatim: uiState.isPanelKey ? "key" : "not key")
-                    .font(.system(size: 1))
-                    .frame(width: 1, height: 1)
-                    .opacity(0.01)
-                    .allowsHitTesting(false)
-                    .accessibilityIdentifier("panel-key-state")
-                    .accessibilityValue(uiState.isPanelKey ? "key" : "not key")
+                PanelKeyStateLabel(state: uiState.keyState)
             }
         }
         .overlay(alignment: .bottom) {
@@ -505,6 +499,11 @@ struct AtticPanelView: View {
                 if model.isOpen { model.close() } else { model.open(on: .tasks(.now)) }
             }
             #endif
+            .onChange(of: uiState.openTaskNoteID) { _, taskID in
+                // Task pages own Back's bottom row, including when opened by
+                // a shortcut or agent rather than an outside mouse press.
+                if taskID != nil { composerState.model?.close(atOnce: true) }
+            }
             .onChange(of: uiState.selectedSection) { _, _ in
                 // Gone whole, at once: never folding over the sliding pages.
                 composerState.model?.close(atOnce: true)
@@ -585,7 +584,7 @@ struct AtticPanelView: View {
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
                 animations: settings.animations,
-                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle),
+                controls: PanelKeyTreatment.controls(isPanelKey: false, surface: settings.panelSurfaceStyle),
                 motion: settings.motionTuning
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
@@ -1000,3 +999,17 @@ extension Notification.Name {
     static let atticBenchToggleComposer = Notification.Name("AtticBenchToggleComposer")
 }
 #endif
+
+/// Only this diagnostic label redraws when keyboard ownership changes.
+private struct PanelKeyStateLabel: View {
+    @ObservedObject var state: PanelKeyState
+    var body: some View {
+        Text(verbatim: state.isKey ? "key" : "not key")
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("panel-key-state")
+            .accessibilityValue(state.isKey ? "key" : "not key")
+    }
+}
