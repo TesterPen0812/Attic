@@ -14,3 +14,36 @@
 **Native/open:** guarded checks repeatedly found Simulator frontmost; no preview was launched or simulator touched. Await Air availability for the dark/light-backdrop × Glass/Frosted/Solid × Light/Dark SCK matrix, paired 12-switch frame run, and Notes/Calendar card UAT. Optimized local-only preview built cleanly at `d70badc1`: **Attic Follow Up**, `com.taha.Attic.preview.followup`, executable `~/Projects/attic/attic-air/.build/island-plus-dd-after/Build/Products/Local/AtticFollowUp.app/Contents/MacOS/AtticFollowUp`; provenance/hash in `.build/followup-preview-manifest.txt`. Native equality and frame improvement remain unverified.
 
 **Outside panel files:** `CalendarPage.swift`; `Composer{Card,Panel}.swift`; `AtticMaterials.swift`, design changelog; Notes `NoteFormatControls.swift`, `NoteEditorEngine{,+Tables}.swift`, `NoteEditorTextView.swift`, `NoteTable{CellEditor,View}.swift`, `NoteEditorHost.swift`, `NotesEditorPage.swift`, `NotesLibraryView.swift`; seven test files; four `capture_followup_surface` / `verify_followup_*` scripts. No Calendar contract, Canvas implementation, signing identity or owner-store changes.
+
+## Verification, 4 Nov
+
+The requested comparison uses optimized `25c2e223` → `d70badc1`. Verification found two further fixes, both pushed on `phase-3/pd-followup`: Notes “+” now opens the existing Note card (`06d6834a`), and redundant screen notifications preserve accepted hides (`2e72aeb2`).
+
+**Surface: PASS, 12/12 after.** ScreenCaptureKit sampled the inactive panel and continuously awake island over uniform 0.06/0.94 backdrops. Metric: maximum absolute RGB-channel difference between 3×3 means, /255. Threshold **12/255**, fixed before capture, allows small native shading/noise and sampling-position differences (~4.7% channel range); every case must also look consistent. After maximum: **5.44**. All twelve read as the panel’s surface.
+
+| Mode | Surface | Dark backdrop, before → after | Light backdrop, before → after |
+|---|---|---:|---:|
+| Light | Glass | 113.44 → 0.56 | 2.22 → 0.22 |
+| Light | Frosted | 5.44 → 5.44 | 2.00 → 2.00 |
+| Light | Solid | 0.44 → 0.44 | 0.44 → 0.44 |
+| Dark | Glass | 51.00 → 0.33 | 1.78 → 0.89 |
+| Dark | Frosted | 2.44 → 2.44 | 0.33 → 0.33 |
+| Dark | Solid | 0.00 → 0.00 | 0.00 → 0.00 |
+
+**Page switches:** paired 12-switch run, three Tasks → Notes → Calendar → Draw laps; `ATTIC_FRAME_MONITOR`, SIGINFO, 60 Hz, 0.6 s windows, 1.2 s trigger spacing, recording stopped. Missed frames **131 → 57**: Notes **52 → 22**, other nine switches **79 → 35**. One measured pair; drops remain.
+
+| Notes visit | Missed, before → after | Worst gap ms, before → after |
+|---|---:|---:|
+| 1 (cold) | 29 → 14 | 409.92 → 196.89 |
+| 2 | 12 → 4 | 128.37 → 78.30 |
+| 3 | 11 → 4 | 159.16 → 73.38 |
+
+**“+” cards: PASS on screen.** Notes writing/library ends rise **63 pt** for the 90 pt card replacing the 27 pt bar. Actual Notes “+” previously opened a blank editor; red regression `a0e4c200` → fix `06d6834a`. Both buttons now open **New Note** and retain the current document/list. Native writing last line y435.482 →372.482; library last row y408.5 →345.5, both clear of the card. Final `2e72aeb2` preview repeats the actual writing “+” check with the full AX document unchanged. Calendar’s final agenda tile (10 Nov) rises **125 pt** for timed Event (**152 pt**) and **94 pt** for all-day (**121 pt**), following the **31 pt** height change. Timed Event visibly shows **Tomorrow, 10:00 / 1 h / Calendar** on separate rows.
+
+**Genie classification: flaky on both — pre-existing cancellation race, now fixed.** Ordinary repeats: exact base **20/20 pass**, original `d70badc1` head **10/10 pass**, subsequent `06d6834a` head **7 pass / 3 fail**. A buffered diagnostic caught an accepted hide being resolved `.superseded` by `windowDidChangeScreen` → work-area recovery; the stale-corner alpha assertions followed. A deterministic notification reproducer fails with the same three assertions on **both `25c2e223` and pre-fix head**, establishing the baseline cause despite the unforced baseline passes. Red commit `becb580e` → fix `2e72aeb2` ignores only notifications with unchanged effective screen, work area and valid placement. Real configuration changes and moved panels retain recovery; animation timings/curves are unchanged.
+
+**Final Air: original Genie 10/10 pass, three notification controls 30/30 pass**, no instrumentation, **40 zero-violation canaries**. Local island/geometry/chrome suites: **137 tests, seven skipped, zero failures**; Notes-route checks also pass. Diagnostic/cancelled attempts are retained and are not counted as passes. Full suite/CI was not rerun; physical monitor reconfiguration was not performed (notification/recovery controls were exercised).
+
+**Capture sheets:** [12-case before/after](/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/surface-before-after-sheet.png), [surface close-ups](/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/surface-closeups.png), [Notes actual “+”](/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/card-notes-fixed-sheet.png), [Calendar Event](/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/card-calendar-sheet.png), [final preview smoke](/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/final-preview-smoke-sheet.png). Raw SCK/AX, RGB/order/alpha JSON, frame logs, red/green logs, Genie counts and manifests: `/Users/taha/Projects/attic/attic-redesign-assets/phaseX/panel-design/improvements-build/followup-verification-4nov/`. The original d70 Notes clearance used the Task diagnostic toggle; subsequent Notes sheets use actual “+” and the Note card. Resting-island/interrupted captures are excluded; physical window order and transparent Dock occlusion were checked.
+
+**Final preview / cleanup:** branch `phase-3/pd-followup`, Air detached build of **`2e72aeb2c0be64f7213caad8a765ff560bf4945e`**, optimized **Attic Follow Up**, bundle **`com.taha.Attic.preview.followup`**. Air executable: `/Users/taha/Projects/attic/attic-air/.build/followup-verify-genie-dd/Build/Products/Local/AtticFollowUp.app/Contents/MacOS/AtticFollowUp`; SHA256 `903aaffa01797a5378aae9b503f209409ed3c3258438198628ec20c90236c076`. Ad hoc signature and local sandbox/network entitlements verified. Final fixture PIDs exited and our Air screen lock was released. No simulator, iPhone worktree/process, owner store or privacy setting was changed. No requested on-screen checks remain; no new local DerivedData folder was created.

@@ -5,6 +5,12 @@
 - Later's empty state reads “Nothing for later”. Calendar's empty Today keeps the same date tile as other empty days, without an empty raised card or lone now line.
 - Search-field discovery services the current pending focus request, retaining cancellation and selection guards.
 
+## 2026-11-04 · Notes "+" uses the shared card
+
+The panel's Notes "+" opens the existing Note composer from writing and
+All notes, keeping the current document and list in place behind the card.
+Both controls use the panel's existing composer route.
+
 ## 2026-11-03 · Combined panel follow-ups
 
 The island crops a panel-sized native glass surface into its capsule, keeping

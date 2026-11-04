@@ -749,6 +749,45 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    func testADuplicateScreenNotificationPreservesAnAcceptedGenieHide() throws {
+        try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+            let container = try content(panel)
+            spin(until: { !container.isIslandStandInShown })
+            var outcome: PanelHideCompletion?
+            XCTAssertEqual(controller.requestHide { outcome = $0 }, .accepted)
+            XCTAssertNil(outcome)
+            NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: panel)
+            XCTAssertNil(outcome, "An unchanged screen, work area and placement cannot supersede an accepted hide")
+            spin(until: { outcome != nil })
+            XCTAssertEqual(outcome, .hidden)
+            XCTAssertFalse(panel.isVisible)
+        }
+    }
+
+    func testAScreenConfigurationChangeStillSupersedesAnAcceptedGenieHide() throws {
+        try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+            let container = try content(panel)
+            spin(until: { !container.isIslandStandInShown })
+            var outcome: PanelHideCompletion?
+            XCTAssertEqual(controller.requestHide { outcome = $0 }, .accepted)
+            NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            XCTAssertEqual(outcome, .superseded)
+            XCTAssertTrue(panel.isVisible)
+        }
+    }
+
+    func testAScreenNotificationStillRecoversChangedPanelPlacement() throws {
+        try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+            let container = try content(panel)
+            spin(until: { !container.isIslandStandInShown })
+            let expected = panel.visibleContentFrame
+            panel.setVisibleContentFrame(expected.offsetBy(dx: -20, dy: 0), display: false)
+            XCTAssertNotEqual(panel.visibleContentFrame, expected)
+            NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: panel)
+            XCTAssertEqual(panel.visibleContentFrame, expected)
+        }
+    }
+
     /// Genie hiding in one corner and revealing in another (same panel
     /// size): the snapshot the reveal flies holds the island at the new
     /// corner and nothing at the old one, whether it is taken at the reveal
