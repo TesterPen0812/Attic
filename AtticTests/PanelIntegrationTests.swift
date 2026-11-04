@@ -73,6 +73,35 @@ final class PanelIntegrationTests: XCTestCase {
         return panel
     }
 
+    func testBugs3OpeningATaskPageClosesTheCardAndLeavesBackAvailable() throws {
+        let panel = try makePanel()
+        let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Back target")])?.first)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
+        func elements(_ object: AnyObject) -> [AnyObject] {
+            [object] + ((object.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        func element(_ id: String) -> AnyObject? {
+            elements(root).first { ($0.accessibilityIdentifier?() ?? "") == id }
+        }
+        spin(until: { element("tasks-new-task") != nil })
+        XCTAssertTrue(try XCTUnwrap(element("tasks-new-task")).accessibilityPerformPress?() ?? false)
+        spin(until: { element("composer-title") != nil })
+        XCTAssertNotNil(element("composer-title"))
+        panel.uiState.openTaskNote(task.id, from: .tasks, backTitle: "Back to Now")
+        spin(until: { element("task-note-back") != nil })
+        XCTAssertNil(element("composer-title"), "the card must give Back its row when a task page opens")
+        let back = try XCTUnwrap(element("task-note-back"))
+        XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+        spin(until: { panel.uiState.openTaskNoteID == nil })
+        XCTAssertNil(panel.uiState.openTaskNoteID)
+        XCTAssertEqual(panel.uiState.selectedSection, .tasks)
+    }
+
     // Retaining Notes must retain its native editor without retaining input ownership.
     private func followupNotes() async throws -> (Panel, NoteSession, NoteEditorTextView) {
         let panel = try makePanel()
