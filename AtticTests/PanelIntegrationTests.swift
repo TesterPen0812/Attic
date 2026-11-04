@@ -107,12 +107,15 @@ final class PanelIntegrationTests: XCTestCase {
         for reason in [PanelInteractionLockReason.panelSwipe, .menuTracking] {
             let panel = try makePanel()
             let delay = AtticPanelController.keptPagesBuildDelay
-            AtticPanelController.keptPagesBuildDelay = 0
+            AtticPanelController.keptPagesBuildDelay = 0.6
             defer { AtticPanelController.keptPagesBuildDelay = delay }
+            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+            // A reveal resets a previous swipe's lock. Start this interaction
+            // after that boundary and before the idle-build deadline.
+            spin(0.3)
             panel.uiState.setInteractionLock(reason, isActive: true)
             defer { panel.uiState.setInteractionLock(reason, isActive: false) }
-            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
-            spin(0.3)
+            spin(0.4)
             XCTAssertEqual(panel.uiState.builtPages, [.tasks], "prewarming must not stall an active swipe or menu")
             panel.uiState.setInteractionLock(reason, isActive: false)
             spin(until: { panel.uiState.builtPages == Set(PanelPage.allCases) })
