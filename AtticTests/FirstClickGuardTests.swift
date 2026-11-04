@@ -24,7 +24,10 @@ final class FirstClickWindowServerTests: XCTestCase {
     func testEveryPointOfThePanelAndTheIslandTakesTheClickThroughARevealOnEveryPage() throws {
         try requireKeyWindowTests()
         var misses: [String] = []
-        for reduceMotion in [false, true] {
+        // Keep the original scan and repeat it in reverse. A miss at the
+        // first queried point can otherwise look like a corner-geometry bug
+        // when native input publication is actually catching up during scan.
+        for (reduceMotion, reverseSurfaceOrder) in [(false, false), (true, false), (false, true), (true, true)] {
             try FirstClickHarness.withController(self, reduceMotion: reduceMotion) { harness in
                 for section in [PanelSection.tasks, .notes, .calendar, .canvas] {
                     harness.state.selectSection(section)
@@ -39,7 +42,8 @@ final class FirstClickWindowServerTests: XCTestCase {
                     for (index, wait) in [0.02, 0.06, 0.12, 0.25, 1.0].enumerated() {
                         harness.spin(wait)
                         let name = "\(section), Reduce Motion \(reduceMotion ? "on" : "off"), sample \(index)"
-                        misses += harness.windowServerMisses(name)
+                            + (reverseSurfaceOrder ? ", reversed surface scan" : "")
+                        misses += harness.windowServerMisses(name, reverseSurfaceOrder: reverseSurfaceOrder)
                     }
                 }
             }
@@ -492,7 +496,7 @@ final class FirstClickHarness {
     /// The points of the surface (inside its superellipse, a 10 pt grid)
     /// and the island's items whose click the window server sends to a
     /// window other than the panel, the island or an open menu card.
-    func windowServerMisses(_ name: String) -> [String] {
+    func windowServerMisses(_ name: String, reverseSurfaceOrder: Bool = false) -> [String] {
         let windows = controller.islandWindowsForTesting
         let frame = panel.visibleContentFrame
         var points: [CGPoint] = []
@@ -509,8 +513,19 @@ final class FirstClickHarness {
         }
         let ours = Set([panel.windowNumber, windows.island.windowNumber]
             + NSApp.windows.filter { $0 is AtticGlassMenuWindow && $0.isVisible }.map(\.windowNumber))
-        let missed = (points + islandPoints).filter {
-            Self.passesThrough(to: NSWindow.windowNumber(at: $0, belowWindowWithWindowNumber: 0), past: ours)
+        let probes = (reverseSurfaceOrder ? Array(points.reversed()) : points) + islandPoints
+        let start = ProcessInfo.processInfo.systemUptime
+        let missed = probes.enumerated().compactMap { index, point -> CGPoint? in
+            let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+            let hit = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+            guard Self.passesThrough(to: hit, past: ours) else { return nil }
+            // Retain the first result as a failure. The immediate second
+            // query diagnoses publication timing; it never excuses the miss.
+            let again = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+            let returned = NSApp.windows.first { $0.windowNumber == hit }
+            let kind = returned.map { String(describing: type(of: $0)) } ?? "foreign or unlisted"
+            print("FIRST_MOUSE_DIAG \(name) query=\(index) elapsed_ms=\(elapsed) point=\(point) local=\(CGPoint(x: point.x-frame.minX,y: point.y-frame.minY)) hit=\(hit) requery=\(again) kind=\(kind) expected=\(ours.sorted()) native=\(panel.frame) surface=\(frame) visible=\(panel.isVisible) ignores=\(panel.ignoresMouseEvents) alpha=\(panel.alphaValue) contentAlpha=\(panel.contentView?.alphaValue ?? -1) layerOpacity=\(panel.contentView?.layer?.presentation()?.opacity ?? -1)")
+            return point
         }
         guard let first = missed.first else { return [] }
         return ["\(name): \(missed.count) of \(points.count + islandPoints.count) points, first at \(first)"]
