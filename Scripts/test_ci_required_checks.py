@@ -76,7 +76,7 @@ class RequiredChecksTests(unittest.TestCase):
         import textwrap
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
         block = workflow.split('          # Hosted identifiers', 1)[1].split('          ATTIC_VISUAL_UAT_DIRECTORY=', 1)[0]
-        script = textwrap.dedent('# Hosted identifiers' + block) + '\nprintf "%s\\n" "$ui_scheme" "${skip_flags[@]}"'
+        script = textwrap.dedent('# Hosted identifiers' + block) + '\nprintf "%s\\n" "$ui_scheme" "${skip_flags[@]}" "${identity_flags[@]}"'
         for selection, scheme, skipped in [
             ('', 'AtticUI', True),
             ('AtticUITests/TasksPageUITests', 'AtticUI', True),
@@ -88,6 +88,9 @@ class RequiredChecksTests(unittest.TestCase):
                                         capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.splitlines()[0], scheme)
                 self.assertEqual('-skip-testing:AtticUITests/PerformanceUITests' in result.stdout, skipped)
+                if 'AtticUITests/PerformanceUITests' in selection:
+                    self.assertIn('ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui', result.stdout)
+                    self.assertIn('CODE_SIGNING_ALLOWED=YES', result.stdout)
 
     def test_workflow_passes_actual_step_outcomes(self):
         import re
