@@ -10,6 +10,54 @@ import XCTest
 /// of one task are two rows). Plus the computer-use review's bugs.
 @MainActor
 final class TasksRound12Tests: XCTestCase {
+    private final class ProbePanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    func testBugs3AFieldAttachmentServicesThePendingExplicitFindWithoutWaitingForARetry() throws {
+        try requireKeyWindowTests()
+        for canceled in [false, true] {
+            let window = ProbePanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 120),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.contentView = nil; window.close() }
+            let root = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 120))
+            let field = NSTextField(string: "invoice")
+            field.placeholderString = "Find pending"
+            field.frame = CGRect(x: 10, y: 10, width: 250, height: 24)
+            let other = NSTextField(string: "Other field")
+            other.frame = CGRect(x: 10, y: 50, width: 250, height: 24)
+            root.addSubview(field); root.addSubview(other)
+            window.contentView = root
+            window.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(window.makeFirstResponder(other))
+            let previousEditor = try XCTUnwrap(other.currentEditor())
+            let claim = AtticFieldClaim()
+            var wanted = true
+            let probe = AtticFieldClaimProbe.ProbeView(frame: field.frame)
+            probe.configure(claim: claim, placeholder: "Find pending", wanted: { wanted })
+            root.addSubview(probe)
+            // Attachment has queued discovery; the explicit request arrives
+            // before that queue drains, and its first attempt has no field yet.
+            let request = claim.beginFocusRequest()
+            XCTAssertFalse(claim.takeKeyboard(request: request, in: window))
+            if canceled { wanted = false; claim.cancelFocusRequest() }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            if canceled {
+                XCTAssertTrue(window.firstResponder === previousEditor,
+                              "a canceled discovery cannot take another field's keyboard")
+            } else {
+                let editor = try XCTUnwrap(field.currentEditor(),
+                    "field discovery services the pending explicit request immediately")
+                XCTAssertTrue(window.firstResponder === editor)
+                editor.selectedRange = NSRange(location: 1, length: 3)
+                XCTAssertFalse(claim.takeKeyboard(request: request, in: window))
+                XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3),
+                               "a later retry cannot replace an acquired selection")
+            }
+        }
+    }
+
     private func sendFindKey(_ hosted: Hosted, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) {
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
