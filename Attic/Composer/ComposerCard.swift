@@ -122,6 +122,7 @@ struct ComposerCard: View {
             titleFocused = false
             writingFocused = false
         }
+        .onChange(of: model.kind) { _, _ in open = nil }
         .onChange(of: model.focusRequest) { _, _ in
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
@@ -392,7 +393,6 @@ struct ComposerCard: View {
             }
         }
         .padding(.leading, ComposerMetrics.chipLeading)
-        .onChange(of: model.kind) { _, _ in open = nil }
     }
 
     private func standardActions(_ kind: ComposerKind) -> some View {
@@ -424,7 +424,6 @@ struct ComposerCard: View {
             createButton
         }
         .animation(ComposerMotion.animation(), value: open == .priority)
-        .onChange(of: kind) { _, _ in open = nil }
     }
 
     private var priorityLevels: some View {
