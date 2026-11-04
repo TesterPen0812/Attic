@@ -359,6 +359,15 @@ extension TaskNoteConversion {
             deletedAt: date, in: context, provenance: "circle removed")
     }
 
+    // Library rows build their named actions while drawing, including when
+    // Notes is kept behind another page. Cache only this pure byte predicate,
+    // never task ownership or lifecycle admission from a ModelContext.
+    private static let writingByContent: NSCache<NSData, NSNumber> = {
+        let cache = NSCache<NSData, NSNumber>()
+        cache.countLimit = 32
+        cache.totalCostLimit = 8 * 1_024 * 1_024
+        return cache
+    }()
     private(set) static var writingDecodeCount = 0
 
     static func hasWriting(_ taskID: UUID, in context: ModelContext) -> Bool {
@@ -367,9 +376,12 @@ extension TaskNoteConversion {
               let writing = try? WorkspaceItemLifecycle.writing(taskIDs: [taskID], in: context) else { return false }
         return writing.contains { row in
             guard row.deletedAt == nil, let bytes = row.content else { return false }
+            let key = bytes as NSData
+            if let known = writingByContent.object(forKey: key) { return known.boolValue }
             writingDecodeCount += 1
-            guard let doc = NoteContentCodec.decode(bytes).document else { return false }
-            return documentHasWriting(doc)
+            let value = NoteContentCodec.decode(bytes).document.map(documentHasWriting) ?? false
+            writingByContent.setObject(NSNumber(value: value), forKey: key, cost: bytes.count)
+            return value
         }
     }
 
