@@ -231,6 +231,7 @@ final class PanelIntegrationTests: XCTestCase {
             document: NoteDocument(blocks: [.text("Table"), .table(.blank()), .text("After")])).get()
         await panel.noteDraft.pages.startAndWait()
         XCTAssertTrue(panel.noteDraft.pages.open(noteID: id))
+        panel.noteDraft.pages.dismissLibrary() // Match the library's actual open route.
         followupSwitch(panel, to: .notes)
         let session = try XCTUnwrap(panel.noteDraft.pages.active)
         let engine = session.engine
