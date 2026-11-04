@@ -251,6 +251,8 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertNotNil(editor.window)
         followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
+        // The outgoing page's spring may retain its native hierarchy until it settles.
+        spin(until: { editor.window == nil })
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)

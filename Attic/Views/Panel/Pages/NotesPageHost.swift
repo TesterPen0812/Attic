@@ -9,6 +9,7 @@ struct NotesPageHost: View {
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
     let hasRestoredSession: Bool
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
 
     var body: some View {
         content.onAppear(perform: installTaskNoteHooks)
@@ -18,6 +19,12 @@ struct NotesPageHost: View {
     private var content: some View {
         if !hasRestoredSession {
             ProgressView("Restoring draft…")
+        } else if !isCurrent, uiState.taskNoteOrigin == .notes,
+                  uiState.openTaskNoteID != nil || noteDraft.pages.taskNotePresenter != nil {
+            // The composed task page already retains its warm native host and
+            // lease. Preserve its old unmount boundary for native controls;
+            // ordinary Notes is the view that needs to stay built.
+            Color.clear
         } else {
             TaskNoteRouteHost(page: .notes, noteStore: noteStore, taskStore: taskStore, noteDraft: noteDraft,
                               uiState: uiState, layout: layout, isReady: hasRestoredSession) { _ in
