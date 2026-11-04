@@ -48,6 +48,9 @@ import SwiftUI
 final class TasksPagerSpan: ObservableObject {
     /// The pages drawn: the one shown, and those a move passes.
     @Published var pages: ClosedRange<Int> = 0...0
+    /// A page a move skips over (Accepted 2026-11-04): Done → Now slides
+    /// Done straight in beside Now, so Later's list never shows on the way.
+    @Published var skipped: Int?
     /// The pages kept built but not drawn (round 11): built once the page
     /// is shown and idle, so a tab click or a swipe never builds a page as
     /// it starts to move (each build took 50–100 ms on screen, the lag the
@@ -68,6 +71,24 @@ final class TasksPagerMotion: ObservableObject {
     /// the new one until `fade` reaches 1.
     @Published private(set) var fadingOut: Int?
     @Published private(set) var fade: CGFloat = 1
+    /// A jump over a page (Done → Now, Now → Done): the page left is placed
+    /// beside the new one for the move (`slot`, in pages), so the two
+    /// travel edge to edge and the page between is never drawn. Set as
+    /// the move starts and cleared as it ends, never while it moves.
+    @Published private(set) var jump: (from: Int, slot: CGFloat)?
+
+    /// Where the pager draws page `index`, in pages.
+    func place(of index: Int) -> CGFloat {
+        if let jump, jump.from == index { return jump.slot }
+        return CGFloat(index)
+    }
+
+    /// No jump any more: every page in its own place again (and the page
+    /// between drawn as usual).
+    private func endJump() {
+        if jump != nil { jump = nil }
+        if span?.skipped != nil { span?.skipped = nil }
+    }
     /// What the UI tests read (DEBUG, `ATTIC_UI_TEST_PAGER_TRACE`).
     @Published private(set) var trace = "reach=0.00 lead=-1.00 page=0"
 
@@ -164,6 +185,7 @@ final class TasksPagerMotion: ObservableObject {
     /// (`ticket`) moves the pages meanwhile.
     private func rest(on page: Int, ticket: Int, now: Bool = false) {
         guard ticket == generation else { return }
+        endJump()
         if now {
             setSpan(page, page)
             return
@@ -203,6 +225,13 @@ final class TasksPagerMotion: ObservableObject {
     /// Stops a settle where it is (a new swipe takes the page from there).
     func stop() {
         driver.stop()
+        // A swipe takes the page from where it is drawn: a jump's page left
+        // goes back to its own place, at the same spot on screen.
+        if let jump {
+            position += CGFloat(jump.from) - jump.slot
+            destination = position
+            endJump()
+        }
         PerformanceSignposts.pagerSettleEnded(frames: 0, late: 0, interrupted: true)
         generation &+= 1
     }
@@ -248,9 +277,21 @@ final class TasksPagerMotion: ObservableObject {
         }
         generation &+= 1
         let ticket = generation
+        // A jump over a page from rest (a tab, a key, Search): the page left
+        // is drawn beside the new one and the two slide edge to edge, so
+        // the page between never shows on the way (Accepted 2026-11-04,
+        // Done → Now flashed Later). Under Reduce Motion it crossfades.
+        endJump()
+        let from = Int(position.rounded())
+        if animated, width > 0, !reduced, abs(position - CGFloat(from)) < 0.001, abs(from - page) > 1 {
+            let slot = target + (from > page ? 1 : -1)
+            jump = (from, slot)
+            span?.skipped = Int((CGFloat(from) + target) / 2)
+            position = slot
+        }
         // Every page the move passes is drawn until it ends.
         // (A sliver under a tenth of a page, a rubber band's, needs none.)
-        setSpan(min(Int((position + 0.15).rounded(.down)), page), max(Int((position - 0.15).rounded(.up)), page))
+        setSpan(min(Int((position + 0.15).rounded(.down)), page, from), max(Int((position - 0.15).rounded(.up)), page, from))
         // Building a page can reach back here (its lists' changes): a newer
         // call has then taken the move over, and this one leaves it alone.
         guard ticket == generation else { return }
@@ -309,21 +350,18 @@ final class TasksPagerMotion: ObservableObject {
         let bounce = Self.settleOverride == nil ? AtticMotionPreset.slide.bounce : 0
         let spring = TasksPagerSpring(from: position, to: target, speed: width > 0 ? velocity / width : 0,
                                       duration: duration, bounce: bounce)
-        var start: CFTimeInterval?
+        var clock = TasksPagerClock()
         var last: CFTimeInterval?
         var frames = 0
         var late = 0
         PerformanceSignposts.pagerSettleBegan()
         driver.start(on: clockView()) { [weak self] now, display, interval in
             guard let self, self.generation == ticket else { return false }
-            if start == nil {
-                start = now
-                PerformanceSignposts.pagerFirstFrame()
-            }
+            if frames == 0 { PerformanceSignposts.pagerFirstFrame() }
             if let last, interval > 0 { late += max(0, Int(((now - last) / interval).rounded()) - 1) }
             last = now
             frames += 1
-            if let value = spring.value(at: display - (start ?? now)) {
+            if let value = spring.value(at: clock.time(now: now, display: display, interval: interval)) {
                 self.position = value
                 return true
             }
@@ -336,6 +374,7 @@ final class TasksPagerMotion: ObservableObject {
     }
 
     private func settled() {
+        endJump()
         guard Self.tracing else { return }
         settledAt = ProcessInfo.processInfo.systemUptime
         let lead = switchedAt.flatMap { switched in settledAt.map { $0 - switched } } ?? -1
@@ -475,6 +514,27 @@ struct TasksPagerSpring: Equatable {
     }
 }
 
+/// The settle's own time (Accepted 2026-11-04): it advances by at most two
+/// frames per frame shown, so a late frame (the page coming in being drawn
+/// for the first time) holds the page where it was rather than jumping it
+/// most of the way and leaving it to slide on (Now → Later "landed, jumped
+/// and slid again").
+struct TasksPagerClock {
+    private(set) var elapsed: CFTimeInterval = 0
+    private var lastDisplay: CFTimeInterval?
+
+    mutating func time(now: CFTimeInterval, display: CFTimeInterval, interval: CFTimeInterval) -> CFTimeInterval {
+        let frame = interval > 0 ? interval : 1.0 / 60
+        if let lastDisplay {
+            elapsed += min(max(display - lastDisplay, 0), frame * 2)
+        } else {
+            elapsed = min(max(display - now, 0), frame * 2)
+        }
+        lastDisplay = display
+        return elapsed
+    }
+}
+
 /// Steps an animation on the display's refresh (round 11): a display link
 /// from the page's own view, so each step is computed for the frame it is
 /// shown in; a 120 Hz timer only where that view is on no screen (tests
@@ -567,7 +627,7 @@ struct TasksPagerPages<Page: View>: View {
             // drawn where the last swipe had it); only its content comes
             // and goes.
             ForEach(0..<count, id: \.self) { index in
-                let drawn = index == shown || span.pages.contains(index)
+                let drawn = index == shown || (span.pages.contains(index) && span.skipped != index)
                 Group {
                     if drawn || span.warm?.contains(index) == true {
                         TasksKeptPage(frozen: drawn ? nil : token(index)) { page(index, drawn) }
@@ -610,7 +670,7 @@ struct TasksPagerSlot: ViewModifier {
         let fadingOut = motion.fadingOut == index
         let fadingIn = motion.fadingOut != nil && CGFloat(index) == motion.position
         content
-            .offset(x: fadingOut ? 0 : (CGFloat(index) - motion.position) * width)
+            .offset(x: fadingOut ? 0 : (motion.place(of: index) - motion.position) * width)
             .opacity(fadingOut ? 1 - motion.fade : fadingIn ? motion.fade : 1)
     }
 }
