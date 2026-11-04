@@ -110,11 +110,15 @@ final class RoundO3ControlsTests: XCTestCase {
             throw NSError(domain: "seed", code: 1)
         }
         let noteDraft = NoteDraftController(noteStore: store)
-        let root = O3NotesRoot(noteDraft: noteDraft, store: store, uiState: PanelUIState(), toasts: PanelToastCenter(), size: Self.size)
-        let view = host(root, design: design)
         let note = try XCTUnwrap(store.notes.first)
+        // This fixture measures scrolling an editor, not navigation from
+        // the library. Establish its session before mounting so a late
+        // editor attachment cannot restore caret zero over our test scroll.
+        noteDraft.pages.start()
         XCTAssertTrue(noteDraft.pages.open(noteID: note.id))
         noteDraft.pages.dismissLibrary()
+        let root = O3NotesRoot(noteDraft: noteDraft, store: store, uiState: PanelUIState(), toasts: PanelToastCenter(), size: Self.size)
+        let view = host(root, design: design)
         spin(0.3)
         view.layoutSubtreeIfNeeded()
         return (view, noteDraft.pages)
