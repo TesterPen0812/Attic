@@ -192,9 +192,16 @@ final class ComposerModel: ObservableObject {
     }
 
     /// Escape or a click outside: the card closes and keeps the draft.
-    func close() {
+    /// The last close was at once (a page switch), not the fold back into
+    /// "+".
+    private(set) var closedAtOnce = false
+
+    /// `atOnce`: gone in the same frame, whole (a page switch: the card
+    /// never comes apart over the moving pages, Accepted 2026-11-04, #9).
+    func close(atOnce: Bool = false) {
         guard isOpen else { return }
         draftGeneration += 1
+        closedAtOnce = atOnce
         isOpen = false
         restoreFocus()
         saveKeptDraft()

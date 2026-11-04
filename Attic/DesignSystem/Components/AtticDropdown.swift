@@ -1208,6 +1208,8 @@ final class AtticDropdownStageModel: ObservableObject {
     /// focus (`atticDropdownFocus`) takes it then. 0 until this opening's
     /// host has it (reset as each card opens).
     @Published var focusRequest = 0
+    /// Solid on every frame (`atticDropdown(opaqueMotion:)`).
+    @Published var opaque = false
 }
 
 private struct AtticDropdownFocusRequestKey: EnvironmentKey {
@@ -1722,7 +1724,8 @@ struct AtticDropdownStage: View {
             .environment(\.atticDropdownHeight, model.height)
             .environment(\.atticDropdownWidth, model.width)
             .animation(reduce ? nil : (closing ? AtticDropdownReveal.closeAnimation : AtticDropdownReveal.openAnimation)) {
-                $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop))
+                $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop,
+                                              appliesOpacity: !model.opaque))
             }
             // Reduced: no motion at all, opening or closing (draft C).
             .animation(nil) {
@@ -1761,6 +1764,10 @@ final class AtticDropdownPresenter {
     /// content whose rows change while open (typing suggestions): the card
     /// follows it rather than keeping its opening width.
     var contentWidth: CGFloat?
+    /// Solid on every frame: no fade in, and it goes at once.
+    var opaqueMotion = false {
+        didSet { if stage.opaque != opaqueMotion { stage.opaque = opaqueMotion } }
+    }
     /// The open card's width (the width rule's, set as it opens) and
     /// natural height (its content's, which can change while open).
     private var openWidth: CGFloat = 0
@@ -1774,6 +1781,8 @@ final class AtticDropdownPresenter {
 
     private weak var anchor: NSView?
     private weak var previousResponder: NSResponder?
+    /// The caret or selection in a field that had the keyboard.
+    private var previousSelection: NSRange?
     private var monitors: [Any] = []
     private var resignObserver: NSObjectProtocol?
     private var geometryObservers: [NSObjectProtocol] = []
@@ -1841,6 +1850,7 @@ final class AtticDropdownPresenter {
         isOpen = true
         if takesKeyboard { Self.openCount += 1 }
         previousResponder = Self.owner(of: window.firstResponder)
+        previousSelection = (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0.selectedRange() : nil }
         install(in: window)
         // The host takes the keyboard now, while nothing can have reached
         // the card: deferred to the next turn, a cold first opening ran it
@@ -1975,6 +1985,14 @@ final class AtticDropdownPresenter {
         if restoreFocus, responderInside, let window {
             if let previous = previousResponder as? NSView, previous.window === window {
                 window.makeFirstResponder(previous)
+                // A field given the keyboard back selects all its text; the
+                // caret goes back where it was instead (Accepted 2026-11-04,
+                // #6: the next key replaced the whole notes line).
+                if let selection = previousSelection, let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
+                    let length = (editor.string as NSString).length
+                    let location = min(selection.location, length)
+                    editor.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+                }
             } else {
                 window.makeFirstResponder(nil)
             }
@@ -1982,7 +2000,8 @@ final class AtticDropdownPresenter {
             window?.makeFirstResponder(nil)
         }
         previousResponder = nil
-        if immediately {
+        previousSelection = nil
+        if immediately || opaqueMotion {
             AtticOverlayHierarchy.remove(host)
             self.host = nil
             return
@@ -2142,6 +2161,7 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     let contentHasCard: Bool
     let contentHeight: CGFloat?
     var contentWidth: CGFloat? = nil
+    var opaqueMotion = false
     let design: AtticDesignContext
     let content: () -> AnyView
 
@@ -2174,6 +2194,7 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.contentHasCard = contentHasCard
         presenter.contentHeight = contentHeight
         presenter.contentWidth = contentWidth
+        presenter.opaqueMotion = opaqueMotion
         presenter.design = design
         // The card is hosted apart from the page: it takes the tag colours
         // from where it opens, so a tag's dot is the hue its row shows.
@@ -2213,10 +2234,14 @@ extension View {
     /// Shows `content` in Attic's dropdown card while `isPresented`, its left
     /// edge on this view's, on the `prefer` side when there is room. Only
     /// for Attic's own pop-over lists; native menus stay native.
+    /// `opaqueMotion`: the card is solid on every frame (no fade in or
+    /// out): it opens by its scale and drop alone and goes at once (the
+    /// "+" card's pickers, Accepted 2026-11-04).
     func atticDropdown<Content: View>(isPresented: Binding<Bool>, prefer: AtticDropdownLayout.Side = .below,
                                       label: String, takesKeyboard: Bool = true, contentHasCard: Bool = false, contentHeight: CGFloat? = nil,
-                                      contentWidth: CGFloat? = nil, @ViewBuilder content: @escaping () -> Content) -> some View {
-        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth, card: content))
+                                      contentWidth: CGFloat? = nil, opaqueMotion: Bool = false,
+                                      @ViewBuilder content: @escaping () -> Content) -> some View {
+        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth, opaqueMotion: opaqueMotion, card: content))
     }
 }
 
@@ -2228,6 +2253,7 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     let contentHasCard: Bool
     let contentHeight: CGFloat?
     let contentWidth: CGFloat?
+    var opaqueMotion = false
     let card: () -> Card
 
     @Environment(\.atticDesign) private var design
@@ -2238,7 +2264,7 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
         content.background {
             if isPresented {
                 AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth,
-                                    design: design, content: { AnyView(card()) })
+                                    opaqueMotion: opaqueMotion, design: design, content: { AnyView(card()) })
                     .accessibilityHidden(true)
             }
         }

@@ -78,6 +78,9 @@ struct ComposerCard: View {
     /// The title field's wrapped height (one line: `titleHeight`).
     @State private var titleFieldHeight = ComposerMetrics.titleHeight
     @State private var open: Chip?
+    /// The priority just picked, highlighted on the row until it closes
+    /// (Accepted 2026-11-04, #3: Low clicked, None stayed lit).
+    @State private var pickedPriority: TaskPriority?
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
 
@@ -137,6 +140,20 @@ struct ComposerCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "New \(kind.title)"))
         .accessibilityIdentifier("composer-card")
+        // The pickers open from the whole card, above it, so they never
+        // cover the card they edit (Accepted 2026-11-04, #4), and solid
+        // all the way in and out (#5).
+        .modifier(ComposerPickers(open: $open, label: pickerLabel) { picker($0) })
+    }
+
+    private var pickerLabel: String {
+        switch open {
+        case .date: dateLabel(model.values)
+        case .tags: String(localized: "Tags")
+        case .length: Self.length(model.eventLength)
+        case .calendar: model.selectedCalendar?.title ?? String(localized: "Calendar")
+        default: ""
+        }
     }
 
     /// B1: a title too long for one line wraps into the writing line's
@@ -248,6 +265,9 @@ struct ComposerCard: View {
                     AtticText(verbatim: kind.placeholder, style: .composerTitle, ink: .placeholder)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
+                        // Task ↔ Note: one placeholder at a time.
+                        .id(kind)
+                        .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion))
                 }
             }
         }
@@ -389,50 +409,79 @@ struct ComposerCard: View {
             }
             HStack(spacing: ComposerMetrics.chipGap) {
                 calendarChip
+                Spacer(minLength: 0)
                 createButton
             }
         }
         .padding(.leading, ComposerMetrics.chipLeading)
     }
 
+    /// The bottom row (Accepted 2026-11-04): the tag control sits in the
+    /// same place in Task and Note, last before Create (as drawn in
+    /// `composer-buttons-drafts.html`). Task: Date, then priority and tag;
+    /// Note: Pin, then the tag. Each control hugs its own label, so a
+    /// chosen priority and tag show on the card (#2) and Date's hover is
+    /// only as wide as Date.
     private func standardActions(_ kind: ComposerKind) -> some View {
         let values = model.values
+        let turns = PanelTakeTurns.transition(reduceMotion: design.reduceMotion)
         return HStack(spacing: ComposerMetrics.chipGap) {
             HStack(spacing: ComposerMetrics.chipGap) {
                 switch kind {
                 case .task:
-                    if open != .priority { dateChip(values, flex: true) }
                     if open == .priority {
                         priorityLevels
+                            .transition(turns)
                     } else {
-                        chip(.priority, systemName: "exclamationmark",
-                             label: values.priority.map(\.composerTitle) ?? String(localized: "Priority"),
-                             set: values.priority != nil, colour: values.priority == .high ? TasksPanelDesign.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
+                        HStack(spacing: ComposerMetrics.chipGap) {
+                            dateChip(values, flex: true)
+                            Spacer(minLength: 0)
+                            chip(.priority, systemName: "exclamationmark",
+                                 label: values.priority.map(\.composerTitle) ?? String(localized: "Priority"),
+                                 set: values.priority != nil, showsLabel: values.priority != nil,
+                                 colour: values.priority == .high ? TasksPanelDesign.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
+                                .fixedSize()
+                            tagsChip(values, showsLabel: !values.tags.isEmpty)
+                        }
+                        .transition(turns)
                     }
-                    if open != .priority { tagsChip(values) }
                 case .event:
                     EmptyView() // Event uses the taller rows above.
                 case .note:
-                    tagsChip(values).fixedSize()
-                    chip(.pin, systemName: "pin", label: model.pinned ? String(localized: "Pinned") : String(localized: "Pin"),
-                         set: model.pinned).fixedSize()
-                    Spacer(minLength: 0)
+                    HStack(spacing: ComposerMetrics.chipGap) {
+                        chip(.pin, systemName: "pin", label: model.pinned ? String(localized: "Pinned") : String(localized: "Pin"),
+                             set: model.pinned).fixedSize()
+                        Spacer(minLength: 0)
+                        tagsChip(values, showsLabel: true)
+                    }
+                    .transition(turns)
                 }
             }
+            // Task ↔ Note: one row at a time, never both rows' words.
+            .id(kind)
+            .transition(turns)
             .padding(.leading, ComposerMetrics.chipLeading)
             .frame(maxWidth: .infinity, alignment: .leading)
             createButton
         }
-        .animation(ComposerMotion.animation(), value: open == .priority)
+        // No I-beam over the row's buttons (#7): the text under the card
+        // does not lend them its cursor.
+        .pointerStyle(.default)
+        .background(ComposerArrowCursor())
     }
 
     private var priorityLevels: some View {
         HStack(spacing: 1) {
             ForEach([TaskPriority.none, .low, .medium, .high], id: \.self) { priority in
-                let selected = (model.values.priority ?? .none) == priority
+                let selected = (pickedPriority ?? model.values.priority ?? .none) == priority
                 Button {
+                    pickedPriority = priority
                     model.tasks.pickPriority(priority, editor: model.editor)
-                    open = nil
+                    // The pick lights up, then the row closes.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.pickedBeat) {
+                        if open == .priority { open = nil }
+                        pickedPriority = nil
+                    }
                 } label: {
                     Text(priority == .none ? String(localized: "None") : priority.composerTitle)
                         .font(AtticTextStyle.composerChip.font)
@@ -463,17 +512,21 @@ struct ComposerCard: View {
         .accessibilityAction(named: Text("Close Priority")) { open = nil }
     }
 
+    /// How long a picked priority stays lit before its row closes.
+    static let pickedBeat: TimeInterval = 0.15
+
     private func dateChip(_ values: ComposerModel.Values, flex: Bool) -> some View {
         chip(.date, systemName: "calendar", label: dateLabel(values), set: values.day != nil || model.kind == .event)
-            .layoutPriority(1)
+            .layoutPriority(-1)
     }
 
-    private func tagsChip(_ values: ComposerModel.Values) -> some View {
+    private func tagsChip(_ values: ComposerModel.Values, showsLabel: Bool) -> some View {
         let tags = values.tags
         let label = tags.first.map { "#" + $0 + (tags.count > 1 ? " +\(tags.count - 1)" : "") } ?? String(localized: "Tags")
         let hue = tags.first.map { model.tasks.library.tagColours.palette.hue(for: $0) }
-        return chip(.tags, systemName: "number", label: label, set: !tags.isEmpty,
+        return chip(.tags, systemName: "number", label: label, set: !tags.isEmpty, showsLabel: showsLabel,
                     colour: hue.map { TasksPanelDesign.tagInk($0, tokens: design.tokens) })
+            .fixedSize()
     }
 
     private var calendarChip: some View {
@@ -507,7 +560,7 @@ struct ComposerCard: View {
     }
 
     private func chip(_ id: Chip, systemName: String?, dot: Color? = nil, label: String, set: Bool,
-                      colour: AtticRGBA? = nil) -> some View {
+                      showsLabel: Bool = true, colour: AtticRGBA? = nil) -> some View {
         let muted = TasksPanelDesign.toneInk(.meta, tokens: design.tokens)
         let ink = set ? design.tokens.ink(.heading) : muted
         return Button {
@@ -520,10 +573,14 @@ struct ComposerCard: View {
                 } else if let dot {
                     Circle().fill(dot).frame(width: 6, height: 6).frame(width: ComposerMetrics.chipIcon)
                 }
-                AtticText(verbatim: label, style: .composerChip, ink: .body, truncates: true).colour(colour ?? ink)
+                if showsLabel {
+                    AtticText(verbatim: label, style: .composerChip, ink: .body, truncates: true).colour(colour ?? ink)
+                }
             }
             .padding(.horizontal, ComposerMetrics.chipPadding)
-            .frame(maxWidth: .infinity, minHeight: ComposerMetrics.chipHeight, alignment: .leading)
+            // Each chip hugs its icon and label: its hover is only as wide
+            // as it (Accepted 2026-11-04: Date's stretched across the row).
+            .frame(minHeight: ComposerMetrics.chipHeight, alignment: .leading)
             .background(
                 Squircle(cornerRadius: ComposerMetrics.chipHeight / 2, exponent: AtticShape.controlExponent)
                     .fill(Color.black.opacity(open == id ? 0.06 : 0))
@@ -533,11 +590,8 @@ struct ComposerCard: View {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .help(label)
+        .accessibilityLabel(label)
         .accessibilityIdentifier("composer-chip-\(id)")
-        .atticDropdown(isPresented: Binding(get: { open == id && id != .priority }, set: { if !$0, open == id { open = nil } }),
-                       prefer: .above, label: label) {
-            picker(id)
-        }
     }
 
     @ViewBuilder
@@ -602,6 +656,57 @@ struct ComposerCard: View {
         .disabled(!can)
         .fixedSize()
         .accessibilityIdentifier("composer-create")
+    }
+}
+
+/// The card's pickers (date, tags, an event's length and calendar): each
+/// opens from the whole card, above it, so it never covers the card it
+/// edits, and stays solid while it opens and goes (Accepted 2026-11-04,
+/// #4 and #5).
+private struct ComposerPickers<Picker: View>: ViewModifier {
+    @Binding var open: ComposerCard.Chip?
+    let label: String
+    @ViewBuilder let picker: (ComposerCard.Chip) -> Picker
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(One(open: $open, chip: .date, label: label, picker: picker))
+            .modifier(One(open: $open, chip: .tags, label: label, picker: picker))
+            .modifier(One(open: $open, chip: .length, label: label, picker: picker))
+            .modifier(One(open: $open, chip: .calendar, label: label, picker: picker))
+    }
+
+    private struct One: ViewModifier {
+        @Binding var open: ComposerCard.Chip?
+        let chip: ComposerCard.Chip
+        let label: String
+        let picker: (ComposerCard.Chip) -> Picker
+
+        func body(content: Content) -> some View {
+            content.atticDropdown(isPresented: Binding(get: { open == chip }, set: { if !$0, open == chip { open = nil } }),
+                                  prefer: .above, label: label, opaqueMotion: true) {
+                picker(chip)
+            }
+        }
+    }
+}
+
+/// An arrow over the card's bottom row: a text view under the card must
+/// not lend the row its I-beam (Accepted 2026-11-04, #7).
+private struct ComposerArrowCursor: NSViewRepresentable {
+    final class ArrowView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+    }
+
+    func makeNSView(context: Context) -> ArrowView {
+        let view = ArrowView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: ArrowView, context: Context) {
+        view.window?.invalidateCursorRects(for: view)
     }
 }
 

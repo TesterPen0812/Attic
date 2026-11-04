@@ -303,6 +303,11 @@ struct ComposerOverlay: View {
                 .background(AtticPressShieldView(isActive: { [model] in model.isOpen },
                                                  onOutsidePress: { [model] in model.close() })
                     .accessibilityHidden(true))
+                // A click anywhere outside the card closes it, keeping its
+                // draft as Escape does (Accepted 2026-11-04).
+                .background(ComposerOutsideClick(isOpen: { [model] in model.isOpen },
+                                                 close: { [model] in model.close() })
+                    .accessibilityHidden(true))
                 .onGeometryChange(for: CGSize.self, of: \.size) { size in
                     if size != card { card = size }
                 }
@@ -329,9 +334,15 @@ struct ComposerOverlay: View {
 
     private func transition(_ open: Bool) {
         if chrome?.plusHandedOver != open { chrome?.plusHandedOver = open }
-        guard let animation = ComposerMotion.animation(showing: open) else {
-            presented = open
-            expanded = open
+        guard let animation = ComposerMotion.animation(showing: open), open || !model.closedAtOnce else {
+            // At once, whatever transaction the change came in (a page
+            // switch's spring must not carry the card's parts apart).
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) {
+                presented = open
+                expanded = open
+            }
             room?.set(height: open ? card.height : 0, open: open)
             return
         }
@@ -350,4 +361,79 @@ struct ComposerOverlay: View {
             }
         }
     }
+}
+
+/// Closes the open card on a press anywhere outside it (Accepted
+/// 2026-11-04, "A click anywhere outside the card closes it"): elsewhere in
+/// the panel or in another of the app's windows (the island, a floating
+/// page). A press on the card, or on one of its own pickers or suggestions
+/// (the panel's overlay layer), keeps it. The press still does what it
+/// does; the draft is kept, as Escape keeps it.
+struct ComposerOutsideClick: NSViewRepresentable {
+    let isOpen: @MainActor () -> Bool
+    let close: @MainActor () -> Void
+
+    final class Watcher: NSView {
+        var isOpen: @MainActor () -> Bool = { false }
+        var close: @MainActor () -> Void = {}
+        nonisolated(unsafe) private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { stop() } else { start() }
+        }
+
+        private func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .otherMouseDown]) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, self.closes(on: event) else { return }
+                    self.close()
+                }
+                return event
+            }
+        }
+
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        /// Whether `event` is a press outside the open card.
+        func closes(on event: NSEvent) -> Bool {
+            guard isOpen(), let window else { return false }
+            guard event.window === window else { return event.window != nil }
+            if bounds.contains(convert(event.locationInWindow, from: nil)) { return false }
+            // The card's own pickers and suggestions live in the overlay layer.
+            if let content = window.contentView,
+               let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil)
+                                          ?? event.locationInWindow) {
+                var view: NSView? = hit
+                while let current = view {
+                    if current is AtticOverlayHostingView { return false }
+                    view = current.superview
+                }
+            }
+            return true
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+
+    func makeNSView(context: Context) -> Watcher {
+        let view = Watcher()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: Watcher, context: Context) {
+        view.isOpen = isOpen
+        view.close = close
+    }
+
+    static func dismantleNSView(_ view: Watcher, coordinator: ()) { view.stop() }
 }
