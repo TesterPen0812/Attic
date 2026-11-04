@@ -37,6 +37,7 @@ struct NotesEditorPage: View {
     /// In the panel the shell draws the library's switch, tag bar and "+"
     /// once for every page (owner, 2026-10-31); here they are a stand-in.
     @Environment(\.panelSharedChrome) private var sharedChrome
+    @Environment(\.panelComposer) private var panelComposer
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
@@ -522,7 +523,7 @@ struct NotesEditorPage: View {
                                                                shown: true),
                                                  plus: PanelBottomBarLook.notesPlus, shown: controller.isLibraryPresented),
                         actions: PanelBottomBarActions(selectTag: { [library] tag in library.tagFilter = tag },
-                                                       plus: { newNote() }))
+                                                       plus: { newNoteFromPlus() }))
     }
 
     /// In Dark the bottom row's glyphs take the strong ink (A39 F13): the
@@ -565,7 +566,7 @@ struct NotesEditorPage: View {
             AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: "New note", size: NotesBarMetrics.size,
                               help: String(localized: "New note (⌘N)"),
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
-                newNote()
+                newNoteFromPlus()
             }
             .accessibilityIdentifier("notes-new-note")
         }
@@ -623,7 +624,7 @@ struct NotesEditorPage: View {
         return AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: String.LocalizationValue(stringLiteral: plus.label),
                                  size: CGSize(width: side, height: side), help: plus.help, emphasisedGlyph: true,
                                  flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
-            newNote()
+            newNoteFromPlus()
         }
         .atticDesignCorners()
         .noteFormatRowLeaving(.newNote)
@@ -795,6 +796,14 @@ struct NotesEditorPage: View {
             guard controller.showLibrary() else { return }
         }
         if focusSearch { searchFocused = true }
+    }
+
+    private func newNoteFromPlus() {
+        if let panelComposer {
+            panelComposer.open(on: .notes)
+        } else {
+            newNote()
+        }
     }
 
     private func newNote() {
