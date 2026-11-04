@@ -190,8 +190,11 @@ final class CornerHoverMonitor {
         // A controller-owned hide can complete before the deferred Space
         // observer (notably with Reduced Motion). Native hide completion is
         // authoritative even when the request did not come from this monitor.
+        // A monitor-owned request must instead finish through its registered
+        // callback: replacing its pending state here would discard that
+        // callback's reset and swallow the next corner entry with an exit latch.
         hideObservation = uiState.$hideCount.dropFirst().sink { [weak self] _ in
-            guard let self, self.isRunning else { return }
+            guard let self, self.isRunning, !self.stateMachine.isHidePending else { return }
             self.stateMachine.forceHidden(untilHotspotExit: true)
             self.refreshSamplingCadence(at: NSEvent.mouseLocation)
         }
