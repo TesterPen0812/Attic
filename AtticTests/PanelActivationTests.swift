@@ -8,13 +8,15 @@ import ServiceManagement
 final class PanelActivationPreparationTests: XCTestCase {
     /// Reports OS state without ordering a window or acquiring native focus.
     private final class Window: NSWindow {
-        var visible = false
-        var main = false
-        var eligible = false
+        var reportsVisible = false
+        var reportsMain = false
+        var mainEligible = false
+        var reportsMiniaturized = false
         var requests: [String] = []
-        override var isVisible: Bool { visible }
-        override var isMainWindow: Bool { main }
-        override var canBecomeMain: Bool { eligible }
+        override var isVisible: Bool { reportsVisible }
+        override var isMainWindow: Bool { reportsMain }
+        override var isMiniaturized: Bool { reportsMiniaturized }
+        override var canBecomeMain: Bool { mainEligible }
         override func makeKey() { requests.append("key") }
         override func makeMain() { requests.append("main") }
     }
@@ -35,29 +37,46 @@ final class PanelActivationPreparationTests: XCTestCase {
 
     func testBugs4AuxiliaryIslandWindowsDoNotRequireMainPromotion() {
         let clicked = window(), island = window()
-        island.visible = true
+        island.reportsVisible = true
         PanelActivation.System.prepareForActivation(clicked, windows: [clicked, island])
         XCTAssertEqual(clicked.requests, ["key"])
     }
 
     func testBugs4VisibleSettingsStillRequiresTheClickedSurfaceToBeMain() {
         let clicked = window(), settings = window()
-        settings.visible = true
-        settings.eligible = true
+        settings.reportsVisible = true
+        settings.mainEligible = true
         PanelActivation.System.prepareForActivation(clicked, windows: [clicked, settings])
         XCTAssertEqual(clicked.requests, ["key", "main"], "activation must not raise another window or change Space")
     }
 
     func testBugs4AnExistingMainWindowIsProtectedEvenAfterItsEligibilityChanges() {
         let clicked = window(), floating = window()
-        floating.main = true
+        floating.reportsMain = true
         PanelActivation.System.prepareForActivation(clicked, windows: [clicked, floating])
         XCTAssertEqual(clicked.requests, ["key", "main"], "a floating panel's temporary main lease may have ended")
     }
 
+    func testBugs4MinimizedWindowsStillRequireTheClickedSurfaceToBeMain() {
+        let clicked = window(), minimized = window()
+        minimized.reportsMiniaturized = true
+        PanelActivation.System.prepareForActivation(clicked, windows: [clicked, minimized])
+        XCTAssertEqual(clicked.requests, ["key", "main"])
+    }
+
+    func testBugs4AnExistingFloatingPanelKeepsTheConservativeMainPreparation() {
+        let clicked = window()
+        let floating = AtticPanel(contentRect: CGRect(x: -4000, y: -4000, width: 100, height: 100),
+                                  styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        floating.isReleasedWhenClosed = false
+        defer { floating.close() }
+        PanelActivation.System.prepareForActivation(clicked, windows: [clicked, floating])
+        XCTAssertEqual(clicked.requests, ["key", "main"], "AppKit may remember a floating panel after its temporary main eligibility ends")
+    }
+
     func testBugs4AClosedNonMainWindowDoesNotRequireMainPromotion() {
         let clicked = window(), closed = window()
-        closed.eligible = true
+        closed.mainEligible = true
         PanelActivation.System.prepareForActivation(clicked, windows: [clicked, closed])
         XCTAssertEqual(clicked.requests, ["key"])
     }
