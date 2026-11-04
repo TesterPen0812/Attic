@@ -24,11 +24,18 @@ final class PanelActivation {
                 let app = NSWorkspace.shared.frontmostApplication
                 return app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
             }, windows: { NSApp.windows }, prepare: { window in
-                window.makeKey()
-                window.makeMain()
+                prepareForActivation(isAlreadyKey: window.isKeyWindow,
+                                     makeKey: { window.makeKey() }, makeMain: { window.makeMain() })
             }, activate: { NSRunningApplication.current.activate(options: []) }, yield: { NSApp.yieldActivation(to: $0) },
             restore: { $0.activate(from: .current, options: []) },
             terminated: { $0.isTerminated }, deactivate: { NSApp.deactivate() })
+        }
+
+        /// Replace the OS requests in policy tests, keeping the invisible
+        /// host's keyboard/presentation safeguards intact.
+        static func prepareForActivation(isAlreadyKey: Bool, makeKey: () -> Void, makeMain: () -> Void) {
+            makeKey()
+            makeMain()
         }
     }
 

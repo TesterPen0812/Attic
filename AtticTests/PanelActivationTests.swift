@@ -5,6 +5,34 @@ import ServiceManagement
 @testable import Attic
 
 @MainActor
+final class PanelActivationKeyPreparationTests: XCTestCase {
+    func testBugs4AnAlreadyKeySurfaceStillBecomesMainWithoutRepeatingKeyPreparation() {
+        var requests: [String] = []
+        PanelActivation.System.prepareForActivation(isAlreadyKey: true,
+            makeKey: { requests.append("key") }, makeMain: { requests.append("main") })
+        XCTAssertEqual(requests, ["main"], "main-window protection remains unconditional")
+    }
+
+    func testBugs4AReleasedSurfaceThatLostKeyGetsItBackBeforeMainPreparation() {
+        var requests: [String] = []
+        PanelActivation.System.prepareForActivation(isAlreadyKey: false,
+            makeKey: { requests.append("key") }, makeMain: { requests.append("main") })
+        XCTAssertEqual(requests, ["key", "main"])
+    }
+
+    func testBugs4RepeatedActivationKeepsMainProtectionAndOnlyAcquiresKeyOnce() {
+        var key = false
+        var requests: [String] = []
+        for _ in 0..<2 {
+            PanelActivation.System.prepareForActivation(isAlreadyKey: key,
+                makeKey: { key = true; requests.append("key") },
+                makeMain: { XCTAssertTrue(key); requests.append("main") })
+        }
+        XCTAssertEqual(requests, ["key", "main", "main"])
+    }
+}
+
+@MainActor
 final class PanelActivationTests: XCTestCase {
     private var previous: PanelActivation!
     private var fixture: Fixture!
