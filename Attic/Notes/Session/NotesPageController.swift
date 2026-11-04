@@ -1385,7 +1385,8 @@ final class NotesPageController: ObservableObject {
 
     // MARK: Opening
 
-    /// Recovery first, then the last note viewed, else a new draft.
+    /// Recovery first, then the last note viewed, else the library when
+    /// there is saved writing or a new draft when there is none.
     func start() {
         guard !didStart else { return }
         startRequested = true
@@ -1413,7 +1414,14 @@ final class NotesPageController: ObservableObject {
             if !recoveryWarnings.isEmpty { active?.showNotice(NoteNotice(kind: .damaged, detail: recoveryWarnings.joined(separator: " "))) }
             return
         }
-        _ = newNote()
+        // A first visit with existing writing belongs in the library. An
+        // empty draft is useful only when there are no notes to return to;
+        // recovered and explicitly requested drafts above still take priority.
+        if !store.notes.isEmpty && recoveryWarnings.isEmpty {
+            isLibraryPresented = true
+        } else {
+            _ = newNote()
+        }
         if !recoveryWarnings.isEmpty {
             active?.showNotice(NoteNotice(kind: .damaged, detail: recoveryWarnings.joined(separator: " ")))
         }
@@ -2007,6 +2015,11 @@ final class NotesPageController: ObservableObject {
             if session.isUntouchedDraft { cache[session.noteID] = nil }
             session.pauseTask?.cancel()
         }
+        // A task's composed editor stays mounted while the panel collapses.
+        // Once preservation accepts a hide, end its native writing focus so
+        // the blue insertion point cannot blink over the shrinking text.
+        // The caret/selection stay in the warm host for the next real click.
+        if reason == .hide { taskNotePresenter?.host.relinquishWritingFocus() }
         if reason == .pageSwitch || reason == .hide || reason == .quit {
             taskNotePresenter?.model.setFocusInside(false)
             taskNotePresenter?.model.setPointerInside(false)

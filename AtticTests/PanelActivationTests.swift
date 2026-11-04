@@ -1,6 +1,7 @@
 import AppKit
 import ObjectiveC
 import XCTest
+import ServiceManagement
 @testable import Attic
 
 @MainActor
@@ -37,13 +38,27 @@ final class PanelActivationTests: XCTestCase {
         PanelActivation.shared = PanelActivation(system: fixture.system)
     }
     override func tearDown() {
-        fixture.windows.forEach { $0.close() }
-        PanelActivation.shared = previous
+        fixture?.windows.forEach { $0.close() }
+        if let previous { PanelActivation.shared = previous }
         fixture = nil
         previous = nil
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
     }
+    func testTearDownAfterSkippedSetupDoesNotReplaceSharedActivation() {
+        let savedFixture = fixture, savedPrevious = previous
+        let installed = PanelActivation.shared
+        fixture = nil
+        previous = nil
+        defer {
+            fixture = savedFixture
+            previous = savedPrevious
+        }
+        // XCTest calls tearDown even when setUpWithError throws XCTSkip.
+        tearDown()
+        XCTAssertTrue(PanelActivation.shared === installed)
+    }
+
     private func panel() -> AtticPanel {
         let window = AtticPanel(contentRect: CGRect(x: -4000, y: -4000, width: 200, height: 200),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -197,5 +212,64 @@ final class PanelActivationTests: XCTestCase {
         let window = panel(); fixture.active = true
         try click(window); window.orderOut(nil)
         XCTAssertTrue(fixture.events.isEmpty)
+    }
+}
+
+/// Activation refreshes Login Items even while the retained Settings view is
+/// hidden. Its daemon may be slow; it must never hold the first panel click.
+@MainActor
+final class LoginItemRefreshTests: XCTestCase {
+    private final class Probe: @unchecked Sendable {
+        let mutex = NSLock()
+        var onMain: [Bool] = []
+        func read() -> SMAppService.Status {
+            mutex.lock(); onMain.append(Thread.isMainThread); mutex.unlock()
+            return .enabled
+        }
+        var reads: [Bool] { mutex.lock(); defer { mutex.unlock() }; return onMain }
+    }
+
+    func testBugs3LoginStatusRefreshDoesNotRunDaemonIPCOnTheInputThread() async {
+        let probe = Probe()
+        let service = LoginItemService(readStatus: { probe.read() })
+        for _ in 0..<200 where !service.isEnabled { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.isEnabled, "the asynchronously read status still reaches Settings")
+        XCTAssertFalse(probe.reads.isEmpty)
+        XCTAssertFalse(probe.reads.contains(true), "SMAppService.status is synchronous IPC; activation must not wait for it")
+        service.refresh()
+        for _ in 0..<200 where probe.reads.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(probe.reads.count, 2)
+        XCTAssertFalse(probe.reads.contains(true), "later activation refreshes must use the same input-safe path")
+    }
+
+    func testBugs3RepeatedActivationCoalescesSlowReadsAndDiscardsAnOutdatedStatus() async {
+        final class Gate: @unchecked Sendable {
+            let mutex = NSLock()
+            var reads = 0
+            let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
+            func read() -> SMAppService.Status {
+                mutex.lock(); reads += 1; let index = reads; mutex.unlock()
+                // The synchronous red implementation must fail, not hang
+                // the test host while waiting for its own input thread.
+                if !Thread.isMainThread {
+                    _ = (index == 1 ? first : second).wait(timeout: .now() + 3)
+                }
+                return index == 1 ? .enabled : .requiresApproval
+            }
+            var count: Int { mutex.lock(); defer { mutex.unlock() }; return reads }
+        }
+        let gate = Gate()
+        defer { gate.first.signal(); gate.second.signal() }
+        let service = LoginItemService(readStatus: { gate.read() })
+        for _ in 0..<200 where gate.count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<20 { service.refresh() }
+        XCTAssertEqual(gate.count, 1, "activation notifications share the in-flight daemon read")
+        gate.first.signal()
+        for _ in 0..<200 where gate.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertFalse(service.isEnabled, "a read invalidated by a newer refresh must never publish its old enabled state")
+        gate.second.signal()
+        for _ in 0..<200 where !service.requiresApproval { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.requiresApproval)
+        XCTAssertEqual(gate.count, 2, "one follow-up reads the latest state after the invalidated request")
     }
 }

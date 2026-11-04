@@ -73,7 +73,7 @@ final class TasksRound3Tests: XCTestCase {
         // Draft C (owner, 2026-10-23) supersedes the quiet month (2026-10-05):
         // two-letter weekdays and six whole weeks, the neighbouring months'
         // days shown lighter.
-        XCTAssertEqual(september.weekdays, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"])
+        XCTAssertEqual(september.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
         XCTAssertEqual(september.inMonth.first, false, "1 Sep is a Tuesday: Monday's cell is 31 August, outside the month")
         XCTAssertEqual(DueDay(date: september.cells[1], calendar: card), day("2026-09-01"))
         XCTAssertEqual(september.cells.count, 42)
@@ -84,7 +84,7 @@ final class TasksRound3Tests: XCTestCase {
         sunday.firstWeekday = 1
         let choices = TaskDateChoices(parser: TaskTextParser(calendar: sunday, locale: Locale(identifier: "en_US"), now: { [clock] in clock.value }))
         let us = AtticDateMonth(containing: try XCTUnwrap(day("2026-09-21").startDate(in: choices.cardCalendar)), calendar: choices.cardCalendar)
-        XCTAssertEqual(us.weekdays.first, "Su")
+        XCTAssertEqual(us.weekdays.first, "S")
         XCTAssertEqual(us.inMonth.prefix(3), [false, false, true], "Sunday and Monday lead from August")
     }
 
@@ -201,6 +201,18 @@ final class TasksRound3Tests: XCTestCase {
     }
 
     // MARK: - Edit Title understands the shorthand (owner fix 4, review 17)
+
+    func testBugs3GroupedDatesKeepTheRenamedRowsSpokenDueDay() throws {
+        let id = try add("Call the plumber")
+        model.beginEditingTitle(id)
+        model.titleEdit.text = "Call the plumber #launch tomorrow !!"
+        XCTAssertTrue(model.commitTitle())
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == id })
+        XCTAssertTrue(row.model.accessibilityDescription.contains("due Tomorrow"), row.model.accessibilityDescription)
+        XCTAssertTrue(row.model.accessibilityDescription.contains("tagged launch"))
+        XCTAssertTrue(row.model.accessibilityDescription.contains("high priority"))
+        XCTAssertNil(row.model.trailingDue, "the date heading still replaces the visible date")
+    }
 
     func testATitleEditIsAPatchThatKeepsWhatWasNotTyped() throws {
         let id = try add("Call mom #family tomorrow !")

@@ -329,6 +329,9 @@ jobs:
         id: strict_build
         continue-on-error: true
         run: |
+          # This input-thread boundary must not transfer a non-Sendable service.
+          xcrun swiftc -typecheck -swift-version 6 \
+            -target "$(uname -m)-apple-macos26.0" Attic/Services/LoginItemService.swift
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
@@ -655,8 +658,17 @@ jobs:
           fi
           # Hosted identifiers (AtticTests/...) run in the Attic scheme.
           ui_scheme=AtticUI
+          identity_flags=(ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ci.ui CODE_SIGNING_ALLOWED=NO)
           skip_flags=(-skip-testing:AtticUITests/PerformanceUITests)
-          case " $UI_TESTS" in *" AtticTests/"*) ui_scheme=Attic; skip_flags=() ;; esac
+          case " $UI_TESTS" in
+            *" AtticTests/"*) ui_scheme=Attic; skip_flags=() ;;
+            *" AtticUITests/PerformanceUITests"*)
+              skip_flags=()
+              identity_flags=(ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui
+                CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual
+                CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+              ;;
+          esac
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
@@ -665,8 +677,7 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
             -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
-            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ci.ui \
-            CODE_SIGNING_ALLOWED=NO \
+            "${identity_flags[@]}" \
             "${shard_flags[@]}" \
             "${skip_flags[@]}" \
             test

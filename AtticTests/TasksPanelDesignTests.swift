@@ -120,7 +120,7 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(headers(.now), ["Overdue", "Today", "Tomorrow", "No date"])
         XCTAssertEqual(titles(.now), ["Late", "Current", "Next", "Undated"], "the keyboard walks the groups' order")
         let tomorrow = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Next" })
-        XCTAssertNil(tomorrow.model.due, "under a day header a row shows no date (Attic's tasks have no time)")
+        XCTAssertNil(tomorrow.model.trailingDue, "under a day header a row shows no date (Attic's tasks have no time)")
         XCTAssertEqual(model.rows(for: .now).first?.model.due?.tone, .overdue)
         // Later is the backlog (Accepted 2026-10-29): one list, no date
         // groups; a dated task goes to Now under its day.
@@ -240,7 +240,7 @@ final class TasksPanelDesignTests: XCTestCase {
 
     func testEmptyStatesUseTheDesignsCopy() {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false).title, "Nothing to do right now")
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing scheduled")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing for later")
         XCTAssertEqual(TasksPanelDesign.empty(tab: .done, query: "", filtered: false),
                        .init(title: "Nothing completed yet", body: "", canClear: false))
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: " milk ", filtered: false),

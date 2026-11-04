@@ -157,6 +157,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         let failing = RefusingJournal(directory: directory)
         failing.failWrites = true
         let controller = makeController(journal: failing)
+        XCTAssertTrue(controller.requestNewNote()) // The refusal needs a competing unsaved draft.
         await controller.startAndWait()
         let draft = try XCTUnwrap(controller.active)
         type("Unsaved", into: draft)

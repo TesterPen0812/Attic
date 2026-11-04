@@ -44,6 +44,9 @@ final class NotesPageRenderTests: XCTestCase {
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         try seed(store)
         let noteDraft = NoteDraftController(noteStore: store)
+        // These writing/layout fixtures intentionally start on a draft;
+        // default saved-library startup has its own Bugs3 controller test.
+        XCTAssertTrue(noteDraft.pages.requestNewNote())
         let uiState = PanelUIState()
         let toasts = PanelToastCenter()
         let root = NotesRenderRoot(noteDraft: noteDraft, store: store, uiState: uiState, toasts: toasts, size: size)

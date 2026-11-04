@@ -156,20 +156,22 @@ final class PanelShellUITests: XCTestCase {
         XCTAssertEqual(["tasks", "notes", "calendar", "canvas"].filter { page($0).isSelected }, [name], file: file, line: line)
     }
 
-    /// The Tall island (Planning.md, Accepted 2026-10-31 "Tall island:
-    /// switching pages"; it replaces the bottom bar's hover-to-open switch):
-    /// always on screen beside the panel, a 27 pt capsule of four 21 pt
-    /// items. Pointing never switches; a click does; ⌘1–⌘4 still work.
+    /// The improved island (Accepted 3 Nov) lies flat by default and wakes
+    /// under the pointer. Pointing never switches; a click does; ⌘1–⌘4 work.
     /// VoiceOver reads one "Pages" group with a named button per page.
     func testThePageButtonOpensUnderThePointerAndSelectsPages() throws {
-        let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
         XCTAssertEqual(pageButton.label, "Pages")
-        pin.hover()
-        XCTAssertEqual(pageButton.frame.width, 27, accuracy: 1.5, "a 27 pt capsule (\(pageButton.frame.width))")
-        XCTAssertEqual(pageButton.frame.height, 99, accuracy: 1.5, "four 21 pt items (\(pageButton.frame.height))")
+        closeTheCardIfOpen()
+        // Accepted 3 Nov: the default island lies flat and wakes near the
+        // pointer. A semantic group's AX bounds include its contour.
+        pageButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        waitFor(page("tasks").isHittable && page("canvas").isHittable, "the island wakes")
+        XCTAssertGreaterThan(pageButton.frame.width, pageButton.frame.height, "the default is horizontal")
+        XCTAssertEqual(page("tasks").frame.midY, page("canvas").frame.midY, accuracy: 1.5)
+        XCTAssertLessThan(page("tasks").frame.midX, page("canvas").frame.midX)
         for name in ["tasks", "notes", "calendar", "canvas"] {
-            XCTAssertTrue(page(name).isHittable, "\(name) is always on the island")
+            XCTAssertTrue(page(name).isHittable, "\(name) takes clicks on the awake island")
         }
         XCTAssertEqual(page("notes").label, "Notes")
         assertOnlySelected("tasks")
@@ -186,13 +188,14 @@ final class PanelShellUITests: XCTestCase {
         assertOnlySelected("tasks")
     }
 
-    /// Focus rings are for keyboard navigation only: clicking pages leaves
-    /// the page button looking exactly as it did once the pointer leaves.
+    /// Clicking pages leaves no focus ring in the same awake scene. Keep
+    /// the pointer on Tasks at both captures to isolate the click's effect.
     func testClickingThePageButtonShowsNoFocusRing() throws {
-        let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
         closeTheCardIfOpen()
-        pin.hover()
+        pageButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        waitFor(page("tasks").isHittable, "the island wakes before the reference")
+        page("tasks").hover()
         Thread.sleep(forTimeInterval: 0.6)
         let before = pageButton.screenshot()
         page("notes").click()
@@ -204,8 +207,8 @@ final class PanelShellUITests: XCTestCase {
             app.typeKey("1", modifierFlags: .command)
         }
         XCTAssertTrue(app.buttons["tasks-new-task"].waitForExistence(timeout: 3), "back on Tasks")
-        pin.hover()
-        Thread.sleep(forTimeInterval: 0.8)
+        page("tasks").hover()
+        Thread.sleep(forTimeInterval: 0.6)
         let after = pageButton.screenshot()
         let attachment = XCTAttachment(image: after.image)
         attachment.name = "page-button-after-clicks"

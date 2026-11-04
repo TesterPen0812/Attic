@@ -147,11 +147,11 @@ final class TasksPanelUITests: XCTestCase {
     /// whole title is the row's accessibility label.
     func testALongTitleStaysOnOneRowAndIsReadInFull() throws {
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
-        // Return creates and closes the card (Accepted "The '+' card").
+        // Accepted 3 Nov, P4: Return creates and keeps the card open.
         openCard()
         app.typeText("Short\r")
         waitFor(row("Short").exists, "the short task is listed")
-        openCard()
+        XCTAssertTrue(cardTitle.exists, "P4 keeps the card ready for the next task")
         app.typeText(longTitle + "\r")
         waitFor(row(longTitle).exists, "the full title is the row's accessibility label")
         XCTAssertEqual(row(longTitle).frame.height, row("Short").frame.height, accuracy: 1,

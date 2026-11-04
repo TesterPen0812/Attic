@@ -246,7 +246,7 @@ enum TasksPanelDesign {
             return Empty(title: String(localized: "Nothing to do right now"),
                          body: "", canClear: false)
         case .backlog:
-            return Empty(title: String(localized: "Nothing scheduled"),
+            return Empty(title: String(localized: "Nothing for later"),
                          body: "", canClear: false)
         case .done:
             return Empty(title: String(localized: "Nothing completed yet"),

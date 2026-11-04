@@ -248,7 +248,7 @@ struct AtticDateMonth: Equatable {
     let cells: [Date]
     /// Which cells are this month's.
     let inMonth: [Bool]
-    /// Two-letter weekdays in column order ("Mo Tu We Th Fr Sa Su").
+    /// The Calendar page's short letters, in the locale's column order.
     let weekdays: [String]
 
     init(containing day: Date, calendar: Calendar) {
@@ -259,8 +259,8 @@ struct AtticDateMonth: Equatable {
         let cellCount = AtticDropdownMetrics.monthWeeks * 7
         cells = (0..<cellCount).map { calendar.date(byAdding: .day, value: $0 - lead, to: first) ?? first }
         inMonth = (0..<cellCount).map { $0 >= lead && $0 < lead + count }
-        let symbols = calendar.shortStandaloneWeekdaySymbols
-        weekdays = (0..<7).map { String(symbols[(calendar.firstWeekday - 1 + $0) % 7].prefix(2)) }
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        weekdays = (0..<7).map { symbols[(calendar.firstWeekday - 1 + $0) % 7] }
     }
 
     var weeks: Int { cells.count / 7 }

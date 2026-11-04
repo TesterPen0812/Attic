@@ -1172,6 +1172,9 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     var state: AtticTaskState = .todo
     var priority: AtticPriority = .none
     var due: Due?
+    /// A date-group heading replaces the visible date, while VoiceOver
+    /// still reads the task's own due day.
+    var hidesDue = false
     var tags: [String] = []
     var attachments = 0
     var links = 0
@@ -1190,7 +1193,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     /// (the subtask counts are a tuple, compared by hand).
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.title == rhs.title && lhs.state == rhs.state && lhs.priority == rhs.priority
-            && lhs.due == rhs.due && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
+            && lhs.due == rhs.due && lhs.hidesDue == rhs.hidesDue && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
             && lhs.subtasks?.done == rhs.subtasks?.done && lhs.subtasks?.total == rhs.subtasks?.total
             && lhs.inWindow == rhs.inWindow && lhs.hasPage == rhs.hasPage && lhs.titleMatch == rhs.titleMatch
             && lhs.tileFiles == rhs.tileFiles
@@ -1221,7 +1224,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
 
     /// The due date at the right end of the title line (none once done).
     var trailingDue: Due? {
-        state == .done ? nil : due
+        state == .done || hidesDue ? nil : due
     }
 
     var accessibilityDescription: String {

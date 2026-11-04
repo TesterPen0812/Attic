@@ -345,6 +345,17 @@ final class TaskNoteComposedHost: NSObject {
 
     // MARK: Focus
 
+    private(set) var writingFocusGeneration: UInt64 = 0
+
+    /// Hide retires automatic focus repairs queued by this presentation.
+    /// Keep editing and the selected range intact for the next real click.
+    func relinquishWritingFocus() {
+        writingFocusGeneration &+= 1
+        if let window = textView.window, window.firstResponder === textView {
+            window.makeFirstResponder(nil)
+        }
+    }
+
     /// The writing takes the keyboard: at the top of the writing (a caret,
     /// no ring), or where its caret was.
     func focusWriting(atTop: Bool) {
@@ -356,9 +367,10 @@ final class TaskNoteComposedHost: NSObject {
         textView.scrollRangeToVisible(textView.selectedRange())
         // SwiftUI drops the field's focus after this turn; if that hands the
         // keyboard to the hosting view, take it back (CU P1: Tab from Add).
-        let target = textView
-        DispatchQueue.main.async { [weak window, weak target] in
-            guard let window, let target, target.isEditable, window.firstResponder !== target else { return }
+        let target = textView, generation = writingFocusGeneration
+        DispatchQueue.main.async { [weak self, weak window, weak target] in
+            guard self?.writingFocusGeneration == generation,
+                  let window, let target, target.isEditable, window.firstResponder !== target else { return }
             window.makeFirstResponder(target)
         }
     }

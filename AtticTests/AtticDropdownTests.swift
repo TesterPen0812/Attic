@@ -2326,7 +2326,7 @@ final class AtticDateCardTests: XCTestCase {
     /// weekdays.
     func testTheMonthShowsSixWeeksWithTheNeighbouringDays() {
         let october = AtticDateMonth(containing: date(2026, 10, 9), calendar: calendar)
-        XCTAssertEqual(october.weekdays, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"])
+        XCTAssertEqual(october.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
         XCTAssertEqual(october.inMonth.prefix(4), [false, false, false, true], "1 Oct is a Thursday: three September days lead")
         XCTAssertEqual(october.cells[3], date(2026, 10, 1))
         XCTAssertEqual(october.inMonth.filter { $0 }.count, 31)
@@ -2338,7 +2338,7 @@ final class AtticDateCardTests: XCTestCase {
         var sunday = calendar
         sunday.firstWeekday = 1
         let us = AtticDateMonth(containing: date(2026, 10, 1), calendar: sunday)
-        XCTAssertEqual(us.weekdays.first, "Su")
+        XCTAssertEqual(us.weekdays.first, "S")
         XCTAssertEqual(us.inMonth.prefix(5).filter { !$0 }.count, 4)
     }
 

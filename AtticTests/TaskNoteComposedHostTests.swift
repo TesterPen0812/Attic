@@ -66,6 +66,35 @@ final class TaskNoteComposedHostTests: XCTestCase {
         return hosting
     }
 
+    func testBugs3AcceptedHideReleasesTheTaskWritingCaretWithoutChangingItsText() async throws {
+        let id = try seed(.boundary), hosting = sectionHosting()
+        let presenter = try await mountTaskPage(id, in: hosting)
+        let text = presenter.host.textView
+        let window = try XCTUnwrap(text.window)
+        XCTAssertTrue(window.makeFirstResponder(text))
+        XCTAssertTrue(window.firstResponder === text)
+        let before = NSAttributedString(attributedString: text.attributedString())
+        let selection = text.selectedRange()
+        XCTAssertTrue(notes.prepareToLeave(.hide))
+        XCTAssertFalse(window.firstResponder === text, "the blue caret must not blink back over the writing during hide")
+        XCTAssertEqual(text.attributedString(), before)
+        XCTAssertEqual(text.selectedRange(), selection)
+    }
+
+    func testBugs3QueuedWritingFocusCannotReclaimTheCaretAfterAnAcceptedHide() async throws {
+        let id = try seed(.boundary), hosting = sectionHosting()
+        let presenter = try await mountTaskPage(id, in: hosting)
+        let text = presenter.host.textView
+        let window = try XCTUnwrap(text.window)
+        presenter.host.focusWriting(atTop: false)
+        XCTAssertTrue(notes.prepareToLeave(.hide))
+        for _ in 0..<3 { await Task.yield() }
+        XCTAssertFalse(window.firstResponder === text, "a queued focus repair cannot undo accepted hide")
+        XCTAssertTrue(text.isEditable, "a later real click must still be able to edit")
+        XCTAssertTrue(window.makeFirstResponder(text))
+        XCTAssertTrue(window.firstResponder === text)
+    }
+
     func testTaskPageDraftCaretAndFoldSurviveTasksThenNotesWithANewContainer() async throws {
         let id = try seed(.boundary), hosting = sectionHosting()
         let uiState = PanelUIState()

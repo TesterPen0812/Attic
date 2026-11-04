@@ -485,9 +485,30 @@ final class UXAuditFixTests: XCTestCase {
 
     private final class KeyPanel: NSPanel {
         override var canBecomeKey: Bool { true }
+        var recordsFocus = false
+        var focusTrace: [String] = []
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            func name(_ value: NSResponder?) -> String {
+                value.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil"
+            }
+            let before = recordsFocus ? name(firstResponder) : ""
+            let accepted = super.makeFirstResponder(responder)
+            if recordsFocus {
+                focusTrace.append("\(focusTrace.count): request=\(name(responder)) before=\(before) accepted=\(accepted) after=\(name(firstResponder))")
+            }
+            return accepted
+        }
     }
 
-    func testAuditA5SearchAndTagsTakeTheKeyboardFromTheBoard() throws {
+    func testAuditA5SearchAndTagsTakeTheKeyboardFromTheBoard() async throws {
+        try await assertDrawFilterKeyboardHandoff(iteration: 0)
+    }
+
+    func testBugs3RepeatedDrawFilterHandoffsKeepTheBoardKeyboard() async throws {
+        for iteration in 1...24 { try await assertDrawFilterKeyboardHandoff(iteration: iteration) }
+    }
+
+    private func assertDrawFilterKeyboardHandoff(iteration: Int) async throws {
         try requireKeyWindowTests()
         AtticDraw.enabledOverride = true
         defer { AtticDraw.enabledOverride = nil }
@@ -499,29 +520,30 @@ final class UXAuditFixTests: XCTestCase {
         let window = KeyPanel(contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.recordsFocus = true
         defer { window.close() }
         window.contentView = NSHostingView(rootView: DrawPageHost(model: model, uiState: state, layout: layout)
             .atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
         window.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        try await Task.sleep(for: .milliseconds(600))
         model.openSearch()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        try await Task.sleep(for: .milliseconds(600))
         let searchEditor = window.firstResponder as? NSTextView
         XCTAssertNotNil(searchEditor, "opening Search gives its field the keyboard")
         if let searchEditor {
             searchEditor.insertText("plan", replacementRange: searchEditor.selectedRange())
-            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            try await Task.sleep(for: .milliseconds(100))
             XCTAssertEqual(model.search.query, "plan")
             let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                 characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
             window.sendEvent(escape)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            try await Task.sleep(for: .milliseconds(100))
             XCTAssertFalse(model.isSearching)
         }
         model.closeSearch()
         model.openFilter()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        try await Task.sleep(for: .milliseconds(400))
         let titleEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let titleField = try XCTUnwrap(titleEditor.delegate as? NSTextField)
         XCTAssertEqual(titleField.accessibilityIdentifier(), "draw-title-filter")
@@ -529,14 +551,34 @@ final class UXAuditFixTests: XCTestCase {
         XCTAssertEqual(model.library.filter, "plan")
         let filterEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
+        func focusState() -> String {
+            let responder = window.firstResponder
+            let editor = responder as? NSTextView
+            let delegate = editor?.delegate
+            let field = delegate as? NSTextField
+            let board = model.board as? DrawBoardView
+            return "responder=\(responder.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil")"
+                + " delegate=\(delegate.map { String(describing: type(of: $0)) + String(describing: ObjectIdentifier($0)) } ?? "nil")"
+                + " field=\(field?.accessibilityIdentifier() ?? "nil") enabled=\(titleField.isEnabled)"
+                + " shown=\(model.isShown) boardHidden=\(board?.isHiddenOrHasHiddenAncestor ?? true)"
+                + " sameWindow=\(board?.window === window) key=\(window.isKeyWindow)"
+                + " search=\(model.isSearching) filter=\(model.isFiltering) rename=\(model.library.isRenaming) edit=\(model.editing != nil)"
+        }
+        let beforeEscape = focusState()
+        DispatchQueue.main.async { window.focusTrace.append("queued-before: \(focusState())") }
         window.sendEvent(filterEscape)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let immediatelyAfterEscape = focusState()
+        DispatchQueue.main.async { window.focusTrace.append("queued-after: \(focusState())") }
+        try await Task.sleep(for: .milliseconds(200))
         XCTAssertFalse(model.isFiltering)
-        XCTAssertTrue(window.firstResponder is DrawBoardView)
+        XCTAssertTrue(window.focusTrace.contains { $0.hasPrefix("queued-before:") }, "the native callback queue received its turn")
+        XCTAssertTrue(window.focusTrace.contains { $0.hasPrefix("queued-after:") }, "the return callback received its turn before the responder assertion")
+        XCTAssertTrue(window.firstResponder is DrawBoardView,
+                      "Draw filter keyboard handoff iteration=\(iteration): before=[\(beforeEscape)] immediate=[\(immediatelyAfterEscape)] after=[\(focusState())] trace=\(window.focusTrace.suffix(30))")
         model.openFilter()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        try await Task.sleep(for: .milliseconds(400))
         model.library.perform(.tags)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        try await Task.sleep(for: .milliseconds(600))
         let tagEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let field = try XCTUnwrap(tagEditor.delegate as? NSTextField)
         XCTAssertNotEqual(field.accessibilityIdentifier(), "draw-title-filter", "Tags takes over from the canvas filter")

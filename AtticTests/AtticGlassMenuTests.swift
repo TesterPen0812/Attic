@@ -540,7 +540,7 @@ final class AtticGlassMenuTests: XCTestCase {
 
     func testTheMonthIsSixWeeksWithTheNeighbouringDaysAndTwoLetterWeekdays() {
         let october = AtticDateMonth(containing: date(2026, 10, 9), calendar: calendar)
-        XCTAssertEqual(october.weekdays, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"])
+        XCTAssertEqual(october.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
         XCTAssertEqual(october.cells.count, 42, "six weeks, so the card never changes height")
         XCTAssertEqual(october.cells.first, date(2026, 9, 28), "the grid starts with September's last days")
         XCTAssertEqual(october.inMonth.prefix(4), [false, false, false, true])

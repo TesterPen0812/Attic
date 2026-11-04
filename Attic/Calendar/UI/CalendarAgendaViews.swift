@@ -78,7 +78,9 @@ struct CalendarAgendaDay: View {
             CalendarDateTile(group: group) { onSelectDay(group.day) }
                 .frame(maxHeight: .infinity, alignment: .top)
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(group.items) { item in
+                // A day without events or tasks reads like the other empty
+                // days: its date tile alone, without a floating now line.
+                ForEach(group.hasRows ? group.items : []) { item in
                     switch item {
                     case let .task(task):
                         taskRow(task)
@@ -106,8 +108,8 @@ struct CalendarAgendaDay: View {
         .padding(.bottom, CalendarDesign.dayGap)
         .accessibilityElement(children: .contain)
     }
-    /// Only today's day is on a card.
-    static func hasCard(_ group: CalendarAgendaGroup) -> Bool { group.isToday }
+    /// Today's content gets a card; an empty day keeps only its date tile.
+    static func hasCard(_ group: CalendarAgendaGroup) -> Bool { group.isToday && group.hasRows }
 
     /// The Tasks rows' way in (Accepted 2026-10-30): a click selects (the
     /// selected look), Return renames, the ›, a double-click, ⇧⌘I and

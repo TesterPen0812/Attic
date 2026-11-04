@@ -110,10 +110,15 @@ final class RoundO3ControlsTests: XCTestCase {
             throw NSError(domain: "seed", code: 1)
         }
         let noteDraft = NoteDraftController(noteStore: store)
+        let note = try XCTUnwrap(store.notes.first)
+        // This fixture measures scrolling an editor, not navigation from
+        // the library. Establish its session before mounting so a late
+        // editor attachment cannot restore caret zero over our test scroll.
+        noteDraft.pages.start()
+        XCTAssertTrue(noteDraft.pages.open(noteID: note.id))
+        noteDraft.pages.dismissLibrary()
         let root = O3NotesRoot(noteDraft: noteDraft, store: store, uiState: PanelUIState(), toasts: PanelToastCenter(), size: Self.size)
         let view = host(root, design: design)
-        let note = try XCTUnwrap(store.notes.first)
-        XCTAssertTrue(noteDraft.pages.open(noteID: note.id))
         spin(0.3)
         view.layoutSubtreeIfNeeded()
         return (view, noteDraft.pages)
@@ -132,7 +137,9 @@ final class RoundO3ControlsTests: XCTestCase {
             scroll.contentView.scroll(to: CGPoint(x: 0, y: 160))
             scroll.reflectScrolledClipView(scroll.contentView)
             spin(0.2)
+            XCTAssertEqual(scroll.contentView.bounds.minY, 160, accuracy: 1, "\(name): the requested reading position is established before capture")
             let rep = try bitmap(view)
+            XCTAssertEqual(scroll.contentView.bounds.minY, 160, accuracy: 1, "\(name): capturing must not replay the initial caret/viewport restore")
             write(rep, "o17-01-notes-\(name)")
             let layout = PanelPageLayout(cornerSize: 52, panelSize: Self.size)
             let bottom = layout.chromeInsets.bottom + AtticControlSize.panelButton.height

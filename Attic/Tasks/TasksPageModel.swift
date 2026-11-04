@@ -741,7 +741,7 @@ final class TasksPageModel: ObservableObject {
                 // The header names the date. Time display stays deferred.
                 if !group.rowsShowDate, row.model.due != nil {
                     var model = row.model
-                    model.due = nil
+                    model.hidesDue = true
                     row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks, due: row.due)
                 }
                 sections.open.append(row)
