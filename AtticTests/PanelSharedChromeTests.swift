@@ -27,6 +27,7 @@ final class PanelSharedChromeTests: XCTestCase {
         .environment(\.panelSharedChrome, chrome)
         .environment(\.panelTopRowState, state)
         .atticDesign(.default)
+        AtticMaterialProbe.reset()
         let host = NSHostingView(rootView: root)
         let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -34,7 +35,6 @@ final class PanelSharedChromeTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
-        AtticMaterialProbe.reset()
         spin(0.3)
         XCTAssertEqual(AtticMaterialProbe.states["task-cover-top"], .init(away: false, gone: false))
         XCTAssertEqual(AtticMaterialProbe.states["task-cover-bottom"], .init(away: false, gone: false))
