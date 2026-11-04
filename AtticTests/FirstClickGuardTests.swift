@@ -388,7 +388,7 @@ final class FirstClickActivationTests: XCTestCase {
 /// The unfenced original scan remains in the same assertion above.
 @MainActor
 private enum FirstMousePublicationProbe: String, CaseIterable {
-    case none, transaction, displayTransaction, applicationUpdate, windowOrderRead
+    case none, transaction, displayTransaction, applicationUpdate, windowOrderRead, mousePolicyRewrite
 
     func apply(to window: NSWindow) {
         switch self {
@@ -399,6 +399,10 @@ private enum FirstMousePublicationProbe: String, CaseIterable {
             CATransaction.flush()
         case .applicationUpdate: NSApp.updateWindows()
         case .windowOrderRead: _ = NSWindow.windowNumbers(options: [.allApplications])
+        case .mousePolicyRewrite:
+            let ignores = window.ignoresMouseEvents
+            window.ignoresMouseEvents = !ignores
+            window.ignoresMouseEvents = ignores
         }
     }
 }
