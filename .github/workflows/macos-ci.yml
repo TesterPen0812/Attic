@@ -656,7 +656,10 @@ jobs:
           # Hosted identifiers (AtticTests/...) run in the Attic scheme.
           ui_scheme=AtticUI
           skip_flags=(-skip-testing:AtticUITests/PerformanceUITests)
-          case " $UI_TESTS" in *" AtticTests/"*) ui_scheme=Attic; skip_flags=() ;; esac
+          case " $UI_TESTS" in
+            *" AtticTests/"*) ui_scheme=Attic; skip_flags=() ;;
+            *" AtticUITests/PerformanceUITests"*) skip_flags=() ;;
+          esac
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
