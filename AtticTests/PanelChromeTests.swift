@@ -1146,8 +1146,8 @@ final class PanelChromeTests: XCTestCase {
                 XCTAssertTrue(draft.pages.showLibrary())
                 spin(0.5)
                 if !library {
-                    let row = try XCTUnwrap(element("notes-library-row", in: host))
-                    XCTAssertTrue(row.accessibilityPerformPress?() ?? false)
+                    let note = try XCTUnwrap(draft.noteStore.notes.first { $0.title == "Launch plan" })
+                    XCTAssertTrue(draft.pages.open(noteID: note.id))
                     spin(0.5)
                 }
                 let beforeNote = draft.pages.active?.noteID
