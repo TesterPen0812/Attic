@@ -96,7 +96,7 @@ final class PerformanceUITests: XCTestCase {
         XCTAssertTrue(tasks.waitForExistence(timeout: 5))
         // The page button opens under the pointer; the other pages take
         // clicks once it has.
-        tasks.hover()
+        picker.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
         let canvas = visible.buttons["panel-section-canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
         XCTAssertTrue(waitUntil { canvas.isHittable }, "the page button did not open under the pointer")
@@ -125,10 +125,13 @@ final class PerformanceUITests: XCTestCase {
         probe.launch()
         let picker = probe.descendants(matching: .any)["panel-section-picker"]
         let tasks = probe.buttons["panel-section-tasks"]
-        XCTAssertTrue(waitUntil(timeout: 90) { picker.isHittable }, "Tasks panel did not open")
+        // D4's resting island is dots, and the Pages group's centre can
+        // be empty. Read the actual Tasks page rather than that group.
+        let pin = probe.buttons["panel-pin-button"]
+        XCTAssertTrue(waitUntil(timeout: 90) { pin.isHittable }, "Tasks panel did not open")
         XCTAssertTrue(tasks.isSelected, "Tasks was not selected before the sample")
         measureState("Tasks open", application: probe)
-        XCTAssertTrue(picker.isHittable, "Tasks panel hid during the sample")
+        XCTAssertTrue(pin.isHittable, "Tasks panel hid during the sample")
         XCTAssertTrue(tasks.isSelected, "Tasks sample overlapped the Canvas switch")
     }
 
