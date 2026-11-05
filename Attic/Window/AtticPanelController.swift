@@ -277,6 +277,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isWindowDragging = false
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
+    private var localOutsidePressMonitor: Any?
+    private var globalOutsidePressMonitor: Any?
+    /// The corner controller owns the auto-hide decision and its existing locks.
+    var onOutsidePress: ((CGPoint) -> Void)?
     private var isDisplayingResizeCursor = false
     private var visibilityTransition = PanelVisibilityTransitionState()
     private(set) var currentScreen: NSScreen?
@@ -397,6 +401,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             DispatchQueue.main.async { self?.scheduleIdlePrepare() }
         }.store(in: &cancellables)
+        // @Published delivers its new value before updating the property.
+        // Passing the value here removes/install monitors on the same turn.
+        settings.$panelDismissMode.dropFirst().removeDuplicates()
+            .sink { [weak self] mode in self?.refreshOutsidePressMonitoring(modeOverride: mode) }
+            .store(in: &cancellables)
+        uiState.$isPanelPinned.dropFirst().removeDuplicates()
+            .sink { [weak self] pinned in self?.refreshOutsidePressMonitoring(pinOverride: pinned) }
+            .store(in: &cancellables)
     }
 
     private var dockingIndicator: NSPanel?
@@ -440,6 +452,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if let globalPointerMonitor {
             NSEvent.removeMonitor(globalPointerMonitor)
         }
+        if let localOutsidePressMonitor { NSEvent.removeMonitor(localOutsidePressMonitor) }
+        if let globalOutsidePressMonitor { NSEvent.removeMonitor(globalOutsidePressMonitor) }
     }
 
 
@@ -531,6 +545,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 IdleLatencyTrace.point("transaction_flushed")
                 IdleLatencyTrace.firstFrameOpportunity(in: hostingView)
             }
+            refreshOutsidePressMonitoring()
         }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
@@ -663,6 +678,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         #endif
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
+            stopOutsidePressMonitoring()
             completion(.hidden)
             return .accepted
         }
@@ -675,6 +691,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 return .rejected(.draftFlushFailed)
             }
         }
+        // The dismissal is committed; no second outside press should start
+        // another hide during the chosen animation.
+        stopOutsidePressMonitoring()
         // Menu cards are separate windows; they cannot ride the panel's
         // hide/Genie stand-in. Close synchronously after the save accepts.
         AtticGlassMenu.current?.close(animated: false)
@@ -2305,6 +2324,52 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         islandWindows.stopPassthrough()
         isDisplayingResizeCursor = false
     }
+
+    private static let outsidePressEvents: NSEvent.EventTypeMask = [
+        .leftMouseDown, .rightMouseDown, .otherMouseDown
+    ]
+
+    private func refreshOutsidePressMonitoring(modeOverride: PanelDismissMode? = nil, pinOverride: Bool? = nil) {
+        let enabled = MainPanelAutoHidePolicy.monitorsOutsidePress(
+            isVisible: panel.isVisible && !visibilityTransition.hasPendingHide,
+            isPinned: pinOverride ?? uiState.isPanelPinned,
+            mode: modeOverride ?? settings.panelDismissMode
+        )
+        guard enabled else { stopOutsidePressMonitoring(); return }
+        guard localOutsidePressMonitor == nil, globalOutsidePressMonitor == nil else { return }
+
+        // Local monitors see Attic's own windows; global ones see other apps
+        // and displays. Neither consumes the mouse press that was observed.
+        localOutsidePressMonitor = NSEvent.addLocalMonitorForEvents(matching: Self.outsidePressEvents) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.onOutsidePress?(self.pointerLocation())
+            }
+            return event
+        }
+        globalOutsidePressMonitor = NSEvent.addGlobalMonitorForEvents(matching: Self.outsidePressEvents) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.onOutsidePress?(self.pointerLocation())
+            }
+        }
+    }
+
+    private func stopOutsidePressMonitoring() {
+        if let localOutsidePressMonitor { NSEvent.removeMonitor(localOutsidePressMonitor) }
+        if let globalOutsidePressMonitor { NSEvent.removeMonitor(globalOutsidePressMonitor) }
+        localOutsidePressMonitor = nil
+        globalOutsidePressMonitor = nil
+    }
+
+    #if DEBUG
+    /// Hosted tests exercise the same press decision without posting real mouse events.
+    var isOutsidePressMonitoringForTesting: Bool {
+        localOutsidePressMonitor != nil && globalOutsidePressMonitor != nil
+    }
+
+    func handlePressForTesting(at point: CGPoint) { onOutsidePress?(point) }
+    #endif
 }
 
 #if DEBUG

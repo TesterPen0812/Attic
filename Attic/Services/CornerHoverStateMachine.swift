@@ -21,6 +21,18 @@ enum MainPanelAutoHidePolicy {
         return !effective.isEmpty
     }
 
+    static func monitorsOutsidePress(isVisible: Bool, isPinned: Bool, mode: PanelDismissMode) -> Bool {
+        isVisible && !isPinned && mode == .clickAway
+    }
+
+    static func shouldDismissPress(
+        isVisible: Bool, isPinned: Bool, mode: PanelDismissMode,
+        isWithinPanelFamily: Bool, isInteractionLocked: Bool, hasOpenMenu: Bool
+    ) -> Bool {
+        monitorsOutsidePress(isVisible: isVisible, isPinned: isPinned, mode: mode)
+            && !isWithinPanelFamily && !isInteractionLocked && !hasOpenMenu
+    }
+
     /// The one moment a temporary focus lock can expire without another UI
     /// event. Persistent locks need no timer because elapsed time cannot make
     /// them eligible for auto-hide.
@@ -178,8 +190,14 @@ struct CornerHoverStateMachine {
     private var revealedAt: TimeInterval?
     private var revealGrace: TimeInterval = 0.8
     private var panelHasBeenEntered = false
+    private var wasRevealedByCorner = false
     private var leaveBeganAt: TimeInterval?
     private var requiresHotspotExitBeforeReveal = false
+    /// An accidental corner skim can still close itself in Click away mode.
+    /// This is fixed, independent of the user-adjustable cursor hide delay.
+    private static let abandonedCornerHideDelay: TimeInterval = 0.3
+
+    var canHideOnCursorExitInClickAwayMode: Bool { wasRevealedByCorner && !panelHasBeenEntered }
 
     /// While visible without a timer, the next moment a sample could change
     /// the outcome: when the hide delay (or the reveal grace) elapses for a
@@ -195,16 +213,18 @@ struct CornerHoverStateMachine {
         isInPanel: Bool,
         isInteractionLocked: Bool,
         isPinned: Bool,
-        hideDelay: TimeInterval
+        hideDelay: TimeInterval,
+        dismissMode: PanelDismissMode = .moveCursorAway
     ) -> TimeInterval? {
-        guard isVisible, !isHidePending, !isPinned, !isInteractionLocked, !isInPanel, !isInHotspot else { return nil }
+        guard isVisible, !isHidePending, !isPinned, !isInteractionLocked, !isInPanel, !isInHotspot,
+              dismissMode == .moveCursorAway || canHideOnCursorExitInClickAwayMode else { return nil }
         if !panelHasBeenEntered, let revealedAt, timestamp - revealedAt < revealGrace {
             return revealedAt + revealGrace
         }
         // Away from the panel the sample that ran just before this call has
         // started the leave; without one, the next pointer event starts it.
         guard let leaveBeganAt else { return nil }
-        return leaveBeganAt + max(0, hideDelay)
+        return leaveBeganAt + (dismissMode == .clickAway ? Self.abandonedCornerHideDelay : max(0, hideDelay))
     }
 
     /// While hidden, the moment the pointer resting in the hotspot will have
@@ -224,7 +244,8 @@ struct CornerHoverStateMachine {
         isInteractionLocked: Bool,
         isPinned: Bool = false,
         revealDelay: TimeInterval,
-        hideDelay: TimeInterval = 0.3
+        hideDelay: TimeInterval = 0.3,
+        dismissMode: PanelDismissMode = .moveCursorAway
     ) -> Transition {
         if !isVisible {
             if requiresHotspotExitBeforeReveal {
@@ -246,6 +267,7 @@ struct CornerHoverStateMachine {
             revealedAt = timestamp
             revealGrace = 0.8
             panelHasBeenEntered = false
+            wasRevealedByCorner = true
             leaveBeganAt = nil
             hotspotEnteredAt = nil
             return .reveal
@@ -253,6 +275,16 @@ struct CornerHoverStateMachine {
 
         if isHidePending {
             return .none
+        }
+
+        if dismissMode == .clickAway {
+            // Track entry even while the corner hotspot overlaps the panel.
+            // The default cursor-away path retains its original state order.
+            if isInPanel { panelHasBeenEntered = true }
+            if !canHideOnCursorExitInClickAwayMode {
+                leaveBeganAt = nil
+                return .none
+            }
         }
 
         if isPinned || isInteractionLocked || isInHotspot {
@@ -277,7 +309,8 @@ struct CornerHoverStateMachine {
             return .none
         }
 
-        guard timestamp - (leaveBeganAt ?? timestamp) >= max(0, hideDelay) else { return .none }
+        let effectiveHideDelay = dismissMode == .clickAway ? Self.abandonedCornerHideDelay : max(0, hideDelay)
+        guard timestamp - (leaveBeganAt ?? timestamp) >= effectiveHideDelay else { return .none }
         isHidePending = true
         return .requestHide
     }
@@ -295,11 +328,16 @@ struct CornerHoverStateMachine {
         }
     }
 
+    /// A press outside starts the same native hide transaction as a timed
+    /// cursor exit; neither may race another hide while the animation runs.
+    mutating func beginOutsidePressHide() { if isVisible { isHidePending = true } }
+
     mutating func forceVisible(at timestamp: TimeInterval, grace: TimeInterval = 3) {
         isVisible = true
         revealedAt = timestamp
         revealGrace = grace
         panelHasBeenEntered = false
+        wasRevealedByCorner = false
         leaveBeganAt = nil
         hotspotEnteredAt = nil
         requiresHotspotExitBeforeReveal = false
@@ -316,6 +354,7 @@ struct CornerHoverStateMachine {
         hotspotEnteredAt = nil
         revealedAt = nil
         panelHasBeenEntered = false
+        wasRevealedByCorner = false
         leaveBeganAt = nil
         requiresHotspotExitBeforeReveal = false
         isHidePending = false

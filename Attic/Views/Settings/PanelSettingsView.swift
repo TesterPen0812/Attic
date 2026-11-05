@@ -75,15 +75,24 @@ struct PanelSettingsView: View {
                 )
                 .disabled(!settings.revealOnHover)
                 AtticGroupDivider()
-                AtticSliderRow(
-                    label: String(localized: "Hide delay"),
-                    valueText: SettingsPointFormat.seconds(settings.hideDelay),
-                    value: $settings.hideDelay,
-                    range: PanelSettingsRanges.hideDelay,
-                    step: 0.1,
-                    accessibilityValue: SettingsPointFormat.spokenSeconds(settings.hideDelay),
-                    identifier: "setting-hide-delay"
+                AtticPopUpRow(
+                    label: String(localized: "Dismiss panel"),
+                    choices: PanelDismissMode.allCases.map { ($0, $0.title) },
+                    selection: $settings.panelDismissMode,
+                    identifier: "setting-panel-dismiss"
                 )
+                if settings.panelDismissMode == .moveCursorAway {
+                    AtticGroupDivider()
+                    AtticSliderRow(
+                        label: String(localized: "Hide delay"),
+                        valueText: SettingsPointFormat.seconds(settings.hideDelay),
+                        value: $settings.hideDelay,
+                        range: PanelSettingsRanges.hideDelay,
+                        step: 0.1,
+                        accessibilityValue: SettingsPointFormat.spokenSeconds(settings.hideDelay),
+                        identifier: "setting-hide-delay"
+                    )
+                }
             }
 
             SettingsGroup(

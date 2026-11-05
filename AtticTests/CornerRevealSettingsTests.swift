@@ -90,6 +90,17 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(corrupt.revealDisplays, .all)
     }
 
+    func testPanelDismissModeDefaultsPersistsAndRejectsUnknownStoredValues() throws {
+        let defaults = try makeDefaults()
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings.panelDismissMode, .moveCursorAway)
+        XCTAssertEqual(PanelDismissMode.allCases.map(\.title), ["Move cursor away", "Click away"])
+        settings.panelDismissMode = .clickAway
+        XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .clickAway)
+        defaults.set("unknown", forKey: "panelDismissMode")
+        XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .moveCursorAway)
+    }
+
     // MARK: - The page's words
 
     func testTheCornerFootnoteSaysWhatHoverDoes() {
@@ -159,6 +170,79 @@ final class CornerRevealSettingsTests: XCTestCase {
         let monitor = CornerHoverMonitor(settings: settings, panelController: controller, uiState: uiState,
                                          store: store, noteStore: notes, canvasStore: canvasStore, noteDraft: noteDraft)
         return Panel(settings: settings, uiState: uiState, controller: controller, monitor: monitor)
+    }
+
+    func testClickAwayPressMonitorOnlyLivesWhileVisibleUnpinnedAndSelected() throws {
+        let rig = try makePanel()
+        rig.settings.revealOnHover = false
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting)
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting)
+
+        rig.settings.panelDismissMode = .clickAway
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting)
+
+        // The island's live windows hand their drawing to the panel during
+        // reveal. Its space must still count as an inside press right now.
+        let revealIsland = rig.controller.islandWindowsForTesting.islandFrame
+        rig.controller.handlePressForTesting(at: CGPoint(x: revealIsland.midX, y: revealIsland.midY))
+        XCTAssertTrue(rig.controller.isPanelVisible)
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting, "an island press must not begin hiding during reveal")
+        rig.uiState.isPanelPinned = true
+        XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting)
+        rig.uiState.isPanelPinned = false
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting)
+        rig.settings.panelDismissMode = .moveCursorAway
+        XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting)
+        rig.settings.panelDismissMode = .clickAway
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting)
+
+        let frame = rig.controller.visibleContentFrameForTesting
+        rig.controller.handlePressForTesting(at: CGPoint(x: frame.midX, y: frame.midY))
+        XCTAssertTrue(rig.controller.isPanelVisible, "a press in the panel keeps it open")
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting)
+        spin(0.5) // the animated island hands its real windows back
+        let island = rig.controller.islandWindowsForTesting.islandFrame
+        rig.controller.handlePressForTesting(at: CGPoint(x: island.midX, y: island.midY))
+        XCTAssertTrue(rig.controller.isPanelVisible, "the island belongs to the panel")
+        XCTAssertTrue(rig.controller.isOutsidePressMonitoringForTesting, "an island press must not begin hiding at rest")
+
+        let outside = CGPoint(x: frame.midX - 700, y: frame.midY - 700)
+        rig.controller.handlePressForTesting(at: outside)
+        let deadline = Date().addingTimeInterval(3)
+        while rig.controller.isPanelVisible, Date() < deadline { spin(0.03) }
+        XCTAssertFalse(rig.controller.isPanelVisible, "an outside press hides the panel")
+        XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting, "hide removes both press monitors")
+    }
+
+    func testPinnedAndInteractionHoldsPreventClickAwayDismissal() throws {
+        let rig = try makePanel()
+        rig.settings.revealOnHover = false
+        rig.settings.panelDismissMode = .clickAway
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        let frame = rig.controller.visibleContentFrameForTesting
+        let outside = CGPoint(x: frame.midX - 700, y: frame.midY - 700)
+
+        rig.uiState.isPanelPinned = true
+        rig.controller.handlePressForTesting(at: outside)
+        XCTAssertTrue(rig.controller.isPanelVisible)
+        rig.uiState.isPanelPinned = false
+
+        for reason in [PanelInteractionLockReason.menuTracking, .taskComposer, .notesDirty,
+                       .notesFilePicker, .windowMove, .blockingSave] {
+            rig.uiState.setInteractionLock(reason, isActive: true)
+            rig.controller.handlePressForTesting(at: outside)
+            XCTAssertTrue(rig.controller.isPanelVisible, "\(reason) must hold the panel")
+            rig.uiState.setInteractionLock(reason, isActive: false)
+        }
+        rig.controller.handlePressForTesting(at: outside)
+        let deadline = Date().addingTimeInterval(3)
+        while rig.controller.isPanelVisible, Date() < deadline { spin(0.03) }
+        XCTAssertFalse(rig.controller.isPanelVisible)
     }
 
     func testPointerLeavingCornerCancelsHiddenWarmerRetries() throws {
