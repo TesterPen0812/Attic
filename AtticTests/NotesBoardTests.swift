@@ -420,12 +420,12 @@ final class NotesBoardTests: XCTestCase {
     /// Board | list gets motion (owner, 2026-10-31: "both"): the switch's
     /// chip slides from one choice to the next on the 260 ms fold (at once
     /// under Reduce Motion): frames of the change draw it over the 1 pt gap
-    /// between the two cells. Now · Later · Done keep their crossfade.
+    /// between the two cells. The other switches travel on the pop spring.
     func testTheSwitchChipSlidesBetweenTheCells() throws {
         XCTAssertEqual(NotesLayoutSwitch.selectionAnimation(reduceMotion: false),
                        TasksDesignMetrics.fold(reduceMotion: false))
         XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16),
-                       "the other switches keep the crossfade")
+                       "the crossfade in place keeps its token")
         XCTAssertNil(NotesLayoutSwitch.selectionAnimation(reduceMotion: true), "Reduce Motion: at once")
 
         let holder = LayoutHolder()

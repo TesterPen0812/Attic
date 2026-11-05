@@ -259,15 +259,25 @@ struct AtticSelectedChip: View {
 /// tag bar's (the design's rgba(0, 0, 0, 0.06) in the primary ink), in the
 /// control's own corner. Hover is a step lighter (0.045).
 ///
-/// One selection motion: the marker lives in the current cell, and a change
-/// of choice crossfades it between the cells (`transition`) in 160 ms
-/// ease-out, at once under Reduce Motion (`animation`), as the Tasks tabs'
-/// thumb did in the owner's app (pd-combined). A switch applies it to the
-/// marker alone, so whatever else the change moves keeps its own motion.
+/// The motion (Accepted 2026-11-05, "Animated selection"): on the pages,
+/// the tabs and the tag filters one marker travels from the old choice to
+/// the new on the island's pop spring (`travel`), under the cells, with the
+/// hover's own chip (`AtticHoverChip`) a step lighter. Smaller controls
+/// (Draw's tools, the page button) keep the crossfade in the current cell
+/// (`transition`, `animation`). A switch applies either to the marker
+/// alone, so whatever else the change moves keeps its own motion.
 struct AtticSelectionMarker: View {
     var cornerRadius: CGFloat
 
-    /// A change of choice: 160 ms ease-out; Reduce Motion, at once.
+    /// The pop spring (200 ms, bounce 0.12), the island's since L5.
+    static let pop = AtticMotionSpring(response: 0.2, bounce: 0.12)
+
+    /// A marker travelling to a new choice; Reduce Motion, at once.
+    static func travel(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(duration: pop.response, bounce: pop.bounce)
+    }
+
+    /// A change of choice in place: 160 ms ease-out; Reduce Motion, at once.
     static func animation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeOut(duration: 0.16)
     }
@@ -289,6 +299,62 @@ struct AtticSelectionMarker: View {
             .fill(Self.fill(design.tokens).color)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The hover's chip: one per switch, under its cells, a step lighter than
+/// the marker, so the two never read as the same thing. Moving along the
+/// switch it travels with the marker's spring; coming onto the switch it
+/// fades in where the pointer is, and leaving it fades out where it was. On
+/// the current choice it goes (the marker already says so) but keeps
+/// following, so it leaves that cell for the next one by travelling too.
+/// Reduce Motion: at once. It only draws: it takes no pointer and no space.
+struct AtticHoverChip: View {
+    /// The cell under the pointer, in the switch's own space; nil off it.
+    let frame: CGRect?
+    /// Whether the chip shows on that cell.
+    var shown = true
+    var cornerRadius: CGFloat
+
+    /// What the chip does next, from where the pointer was and is.
+    struct Step: Equatable {
+        var place: CGRect?
+        var travels: Bool
+        var visible: Bool
+
+        static func next(from old: CGRect?, to new: CGRect?, shown: Bool) -> Step {
+            Step(place: new, travels: old != nil && new != nil, visible: new != nil && shown)
+        }
+    }
+
+    private struct Target: Equatable {
+        var frame: CGRect?
+        var shown: Bool
+    }
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
+    @State private var place = CGRect.zero
+    @State private var travels = false
+    @State private var visible = false
+
+    var body: some View {
+        let reduceMotion = design.reduceMotion
+        AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent ?? AtticShape.controlExponent)
+            .fill(AtticSelectionMarker.hoverFill(design.tokens).color)
+            .frame(width: place.width, height: place.height)
+            .offset(x: place.minX, y: place.minY)
+            .animation(travels ? AtticSelectionMarker.travel(reduceMotion: reduceMotion) : nil, value: place)
+            .opacity(visible ? 1 : 0)
+            .animation(reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: visible)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: Target(frame: frame, shown: shown), initial: true) { old, new in
+                let step = Step.next(from: old.frame, to: new.frame, shown: new.shown)
+                travels = step.travels
+                if let next = step.place { place = next }
+                visible = step.visible
+            }
     }
 }
 

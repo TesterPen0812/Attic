@@ -137,7 +137,7 @@ enum PanelIslandLayout {
     static let labelFollow: TimeInterval = 0.5
     /// The pop spring (200 ms, bounce 0.12): the chip's travel (L5) and the
     /// dots growing into their icons (D4).
-    static let pop = AtticMotionSpring(response: 0.2, bounce: 0.12)
+    static let pop = AtticSelectionMarker.pop
 
     @MainActor
     static func popAnimation(reduceMotion: Bool) -> Animation {
@@ -689,6 +689,10 @@ struct PanelIslandView: View {
                     .opacity(awake ? 1 : 0)
                     .animation(L.chipAnimation(reduceMotion: false), value: model.page)
                     .allowsHitTesting(false)
+                // The hover's own chip, travelling as the marker does
+                // (Accepted 2026-11-05, "Animated selection").
+                AtticHoverChip(frame: awake ? model.pointed.flatMap(L.pages.firstIndex(of:)).map(itemRect) : nil,
+                               shown: model.pointed != model.page, cornerRadius: chipRadius)
             }
             ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
                 let rect = itemRect(index)
@@ -725,7 +729,7 @@ struct PanelIslandView: View {
             if awake, chips, isSelected {
                 AtticSelectionMarker(cornerRadius: chipRadius)
                     .transition(AtticSelectionMarker.transition)
-            } else if awake, model.pointed == page, !isSelected {
+            } else if awake, chips, model.pointed == page, !isSelected {
                 shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
             }
             ZStack {

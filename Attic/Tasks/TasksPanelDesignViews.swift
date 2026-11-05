@@ -238,11 +238,6 @@ struct TasksTopTabs: View {
                         .foregroundStyle(on || hovered == tab ? tokens.ink(.heading).color
                                          : TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
                         .frame(width: M.cell.width, height: M.cell.height)
-                        // In the current cell, as the old thumb was: a
-                        // change of tab crossfades it between the cells.
-                        .background {
-                            if on { AtticSelectionMarker(cornerRadius: chipRadius).transition(AtticSelectionMarker.transition) }
-                        }
                         .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
@@ -253,6 +248,19 @@ struct TasksTopTabs: View {
                 .accessibilityLabel(tab.title)
                 .accessibilityIdentifier("tasks-page-\(tab.identifier)")
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        // One marker and one hover chip under the cells, travelling
+        // between them (Accepted 2026-11-05, "Animated selection").
+        .background(alignment: .topLeading) {
+            let current = M.cellFrame(selected)
+            ZStack(alignment: .topLeading) {
+                AtticSelectionMarker(cornerRadius: chipRadius)
+                    .frame(width: current.width, height: current.height)
+                    .offset(x: current.minX, y: current.minY)
+                    .animation(AtticSelectionMarker.travel(reduceMotion: design.reduceMotion), value: selection)
+                AtticHoverChip(frame: hovered.flatMap(tabs.firstIndex(of:)).map { M.cellFrame($0) },
+                               shown: hovered != selection, cornerRadius: chipRadius)
             }
         }
         .padding(M.inset)
@@ -284,6 +292,11 @@ enum TasksTopTabsMetrics {
     /// 21 px, weight 500, −0.1 px.
     static let fontSize: CGFloat = 10.5
     static let tracking: CGFloat = -0.05
+
+    /// A cell in the row of cells (the capsule's inset not counted).
+    static func cellFrame(_ index: Int) -> CGRect {
+        CGRect(x: CGFloat(index) * (cell.width + gap), y: 0, width: cell.width, height: cell.height)
+    }
 
     /// The whole switch's width.
     static var width: CGFloat {

@@ -58,6 +58,8 @@ struct NotesTagBar: View {
     @Environment(\.atticDesign) private var design
     /// Which edges have tags cut off (owner, 2026-10-31): each fades only then.
     @State private var cutOff = NotesTagBarCutOff()
+    /// The pill under the pointer.
+    @State private var pointed: NotesTagBarPillID?
 
     private var allID: String { "\(idPrefix)-all" }
 
@@ -89,22 +91,53 @@ struct NotesTagBar: View {
         AtticMotionPreset.expand.animation(reduceMotion: reduceMotion)
     }
 
+    private func point(at tag: String?, inside: Bool) {
+        let pill = NotesTagBarPillID(tag: tag)
+        if inside { pointed = pill } else if pointed == pill { pointed = nil }
+    }
+
+    private func chips(chosen: CGRect?, pointed frame: CGRect?) -> some View {
+        let radius = NotesBarMetrics.pillRadius
+        return ZStack(alignment: .topLeading) {
+            if let chosen {
+                AtticSelectionMarker(cornerRadius: radius)
+                    .frame(width: chosen.width, height: chosen.height)
+                    .offset(x: chosen.minX, y: chosen.minY)
+                    .animation(AtticSelectionMarker.travel(reduceMotion: design.reduceMotion), value: chosen)
+            }
+            AtticHoverChip(frame: frame, shown: pointed != NotesTagBarPillID(tag: selection), cornerRadius: radius)
+        }
+    }
+
     private func scroller(motion: Animation?) -> some View {
         let m = NotesBarMetrics.self
         let shape = Squircle(cornerRadius: m.radius, exponent: TasksDesignMetrics.cornerExponent)
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: m.pillGap) {
-                    NotesTagBarPill(title: String(localized: "All"), tag: nil, selected: selection == nil) { onSelect(nil) }
+                    NotesTagBarPill(title: String(localized: "All"), tag: nil, selected: selection == nil,
+                                    onHover: { point(at: nil, inside: $0) }) { onSelect(nil) }
+                        .anchorPreference(key: NotesTagBarPillBounds.self, value: .bounds) { [NotesTagBarPillID(tag: nil): $0] }
                         .id(allID)
                         .accessibilityIdentifier(allID)
                     ForEach(tags, id: \.self) { tag in
-                        NotesTagBarPill(title: TasksPanelDesign.tagChipTitle(tag), tag: tag, selected: selection == tag) {
+                        NotesTagBarPill(title: TasksPanelDesign.tagChipTitle(tag), tag: tag, selected: selection == tag,
+                                        onHover: { point(at: tag, inside: $0) }) {
                             onSelect(tag)
                         }
+                        .anchorPreference(key: NotesTagBarPillBounds.self, value: .bounds) { [NotesTagBarPillID(tag: tag): $0] }
                         .id(tag)
                         .accessibilityLabel(tag)
                         .accessibilityIdentifier("\(idPrefix)-\(tag)")
+                    }
+                }
+                // One marker and one hover chip under the pills, travelling
+                // between them, in the scrolled content so they scroll with
+                // the pills (Accepted 2026-11-05, "Animated selection").
+                .backgroundPreferenceValue(NotesTagBarPillBounds.self) { pills in
+                    GeometryReader { proxy in
+                        chips(chosen: pills[NotesTagBarPillID(tag: selection)].map { proxy[$0] },
+                              pointed: pointed.flatMap { pills[$0] }.map { proxy[$0] })
                     }
                 }
                 .padding(.horizontal, m.tagBarPadding)
@@ -227,11 +260,12 @@ struct NotesTagBarPill: View {
     let title: String
     let tag: String?
     let selected: Bool
+    /// The bar draws the marker and the hover chip under its pills.
+    var onHover: (Bool) -> Void = { _ in }
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var colouring
-    @State private var hovered = false
 
     var body: some View {
         let m = NotesBarMetrics.self
@@ -241,7 +275,6 @@ struct NotesTagBarPill: View {
             TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)),
                                                                dark: design.mode == .dark).text, tokens: tokens).color
         } ?? tokens.color(.heading)
-        let fill = selected ? m.selectedFill : (hovered ? m.hoverFill : 0)
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: m.pillFontSize, weight: selected ? .semibold : .medium))
@@ -250,12 +283,25 @@ struct NotesTagBarPill: View {
                 .fixedSize()
                 .padding(.horizontal, m.pillPaddingX)
                 .frame(height: m.pillHeight)
-                .background(shape.fill(tokens.ink(.heading).withAlpha(fill).color))
                 .contentShape(shape)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .onHover(perform: onHover)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// A pill in the tag bar: All (no tag) or a tag.
+struct NotesTagBarPillID: Hashable {
+    let tag: String?
+}
+
+/// Where the tag bar's pills are, for the chips under them.
+private struct NotesTagBarPillBounds: PreferenceKey {
+    static let defaultValue: [NotesTagBarPillID: Anchor<CGRect>] = [:]
+
+    static func reduce(value: inout [NotesTagBarPillID: Anchor<CGRect>], nextValue: () -> [NotesTagBarPillID: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
     }
 }

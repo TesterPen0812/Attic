@@ -400,7 +400,7 @@ struct NotesLayoutSwitch: View {
     /// A change of layout (owner, 2026-10-31: "both"): the chip slides to
     /// the new choice and the notes move into their new places, on the
     /// bottom bar's 260 ms fold; Reduce Motion at once. Only this switch:
-    /// Now · Later · Done and the page switch keep their crossfade.
+    /// the others' markers travel on the pop spring.
     static func selectionAnimation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : TasksDesignMetrics.fold(reduceMotion: false)
     }
@@ -439,11 +439,17 @@ struct NotesLayoutSwitch: View {
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
             }
         }
-        // One chip under the cells, sliding from one to the next.
-        .background(alignment: .leading) {
-            AtticSelectionMarker(cornerRadius: chipRadius)
-                .frame(width: M.cell, height: M.cell)
-                .offset(x: CGFloat(selected) * (M.cell + M.gap))
+        // One chip under the cells, sliding from one to the next, and the
+        // hover's, a step lighter (Accepted 2026-11-05, "Animated selection").
+        .background(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                AtticSelectionMarker(cornerRadius: chipRadius)
+                    .frame(width: M.cell, height: M.cell)
+                    .offset(x: CGFloat(selected) * (M.cell + M.gap))
+                AtticHoverChip(frame: hovered.flatMap(layouts.firstIndex(of:)).map {
+                    CGRect(x: CGFloat($0) * (M.cell + M.gap), y: 0, width: M.cell, height: M.cell)
+                }, shown: hovered != selection, cornerRadius: chipRadius)
+            }
         }
         .padding(M.inset)
         .frame(height: AtticControlSize.headerControl)
