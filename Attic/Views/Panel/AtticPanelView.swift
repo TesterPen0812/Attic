@@ -7,16 +7,15 @@ import SwiftData
 /// and the error notice). Pages lay themselves out inside
 /// `PanelPageLayout`; the shell owns everything around them.
 struct AtticPanelView: View {
-    @ObservedObject var store: TaskStore
-    @ObservedObject var noteStore: NoteStore
-    @ObservedObject var canvasSession: CanvasSession
-    @ObservedObject var noteDraft: NoteDraftController
+    let store: TaskStore
+    let noteStore: NoteStore
+    let canvasSession: CanvasSession
+    let noteDraft: NoteDraftController
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     /// The Draw page's model (its save notice shows like the other pages').
-    @ObservedObject private var drawPage: DrawPageModel = .shared
     @ObservedObject var settings: AppSettings
-    @ObservedObject var toasts: PanelToastCenter
+    let toasts: PanelToastCenter
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) var reduceMotion
@@ -192,11 +191,9 @@ struct AtticPanelView: View {
     }
 
     private var notices: some View {
-        PanelNoticeStack(
-            toasts: toasts,
-            notice: currentNotice,
-            onRetry: retryCurrentNotice,
-            onDismissNotice: dismissCurrentNotice
+        PanelCurrentNoticeOverlay(
+            store: store, noteStore: noteStore, canvasSession: canvasSession,
+            toasts: toasts, page: currentPage
         )
         .padding(.horizontal, chromeInsets.leading)
         .padding(.bottom, pageLayout.contentInsets.bottom + noticeClearance)
@@ -230,11 +227,12 @@ struct AtticPanelView: View {
             }
             .transition(pageTransition(.tasks))
         case .canvas:
-            CanvasPageHost(
+            PanelCanvasNoticeAwareHost(
                 canvasSession: canvasSession,
+                toasts: toasts,
                 uiState: uiState,
                 layout: pageLayout,
-                errorBannerHeight: currentNotice == nil && toasts.current == nil ? 0 : noticeHeight,
+                noticeHeight: noticeHeight,
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: chromeInsets)
             )
@@ -518,11 +516,9 @@ struct AtticPanelView: View {
                 await noteDraft.pages.startAndWait()
                 hasRestoredNoteSession = true
             }
-            // Task-list plumbing the legacy Tasks page relies on; it runs on
-            // every page, as it always has, and leaves with that page.
-            .onChange(of: store.revision) { _, _ in
-                uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
-            }
+            // The store's frequent edits are observed only in this small
+            // sidecar; they must not invalidate the whole retained shell.
+            .background(PanelStoreRevisionObserver(store: store, uiState: uiState))
     }
 
     private var interactionObservedPanel: some View {
@@ -538,12 +534,10 @@ struct AtticPanelView: View {
                 // The Notes session's hooks belong to the panel Notes is in.
                 if !uiState.isElsewhere(.notes) { installTaskNotePurgePresentation() }
             }
+            .background(PanelNoteDraftLockObserver(draft: noteDraft, uiState: uiState))
             .onChange(of: uiState.pagesElsewhere.contains(.notes)) { _, away in
                 if !away { installTaskNotePurgePresentation() }
             }
-            .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
-            .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
-            .onChange(of: noteDraft.isImporting) { _, _ in syncNoteDraftInteractionLocks() }
             .onPreferenceChange(PanelNoticeHeightPreferenceKey.self) { measured in
                 let resolved = max(0, measured.isFinite ? measured : 0)
                 if abs(noticeHeight - resolved) >= 0.5 { noticeHeight = resolved }
@@ -694,12 +688,57 @@ struct AtticPanelView: View {
         uiState.setInteractionLock(.taskComposer, isActive: false)
     }
 
-    // MARK: Notices
+}
 
-    /// The problem the current page's store reports. Task errors that
-    /// concern one family's panel show inside that panel only.
+/// Store revisions still reconcile task-route IDs, without subscribing the
+/// entire panel surface to every task mutation.
+private struct PanelStoreRevisionObserver: View {
+    @ObservedObject var store: TaskStore
+    let uiState: PanelUIState
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: store.revision) { _, _ in
+                uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
+            }
+    }
+}
+
+/// Note-draft changes affect interaction locks, not the shell's layout.
+private struct PanelNoteDraftLockObserver: View {
+    @ObservedObject var draft: NoteDraftController
+    let uiState: PanelUIState
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: draft.isDirty) { _, _ in syncLocks() }
+            .onChange(of: draft.hasConflict) { _, _ in syncLocks() }
+            .onChange(of: draft.isImporting) { _, _ in syncLocks() }
+    }
+
+    private func syncLocks() {
+        uiState.setInteractionLock(.notesDirty, isActive: draft.isDirty)
+        uiState.setInteractionLock(.notesConflict, isActive: draft.hasConflict)
+        uiState.setInteractionLock(.notesImport, isActive: draft.pages.active?.isImporting == true)
+    }
+}
+
+/// Heavy page error state changes only the notice and its measured clearance.
+private struct PanelCurrentNoticeOverlay: View {
+    @ObservedObject var store: TaskStore
+    @ObservedObject var noteStore: NoteStore
+    @ObservedObject var canvasSession: CanvasSession
+    @ObservedObject var drawPage: DrawPageModel = .shared
+    @ObservedObject var toasts: PanelToastCenter
+    let page: PanelPage
+
+    var body: some View {
+        PanelNoticeStack(toasts: toasts, notice: currentNotice,
+                         onRetry: retryCurrentNotice, onDismissNotice: dismissCurrentNotice)
+    }
+
     private var currentNotice: PanelNoticeContent? {
-        switch currentPage {
+        switch page {
         case .canvas:
             if AtticDraw.isEnabled { return drawPage.saveNotice }
             return canvasSession.lastErrorMessage.map {
@@ -714,17 +753,37 @@ struct AtticPanelView: View {
     }
 
     private func retryCurrentNotice() {
-        guard currentPage == .canvas else { return }
+        guard page == .canvas else { return }
         if AtticDraw.isEnabled { return drawPage.retrySave() }
         if canvasSession.retryFailedImageDecodes() { canvasSession.dismissErrorMessage() }
     }
 
     private func dismissCurrentNotice() {
-        switch currentPage {
+        switch page {
         case .canvas: AtticDraw.isEnabled ? drawPage.dismissSaveError() : canvasSession.dismissErrorMessage()
         case .notes: noteStore.dismissError()
         case .tasks, .calendar: store.dismissError()
         }
+    }
+}
+
+/// The legacy Canvas's error clearance follows notices without redrawing the
+/// shared panel on every toast, save or decode notification.
+private struct PanelCanvasNoticeAwareHost: View {
+    @ObservedObject var canvasSession: CanvasSession
+    @ObservedObject var toasts: PanelToastCenter
+    @ObservedObject var drawPage: DrawPageModel = .shared
+    let uiState: PanelUIState
+    let layout: PanelPageLayout
+    let noticeHeight: CGFloat
+    let headerControlRects: [CGRect]
+    let headerBottom: CGFloat
+
+    var body: some View {
+        let hasNotice = AtticDraw.isEnabled ? drawPage.saveNotice != nil : canvasSession.lastErrorMessage != nil
+        CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
+                       errorBannerHeight: hasNotice || toasts.current != nil ? noticeHeight : 0,
+                       headerControlRects: headerControlRects, headerBottom: headerBottom)
     }
 }
 
