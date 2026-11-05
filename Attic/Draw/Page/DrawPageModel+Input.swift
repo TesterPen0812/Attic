@@ -215,6 +215,7 @@ extension DrawPageModel {
         }
         if isDrawingLive { isDrawingLive = false }
         board?.drawLiveChanged()
+        syncExternalChanges()
     }
 
     private func begin(_ next: DrawLive) {

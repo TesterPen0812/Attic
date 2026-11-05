@@ -171,6 +171,7 @@ final class DrawPageModel: ObservableObject {
     }
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
+    var externalSyncDeferred = false
     private var flashGeneration = 0
     /// Canvases whose thumbnail is behind their content.
     private var thumbnailDirty: Set<UUID> = []
@@ -1159,8 +1160,14 @@ final class DrawPageModel: ObservableObject {
         }
     }
 
-    private func syncExternalChanges() {
-        guard let canvasID, store.revision != appliedRevision, live == nil else { return }
+    func syncExternalChanges() {
+        guard let canvasID else { return }
+        if live != nil {
+            if store.revision != appliedRevision { externalSyncDeferred = true }
+            return
+        }
+        guard externalSyncDeferred || store.revision != appliedRevision else { return }
+        externalSyncDeferred = false
         appliedRevision = store.revision
         guard let snapshot = try? store.open(canvasID) else { return }
         if snapshot.canvas.deletedAt != nil {

@@ -43,6 +43,18 @@ final class DrawPageModelTests: XCTestCase {
         drag([CGPoint(x: 60, y: y), CGPoint(x: 90, y: y + 10), CGPoint(x: 130, y: y)])
     }
 
+    func testExternalCanvasRenameDeferredDuringPanAppliesOnPointerUp() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.rename("Before pan"), on: id).isSaved)
+        model.syncExternalChanges()
+        model.pointerDown(at: CGPoint(x: 100, y: 100), panButton: true)
+        XCTAssertTrue(store.perform(.rename("During pan"), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.canvasName, "Before pan")
+        model.pointerUp()
+        XCTAssertEqual(model.canvasName, "During pan")
+    }
+
     private func key(_ characters: String, code: UInt16 = 0, command: Bool = false, shift: Bool = false) -> Bool {
         model.handleKey(DrawKey(characters: characters, keyCode: code, command: command, shift: shift))
     }
