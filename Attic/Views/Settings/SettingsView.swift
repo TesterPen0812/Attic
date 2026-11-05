@@ -57,16 +57,8 @@ struct SettingsView: View {
 
     var body: some View {
         GeometryReader { available in
-            if SettingsWindowLayout.needsContentScroll(available.size) {
-                ScrollView([.horizontal, .vertical]) {
-                    settingsContent
-                        .frame(minWidth: SettingsWindowLayout.minimumContentSize.width,
-                               minHeight: SettingsWindowLayout.minimumContentSize.height)
-                }
-                .scrollIndicators(.visible)
-            } else {
+            SettingsAdaptiveScroll(size: available.size) {
                 settingsContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .ignoresSafeArea()
@@ -130,6 +122,24 @@ struct SettingsView: View {
         case .about:
             AboutSettingsView()
         }
+    }
+}
+
+/// Keep the selected page mounted when an unusually small work area requires
+/// scrolling. Only the scroll behaviour and minimum content size change.
+struct SettingsAdaptiveScroll<Content: View>: View {
+    let size: CGSize
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let needsScroll = SettingsWindowLayout.needsContentScroll(size)
+        ScrollView([.horizontal, .vertical]) {
+            content()
+                .frame(minWidth: max(SettingsWindowLayout.minimumContentSize.width, size.width),
+                       minHeight: max(SettingsWindowLayout.minimumContentSize.height, size.height))
+        }
+        .scrollDisabled(!needsScroll)
+        .scrollIndicators(needsScroll ? .visible : .hidden)
     }
 }
 
