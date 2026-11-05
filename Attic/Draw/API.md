@@ -111,9 +111,12 @@ block quit after the bound. Undo survives session switches, not app relaunch.
 
 
 The page can receive identity-scoped `resumeDefaults`; without them it is fully
-session-only. With them it resumes the last canvas and each canvas's validated
-viewport. Gesture changes update memory immediately and coalesce preference
-writes; canvas switches and quitting flush the latest viewport. New unnamed
+session-only. With them it resumes the last canvas, each canvas's validated
+viewport, and pending thumbnail IDs. A render unfinished at quit is regenerated
+when its canvas is opened or its thumbnail is shown on a later launch; the marker
+clears only after a successful quiet thumbnail write. Gesture changes update
+memory immediately and coalesce preference writes; canvas switches and quitting
+flush the latest viewport. New unnamed
 canvases use the next free `Untitled` suffix across saved canvases and drafts.
 
 The title capsule becomes the canvas filter; the menu has no duplicate search

@@ -174,6 +174,9 @@ final class DrawPageModel: ObservableObject {
     private var flashGeneration = 0
     /// Canvases whose thumbnail is behind their content.
     private var thumbnailDirty: Set<UUID> = []
+    /// A render can outlive the bounded quit. Keep dirty IDs across launch
+    /// until their quiet thumbnail write succeeds (no drawing-store schema change).
+    private var unrenderedThumbnails: Set<UUID> = []
     private var thumbnailTimer: DispatchWorkItem?
     private var thumbnailRenders: [UUID: (generation: Int, dark: Bool, task: Task<Void, Never>)] = [:]
     private var thumbnailGeneration = 0
@@ -196,6 +199,10 @@ final class DrawPageModel: ObservableObject {
     init(store: any DrawStoreProtocol, resumeDefaults: UserDefaults? = nil) {
         self.resumeDefaults = resumeDefaults
         self.store = store
+        if let ids = resumeDefaults?.stringArray(forKey: "AtticDraw.unrenderedThumbnails") {
+            unrenderedThumbnails = Set(ids.compactMap(UUID.init(uuidString:)))
+            thumbnailDirty = unrenderedThumbnails
+        }
         if let data = resumeDefaults?.data(forKey: "AtticDraw.viewports"),
            let saved = try? JSONDecoder().decode([UUID: DrawViewport].self, from: data) {
             viewports = saved.filter { _, v in
@@ -328,10 +335,19 @@ final class DrawPageModel: ObservableObject {
 
     // MARK: Thumbnails
 
+    private func markThumbnailDirty(_ id: UUID) {
+        thumbnailDirty.insert(id)
+        if unrenderedThumbnails.insert(id).inserted { persistUnrenderedThumbnails() }
+    }
+
+    private func persistUnrenderedThumbnails() {
+        resumeDefaults?.set(unrenderedThumbnails.map(\.uuidString).sorted(), forKey: "AtticDraw.unrenderedThumbnails")
+    }
+
     /// The open canvas changed: its thumbnail renders once edits settle.
     private func thumbnailNeeded() {
         guard let canvasID else { return }
-        thumbnailDirty.insert(canvasID)
+        markThumbnailDirty(canvasID)
         thumbnailTimer?.cancel()
         let timer = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated { self?.thumbnailSettled() }
@@ -392,7 +408,8 @@ final class DrawPageModel: ObservableObject {
     /// place. Canvases that never show are left alone.
     func thumbnailsShown(_ canvases: [DrawCanvas]) {
         let dark = DrawImageActions.isDark
-        for canvas in canvases where canvas.thumbnail != nil && canvas.thumbnailDark != dark && canvas.deletedAt == nil {
+        for canvas in canvases where canvas.deletedAt == nil &&
+            (unrenderedThumbnails.contains(canvas.id) || (canvas.thumbnail != nil && canvas.thumbnailDark != dark)) {
             appearanceQueue.insert(canvas.id)
         }
         guard !appearanceQueue.isEmpty, !appearanceDrainScheduled else { return }
@@ -423,11 +440,16 @@ final class DrawPageModel: ObservableObject {
         let dark = DrawImageActions.isDark
         for id in ids where thumbnailRenders[id]?.dark != dark {
             if id == canvasID {
+                if thumbnailDirty.contains(id), thumbnailTimer == nil, live == nil {
+                    renderThumbnail(id, objects: objects, keepOnFailure: true)
+                    continue
+                }
                 appearanceChanged()
                 continue
             }
-            guard store.pendingEdits[id] == nil, let snapshot = try? store.open(id), snapshot.canvas.deletedAt == nil,
-                  snapshot.canvas.thumbnail != nil, snapshot.canvas.thumbnailDark != dark else { continue }
+            guard store.pendingEdits[id] == nil, let snapshot = try? store.open(id), snapshot.canvas.deletedAt == nil else { continue }
+            let stale = unrenderedThumbnails.contains(id)
+            guard stale || (snapshot.canvas.thumbnail != nil && snapshot.canvas.thumbnailDark != dark) else { continue }
             renderThumbnail(id, objects: snapshot.objects, keepOnFailure: true)
         }
     }
@@ -437,11 +459,13 @@ final class DrawPageModel: ObservableObject {
         switch store.perform(.thumbnail(data, dark: dark), on: id) {
         case .saved:
             if synced { appliedRevision = store.revision }
+            if !thumbnailDirty.contains(id), unrenderedThumbnails.remove(id) != nil { persistUnrenderedThumbnails() }
         case .unchanged:
             // An unsettled edit comes first; the thumbnail follows it.
-            if store.pendingEdits[id] != nil { thumbnailDirty.insert(id) }
+            if store.pendingEdits[id] != nil { markThumbnailDirty(id) }
+            else if !thumbnailDirty.contains(id), unrenderedThumbnails.remove(id) != nil { persistUnrenderedThumbnails() }
         case .retry, .held:
-            thumbnailDirty.insert(id)
+            markThumbnailDirty(id)
         }
     }
 
@@ -496,6 +520,11 @@ final class DrawPageModel: ObservableObject {
         canvasName = snapshot.canvas.name
         library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
+        // A prior session may have quit while its thumbnail renderer was
+        // still running. Its persisted dirty marker forces regeneration here.
+        if thumbnailDirty.contains(id), thumbnailRenders[id] == nil {
+            renderThumbnail(id, objects: objects, keepOnFailure: true)
+        }
         selection = []
         strip = nil
         isSelectionStyleOpen = false
@@ -994,9 +1023,10 @@ final class DrawPageModel: ObservableObject {
         case .unchanged:
             break
         case .saved:
+            markThumbnailDirty(id)
             renderThumbnail(id, objects: (try? store.open(id).objects) ?? [])
         case .retry(let message), .held(let message):
-            thumbnailDirty.insert(id)
+            markThumbnailDirty(id)
             if store.pendingEdits[id] != nil {
                 dismissedSaveProblem = nil
             } else {
