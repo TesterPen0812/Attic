@@ -49,6 +49,21 @@ final class CalendarEventWriterTests: XCTestCase {
         XCTAssertEqual(try writer.writableCalendars(), [calendar(), calendar("work", source: "Work")])
     }
 
+    func testC03EditingAnOwnedEventDoesNotRoundItsSubmittedTimestamps() throws {
+        let writer = try writer()
+        let original = try writer.create(draft())
+        var edited = original.draft
+        edited.title = "Precise edit"
+        edited.start.addTimeInterval(30.25)
+        edited.end.addTimeInterval(30.25)
+        let updated = try writer.edit(original.id, draft: edited)
+        XCTAssertEqual(updated.draft.start, edited.start)
+        XCTAssertEqual(updated.draft.end, edited.end)
+        XCTAssertEqual(store.events.values.first?.draft, edited)
+        XCTAssertEqual(undo.undo(in: .calendar), true)
+        XCTAssertEqual(store.events.values.first?.draft, original.draft)
+    }
+
     func testOwnershipJournalIOLeavesTheMainThread() async throws {
         let record = try CalendarOwnershipRecord(persist: { _ in
             XCTAssertFalse(Thread.isMainThread, "durable event proof must not block the UI")

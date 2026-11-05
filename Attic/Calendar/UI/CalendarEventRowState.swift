@@ -118,18 +118,50 @@ final class CalendarEventRowState: ObservableObject {
         draft.calendarID = calendarID
         guard !draft.title.isEmpty else { throw CalendarEventWriteError.invalidDraft }
         if !draft.isAllDay {
-            guard let minutes = Self.minutes(startText), length > 0 else { throw CalendarEventWriteError.invalidDraft }
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .current
-            var parts = calendar.dateComponents([.year, .month, .day], from: draft.start)
-            parts.hour = minutes / 60
-            parts.minute = minutes % 60
-            parts.second = 0
-            guard let start = calendar.date(from: parts),
-                  calendar.component(.hour, from: start) == minutes / 60,
-                  calendar.component(.minute, from: start) == minutes % 60 else { throw CalendarEventWriteError.invalidDraft }
-            draft.start = start
-            draft.end = start.addingTimeInterval(Double(length) * 60)
+            let oldMinutes = calendar.component(.hour, from: original.start) * 60
+                + calendar.component(.minute, from: original.start)
+            let oldDuration = original.end.timeIntervalSince(original.start)
+            let oldLength = Int(oldDuration / 60)
+            let clockChanged = startText != ComposerCard.clock(oldMinutes)
+            let lengthChanged = length != oldLength
+
+            // A title or calendar-only edit must never reconstruct timestamps.
+            if clockChanged {
+                guard let minutes = Self.minutes(startText) else { throw CalendarEventWriteError.invalidDraft }
+                let second = calendar.component(.second, from: original.start)
+                let match = DateComponents(hour: minutes / 60, minute: minutes % 60, second: second)
+                let beforeDay = calendar.startOfDay(for: original.start).addingTimeInterval(-1)
+                guard let first = calendar.nextDate(after: beforeDay, matching: match,
+                    matchingPolicy: .strict, repeatedTimePolicy: .first, direction: .forward),
+                    calendar.isDate(first, inSameDayAs: original.start) else {
+                    // A clock time in the spring DST gap has no valid instant.
+                    throw CalendarEventWriteError.invalidDraft
+                }
+                let last = calendar.nextDate(after: beforeDay, matching: match,
+                    matchingPolicy: .strict, repeatedTimePolicy: .last, direction: .forward)
+                // During the autumn fold, prefer the existing event's UTC
+                // offset. If neither fold has that offset, use the first.
+                let previousOffset = calendar.timeZone.secondsFromGMT(for: original.start)
+                let chosen = last.flatMap { candidate -> Date? in
+                    guard calendar.isDate(candidate, inSameDayAs: original.start),
+                          calendar.timeZone.secondsFromGMT(for: candidate) == previousOffset else { return nil }
+                    return candidate
+                } ?? first
+                let reference = original.start.timeIntervalSinceReferenceDate
+                draft.start = chosen.addingTimeInterval(reference - floor(reference))
+            }
+            if lengthChanged {
+                guard length > 0 else { throw CalendarEventWriteError.invalidDraft }
+            }
+            if clockChanged || lengthChanged {
+                // The picker edits whole minutes; retain the original seconds
+                // and fraction of a minute in the duration when it changes.
+                let remainder = oldDuration - Double(oldLength) * 60
+                let newDuration = lengthChanged ? Double(length) * 60 + remainder : oldDuration
+                draft.end = draft.start.addingTimeInterval(newDuration)
+            }
         }
         return draft
     }

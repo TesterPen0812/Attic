@@ -26,6 +26,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     let page: PanelPage
     let panel: AtticPanel
     let uiState = PanelUIState()
+    let calendarPageState = CalendarPageState()
     let toasts = PanelToastCenter()
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
@@ -60,7 +61,8 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
                 settings: deps.settings, toasts: toasts,
                 // Its own page state (its own Search and drafts), the
                 // remembered views shared with the docked panel's.
-                tasksPageState: TasksPageState(memory: deps.tasksMemory)),
+                tasksPageState: TasksPageState(memory: deps.tasksMemory),
+                calendarPageState: calendarPageState),
             panelCornerRadius: deps.settings.panelCornerSize,
             dockedCorner: deps.settings.corner,
             chromeInteractionState: chrome)
@@ -221,7 +223,15 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
 
     #if DEBUG
     var hostingViewForTesting: AtticPanelHostingView { hostingView }
+    var calendarEventRowsOverrideForTesting: CalendarEventRowState?
     #endif
+
+    var calendarEventRowsForDock: CalendarEventRowState? {
+        #if DEBUG
+        if let calendarEventRowsOverrideForTesting { return calendarEventRowsOverrideForTesting }
+        #endif
+        return calendarPageState.activeEventRows
+    }
 
     private func animateAlpha(_ alpha: CGFloat, duration: TimeInterval, curve: CAMediaTimingFunction?,
                               completion: (@MainActor () -> Void)? = nil) {
@@ -331,6 +341,7 @@ final class PanelPullOutController {
     private var panels: [PanelPage: PanelFloatingPanel] = [:]
     private let outline: PanelLandingOutline
     private var cancellables: Set<AnyCancellable> = []
+    private var calendarDockPending = false
 
     private struct Drag {
         let page: PanelPage
@@ -493,14 +504,44 @@ final class PanelPullOutController {
     // MARK: Snapping in
 
     /// `page` flies home on the panel's motion (Reduce Motion: at once)
-    /// and the docked panel shows it. False when it stays out (Notes
-    /// refused to leave, or the docked panel isn't showing).
+    /// and the docked panel shows it. Calendar returns true when its
+    /// asynchronous save check starts; a failed save keeps the panel out.
+    /// False when docking cannot begin.
     @discardableResult
     func dockIn(_ page: PanelPage) -> Bool {
         guard let floating = panels[page], let home = dockedFrame() else { return false }
         if page == .notes { guard deps.noteDraft.prepareToLeave(.pageSwitch) else { return false } }
+        if page == .calendar {
+            guard !calendarDockPending else { return true }
+            calendarDockPending = true
+            Task { @MainActor [weak self, weak floating] in
+                guard let self, let floating else { return }
+                let rows = floating.calendarEventRowsForDock
+                let settled = await rows?.waitForInFlightWorkBeforeQuit() ?? true
+                let saved: Bool
+                if settled { saved = await rows?.close() ?? true }
+                else { saved = false }
+                self.calendarDockPending = false
+                guard self.panels[page] === floating else { return }
+                guard saved, let currentHome = self.dockedFrame() else {
+                    // A snap attempt can move the window before the save
+                    // completes. Keep its current position with the editor.
+                    self.state.move(page, to: floating.visibleFrame)
+                    self.save()
+                    return
+                }
+                self.finishDock(page, floating: floating, home: currentHome)
+            }
+            return true
+        }
+        finishDock(page, floating: floating, home: home)
+        return true
+    }
+
+    private func finishDock(_ page: PanelPage, floating: PanelFloatingPanel, home: CGRect) {
         let finish = { [weak self] in
             guard let self else { return }
+            guard self.panels[page] === floating else { return }
             panels[page] = nil
             floating.close()
             state.dockIn(page)
@@ -518,7 +559,6 @@ final class PanelPullOutController {
                 floating.panel.animator().setFrame(floating.panel.nativeFrame(forVisibleFrame: home), display: true)
             }, completionHandler: { MainActor.assumeIsolated { finish() } })
         }
-        return true
     }
 
     // MARK: Bringing forward

@@ -39,6 +39,39 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         func openInCalendar(_ id: String) async throws { try base.openInCalendar(id) }
     }
 
+    /// Exact fake for events received with seconds and DST-fold precision.
+    /// The transactional fake rounds events created by Attic to minutes.
+    private final class PreciseWriter: CalendarEventWriter {
+        var saved: CalendarOwnedEvent
+        var lastError: CalendarEventWriteError?
+        init(_ draft: CalendarEventDraft) {
+            saved = CalendarOwnedEvent(id: UUID(), occurrenceID: "precise", draft: draft)
+        }
+        func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
+        func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? {
+            id == saved.occurrenceID ? saved : nil
+        }
+        func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
+        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+            guard id == saved.id else { throw CalendarEventWriteError.notOwned }
+            saved.draft = draft
+            return saved
+        }
+        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func openInCalendar(_ id: String) async throws { throw CalendarEventWriteError.openFailed }
+    }
+
+    private func preciseRow(start: Date, duration: TimeInterval) -> (rows: CalendarEventRowState, writer: PreciseWriter, event: CalendarEvent) {
+        let draft = CalendarEventDraft(title: "Lunch", start: start, length: duration,
+                                       calendarID: "home", timeZoneID: "Europe/London")
+        let writer = PreciseWriter(draft)
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        let event = CalendarEvent(id: writer.saved.occurrenceID, title: draft.title, start: start, end: draft.end,
+                                  isAllDay: false, location: nil, calendarTitle: "Home",
+                                  colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+        return (rows, writer, event)
+    }
+
     @MainActor
     private final class Fixture {
         let backend = FakeCalendarEventWriteStore()
@@ -104,12 +137,63 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertEqual(f.backend.events.values.first?.draft, f.made.draft)
     }
 
+    func testC03RenamingAnEventPreservesSubminuteTimingAndSecondDSTFold() async throws {
+        let secondFold = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-25T01:45:30Z"))
+        let f = preciseRow(start: secondFold.addingTimeInterval(0.25), duration: 3641.5)
+        await f.rows.toggle(f.event)
+        f.rows.title = "Renamed"
+        let renamed = await f.rows.close()
+        XCTAssertTrue(renamed)
+        let saved = f.writer.saved.draft
+        XCTAssertEqual(saved.title, "Renamed")
+        XCTAssertEqual(saved.start, secondFold.addingTimeInterval(0.25), "the second occurrence keeps its exact timestamp")
+        XCTAssertEqual(saved.end.timeIntervalSince(saved.start), 3641.5, accuracy: 0.00001)
+
+        let short = preciseRow(start: secondFold, duration: 38.5)
+        await short.rows.toggle(short.event)
+        short.rows.title = "Short renamed"
+        let shortened = await short.rows.close()
+        XCTAssertTrue(shortened, "a title-only edit must not reject a subminute event")
+        XCTAssertEqual(short.writer.saved.draft.start, secondFold)
+        XCTAssertEqual(short.writer.saved.draft.end.timeIntervalSince(secondFold), 38.5, accuracy: 0.00001)
+    }
+
+    func testC03ChangingClockAndLengthPreservesPrecisionAndOriginalDSTFold() async throws {
+        let formatter = ISO8601DateFormatter()
+        let secondFold = try XCTUnwrap(formatter.date(from: "2026-10-25T01:45:30Z"))
+        let f = preciseRow(start: secondFold.addingTimeInterval(0.25), duration: 3641.5)
+        await f.rows.toggle(f.event)
+        XCTAssertEqual(f.rows.startText, "01:45")
+        f.rows.startText = "01:15"
+        f.rows.length = 75
+        let changed = await f.rows.close()
+        XCTAssertTrue(changed)
+        let saved = f.writer.saved.draft
+        let expected = try XCTUnwrap(formatter.date(from: "2026-10-25T01:15:30Z"))
+            .addingTimeInterval(0.25)
+        XCTAssertEqual(saved.start, expected, "retain the second repeated hour when changing the clock")
+        XCTAssertEqual(saved.end.timeIntervalSince(saved.start), 75 * 60 + 41.5,
+                       accuracy: 0.00001, "retain the duration's subminute remainder")
+    }
+
+    func testC03SpringGapRejectsAnImpossibleClockAndKeepsTheDraft() async throws {
+        let start = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-03-29T00:45:20Z"))
+        let f = preciseRow(start: start, duration: 3600)
+        await f.rows.toggle(f.event)
+        f.rows.startText = "01:30" // skipped when London jumps to 02:00
+        let closed = await f.rows.close()
+        XCTAssertFalse(closed)
+        XCTAssertNotNil(f.rows.rowID)
+        XCTAssertNotNil(f.rows.failure)
+        XCTAssertEqual(f.writer.saved.draft.start, start)
+    }
+
     func testQuitPreparationSavesEveryRegisteredCalendarDraft() async throws {
         let docked = try Fixture(); defer { docked.finish() }
         let detached = try Fixture(); defer { detached.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(docked.rows)
-        registry.register(detached.rows)
+        registry.register(docked.rows, owner: .docked)
+        registry.register(detached.rows, owner: .floating)
         await docked.rows.toggle(docked.event)
         await detached.rows.toggle(detached.event)
         docked.rows.title = "Docked edit"
@@ -142,7 +226,7 @@ final class AdaptiveCalendarEventTests: XCTestCase {
     func testV7QuitWaitsForAnExistingInFlightCalendarSave() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(f.rows)
+        registry.register(f.rows, owner: .docked)
         await f.rows.toggle(f.event)
         f.rows.title = "Already saving"
         f.writer.hold = true
@@ -163,7 +247,7 @@ final class AdaptiveCalendarEventTests: XCTestCase {
     func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(f.rows)
+        registry.register(f.rows, owner: .docked)
         await f.rows.toggle(f.event)
         f.rows.title = "First edit"
         f.backend.commitError = .saveFailed("Full disk")
