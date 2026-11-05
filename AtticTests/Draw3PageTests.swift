@@ -744,6 +744,14 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertLessThanOrEqual(needed, room, "At the panel's smallest height the list fits without scrolling")
     }
 
+    func testDrawMenuRoomNeverExceedsShortAvailableHeight() {
+        let available = DrawPageMetrics.menuListRoom(boardHeight: 110, chromeTop: 15.5, chromeBottom: 15.5)
+        XCTAssertGreaterThan(available, 0)
+        XCTAssertLessThan(available, DrawLibraryMetrics.maxListHeight,
+                           "a short display must scroll rather than force the default menu height")
+        XCTAssertEqual(DrawPageMetrics.menuListRoom(boardHeight: 0, chromeTop: 15.5, chromeBottom: 15.5), 0)
+    }
+
     // MARK: Save problems
 
     func testARetrySaveShowsAndRetryWorks() throws {
