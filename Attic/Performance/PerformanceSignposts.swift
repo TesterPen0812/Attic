@@ -375,8 +375,8 @@ enum IdleLatencyTrace {
         log.notice("followup_fire id=\(trace.id, privacy: .public) due=\(scheduled, privacy: .public) actual=\(now, privacy: .public) late_ms=\((now - scheduled) * 1000, privacy: .public)")
     }
 
-    /// A display-link tick following a committed transaction is the first
-    /// *eligible* changed frame, not proof of compositor scan-out pixels.
+    /// The next main-thread display-link callback is only a frame candidate.
+    /// It can precede a SwiftUI commit and does not prove any pixels changed.
     static func firstFrameOpportunity(in view: NSView?) {
         guard let trace = current, now - trace.started < 8, let view else { return }
         firstFrameWatch?.stop()
@@ -392,7 +392,8 @@ enum IdleLatencyTrace {
     }
 }
 
-/// Only installed for one frame after an input/flush. No idle display link.
+/// Only installed for the next display-link opportunity after input/flush.
+/// It observes a callback, not the final displayed pixels.
 @MainActor
 private final class IdleLatencyFirstFrameWatch: NSObject {
     let id: Int
