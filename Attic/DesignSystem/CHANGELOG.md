@@ -1,3 +1,20 @@
+## 2026-11-05 · Pop-over row pressed state
+
+Shared pop-over rows now respond to the button's actual pressed state with the
+existing pressed fill. Keyboard selection, disabled inks and control geometry
+keep their prior appearance.
+
+## 2026-11-05 · Keyboard focus on custom page controls
+
+Calendar day keys, day tiles, header navigation and event actions, Draw toolbar chips, small controls,
+status and notice actions now reuse the existing keyboard-only focus ring. Settings tracks
+keyboard versus pointer navigation, as do detached TaskNote windows and the
+standalone Find host, so mouse interaction keeps its prior look.
+The shared ring registers its focus binding only while keyboard navigation is
+active; the Composer card's action buttons remain outside keyboard focus so
+title and writing keep their established Tab order and typing focus.
+No control geometry, token, animation or mouse hover treatment changes.
+
 ## 2026-11-04 · First visits and task-page controls
 
 Notes warms behind the current page with native input suspended. Keyboard
@@ -1399,3 +1416,8 @@ Behaviour only: no token, colour, radius, size or motion preset changed.
   read as one preference value, so a cut-short tag picker settles at once.
 - **VoiceOver**: a dropdown row is "selected" only while it has the list's
   highlight; a tick is the menu item's mark (`AXMenuItemMarkChar`).
+## 2026-11-05 · Light selected-key ink restored (V-11)
+
+Light Create and selected Calendar day keys again use the resolved heading ink
+with pure white text in standard and increased contrast. The inverse colour
+pair applies only in Dark, as originally intended.

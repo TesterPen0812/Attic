@@ -1274,6 +1274,7 @@ struct AtticSmallButton: View {
     /// buttons: the raised material at the Medium height, as wide as it is
     /// tall, hover and press as the material's fills.
     let floating: Bool
+    let acceptsKeyboardFocus: Bool
     let action: () -> Void
 
     @Environment(\.atticSmallControlBarSize) private var barSize
@@ -1286,12 +1287,14 @@ struct AtticSmallButton: View {
     @State private var probeID = UUID()
 
     init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
-         quietIcon: Bool = false, floating: Bool = false, action: @escaping () -> Void) {
+         quietIcon: Bool = false, floating: Bool = false, acceptsKeyboardFocus: Bool = true,
+         action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
         self.quietIcon = quietIcon
         self.floating = floating
+        self.acceptsKeyboardFocus = acceptsKeyboardFocus
         self.action = action
     }
 
@@ -1306,6 +1309,7 @@ struct AtticSmallButton: View {
         }
         .buttonStyle(AtticFlatPressStyle())
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: height), acceptsKeyboardFocus: acceptsKeyboardFocus)
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -2288,9 +2292,6 @@ struct AtticPopoverRow: View {
     var checked: Bool?
     let action: () -> Void
 
-    @Environment(\.atticDesign) private var design
-    @Environment(\.atticForcedState) private var forced
-    @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var probeID = UUID()
 
@@ -2306,10 +2307,41 @@ struct AtticPopoverRow: View {
     }
 
     var body: some View {
+        let height = AtticControlSize.smallHeight
+        let radius = AtticRadius.control(height: height)
+        Button(action: action) {
+            AtticPopoverRowFace(systemName: systemName, title: title, detail: detail,
+                                isHighlighted: isHighlighted, reservesIconSlot: reservesIconSlot,
+                                checked: checked, hovered: hovered)
+        }
+        .buttonStyle(AtticFlatPressStyle())
+        .onHover { hovered = $0 }
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
+        .accessibilityValue(checked == true ? String(localized: "Selected") : "")
+        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
+    }
+}
+
+/// Resolves the button style's live press signal inside the label environment.
+struct AtticPopoverRowFace: View {
+    let systemName: String?
+    let title: String
+    let detail: String?
+    let isHighlighted: Bool
+    let reservesIconSlot: Bool
+    let checked: Bool?
+    let hovered: Bool
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticIsPressed) private var isPressed
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
         let m = AtticPopoverMetrics.self
         let height = AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
-        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: false).state
+        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: isPressed, isFocused: false).state
         let tokens = design.tokens
         let fill: AtticRGBA = switch state {
         case .disabled: .clear
@@ -2317,41 +2349,34 @@ struct AtticPopoverRow: View {
         case .hover, .focused: tokens.selected
         case .rest: isHighlighted ? tokens.selected : .clear
         }
-        Button(action: action) {
-            HStack(spacing: m.rowGap) {
-                if let systemName {
-                    AtticIcon(systemName: systemName, size: m.rowIconSize, ink: state == .disabled ? .disabledIcon : .icon)
-                        .frame(width: m.rowIconSlot)
-                } else if reservesIconSlot {
-                    Color.clear.frame(width: m.rowIconSlot, height: 1).accessibilityHidden(true)
-                }
-                AtticText(verbatim: title, style: .menuRow, ink: state == .disabled ? .disabledText : .body, truncates: true)
-                Spacer(minLength: m.trailingMinGap)
-                if let detail {
-                    AtticText(verbatim: detail, style: .shortcut, ink: state == .disabled ? .disabledText : .helper)
-                }
-                if let checked {
-                    Group {
-                        if checked {
-                            AtticIcon(systemName: "checkmark", size: AtticDropdownMetrics.checkSize, weight: .semibold, ink: .glyph)
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(width: AtticDropdownMetrics.checkSlot)
-                    .accessibilityHidden(true)
-                }
+        HStack(spacing: m.rowGap) {
+            if let systemName {
+                AtticIcon(systemName: systemName, size: m.rowIconSize, ink: state == .disabled ? .disabledIcon : .icon)
+                    .frame(width: m.rowIconSlot)
+            } else if reservesIconSlot {
+                Color.clear.frame(width: m.rowIconSlot, height: 1).accessibilityHidden(true)
             }
-            .padding(.horizontal, m.rowPadding)
-            .frame(height: height)
-            .background(Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
-            .contentShape(Rectangle())
+            AtticText(verbatim: title, style: .menuRow, ink: state == .disabled ? .disabledText : .body, truncates: true)
+            Spacer(minLength: m.trailingMinGap)
+            if let detail {
+                AtticText(verbatim: detail, style: .shortcut, ink: state == .disabled ? .disabledText : .helper)
+            }
+            if let checked {
+                Group {
+                    if checked {
+                        AtticIcon(systemName: "checkmark", size: AtticDropdownMetrics.checkSize, weight: .semibold, ink: .glyph)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: AtticDropdownMetrics.checkSlot)
+                .accessibilityHidden(true)
+            }
         }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .onHover { hovered = $0 }
-        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
-        .accessibilityValue(checked == true ? String(localized: "Selected") : "")
-        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
+        .padding(.horizontal, m.rowPadding)
+        .frame(height: height)
+        .background(Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+        .contentShape(Rectangle())
     }
 }
 

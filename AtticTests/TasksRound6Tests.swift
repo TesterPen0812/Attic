@@ -111,6 +111,30 @@ final class TasksRound6Tests: XCTestCase {
         hosted.press("\u{1B}", keyCode: 53)
     }
 
+    /// A card may lose its editor's native first responder intermittently.
+    /// Even if a Tasks row then has focus, letters cannot start Done search
+    /// until the card has closed. The closed case is the positive control.
+    func testOpenComposerBlocksDonePageTypingAfterTextFocusIsLost() throws {
+        try requireKeyWindowTests()
+        final class CardState { var isOpen = true }
+        let card = CardState()
+        let hosted = try Hosted(height: 520, composerIsOpen: { card.isOpen })
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        let positions = hosted.rowPlaces()
+        let row = try XCTUnwrap(positions.values.first, "a Done row to own keyboard focus")
+        hosted.click(y: row)
+        XCTAssertEqual(hosted.model.selection.count, 1)
+        XCTAssertFalse(AtticTextInput.hasKeyboard, "no text field protects the page key handler")
+
+        hosted.press("q", keyCode: 12)
+        XCTAssertEqual(hosted.model.doneSearch, "", "an open composer blocks Done's type-to-search")
+
+        card.isOpen = false
+        hosted.press("q", keyCode: 12)
+        XCTAssertEqual(hosted.model.doneSearch, "q", "the same focused row can start search after the card closes")
+    }
+
     /// A click on Done's magnifier, with the add bar holding the keyboard:
     /// the field takes the tabs' line and the keyboard (CI run 1).
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
@@ -399,7 +423,8 @@ final class Hosted {
 
     init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
          chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
-         design: AtticDesignContext = AtticDesignContext(mode: .light)) throws {
+         design: AtticDesignContext = AtticDesignContext(mode: .light),
+         composerIsOpen: (() -> Bool)? = nil) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -414,7 +439,13 @@ final class Hosted {
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: page.atticDesign(design).frame(width: size.width, height: size.height))
+        let route = composerIsOpen.map { isOpen in
+            PanelComposerRoute(open: { _, _ in }, isOpen: isOpen)
+        }
+        window.contentView = NSHostingView(rootView: page
+            .environment(\.panelComposer, route)
+            .atticDesign(design)
+            .frame(width: size.width, height: size.height))
         window.orderFront(nil)
         if keyWindow { window.makeKey() }
         spin(1)

@@ -1207,13 +1207,56 @@ struct TaskNotePageContainer: View {
                     // its native views must be mounted, never the old ones.
                     .id(pageGeneration)
             } else if openFailed {
-                AtticText("This task's note can't be opened here.", style: .body, ink: .helper)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                openingState
             } else {
-                Color.clear
+                openingState
             }
         }
         .onAppear(perform: open)
+    }
+
+    /// Route controls must remain reachable even when no presenter/lease exists.
+    private var openingState: some View {
+        ZStack(alignment: .bottom) {
+            Group {
+                if openFailed {
+                    AtticText("This task's note can't be opened here.", style: .body, ink: .helper)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            AtticControlGroup {
+                HStack(spacing: 0) {
+                    AtticRaisedButton(systemName: placement == .window ? "rectangle.portrait.and.arrow.right" : "chevron.left",
+                                      label: placement == .window ? "Move to Panel" : "Back",
+                                      help: backTitle + "  (Esc)") { back() }
+                        .accessibilityLabel(backTitle)
+                        .accessibilityIdentifier("task-note-back")
+                    Spacer(minLength: AtticSpacing.s12)
+                    if openFailed {
+                        AtticRaisedButton(systemName: "arrow.clockwise", label: "Retry") {
+                            openFailed = false
+                            open()
+                        }
+                        .accessibilityIdentifier("task-note-retry")
+                    }
+                }
+                .frame(height: AtticControlSize.panelButton.height)
+            }
+            .padding(.horizontal, layout.chromeInsets.leading)
+            .padding(.bottom, layout.chromeInsets.bottom)
+        }
+        .background(alignment: .topLeading) {
+            if openFailed {
+                TaskNoteFailedOpeningEscapeReceiver(onEscape: back)
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onKeyPress(.escape) { back(); return .handled }
     }
 
     private func open() {
@@ -1281,6 +1324,43 @@ struct TaskNotePageContainer: View {
             open()
         }
     }
+}
+
+/// The failed-open page has no text editor to own Escape. Give it a native
+/// responder only for that state; the normal editor retains its own key path.
+private struct TaskNoteFailedOpeningEscapeReceiver: NSViewRepresentable {
+    let onEscape: () -> Void
+
+    final class EscapeView: NSView {
+        var onEscape: (() -> Void)?
+        override var acceptsFirstResponder: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 53 {
+                onEscape?()
+            } else {
+                super.keyDown(with: event)
+            }
+        }
+
+        override func cancelOperation(_ sender: Any?) { onEscape?() }
+    }
+
+    func makeNSView(context: Context) -> EscapeView {
+        let view = EscapeView()
+        view.onEscape = onEscape
+        return view
+    }
+
+    func updateNSView(_ view: EscapeView, context: Context) { view.onEscape = onEscape }
 }
 
 extension NotesPageController {

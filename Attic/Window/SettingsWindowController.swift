@@ -8,6 +8,12 @@ enum SettingsWindowLayout {
     static let maximumContentSize = NSSize(width: 1_100, height: 900)
     static let screenMargin: CGFloat = 24
 
+    /// AppKit temporarily permits smaller windows on constrained displays;
+    /// SwiftUI must then scroll the normal-sized contents inside that space.
+    static func needsContentScroll(_ available: CGSize) -> Bool {
+        available.width < minimumContentSize.width || available.height < minimumContentSize.height
+    }
+
     static func fittedContentSize(to visibleFrame: NSRect) -> NSSize {
         NSSize(
             width: max(

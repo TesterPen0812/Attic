@@ -207,6 +207,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
 
 private struct TaskNoteWindowRoot: View {
     @ObservedObject var presenter: TaskNotePresenter
+    @StateObject private var keyboardFocus = AtticKeyboardFocusTracker()
     let controller: NotesPageController
     let noteStore: NoteStore
     let onMoveToPanel: () -> Void
@@ -218,5 +219,6 @@ private struct TaskNoteWindowRoot: View {
                          backTitle: String(localized: "Move to Panel"), placement: .window, onBack: onMoveToPanel)
                 .id(presenter.projectionGeneration)
         }.ignoresSafeArea()
+            .atticKeyboardFocusTracking(keyboardFocus)
     }
 }

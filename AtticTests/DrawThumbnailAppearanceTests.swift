@@ -245,6 +245,38 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
                      "No thumbnail, no appearance")
         XCTAssertEqual(self.canvas(canvas.id)?.updatedAt, date)
     }
+
+    func testR21UnfinishedThumbnailRegeneratesAfterRelaunch() throws {
+        let suite = "attic.draw.thumbnail.r21.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let originalStore = DrawPersistentStore(container: container)
+        let canvas = originalStore.create(name: "Awaiting thumbnail")
+        let id = canvas.id
+        let object = DrawObject(frame: DrawFrame(x: 20, y: 30, width: 100, height: 50), content: .shape(.rectangle))
+        XCTAssertTrue(originalStore.perform(.put([object]), on: id).isSaved)
+        XCTAssertTrue(originalStore.perform(.thumbnail(Data([10]), dark: true), on: id).isSaved)
+        defaults.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
+        var original: DrawPageModel? = DrawPageModel(store: originalStore, resumeDefaults: defaults)
+        original?.thumbnailSettleDelay = 600
+        original?.start()
+        XCTAssertEqual(original?.canvasID, id)
+        var changed = object
+        changed.frame.x = 120
+        XCTAssertTrue(try XCTUnwrap(original).perform(.put([changed])).isSaved)
+        XCTAssertTrue(defaults.stringArray(forKey: "AtticDraw.unrenderedThumbnails")?.contains(id.uuidString) == true,
+                      "The edit persisted its dirty marker before any asynchronous render")
+        XCTAssertEqual(try originalStore.open(id).canvas.thumbnail, Data([10]), "Quit left the old thumbnail")
+        original = nil // A new model must recover using persisted state alone.
+
+        let relaunchedStore = DrawPersistentStore(container: container)
+        let relaunched = DrawPageModel(store: relaunchedStore, resumeDefaults: defaults)
+        relaunched.thumbnailRenderer = { _, _ in Data([30]) }
+        relaunched.start()
+        XCTAssertTrue(wait { (try? relaunchedStore.open(id).canvas.thumbnail) == Data([30]) },
+                      "Opening a stale canvas regenerates its thumbnail after relaunch")
+        XCTAssertTrue(defaults.stringArray(forKey: "AtticDraw.unrenderedThumbnails")?.isEmpty == true)
+    }
 }
 
 /// Counts thumbnail renders by the first object drawn (one per canvas in

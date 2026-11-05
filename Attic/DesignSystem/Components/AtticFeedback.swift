@@ -82,6 +82,7 @@ private struct AtticToastButton: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @State private var hovered = false
     @FocusState private var focused: Bool
 
@@ -107,19 +108,20 @@ private struct AtticToastButton: View {
                 .contentShape(AtticUndoToast.buttonShape(outer: outerRadius))
         }
         .buttonStyle(.plain)
+        .atticFocusRing(acceptsKeyboardFocus && focused && keyboardFocusVisible,
+                        cornerRadius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius)
         .onHover { hovered = $0 }
     }
 }
 
 // MARK: - Notice
 
-/// A problem that concerns the whole panel (a failed save, an import that
-/// could not finish): raised over content like the toast, with the error's
-/// red icon, the store's sentence in body ink and the next step as a button. It stays until it is resolved or
-/// dismissed; a problem is never hidden. The message is the store's own
-/// sentence and wraps to fit, with the same full text for VoiceOver.
+/// A notice concerning the whole panel: errors use the red error icon; a
+/// still-running import uses a neutral information icon. The store's sentence
+/// wraps in body ink and is accessible to VoiceOver until dismissed or resolved.
 struct AtticNotice: View {
     let message: String
+    var isInformational = false
     /// "Retry" when the failed step can run again; nil offers only Dismiss.
     var actionTitle: String?
     var onAction: (() -> Void)?
@@ -132,8 +134,9 @@ struct AtticNotice: View {
         let tokens = design.tokens
         let radius = AtticRadius.control(height: AtticControlSize.toastHeight)
         HStack(alignment: .center, spacing: AtticNoticeMetrics.gap) {
-            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium,
-                      ink: AtticStatusItem.Tone.error.iconInk)
+            AtticIcon(systemName: isInformational ? "info.circle" : "exclamationmark.circle",
+                      size: AtticErrorLineMetrics.iconSize, weight: .medium,
+                      ink: isInformational ? AtticStatusItem.Tone.normal.iconInk : AtticStatusItem.Tone.error.iconInk)
             Text(verbatim: message)
                 .font(AtticTextStyle.toast.font)
                 .foregroundStyle(tokens.ink(.body).color)
@@ -143,7 +146,7 @@ struct AtticNotice: View {
             if let actionTitle, let onAction {
                 AtticNoticeButton(title: actionTitle, action: onAction)
             }
-            AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
+            AtticSmallButton(systemName: "xmark", label: "Dismiss", acceptsKeyboardFocus: false, action: onDismiss)
                 .accessibilityIdentifier("panel-error-dismiss")
         }
         .padding(.leading, AtticToastMetrics.leadingPadding)
@@ -153,7 +156,7 @@ struct AtticNotice: View {
         .background(AtticPopoverBackground(cornerRadius: radius, exponent: AtticUndoToast.shape.exponent))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
-        .atticAnnounceErrors([message])
+        .atticAnnounceErrors(isInformational ? [] : [message])
         .atticControlProbe("Notice", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
@@ -177,6 +180,7 @@ private struct AtticNoticeButton: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .focusable(false)
         .onHover { hovered = $0 }
     }
 }
@@ -552,14 +556,16 @@ struct AtticStatusPill: View {
             }
             .buttonStyle(AtticUndimmedButtonStyle())
             .focusEffectDisabled()
+            .focusable(false)
             .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
             .accessibilityHint(String(localized: "Shows details"))
             .accessibilityIdentifier("notes-status-primary")
             if let inlineAction {
-                AtticToastButton(title: inlineAction.title, outerRadius: radius, action: inlineAction.handler)
+                AtticToastButton(title: inlineAction.title, outerRadius: radius, acceptsKeyboardFocus: false,
+                                 action: inlineAction.handler)
                     .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
             } else if let onCancel {
-                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
+                AtticSmallButton(systemName: "xmark", label: "Cancel", acceptsKeyboardFocus: false, action: onCancel)
                     .accessibilityIdentifier("notes-status-cancel")
             }
         }

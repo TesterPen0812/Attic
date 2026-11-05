@@ -9,6 +9,30 @@ import XCTest
 /// off-screen windows that never take the keyboard.
 @MainActor
 final class TaskPageSliceTests: XCTestCase {
+    func testR05PointerCancelsPendingTabFocusEvenIfTheSameRowIsRequestedAgain() {
+        let target = TasksTabTarget()
+        let row = TasksTabStop.row(UUID())
+        target.request(row)
+        let initial = target.generation
+        XCTAssertTrue(target.isCurrent(row, generation: initial))
+        target.cancel()
+        XCTAssertFalse(target.isCurrent(row, generation: initial))
+        target.request(row)
+        XCTAssertFalse(target.isCurrent(row, generation: initial))
+        XCTAssertTrue(target.isCurrent(row, generation: target.generation))
+    }
+
+    func testR06SelectionRunsUseListNeighboursAndRespectExpandedBreaks() {
+        let ids = (0..<5).map { _ in UUID() }
+        let selected = Set(ids.prefix(4))
+        let runs = TasksSelectionRuns.make(ids: ids, selected: selected, expanded: [ids[1]])
+        XCTAssertEqual(runs[ids[0]], .first)
+        XCTAssertEqual(runs[ids[1]], .last)
+        XCTAssertEqual(runs[ids[2]], .first)
+        XCTAssertEqual(runs[ids[3]], .last)
+        XCTAssertNil(runs[ids[4]])
+    }
+
     private var container: ModelContainer!
     private var tasks: TaskStore!
     private var library: AtticLibrary!

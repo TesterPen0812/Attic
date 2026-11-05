@@ -738,6 +738,56 @@ final class ComposerTests: XCTestCase {
         spin(0.1)
     }
 
+    /// The full Tasks page and its overlaid card share a key window. A
+    /// printable key belongs to the card on either tab, never to Find.
+    func testTypingInOpenTaskComposerDoesNotReachSearchOnDoneOrNow() throws {
+        try requireKeyWindowTests()
+        let composer = try XCTUnwrap(model)
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 520)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
+        let route = PanelComposerRoute(
+            open: { page, kind in composer.open(on: page, as: kind) },
+            isOpen: { composer.isOpen }
+        )
+
+        for tab in [TasksTab.done, .now] {
+            page.select(tab: tab)
+            composer.open(on: .tasks(tab))
+            let host = NSHostingView(rootView: TasksPage(
+                model: page, store: tasks, layout: layout, addBarFocused: .constant(false)
+            )
+            .environment(\.panelComposer, route)
+            .overlay(alignment: .bottomTrailing) { ComposerCard(model: composer) }
+            .atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+            let window = KeyWindow(
+                contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            window.becomeKey()
+            windows.append(window)
+            spin(0.4)
+
+            let field = try XCTUnwrap(composer.editor.textView)
+            XCTAssertTrue(window.makeFirstResponder(field))
+            spin(0.1)
+            XCTAssertTrue(window.firstResponder === field, "\(tab): composer starts with the keyboard")
+            for (letter, code) in [("c", UInt16(8)), ("a", UInt16(0)), ("t", UInt16(17))] {
+                key(window, letter, code: code)
+                XCTAssertTrue(window.firstResponder === field, "\(tab): \(letter) did not steal the caret")
+                XCTAssertEqual(page.searchQuery(for: tab), "", "\(tab): \(letter) never entered Find")
+            }
+            XCTAssertEqual(page.addBar.text, "cat", "\(tab): the card receives the typed text")
+            composer.close(atOnce: true)
+            window.contentView = nil
+            window.close()
+            page.addBar = TaskAddBarText(text: "")
+        }
+    }
+
     func testPriorityWidensFoldsItsNeighboursAndEscapeHasTwoSteps() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")

@@ -63,10 +63,14 @@ struct TaskNoteRouteHost<Origin: View>: View {
             let previous = noteDraft.pages.taskNotePresenter
             let previousID = displayedTaskID
             guard await noteDraft.pages.prepareTaskNoteRoute(requested) else {
-                if !Task.isCancelled, uiState.taskNoteOrigin == page { uiState.openTaskNoteID = previousID }
+                if !Task.isCancelled, uiState.taskNoteOrigin == page {
+                    if page == .notes { noteDraft.pages.finishLibraryTaskRoute(requested, accepted: false) }
+                    uiState.openTaskNoteID = previousID
+                }
                 return
             }
             guard !Task.isCancelled else { return }
+            if page == .notes { noteDraft.pages.finishLibraryTaskRoute(requested, accepted: true) }
             if previous != nil, previous?.lease == nil { taskRouteGeneration &+= 1 }
             // At once: the page is the next frame (no crossfade holding two
             // editors on screen, OD-1).

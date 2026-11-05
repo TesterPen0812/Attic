@@ -21,6 +21,66 @@ final class SettingsWindowHostedTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    func testR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
+        let suite = "SettingsR24.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let settings = AppSettings(defaults: defaults)
+        let host = NSHostingView(rootView: SettingsView(
+            settings: settings,
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 860, height: 420),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap(scrollViews)
+        }
+        for size in [CGSize(width: 860, height: 420), CGSize(width: 580, height: 650)] {
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.2)
+            host.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 },
+                                       "The undersized Settings host must offer scrolling")
+            let content = try XCTUnwrap(scroll.documentView)
+            XCTAssertGreaterThanOrEqual(content.frame.width, max(640, size.width) - 2,
+                                        "Sidebar background and page card must fill the wide host")
+            XCTAssertGreaterThanOrEqual(content.frame.height, max(460, size.height) - 2,
+                                        "Content must fill the tall host without leaving a bare strip")
+        }
+    }
+
+    func testR24ScrollThresholdDoesNotRemountPageLocalState() {
+        var appearances = 0
+        let host = NSHostingView(rootView: GeometryReader { available in
+            SettingsAdaptiveScroll(size: available.size) {
+                Text("Settings page state")
+                    .onAppear { appearances += 1 }
+            }
+        })
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 860, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        for size in [CGSize(width: 860, height: 650), CGSize(width: 860, height: 420),
+                     CGSize(width: 580, height: 650), CGSize(width: 860, height: 650)] {
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.05)
+            XCTAssertEqual(appearances, 1, "Changing the scroll threshold must keep the current Settings page mounted")
+        }
+    }
+
     private func makeWindow() -> SettingsWindow {
         let window = SettingsWindow(contentViewController: NSHostingController(rootView: Color.clear))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]

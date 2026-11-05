@@ -1621,6 +1621,28 @@ final class NotesPageController: ObservableObject {
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
+    weak var liveLibraryModel: NotesLibraryModel?
+    var pendingLibraryTaskRoute: UUID?
+
+    /// A route request is provisional until the task page releases the old
+    /// editor. The library query belongs to the user until that handoff is
+    /// accepted; a refusal must keep it ready for All notes.
+    func finishLibraryTaskRoute(_ taskID: UUID?, accepted: Bool) {
+        guard let taskID, pendingLibraryTaskRoute == taskID else { return }
+        pendingLibraryTaskRoute = nil
+        guard let savedQuery = libraryQueryAcrossTaskPage else { return }
+        if accepted {
+            if let library = liveLibraryModel {
+                if library.query == savedQuery { library.clearSearch() }
+                else { libraryQueryAcrossTaskPage = library.query.isEmpty ? nil : library.query }
+            }
+        } else if let library = liveLibraryModel {
+            if library.query.isEmpty { library.query = savedQuery }
+            else { libraryQueryAcrossTaskPage = library.query }
+        }
+        // Keep the query for the next onAppear even when a live library
+        // received it: a refused route may replace that library's host.
+    }
     var pendingTaskSearchQuery: String?
 
     func installFileHistoryState(_ session: NoteSession, rootID: UUID, noteID: UUID, history: WorkspaceHistory) throws {

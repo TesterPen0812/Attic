@@ -104,14 +104,19 @@ and every old-Canvas reader (the Canvas store, Search's library, Recently
 Deleted, tags, workspace tokens and inventory, links and titles, all through
 the counted `fetchCanvasReplicas` funnel) leaves the old rows unread and
 unchanged. The quit route calls `DrawPageModel.prepareToQuit()`, which settles
-the stroke in progress, waits for every image import in flight, retries or
-reconciles unsettled edits and returns false while any is unsaved. Undo survives session switches, not app relaunch.
+the stroke in progress, gives in-flight image imports a bounded chance to finish,
+retries or reconciles unsettled edits and returns false while any import or edit
+is still outstanding. Thumbnail generation is a regenerable cache and does not
+block quit after the bound. Undo survives session switches, not app relaunch.
 
 
 The page can receive identity-scoped `resumeDefaults`; without them it is fully
-session-only. With them it resumes the last canvas and each canvas's validated
-viewport. Gesture changes update memory immediately and coalesce preference
-writes; canvas switches and quitting flush the latest viewport. New unnamed
+session-only. With them it resumes the last canvas, each canvas's validated
+viewport, and pending thumbnail IDs. A render unfinished at quit is regenerated
+when its canvas is opened or its thumbnail is shown on a later launch; the marker
+clears only after a successful quiet thumbnail write. Gesture changes update
+memory immediately and coalesce preference writes; canvas switches and quitting
+flush the latest viewport. New unnamed
 canvases use the next free `Untitled` suffix across saved canvases and drafts.
 
 The title capsule becomes the canvas filter; the menu has no duplicate search

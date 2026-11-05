@@ -38,7 +38,7 @@ struct TasksDonePage<Cell: View>: View {
     @Binding var reveal: TasksPageModel.ScrollRequest?
     /// Brings a row into the uncovered part of the list (the page's rule).
     let revealRow: (UUID, ScrollViewProxy) -> Void
-    let cell: (TasksListRow) -> Cell
+    let cell: (TasksListRow, AtticSelectionRun) -> Cell
     /// Where the page keeps the log's scroll view and proxy (round 10).
     var proxies: TasksListProxies?
     var pointer: TasksPointer?
@@ -64,11 +64,13 @@ struct TasksDonePage<Cell: View>: View {
 
     var body: some View {
         let days = model.doneDays()
+        let runs = TasksSelectionRuns.make(ids: days.flatMap { $0.rows.map(\.id) },
+                                          selected: model.selection, expanded: model.expanded)
         let lines = slots.lines(for: days, query: model.trimmedQuery(for: .done),
                                 interchangeable: rowsAreInterchangeable)
         let turn = foldTurn?.tab == .done ? foldTurn : nil
         let places = turn.flatMap { turn in days.first { $0.key == turn.key } }.map { foldPlaces($0.rows) } ?? [:]
-        list(lines, turn: turn, places: places)
+        list(lines, turn: turn, places: places, runs: runs)
         // Round 12: a page kept built but not drawn reads nothing and
         // watches nothing (its copy of the log is not on screen); drawn
         // again, it catches up with whatever changed meanwhile.
@@ -84,7 +86,8 @@ struct TasksDonePage<Cell: View>: View {
         }
     }
 
-    private func list(_ lines: [TasksDoneLine], turn: TasksFoldTurn?, places: [UUID: TasksFoldPlace]) -> some View {
+    private func list(_ lines: [TasksDoneLine], turn: TasksFoldTurn?, places: [UUID: TasksFoldPlace],
+                      runs: [UUID: AtticSelectionRun]) -> some View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -102,7 +105,7 @@ struct TasksDonePage<Cell: View>: View {
                     case let .row(row):
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.
-                        cell(row)
+                        cell(row, runs[row.id] ?? .single)
                             .modifier(turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0) } }
                                 ?? TasksFoldBody(progress: 1, place: nil))
                     }
