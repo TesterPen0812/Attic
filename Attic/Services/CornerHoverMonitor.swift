@@ -425,10 +425,12 @@ final class CornerHoverMonitor {
             isPanelVisible: stateMachine.isVisible
         )
         let cadenceChanged = decision.cadence != scheduledCadence
+        // This describes the state on entry, before the callback can acquire an activity.
+        let activityAtEntry = responsivenessActivity != nil
         applySamplingCadence(decision.cadence)
         if cadenceChanged, decision.cadence == .responsive, !stateMachine.isVisible {
             IdleLatencyTrace.begin("corner_approach", original: eventTimestamp,
-                                   context: panelController.idleLatencyContext(activity: responsivenessActivity != nil))
+                                   context: panelController.idleLatencyContext(activity: activityAtEntry))
         }
         guard decision.shouldSampleImmediately else { return }
         // A boundary crossing samples at once. Event-driven sampling while

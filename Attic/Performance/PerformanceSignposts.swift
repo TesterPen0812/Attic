@@ -309,6 +309,9 @@ enum IdleLatencyTrace {
 
     static func hidden() { hiddenAt = now }
 
+    /// The next visible input is no longer part of the preceding hidden interval.
+    static func revealed() { hiddenAt = nil }
+
     static func cleanupBegan() {
         cleanupStart = now
         log.notice("cleanup_begin uptime=\(now, privacy: .public)")

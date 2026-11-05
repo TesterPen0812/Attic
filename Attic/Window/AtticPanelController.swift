@@ -623,6 +623,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         PerformanceSignposts.panelOrderedFront()
         // A reveal: the panel was hidden and is now on screen.
         uiState.panelDidReveal()
+        IdleLatencyTrace.revealed()
         return true
     }
 
