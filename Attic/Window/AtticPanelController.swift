@@ -807,6 +807,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // release, but controls no longer substitute a drawn material.
         panel.activeAppearance = { true }
         panel.onIdleTraceContext = { [weak self] in self?.idleLatencyContext() }
+        uiState.onIslandApproach = { [weak self] in self?.requestKeptPagesBuildFromIsland() }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -1982,6 +1983,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func buildKeptPagesAfterReveal() {
         keptPagesBuildGeneration &+= 1
         scheduleKeptPagesBuild(generation: keptPagesBuildGeneration, after: Self.keptPagesBuildDelay)
+    }
+
+    /// An island approach uses the same generation and input checks as the
+    /// ordinary after-reveal warmer; repeated approaches coalesce.
+    private func requestKeptPagesBuildFromIsland() {
+        guard panel.isVisible, uiState.isPageContentLoaded else { return }
+        keptPagesBuildGeneration &+= 1
+        scheduleKeptPagesBuild(generation: keptPagesBuildGeneration, after: 0)
     }
 
     /// One page per idle turn. A gesture or menu can outlive the initial

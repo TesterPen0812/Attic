@@ -104,6 +104,8 @@ final class PanelUIState: ObservableObject {
     /// may leave the docked panel's page alone (`switchesDocked` false: a
     /// floating panel's ⌘Return never switches the docked panel).
     var onOpenElsewhere: ((PanelPage, _ switchesDocked: Bool) -> Bool)?
+    /// The island asks the controller to warm pages through its input guard.
+    var onIslandApproach: (() -> Void)?
 
     /// Shows `section`'s page in the panel that hosts it. True when it shows.
     func openElsewhere(_ section: PanelSection, switchesDocked: Bool) -> Bool {

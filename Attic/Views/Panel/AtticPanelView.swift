@@ -625,14 +625,7 @@ struct AtticPanelView: View {
     /// Builds the pages the switch leads to (those the shell keeps), one per
     /// main-thread turn so the pointer never waits on all of them at once.
     private func prepareOtherPages() {
-        let pending = PanelPage.allCases.filter {
-            $0 != currentPage && PanelUIState.prewarms($0) && !uiState.builtPages.contains($0)
-        }
-        for (index, page) in pending.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) {
-                uiState.prepareBuiltPage(page)
-            }
-        }
+        uiState.onIslandApproach?()
     }
 
     private func selectPage(_ page: PanelPage) {
