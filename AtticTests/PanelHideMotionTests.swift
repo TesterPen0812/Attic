@@ -517,8 +517,9 @@ final class PanelHideMotionTests: XCTestCase {
 final class PanelHideMotionShipTests: XCTestCase {
     // MARK: The first frame
 
-    /// A flight's first frame is drawn, and the live panel steps aside, in
-    /// the same call (one Core Animation transaction). Drafts drew into a
+    /// A flight's first completed GPU frame and the live panel stepping
+    /// aside land in one Core Animation transaction, without waiting on the
+    /// main thread. Drafts drew into a
     /// CAMetalLayer whose drawable reached the screen a frame or two after
     /// the live panel had stepped aside: an empty, then a glass-only panel
     /// as a hide began (owner, 2026-10-21).
@@ -549,8 +550,22 @@ final class PanelHideMotionShipTests: XCTestCase {
             XCTAssertNotNil(genie.shownFrame, "the frame is there before the live panel steps aside")
             tookOver = true
         }
+        XCTAssertFalse(tookOver, "input does not wait for the GPU to finish")
+        let firstFrameDeadline = Date().addingTimeInterval(2)
+        while !tookOver, Date() < firstFrameDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
         XCTAssertTrue(tookOver)
         XCTAssertFalse(genie.isHidden)
+        // A second flight interrupted before its GPU callback must never
+        // apply a stale takeover from the abandoned generation.
+        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: root.bounds.insetBy(dx: 20, dy: 20), cornerRadius: 30,
+                              dark: false)
+        var staleTakeover = false
+        genie.beginFlight(progress: 0, corner: .topRight) { staleTakeover = true }
+        genie.stop()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(staleTakeover)
     }
 
     /// The snapshot is taken at the window's backing scale (crisp text in
@@ -882,6 +897,10 @@ final class PanelHideMotionShipTests: XCTestCase {
         rig.content.setAlternateProgress(.genieLiveGlass, 0, corner: .topRight, surface: surface)
         let genie = rig.content.genieForTesting
         let glass = genie.liveControlGlass
+        let firstDeadline = Date().addingTimeInterval(2)
+        while genie.shownFrame == nil, Date() < firstDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
         XCTAssertNotNil(genie.shownFrame)
         XCTAssertNotNil(genie.shownControlsFrame, "the controls have their own mesh")
         XCTAssertFalse(glass.isHidden)
@@ -898,8 +917,14 @@ final class PanelHideMotionShipTests: XCTestCase {
             XCTAssertEqual(bounds.minY, height - shown.maxY, accuracy: 0.5, "\(pill.rect) clip \(pill.clip): \(bounds)")
         }
         rig.content.setAlternateProgress(.genieLiveGlass, 0.4, corner: .topRight, surface: surface)
+        let bentDeadline = Date().addingTimeInterval(2)
+        while glass.shapes.map(\.boundingRect) == rest, Date() < bentDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
         XCTAssertNotEqual(glass.shapes.map(\.boundingRect), rest, "bent with the mesh")
         rig.content.clearAlternateMotion()
+        // A completion from an interrupted render cannot resurrect the mesh.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertTrue(genie.isHidden)
     }
 

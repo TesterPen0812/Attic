@@ -646,6 +646,19 @@ final class PanelGenieView: NSView {
     /// showing the last one): the content's and the controls'.
     private var surfaces = PanelGenieSurfaceRing()
     private var controlSurfaces = PanelGenieSurfaceRing()
+    /// The GPU may finish after an interrupted flight or a new snapshot.
+    /// Only one command buffer is outstanding; display ticks coalesce into
+    /// one latest-progress request rather than queuing stale surfaces.
+    private var frameGeneration = 0
+    private var frameInFlight = false
+    private var framePending = false
+    private var takeOverOnFirstFrame: (() -> Void)?
+
+    private func invalidatePendingFrames() {
+        frameGeneration &+= 1
+        framePending = false
+        takeOverOnFirstFrame = nil
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -735,6 +748,7 @@ final class PanelGenieView: NSView {
     ) {
         let began = CACurrentMediaTime()
         defer { PanelHideMotionTrace.note("total", (CACurrentMediaTime() - began) * 1000) }
+        invalidatePendingFrames()
         texture = nil
         controlsTexture = nil
         controlGlassView.configure(pills: [], in: view.bounds.size, dark: dark)
@@ -827,6 +841,7 @@ final class PanelGenieView: NSView {
     }
 
     func releaseSnapshot() {
+        invalidatePendingFrames()
         texture = nil
         controlsTexture = nil
         controlGlassView.configure(pills: [], in: bounds.size, dark: false)
@@ -1236,15 +1251,16 @@ final class PanelGenieView: NSView {
 
     /// A flight starts at `progress`: `takeOver` (the live panel stepping
     /// aside) and the first frame land in one transaction.
-    func beginFlight(progress: Double, corner: ScreenCorner, takeOver: () -> Void) {
+    func beginFlight(progress: Double, corner: ScreenCorner, takeOver: @escaping () -> Void) {
         self.corner = corner
         self.progress = progress
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         isHidden = false
-        render()
-        takeOver()
-        CATransaction.commit()
+        takeOverOnFirstFrame = takeOver
+        if !render() {
+            // No render target is available (the existing no-Metal fallback).
+            takeOverOnFirstFrame = nil
+            takeOver()
+        }
     }
 
     /// Draws `progress` now, in the current Core Animation transaction (a
@@ -1261,7 +1277,9 @@ final class PanelGenieView: NSView {
         to target: Double, curve: PanelHideMotionCurve, corner: ScreenCorner,
         completion: @escaping () -> Void
     ) -> TimeInterval {
-        stop()
+        // A flight's first GPU frame can still be pending when its display
+        // link begins. Keep that frame and its atomic takeover callback.
+        stop(invalidateFrames: false)
         self.corner = corner
         self.completion = completion
         let made = curve.run(from: progress, to: target, start: CACurrentMediaTime())
@@ -1278,7 +1296,7 @@ final class PanelGenieView: NSView {
     }
 
     /// Freezes where it is (an interruption reverses from here).
-    func stop() {
+    func stop(invalidateFrames: Bool = true) {
         watchdog?.cancel()
         watchdog = nil
         if let run { progress = run.progress(at: CACurrentMediaTime()) }
@@ -1286,6 +1304,7 @@ final class PanelGenieView: NSView {
         displayLink = nil
         run = nil
         completion = nil
+        if invalidateFrames { invalidatePendingFrames() }
     }
 
     @objc private func step(_ link: CADisplayLink) {
@@ -1309,7 +1328,12 @@ final class PanelGenieView: NSView {
         done?()
     }
 
-    private func render() {
+    @discardableResult
+    private func render() -> Bool {
+        if frameInFlight {
+            framePending = true
+            return true
+        }
         let scale = window?.backingScaleFactor ?? 2
         let width = Int((bounds.width * scale).rounded()), height = Int((bounds.height * scale).rounded())
         guard width > 0, height > 0,
@@ -1317,11 +1341,9 @@ final class PanelGenieView: NSView {
               let (pipeline, queue) = PanelGenieRenderer.shared.state(),
               let grid = PanelGenieRenderer.shared.grid,
               let frame = surfaces.next(width: width, height: height, device: device),
-              let buffer = queue.makeCommandBuffer() else { return }
+              let buffer = queue.makeCommandBuffer() else { return false }
         let controlsFrame = controlsTexture == nil ? nil : controlSurfaces.next(width: width, height: height, device: device)
         var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner, inset: anchorInset)
-        frameObserver?(uniforms)
-        controlGlassView.update(uniforms, isShown: controlsFrame != nil)
         func draw(_ texture: MTLTexture?, into target: MTLTexture) {
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = target
@@ -1342,21 +1364,51 @@ final class PanelGenieView: NSView {
         }
         draw(texture, into: frame.target)
         if let controlsFrame { draw(controlsTexture, into: controlsFrame.target) }
-        buffer.commit()
-        // The frame is complete before the layer shows it (well under a
-        // millisecond for the grid).
-        buffer.waitUntilCompleted()
-        if let space = colorSpace?.copyICCData() {
-            frame.surface.setAttachment(space, forKey: "IOSurfaceColorSpace")
-            controlsFrame?.surface.setAttachment(space, forKey: "IOSurfaceColorSpace")
+        let generation = frameGeneration
+        framePending = false
+        frameInFlight = true
+        buffer.addCompletedHandler { [weak self] completed in
+            let succeeded = completed.status == .completed
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.frameInFlight = false
+                if self.frameGeneration == generation {
+                    if succeeded {
+                        if let space = self.colorSpace?.copyICCData() {
+                            frame.surface.setAttachment(space, forKey: "IOSurfaceColorSpace")
+                            controlsFrame?.surface.setAttachment(space, forKey: "IOSurfaceColorSpace")
+                        }
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
+                        self.frameObserver?(uniforms)
+                        self.controlGlassView.update(uniforms, isShown: controlsFrame != nil)
+                        self.meshLayer.contentsScale = scale
+                        self.meshLayer.contents = frame.surface
+                        self.controlsMeshLayer.contentsScale = scale
+                        self.controlsMeshLayer.contents = controlsFrame?.surface
+                        // The first surface and the live panel stepping aside
+                        // still land in the same Core Animation transaction.
+                        let takeOver = self.takeOverOnFirstFrame
+                        self.takeOverOnFirstFrame = nil
+                        takeOver?()
+                        CATransaction.commit()
+                    } else {
+                        let takeOver = self.takeOverOnFirstFrame
+                        self.takeOverOnFirstFrame = nil
+                        takeOver?()
+                    }
+                }
+                if self.framePending {
+                    self.framePending = false
+                    if !self.render(), let takeOver = self.takeOverOnFirstFrame {
+                        self.takeOverOnFirstFrame = nil
+                        takeOver()
+                    }
+                }
+            }
         }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        meshLayer.contentsScale = scale
-        meshLayer.contents = frame.surface
-        controlsMeshLayer.contentsScale = scale
-        controlsMeshLayer.contents = controlsFrame?.surface
-        CATransaction.commit()
+        buffer.commit()
+        return true
     }
 }
 
