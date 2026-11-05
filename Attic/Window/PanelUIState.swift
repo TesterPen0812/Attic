@@ -301,7 +301,16 @@ final class PanelUIState: ObservableObject {
     @Published private(set) var hideCount: UInt64 = 0
 
     func panelDidReveal() { revealCount &+= 1 }
-    func panelDidHide() { hideCount &+= 1 }
+    func panelDidHide() {
+        hideCount &+= 1
+        // SwiftUI may stop completing animations after the window orders out.
+        // No page is visibly travelling now; discard the old completion so
+        // it cannot end a new slide if the panel reopens immediately.
+        if pageTransit.sliding {
+            pageSlideGeneration &+= 1
+            pageTransit.sliding = false
+        }
+    }
 
     func requestSearch() {
         searchRequest &+= 1

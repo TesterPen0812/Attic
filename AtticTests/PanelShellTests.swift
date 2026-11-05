@@ -201,6 +201,76 @@ final class PanelShellTests: XCTestCase {
         XCTAssertFalse(ui.isPageSwitchSliding)
     }
 
+    private struct HostedPageSlide: View {
+        @ObservedObject var ui: PanelUIState
+        let motion: PanelPageMotion
+
+        var body: some View {
+            ZStack {
+                Color.gray.frame(width: 300, height: 120)
+                    .modifier(PanelPageVisibility(isCurrent: ui.selectedSection == .tasks,
+                                                  restingOffset: -300, motion: motion, disablesWhenHidden: false))
+                Color.blue.frame(width: 300, height: 120)
+                    .modifier(PanelPageVisibility(isCurrent: ui.selectedSection == .notes,
+                                                  restingOffset: 300, motion: motion, disablesWhenHidden: false))
+            }
+            .frame(width: 300, height: 120)
+        }
+    }
+
+    /// Runs the same page visibility animation as the shell in a window that
+    /// cannot touch a display, become key, or activate the test runner.
+    private func hostSlide(_ ui: PanelUIState, motion: PanelPageMotion) -> NSWindow {
+        let frame = TestPresentationPolicy.offscreenFrame(CGRect(x: -6_000, y: -6_000, width: 300, height: 120))
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: HostedPageSlide(ui: ui, motion: motion))
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        return window
+    }
+
+    func testHostedPageSlideKeepsScrollBarsHiddenUntilTheAnimationFinishes() throws {
+        guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Requires invisible unit-test host") }
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        let window = hostSlide(ui, motion: motion)
+        defer { window.contentView = nil; window.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        ui.switchPage(to: .notes, motion: motion)
+        XCTAssertTrue(ui.isPageSwitchSliding, "a rendered page must keep the scroll bars hidden as it travels")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(ui.isPageSwitchSliding, "completion cannot run during the page's first frames")
+        RunLoop.main.run(until: Date().addingTimeInterval(motion.settleDuration + 0.25))
+        XCTAssertFalse(ui.isPageSwitchSliding, "scroll bars return after actual SwiftUI completion")
+    }
+
+    func testHidingMidSlideReleasesTransitAndOldCompletionCannotEndTheNextSlide() throws {
+        guard TestPresentationPolicy.isInvisible else { throw XCTSkip("Requires invisible unit-test host") }
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        let window = hostSlide(ui, motion: motion)
+        defer { window.contentView = nil; window.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        ui.switchPage(to: .notes, motion: motion)
+        XCTAssertTrue(ui.isPageSwitchSliding)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.16))
+        XCTAssertTrue(ui.isPageSwitchSliding)
+        ui.panelDidHide()
+        XCTAssertFalse(ui.isPageSwitchSliding, "a hidden panel must not hold a stale slide lock")
+        ui.panelDidReveal()
+        ui.switchPage(to: .tasks, motion: motion)
+        XCTAssertTrue(ui.isPageSwitchSliding)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.24))
+        XCTAssertTrue(ui.isPageSwitchSliding, "the interrupted slide's completion must not clear the new slide")
+        RunLoop.main.run(until: Date().addingTimeInterval(motion.settleDuration + 0.25))
+        XCTAssertFalse(ui.isPageSwitchSliding)
+    }
+
     func testEveryPageSwitchUsesTheFeelsMotionEveryTime() throws {
         let saved = AtticMotionTuning.current
         defer { AtticMotionTuning.current = saved }
