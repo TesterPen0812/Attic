@@ -46,6 +46,19 @@ final class NotesLibraryOrganizeTests: XCTestCase {
 
     private func ids(_ groups: [NotesLibraryModel.Group]) -> Set<UUID> { Set(groups.flatMap { $0.rows.map(\.id) }) }
 
+    func testSW03DeletedSummaryIsPrunedEvenWhenNoteCountIsUnchanged() throws {
+        let first = try create("Old note", "Private old body")
+        let controller = makeController()
+        let model = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        _ = model.groups(store: store, drafts: [])
+        XCTAssertNotNil(controller.librarySummaries.bodies[first])
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: first))))
+        let replacement = try create("Replacement note", "Different body")
+        _ = model.groups(store: store, drafts: [], prepareSummaries: false)
+        XCTAssertNil(controller.librarySummaries.bodies[first], "Deletion must release old note bytes even if the note count stays equal")
+        XCTAssertNotNil(store.note(withID: replacement))
+    }
+
     // MARK: The filter
 
     #if !ATTIC_GENERATED_TESTS

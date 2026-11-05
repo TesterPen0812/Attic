@@ -334,6 +334,15 @@ final class NotesLibraryModel: ObservableObject {
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
         var notes = oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
+        // The controller keeps decoded summaries across library remounts.
+        // Prune by identity, independent of count or the active search/filter.
+        let liveIDs = Set(store.notes.lazy.filter { $0.deletedAt == nil }.map(\.id))
+        if summaries.bodies.keys.contains(where: { !liveIDs.contains($0) }) {
+            summaries.bodies = summaries.bodies.filter { liveIDs.contains($0.key) }
+        }
+        if writingKnown.keys.contains(where: { !liveIDs.contains($0) }) {
+            writingKnown = writingKnown.filter { liveIDs.contains($0.key) }
+        }
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
         if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {
@@ -376,11 +385,6 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= today { todayRows.append(model) }
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
-            }
-            // Deleted notes' bodies go (the full list was just read).
-            if summaries.bodies.count > allNotes.count {
-                let stored = Set(allNotes.map(\.id))
-                summaries.bodies = summaries.bodies.filter { stored.contains($0.key) }
             }
             thumbnails.keep(only: Set(allNotes.map(\.id)).union(draftRows.map(\.id)))
             result = [
