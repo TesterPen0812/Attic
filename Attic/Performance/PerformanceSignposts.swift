@@ -304,6 +304,7 @@ enum IdleLatencyTrace {
     private static var cleanupStart: TimeInterval?
     private static var lastCleanup: (start: TimeInterval, end: TimeInterval)?
     private static var firstFrameWatch: IdleLatencyFirstFrameWatch?
+    private static var lastPanelPressAt: TimeInterval?
 
     private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -311,6 +312,16 @@ enum IdleLatencyTrace {
 
     /// The next visible input is no longer part of the preceding hidden interval.
     static func revealed() { hiddenAt = nil }
+
+    /// Keep rapid clicks and all keystrokes off the persisted trace path.
+    static var shouldTracePanelPress: Bool {
+        lastPanelPressAt.map { now - $0 >= 1 } ?? true
+    }
+
+    static func panelPressBegan(original: TimeInterval, context: Context) {
+        lastPanelPressAt = now
+        begin("panel_action", original: original, context: context)
+    }
 
     static func cleanupBegan() {
         cleanupStart = now

@@ -24,6 +24,7 @@ final class AtticPanel: NSPanel {
     /// A press the panel received is still down (O14-01).
     private(set) var isPressing = false
     private var trackingConsumedRelease = false
+    private var tracingIdlePress = false
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
     var onUnhandledEscape: (() -> Void)?
@@ -367,15 +368,18 @@ final class AtticPanel: NSPanel {
     private(set) var lastScrollEventTime: TimeInterval = 0
 
     override func sendEvent(_ event: NSEvent) {
-        let isActionStart = Self.takesFirstPress(event.type) || event.type == .keyDown
-        let isActionEnd = [.leftMouseUp, .rightMouseUp, .otherMouseUp, .keyDown].contains(event.type)
-        if isActionStart, let context = onIdleTraceContext?() {
-            IdleLatencyTrace.begin("panel_action", original: event.timestamp, context: context)
+        if Self.takesFirstPress(event.type) {
+            tracingIdlePress = false
+            if IdleLatencyTrace.shouldTracePanelPress, let context = onIdleTraceContext?() {
+                IdleLatencyTrace.panelPressBegan(original: event.timestamp, context: context)
+                tracingIdlePress = true
+            }
         }
         defer {
-            if isActionEnd {
+            if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("sendEvent_dispatched")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+                tracingIdlePress = false
             }
             if changesContent(event) {
                 onContentMayChange?([.mouseMoved, .mouseEntered, .mouseExited].contains(event.type))
