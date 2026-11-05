@@ -55,6 +55,7 @@ final class CalendarDraftTerminationRegistry {
 @MainActor
 final class CalendarPageState: ObservableObject {
     private var model: CalendarPageModel?
+    var activeEventRows: CalendarEventRowState? { model?.eventRows }
 
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }

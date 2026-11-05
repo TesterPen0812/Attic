@@ -355,6 +355,47 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    func testC01CalendarDockRefusesFailedSaveAndKeepsEditableDraft() throws {
+        try withRig { rig in
+            try pull(.calendar, in: rig, to: CGPoint(x: rig.workArea.midX - 220, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .calendar))
+            let backend = FakeCalendarEventWriteStore()
+            backend.availableCalendars = [CalendarWriteCalendar(id: "test", title: "Test",
+                colour: .init(red: 0.2, green: 0.5, blue: 0.9), sourceID: "fake",
+                sourceTitle: "Fake", isWritable: true)]
+            let undo = UndoRoute()
+            let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(),
+                undoRoute: undo, notificationCenter: NotificationCenter())
+            let start = Date(timeIntervalSince1970: 1_793_361_600)
+            let owned = try writer.create(CalendarEventDraft(title: "Original", start: start,
+                length: 3600, calendarID: "test", timeZoneID: "Europe/London"))
+            let rows = CalendarEventRowState(makeWriter: { writer })
+            floating.calendarEventRowsOverrideForTesting = rows
+            let event = CalendarEvent(id: owned.occurrenceID, title: "Original", start: start,
+                end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+                calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+            Task { await rows.toggle(event) }
+            spin(until: { rows.canEdit })
+            XCTAssertTrue(rows.canEdit, "the fake owns an editable event")
+            rows.title = "Uncommitted"
+            backend.commitError = .saveFailed("Test failure")
+
+            XCTAssertTrue(rig.pullOut.dockIn(.calendar))
+            spin(until: { rows.failure != nil || rig.pullOut.panel(for: .calendar) == nil })
+            XCTAssertTrue(rig.pullOut.panel(for: .calendar) === floating, "a failed save must refuse docking")
+            XCTAssertEqual(rows.title, "Uncommitted")
+            XCTAssertNotNil(rows.failure, "the editor keeps the actionable save error")
+            XCTAssertNotNil(rows.rowID)
+            XCTAssertEqual(backend.events.values.first?.draft.title, "Original")
+
+            backend.commitError = nil
+            XCTAssertTrue(rig.pullOut.dockIn(.calendar))
+            spin(until: { rig.pullOut.panel(for: .calendar) == nil })
+            XCTAssertNil(rig.pullOut.panel(for: .calendar))
+            XCTAssertEqual(backend.events.values.first?.draft.title, "Uncommitted")
+        }
+    }
+
     /// A pulled-out panel docked back in goes away with its window and its
     /// hosting view (and its subscriptions), every time. Its press callback
     /// held it (Astra F3).
