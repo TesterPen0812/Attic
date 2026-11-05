@@ -38,6 +38,7 @@ final class NoteFindController: ObservableObject {
     private var pendingFullSearch = false
     private var monitor: Any?
     private var host: NSHostingView<AnyView>?
+    private let keyboardFocus = AtticKeyboardFocusTracker()
     /// The Notes page puts Find in its top row (N4, Idea B, 2026-11-01):
     /// the page's field takes the query, Pin, the title and ••• fold away,
     /// and the note never moves. Elsewhere (a task's page) Find keeps its
@@ -197,7 +198,8 @@ final class NoteFindController: ObservableObject {
         }
         shownInTopRow = false
         if host == nil {
-            let host = NSHostingView(rootView: AnyView(NoteFindBar(find: self).atticDesign(engine.style.design)))
+            let host = NSHostingView(rootView: AnyView(NoteFindBar(find: self)
+                .atticDesign(engine.style.design).atticKeyboardFocusTracking(keyboardFocus)))
             self.host = host
             scroll.addSubview(host)
         }
@@ -222,7 +224,8 @@ final class NoteFindController: ObservableObject {
     /// A change of look reaches an open bar (H10-01): its host is built
     /// once, with the design the note had when Find opened.
     func update(design: AtticDesignContext) {
-        host?.rootView = AnyView(NoteFindBar(find: self).atticDesign(design))
+        host?.rootView = AnyView(NoteFindBar(find: self)
+            .atticDesign(design).atticKeyboardFocusTracking(keyboardFocus))
     }
 
     func close(returnFocus: Bool = true) {
