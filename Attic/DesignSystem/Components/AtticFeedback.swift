@@ -146,7 +146,7 @@ struct AtticNotice: View {
             if let actionTitle, let onAction {
                 AtticNoticeButton(title: actionTitle, action: onAction)
             }
-            AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
+            AtticSmallButton(systemName: "xmark", label: "Dismiss", acceptsKeyboardFocus: false, action: onDismiss)
                 .accessibilityIdentifier("panel-error-dismiss")
         }
         .padding(.leading, AtticToastMetrics.leadingPadding)
@@ -180,8 +180,7 @@ private struct AtticNoticeButton: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: AtticUndoToast.buttonShape().cornerRadius,
-                                    height: AtticControlSize.smallHeight))
+        .focusable(false)
         .onHover { hovered = $0 }
     }
 }
@@ -557,15 +556,16 @@ struct AtticStatusPill: View {
             }
             .buttonStyle(AtticUndimmedButtonStyle())
             .focusEffectDisabled()
-            .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
+            .focusable(false)
             .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
             .accessibilityHint(String(localized: "Shows details"))
             .accessibilityIdentifier("notes-status-primary")
             if let inlineAction {
-                AtticToastButton(title: inlineAction.title, outerRadius: radius, action: inlineAction.handler)
+                AtticToastButton(title: inlineAction.title, outerRadius: radius, acceptsKeyboardFocus: false,
+                                 action: inlineAction.handler)
                     .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
             } else if let onCancel {
-                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
+                AtticSmallButton(systemName: "xmark", label: "Cancel", acceptsKeyboardFocus: false, action: onCancel)
                     .accessibilityIdentifier("notes-status-cancel")
             }
         }

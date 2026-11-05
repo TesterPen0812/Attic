@@ -1003,8 +1003,15 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
 
 extension View {
     /// Attic's focus ring for this button's own keyboard focus.
-    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline) -> some View {
-        modifier(AtticOwnFocusRing(outline: outline))
+    @ViewBuilder
+    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline, acceptsKeyboardFocus: Bool = true) -> some View {
+        if acceptsKeyboardFocus {
+            modifier(AtticOwnFocusRing(outline: outline))
+        } else {
+            // Transient feedback must never register a SwiftUI focus proxy
+            // while a native editor can be first responder (R11B-01).
+            focusable(false)
+        }
     }
 }
 

@@ -673,6 +673,48 @@ extension AtticDesignSystemHostedTests {
     }
 }
 
+// R-26 / V-2: a notice or status pill may arrive while the native editor owns typing.
+@MainActor
+private final class TransientFocusProbe: ObservableObject {
+    @Published var shown = 0
+}
+
+private struct TransientFocusHost: View {
+    @ObservedObject var probe: TransientFocusProbe
+
+    var body: some View {
+        VStack {
+            TextEditor(text: .constant("Keep typing here"))
+                .frame(height: 90)
+            if probe.shown == 1 {
+                AtticStatusPill(item: AtticStatusItem(id: "save", systemName: "exclamationmark.circle",
+                                                       title: "Not saved", tone: .error),
+                                inlineAction: AtticStatusItem.Action(title: "Retry", handler: {}),
+                                onCancel: {}, onOpen: {})
+                    .id("status")
+            } else if probe.shown == 2 {
+                AtticNotice(message: "Couldn't save", actionTitle: "Retry", onAction: {}, onDismiss: {})
+                    .id("notice")
+            }
+        }
+        .frame(width: 340, height: 155)
+    }
+}
+
+extension AtticDesignSystemHostedTests {
+    func testR26TransientFeedbackMountPreservesEditorFirstResponder() throws {
+        let probe = TransientFocusProbe()
+        let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        for (value, description) in [(1, "status pill"), (2, "notice")] {
+            probe.shown = value
+            spin(0.2)
+            XCTAssertTrue(window.firstResponder === editor, "Mounting \(description) must preserve editor focus")
+        }
+    }
+}
+
 // MARK: - Round 13: the unfold cuts a card's contents (O14-02)
 
 extension AtticDesignSystemHostedTests {

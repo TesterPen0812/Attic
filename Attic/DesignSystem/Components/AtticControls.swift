@@ -1274,6 +1274,7 @@ struct AtticSmallButton: View {
     /// buttons: the raised material at the Medium height, as wide as it is
     /// tall, hover and press as the material's fills.
     let floating: Bool
+    let acceptsKeyboardFocus: Bool
     let action: () -> Void
 
     @Environment(\.atticSmallControlBarSize) private var barSize
@@ -1286,12 +1287,14 @@ struct AtticSmallButton: View {
     @State private var probeID = UUID()
 
     init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
-         quietIcon: Bool = false, floating: Bool = false, action: @escaping () -> Void) {
+         quietIcon: Bool = false, floating: Bool = false, acceptsKeyboardFocus: Bool = true,
+         action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
         self.quietIcon = quietIcon
         self.floating = floating
+        self.acceptsKeyboardFocus = acceptsKeyboardFocus
         self.action = action
     }
 
@@ -1306,7 +1309,7 @@ struct AtticSmallButton: View {
         }
         .buttonStyle(AtticFlatPressStyle())
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: radius, height: height))
+        .atticOwnFocusRing(.rounded(radius: radius, height: height), acceptsKeyboardFocus: acceptsKeyboardFocus)
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
