@@ -260,7 +260,8 @@ final class DrawPageModel: ObservableObject {
         }
         if let actionProblem { return PanelNoticeContent(message: actionProblem, canRetry: false) }
         if quitImportPending {
-            return PanelNoticeContent(message: String(localized: "Importing images…"), canRetry: false)
+            return PanelNoticeContent(message: String(localized: "Importing images…"), canRetry: false,
+                                      isInformational: true)
         }
         return nil
     }
@@ -299,8 +300,10 @@ final class DrawPageModel: ObservableObject {
     func dismissSaveError() {
         if let problem = saveProblem, problem.message != dismissedSaveProblem {
             dismissedSaveProblem = problem.message
-        } else {
+        } else if actionProblem != nil {
             actionProblem = nil
+        } else {
+            quitImportPending = false
         }
     }
 

@@ -116,13 +116,12 @@ private struct AtticToastButton: View {
 
 // MARK: - Notice
 
-/// A problem that concerns the whole panel (a failed save, an import that
-/// could not finish): raised over content like the toast, with the error's
-/// red icon, the store's sentence in body ink and the next step as a button. It stays until it is resolved or
-/// dismissed; a problem is never hidden. The message is the store's own
-/// sentence and wraps to fit, with the same full text for VoiceOver.
+/// A notice concerning the whole panel: errors use the red error icon; a
+/// still-running import uses a neutral information icon. The store's sentence
+/// wraps in body ink and is accessible to VoiceOver until dismissed or resolved.
 struct AtticNotice: View {
     let message: String
+    var isInformational = false
     /// "Retry" when the failed step can run again; nil offers only Dismiss.
     var actionTitle: String?
     var onAction: (() -> Void)?
@@ -135,8 +134,9 @@ struct AtticNotice: View {
         let tokens = design.tokens
         let radius = AtticRadius.control(height: AtticControlSize.toastHeight)
         HStack(alignment: .center, spacing: AtticNoticeMetrics.gap) {
-            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium,
-                      ink: AtticStatusItem.Tone.error.iconInk)
+            AtticIcon(systemName: isInformational ? "info.circle" : "exclamationmark.circle",
+                      size: AtticErrorLineMetrics.iconSize, weight: .medium,
+                      ink: isInformational ? AtticStatusItem.Tone.normal.iconInk : AtticStatusItem.Tone.error.iconInk)
             Text(verbatim: message)
                 .font(AtticTextStyle.toast.font)
                 .foregroundStyle(tokens.ink(.body).color)
@@ -156,7 +156,7 @@ struct AtticNotice: View {
         .background(AtticPopoverBackground(cornerRadius: radius, exponent: AtticUndoToast.shape.exponent))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
-        .atticAnnounceErrors([message])
+        .atticAnnounceErrors(isInformational ? [] : [message])
         .atticControlProbe("Notice", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }

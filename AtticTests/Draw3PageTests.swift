@@ -239,6 +239,10 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertFalse(ready, "quit must be refused while the import remains in flight")
         XCTAssertLessThan(began.duration(to: .now), .seconds(2), "a stuck import must not hold up the quit reply")
         XCTAssertNotNil(model.saveNotice, "existing notice shows that the import is still running")
+        XCTAssertTrue(model.saveNotice?.isInformational == true, "A running import is not a save failure")
+
+        model.dismissSaveError()
+        XCTAssertNil(model.saveNotice, "Dismiss must clear the import notice without cancelling the import")
 
         release.finish()
         await importTask.value

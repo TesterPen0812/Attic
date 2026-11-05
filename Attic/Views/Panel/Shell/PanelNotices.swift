@@ -5,6 +5,7 @@ import SwiftUI
 struct PanelNoticeContent: Equatable {
     let message: String
     let canRetry: Bool
+    var isInformational = false
 }
 
 /// The Undo toast and the error notice, stacked above the page's bottom
@@ -35,6 +36,7 @@ struct PanelNoticeStack: View {
             if let notice {
                 AtticNotice(
                     message: notice.message,
+                    isInformational: notice.isInformational,
                     actionTitle: notice.canRetry ? String(localized: "Retry") : nil,
                     onAction: notice.canRetry ? onRetry : nil,
                     onDismiss: onDismissNotice
