@@ -122,6 +122,44 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertNil(detached.rows.rowID)
     }
 
+    func testV6QuitRefusalNamesTheActualFailedCalendarOwner() async throws {
+        let docked = try Fixture(); defer { docked.finish() }
+        let floating = try Fixture(); defer { floating.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(docked.rows, owner: .docked)
+        registry.register(floating.rows, owner: .floating)
+        await docked.rows.toggle(docked.event)
+        await floating.rows.toggle(floating.event)
+        docked.rows.title = "" // invalid: this draft belongs to the docked page
+        floating.rows.title = "Valid floating edit"
+
+        let outcome = await registry.prepareForTerminationResult()
+        XCTAssertEqual(outcome, .refused(.docked))
+        XCTAssertNotNil(docked.rows.rowID, "failed owner must keep its draft")
+        XCTAssertNil(floating.rows.rowID, "the other owner may close normally")
+    }
+
+    func testV7QuitWaitsForAnExistingInFlightCalendarSave() async throws {
+        let f = try Fixture(); defer { f.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(f.rows)
+        await f.rows.toggle(f.event)
+        f.rows.title = "Already saving"
+        f.writer.hold = true
+        let earlierClose = Task { await f.rows.close() }
+        for _ in 0..<100 where f.writer.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(f.writer.gate, "the existing save reached its writer")
+        var quitResult: Bool?
+        let quit = Task { @MainActor in quitResult = await registry.prepareForTerminationDurably() }
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertNil(quitResult, "quit must await the already running save")
+        gate.resume()
+        await XCTAssertTrueAsync(await earlierClose.value)
+        await quit.value
+        XCTAssertEqual(quitResult, true)
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, "Already saving")
+    }
+
     func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()

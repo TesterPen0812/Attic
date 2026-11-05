@@ -43,8 +43,9 @@ final class PanelKeyState: ObservableObject {
 
 @MainActor
 final class PanelUIState: ObservableObject {
-    /// The owner's current light-host budget: one shared footer/composer host
-    /// and previously built Tasks tab hosts. Heavy page content still expires.
+    /// Provisional engineering default pending owner-side idle and memory
+    /// measurements: retain the shared footer/composer and warmed Tasks tabs.
+    /// Heavy page content still expires under the existing release policy.
     static let retainsLightweightHostsWhenHidden = true
     let resumeDefaults: UserDefaults?
 
@@ -305,7 +306,16 @@ final class PanelUIState: ObservableObject {
     var isPanelOnScreen: Bool { revealCount > hideCount }
 
     func panelDidReveal() { revealCount &+= 1 }
-    func panelDidHide() { hideCount &+= 1 }
+    func panelDidHide() {
+        hideCount &+= 1
+        // SwiftUI may stop completing animations after the window orders out.
+        // No page is visibly travelling now; discard the old completion so
+        // it cannot end a new slide if the panel reopens immediately.
+        if pageTransit.sliding {
+            pageSlideGeneration &+= 1
+            pageTransit.sliding = false
+        }
+    }
 
     func requestSearch() {
         searchRequest &+= 1

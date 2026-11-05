@@ -629,7 +629,8 @@ final class NotesPageController: ObservableObject {
     /// Waiting never cancels the serialized write or releases its live owners.
     /// A slow disk returns control with guidance; the same action can be retried.
     var recoveryResponseTimeout: Duration = .seconds(2)
-    /// The functional ordering test can pause this read; production uses the real clock.
+    /// Injected by ordering tests; production uses the monotonic clock. The
+    /// deadline covers every write queued before this wait actually drains.
     var recoveryClockNow: () -> ContinuousClock.Instant = { .now }
     var recoveryWaitDidStart: (() -> Void)?
     /// Deterministic ordering seams; unset in the app.
@@ -639,37 +640,48 @@ final class NotesPageController: ObservableObject {
         let deadline = recoveryClockNow() + recoveryResponseTimeout
         let hadPendingWork = recoveryWork != nil
         if hadPendingWork { recoveryWaitDidStart?() }
-        if hadPendingWork {
-            let waiterID = UUID()
-            let drained = await withTaskCancellationHandler {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                    guard !Task.isCancelled, recoveryClockNow() < deadline else {
-                        continuation.resume(returning: false)
-                        return
+        var didReportDrain = false
+        while true {
+            // A continuation can wake just as another serialized write is
+            // queued. Re-check the actual worker after every suspension.
+            while recoveryWork != nil {
+                let waiterID = UUID()
+                let drained = await withTaskCancellationHandler {
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                        guard !Task.isCancelled, recoveryClockNow() < deadline else {
+                            continuation.resume(returning: false)
+                            return
+                        }
+                        guard recoveryWork != nil else {
+                            continuation.resume(returning: true)
+                            return
+                        }
+                        let remaining = recoveryClockNow().duration(to: deadline)
+                        recoveryDrainWaiters[waiterID] = continuation
+                        recoveryDrainTimeouts[waiterID] = Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: remaining)
+                            guard !Task.isCancelled else { return }
+                            self?.finishRecoveryWaiter(waiterID, drained: false)
+                        }
                     }
-                    guard recoveryWork != nil else {
-                        continuation.resume(returning: true)
-                        return
-                    }
-                    recoveryDrainWaiters[waiterID] = continuation
-                    recoveryDrainTimeouts[waiterID] = Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: recoveryResponseTimeout)
-                        guard !Task.isCancelled else { return }
-                        self?.finishRecoveryWaiter(waiterID, drained: false)
-                    }
+                } onCancel: {
+                    Task { @MainActor [weak self] in self?.finishRecoveryWaiter(waiterID, drained: false) }
                 }
-            } onCancel: {
-                Task { @MainActor [weak self] in self?.finishRecoveryWaiter(waiterID, drained: false) }
+                guard drained, !Task.isCancelled else {
+                    reportRecoveryRetentionWarning(completedAction
+                        ? "Recovery data is still being saved."
+                        : "Recovery data is still being saved. Try again when saving finishes.",
+                        kind: .stillSaving, severity: completedAction ? .progress : .information)
+                    return false
+                }
             }
-            guard drained, !Task.isCancelled else {
-                reportRecoveryRetentionWarning(completedAction
-                    ? "Recovery data is still being saved."
-                    : "Recovery data is still being saved. Try again when saving finishes.",
-                    kind: .stillSaving, severity: completedAction ? .progress : .information)
-                return false
+            if hadPendingWork && !didReportDrain {
+                didReportDrain = true
+                await recoveryWaitDidDrain?()
+                continue // The drain observer can also queue a recovery write.
             }
+            break
         }
-        if hadPendingWork { await recoveryWaitDidDrain?() }
         clearPendingRecoveryWarnings()
         return true
     }
@@ -743,6 +755,13 @@ final class NotesPageController: ObservableObject {
             }
         }
     }
+    #if DEBUG
+    /// Exercises the real serialized recovery/waiter lifecycle in hosted tests.
+    func queueRecoveryWorkForTesting(_ action: @escaping @MainActor () async -> Void) {
+        queueRecoveryWork(action)
+    }
+    func awaitRecoveryForTesting() async -> Bool { await awaitRecoveryForUser() }
+    #endif
     private var recoveryWorkToken: UUID?
 
     private var newestRecovered: NoteSession?

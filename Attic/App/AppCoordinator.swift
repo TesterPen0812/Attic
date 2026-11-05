@@ -1102,9 +1102,23 @@ final class AppCoordinator: ObservableObject {
     }
 
     func prepareForTerminationDurably() async -> Bool {
-        guard await CalendarDraftTerminationRegistry.shared.prepareForTerminationDurably() else {
-            if !panelController.pullOut.bringForward(.calendar, switchesDocked: false) {
-                hoverMonitor.revealProgrammatically(section: .calendar)
+        let calendar = await CalendarDraftTerminationRegistry.shared.prepareForTerminationResult()
+        if case let .refused(owner) = calendar {
+            switch owner {
+            case .floating:
+                if !panelController.pullOut.bringForward(.calendar, switchesDocked: false) {
+                    hoverMonitor.revealProgrammatically(section: .calendar)
+                }
+            case .docked:
+                if panelController.pullOut.state.isOut(.calendar),
+                   let floating = panelController.pullOut.panel(for: .calendar) {
+                    _ = panelController.pullOut.bringForward(.calendar, switchesDocked: false)
+                    floating.toasts.show(
+                        String(localized: "The Calendar draft in the docked panel couldn't be saved. Dock Calendar to edit it."),
+                        actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+                } else {
+                    hoverMonitor.revealProgrammatically(section: .calendar)
+                }
             }
             return false
         }

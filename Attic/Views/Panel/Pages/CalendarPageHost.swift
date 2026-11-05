@@ -6,29 +6,46 @@ import SwiftUI
 final class CalendarDraftTerminationRegistry {
     static let shared = CalendarDraftTerminationRegistry()
 
+    enum Owner: Equatable { case docked, floating }
+    enum Preparation: Equatable { case ready, refused(Owner) }
+
     private final class Entry {
         weak var rows: CalendarEventRowState?
-        init(_ rows: CalendarEventRowState) { self.rows = rows }
+        let owner: Owner
+        init(_ rows: CalendarEventRowState, owner: Owner) { self.rows = rows; self.owner = owner }
     }
 
     private var entries: [Entry] = []
 
-    func register(_ rows: CalendarEventRowState) {
+    func register(_ rows: CalendarEventRowState, owner: Owner = .docked) {
         entries.removeAll { $0.rows == nil }
         guard !entries.contains(where: { $0.rows === rows }) else { return }
-        entries.append(Entry(rows))
+        entries.append(Entry(rows, owner: owner))
     }
 
     func prepareForTerminationDurably() async -> Bool {
+        await prepareForTerminationResult() == .ready
+    }
+
+    func prepareForTerminationResult() async -> Preparation {
         entries.removeAll { $0.rows == nil }
-        let owners = entries.compactMap(\.rows)
-        var allSaved = true
-        for rows in owners {
-            if !(await rows.close()) { allSaved = false }
+        let owners = entries.compactMap { entry -> (CalendarEventRowState, Owner)? in
+            guard let rows = entry.rows else { return nil }
+            return (rows, entry.owner)
         }
+        var failedOwner: Owner?
+        for (rows, owner) in owners {
+            let settled = await rows.waitForInFlightWorkBeforeQuit()
+            let closed = settled ? await rows.close() : false
+            if !closed, failedOwner == nil { failedOwner = owner }
+        }
+        if let failedOwner { return .refused(failedOwner) }
         // An await can admit a newly mounted panel or newer typing. Never
         // approve quit while any owner still holds an open draft.
-        return allSaved && !entries.contains { $0.rows?.rowID != nil }
+        if let stillOpen = entries.first(where: { $0.rows?.rowID != nil }) {
+            return .refused(stillOpen.owner)
+        }
+        return .ready
     }
 }
 
@@ -42,14 +59,15 @@ final class CalendarPageState: ObservableObject {
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
-    func model(store: TaskStore, resumeDefaults: UserDefaults? = nil) -> CalendarPageModel {
+    func model(store: TaskStore, resumeDefaults: UserDefaults? = nil,
+               owner: CalendarDraftTerminationRegistry.Owner = .docked) -> CalendarPageModel {
         if let model { return model }
         let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
             guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
             return try CalendarEventWriters.makeDefault(undoRoute: undo)
         }, resumeDefaults: resumeDefaults)
         model = made
-        CalendarDraftTerminationRegistry.shared.register(made.eventRows)
+        CalendarDraftTerminationRegistry.shared.register(made.eventRows, owner: owner)
         return made
     }
 }
@@ -67,15 +85,18 @@ struct CalendarPageHost: View {
     var taskNotes: TaskNoteEntryServices?
 
     var body: some View {
-        CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults), layout: layout,
-                     taskActions: taskActions, onNewTask: onNewTask, panelIsVisible: uiState.isPanelOnScreen)
+        CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults,
+                                        owner: uiState.isFloating ? .floating : .docked),
+                     layout: layout, taskActions: taskActions, onNewTask: onNewTask,
+                     panelIsVisible: uiState.isPanelOnScreen)
     }
 
     private var taskActions: CalendarTaskRowActions {
         CalendarTaskRowActions(
             toggleDone: { [store] id in CalendarAgendaCommands.toggleDone(id, store: store) },
             open: { [uiState, state, store] id in
-                let query = state.model(store: store).searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let query = state.model(store: store, owner: uiState.isFloating ? .floating : .docked)
+                    .searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
                 if let taskNotes { taskNotes.open(id, String(localized: "Back to Calendar")) }
                 else { uiState.openTaskNote(id, from: .calendar, row: id, backTitle: String(localized: "Back to Calendar")) }

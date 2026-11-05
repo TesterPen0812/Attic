@@ -15,7 +15,47 @@ final class CalendarEventRowState: ObservableObject {
     @Published var calendarID = ""
     @Published var expandedChoice: Choice?
     @Published private(set) var failure: String?
-    @Published private(set) var busy = false
+    @Published private(set) var busy = false {
+        didSet {
+            if !busy {
+                for id in Array(idleWaiters.keys) { finishIdleWaiter(id, settled: true) }
+            }
+        }
+    }
+
+    private var idleWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var idleTimeouts: [UUID: Task<Void, Never>] = [:]
+    var terminationIdleTimeout: Duration = .seconds(2)
+
+    /// A prior close, delete or toggle can already own an asynchronous writer.
+    /// Quit waits for it to settle, bounded so a hung writer cannot hang quit.
+    func waitForInFlightWorkBeforeQuit() async -> Bool {
+        guard busy else { return true }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                guard busy, !Task.isCancelled else {
+                    continuation.resume(returning: !Task.isCancelled)
+                    return
+                }
+                idleWaiters[id] = continuation
+                let timeout = terminationIdleTimeout
+                idleTimeouts[id] = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: timeout)
+                    guard !Task.isCancelled else { return }
+                    self?.finishIdleWaiter(id, settled: false)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finishIdleWaiter(id, settled: false) }
+        }
+    }
+
+    private func finishIdleWaiter(_ id: UUID, settled: Bool) {
+        guard let continuation = idleWaiters.removeValue(forKey: id) else { return }
+        idleTimeouts.removeValue(forKey: id)?.cancel()
+        continuation.resume(returning: settled)
+    }
 
     enum Choice { case calendar, length }
     var canEdit: Bool { owned != nil }

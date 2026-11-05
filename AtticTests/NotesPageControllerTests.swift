@@ -3467,6 +3467,27 @@ private final class QuitImportBarrier {
 
 extension NotesPageControllerTests {
     #if !ATTIC_GENERATED_TESTS
+    func testV12WaiterRechecksRecoveryQueuedAsItWakes() async throws {
+        let controller = NotesPageController(store: store, journal: nil)
+        controller.recoveryResponseTimeout = .seconds(5)
+        let firstWrite = QuitImportBarrier(), secondWrite = QuitImportBarrier()
+        controller.queueRecoveryWorkForTesting { await firstWrite.pause() }
+        try await firstWrite.waitUntilEntered()
+        controller.recoveryWaitDidDrain = {
+            controller.queueRecoveryWorkForTesting { await secondWrite.pause() }
+        }
+        var result: Bool?
+        let waiter = Task { @MainActor in result = await controller.awaitRecoveryForTesting() }
+        firstWrite.release()
+        try await secondWrite.waitUntilEntered()
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertNil(result, "the first recovery completion must not release a waiter past a newly queued write")
+        secondWrite.release()
+        await waiter.value
+        XCTAssertEqual(result, true)
+        await controller.waitForRecoveryWork()
+    }
+
     func testS17QuitAcceptsDurableImportWhenImportClearsTicketBeforeFinalCheck() async throws {
         try await assertQuitDuringImport(importResumesFirst: true)
     }
