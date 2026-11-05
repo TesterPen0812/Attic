@@ -2626,6 +2626,10 @@ struct TasksPage: View {
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
+        // The shared card owns the keyboard even if its editor temporarily
+        // loses first responder. In particular, Done must not turn its
+        // draft's next letter into a new search.
+        guard panelComposer?.isOpen() != true else { return .ignored }
         // A field that is typing keeps every key, ⌘Z included (round 5:
         // the owner's Backspace in the tag picker deleted the task).
         guard !AtticTextInput.hasKeyboard else { return .ignored }
