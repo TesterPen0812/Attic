@@ -1,3 +1,9 @@
+## 2026-11-05 · Pop-over row pressed state
+
+Shared pop-over rows now respond to the button's actual pressed state with the
+existing pressed fill. Keyboard selection, disabled inks and control geometry
+keep their prior appearance.
+
 ## 2026-11-05 · Keyboard focus on custom page controls
 
 Calendar day keys, Draw toolbar chips, small controls, status and notice
