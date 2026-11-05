@@ -307,7 +307,13 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// newest other canvas (or a new one), and a toast offers Undo.
     private func delete(_ canvas: DrawCanvas) {
         let result = store.perform(.deleteCanvas, on: canvas.id)
-        if case .held = result { return }
+        switch result {
+        case .saved, .unchanged: break
+        case let .retry(message), let .held(message):
+            toasts?.show(message.isEmpty ? String(localized: "The canvas couldn’t be deleted.") : message,
+                         actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+            return
+        }
         finish()
         if let next = ((try? store.library()) ?? []).first(where: { $0.id != canvas.id }) {
             actions.open(next.id)
