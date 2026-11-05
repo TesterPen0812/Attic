@@ -246,6 +246,15 @@ final class NotesLibraryModel: ObservableObject {
 
     func clearSearch() { query = "" }
 
+    /// Opening a note may await disk work while the person edits the library
+    /// search. Dismissal clears the old search synchronously; keep a newer
+    /// query if this request no longer owns the field.
+    func dismissAfterOpenedNote(_ controller: NotesPageController, requestedQuery: String) {
+        let newerQuery = query == requestedQuery ? nil : query
+        controller.dismissLibrary()
+        if let newerQuery { query = newerQuery }
+    }
+
     private func scheduleSearch(immediately: Bool = false) {
         searchTask?.cancel()
         searchGeneration &+= 1

@@ -843,8 +843,7 @@ struct NotesEditorPage: View {
         } else {
             Task { @MainActor in
                 if await controller.openFromLibrary(noteID: id, searchQuery: query) {
-                    controller.dismissLibrary()
-                    if library.query == query { library.clearSearch() }
+                    library.dismissAfterOpenedNote(controller, requestedQuery: query)
                 }
             }
             return
