@@ -449,6 +449,7 @@ struct NotesLibraryView: View {
                                         isHighlighted: row.id == model.highlightedID,
                                         commands: { rowCommands(row.id) }, anchors: anchors,
                                         onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                                        .equatable()
                                         // Rows sit 2 apart, no dividers.
                                         .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
                                         .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
@@ -690,7 +691,7 @@ extension EventModifiers {
     }
 }
 
-private struct PreparedNotesLibraryRow: View {
+private struct PreparedNotesLibraryRow: View, Equatable {
     let library: NotesLibraryModel
     let store: NoteStore
     let revision: UInt64
@@ -705,6 +706,14 @@ private struct PreparedNotesLibraryRow: View {
         NotesLibraryRow(details: library.libraryRow(row, store: store), thumbnails: library.thumbnails,
                         isSelected: isSelected, isHighlighted: isHighlighted,
                         commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
+                && lhs.row == rhs.row && lhs.isSelected == rhs.isSelected
+                && lhs.isHighlighted == rhs.isHighlighted && lhs.anchors === rhs.anchors
+        }
     }
 }
 

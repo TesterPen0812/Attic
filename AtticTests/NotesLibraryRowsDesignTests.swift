@@ -28,6 +28,19 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
     private func library() -> NotesLibraryModel { NotesLibraryModel(search: { _ in [] }, store: store) }
 
+    func testSW04ArrowNavigationReusesOrderedIDsUntilRowsChange() throws {
+        let first = try create("first")
+        _ = try create("second")
+        let model = library()
+        var groups = model.unfolded(model.groups(store: store, drafts: [], prepareSummaries: false))
+        for _ in 0..<20 { model.moveHighlight(by: 1, in: groups, from: nil) }
+        XCTAssertEqual(model.navigationBuildCount, 1)
+        _ = try create("third")
+        groups = model.unfolded(model.groups(store: store, drafts: [], prepareSummaries: false))
+        model.moveHighlight(by: -1, in: groups, from: first)
+        XCTAssertEqual(model.navigationBuildCount, 2, "a changed inventory must rebuild the navigation index")
+    }
+
     // MARK: Line two
 
     func testTheRowShowsTheFirstTagSkippingTheFilteredOne() throws {
