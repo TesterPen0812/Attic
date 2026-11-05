@@ -1420,7 +1420,7 @@ struct TasksPage: View {
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, glides: false) },
-                              cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
+                              cell: { row, run in cell(row, tab: .done, group: [], run: run, drawn: drawn) },
                               proxies: listProxies,
                               pointer: pointer,
                               focusSelection: { id in setFocus(id) },
@@ -1452,6 +1452,7 @@ struct TasksPage: View {
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
         let rows = model.rows(for: tab)
+        let selectionRuns = TasksSelectionRuns.make(ids: rows.map(\.id), selected: model.selection, expanded: model.expanded)
         let sections = model.sections(for: tab)
         let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
@@ -1484,7 +1485,7 @@ struct TasksPage: View {
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if let row = entry.row {
-                            cell(row, tab: tab, group: entry.reorderIDs, drawn: drawn)
+                            cell(row, tab: tab, group: entry.reorderIDs, run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                 .id(row.id)
                                 .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                                 // A moved row pops back in with the feel (1, none, in Calm).
@@ -1567,7 +1568,7 @@ struct TasksPage: View {
                         .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
                         if model.completedTodayExpanded {
                             ForEach(sections.done) { row in
-                                cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
+                                cell(row, tab: tab, group: groups[row.status] ?? [], run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                     .id(row.id)
                             }
                         }
@@ -1630,7 +1631,7 @@ struct TasksPage: View {
     /// `drawn` false: the page is kept built but not drawn; the row does no
     /// work until it is (round 11).
     @ViewBuilder
-    private func cell(_ row: TasksListRow, tab: TasksTab, group: [UUID], drawn: Bool = true) -> some View {
+    private func cell(_ row: TasksListRow, tab: TasksTab, group: [UUID], run: AtticSelectionRun, drawn: Bool = true) -> some View {
         let id = row.id
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
@@ -1670,7 +1671,6 @@ struct TasksPage: View {
             crossDay: { location in updateDayDrop(for: id, in: tab, at: location) }
         ) { live in
             let isSelected = model.selection.contains(id)
-            let run = selectionRun(for: id, in: tab)
             let isExpanded = expanded()
             // Only the page that answers the keyboard opens an editor: the
             // copy a kept page draws of the same task shows none (round 12).
@@ -1927,20 +1927,6 @@ struct TasksPage: View {
             TasksPickerFailureLine(model: model, id: id, closeOnRetrySuccess: nil)
         }
         .onDisappear { model.clearPickerFailure() }
-    }
-
-    private func selectionRun(for id: UUID, in tab: TasksTab) -> AtticSelectionRun {
-        guard model.selection.contains(id), model.selection.count > 1 else { return .single }
-        let ids = tab == .done ? model.doneDays().flatMap { $0.rows.map(\.id) } : model.rows(for: tab).map(\.id)
-        guard let index = ids.firstIndex(of: id) else { return .single }
-        let above = index > 0 && model.selection.contains(ids[index - 1]) && !model.expanded.contains(ids[index - 1])
-        let below = index + 1 < ids.count && model.selection.contains(ids[index + 1]) && !model.expanded.contains(id)
-        switch (above, below) {
-        case (false, false): return .single
-        case (false, true): return .first
-        case (true, true): return .middle
-        case (true, false): return .last
-        }
     }
 
     private func visibleIDs() -> [UUID] {
@@ -5183,6 +5169,27 @@ enum TasksScrollerRule {
 }
 
 // MARK: - Tab order (A10)
+
+/// One linear pass for a list's selection geometry. Lazy cells consume the
+/// resulting constant-time lookup instead of scanning the list on every draw.
+enum TasksSelectionRuns {
+    static func make(ids: [UUID], selected: Set<UUID>, expanded: Set<UUID>) -> [UUID: AtticSelectionRun] {
+        guard selected.count > 1 else { return [:] }
+        var runs: [UUID: AtticSelectionRun] = [:]
+        runs.reserveCapacity(selected.count)
+        for (index, id) in ids.enumerated() where selected.contains(id) {
+            let above = index > 0 && selected.contains(ids[index - 1]) && !expanded.contains(ids[index - 1])
+            let below = index + 1 < ids.count && selected.contains(ids[index + 1]) && !expanded.contains(id)
+            switch (above, below) {
+            case (false, false): runs[id] = .single
+            case (false, true): runs[id] = .first
+            case (true, true): runs[id] = .middle
+            case (true, false): runs[id] = .last
+            }
+        }
+        return runs
+    }
+}
 
 /// The stop Tab last sent the keyboard to (`TasksPage.settleKeyboard`).
 @MainActor
