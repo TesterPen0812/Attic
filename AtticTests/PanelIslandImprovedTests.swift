@@ -92,8 +92,8 @@ final class PanelIslandImprovedTests: XCTestCase {
 
     func testLyingFlatTheItemsAreWider() {
         let flat = L.size(spot: .acrossOpenEnd)
-        XCTAssertEqual(flat, CGSize(width: 115, height: 27))
-        XCTAssertEqual(L.size(spot: .screenSideMiddle), CGSize(width: 27, height: 99), "standing is unchanged")
+        XCTAssertEqual(flat, CGSize(width: 146, height: 27))
+        XCTAssertEqual(L.size(spot: .screenSideMiddle), CGSize(width: 27, height: 126))
         let island = CGRect(origin: .zero, size: flat)
         XCTAssertEqual(L.itemFrame(0, in: island), CGRect(x: 3, y: 3, width: 25, height: 21))
         XCTAssertEqual(L.itemFrame(3, in: island).maxX, 112)

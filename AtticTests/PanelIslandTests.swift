@@ -30,7 +30,7 @@ final class PanelIslandTests: XCTestCase {
         let (panel, island) = placed(in: visible, corner: corner)
         let what = "\(corner) \(note)"
         XCTAssertEqual(island.width, 27, accuracy: 0.01, "\(what): 27 pt wide", file: file, line: line)
-        XCTAssertEqual(island.height, CGFloat(99), accuracy: 0.01, "\(what): four 21 pt items", file: file, line: line)
+        XCTAssertEqual(island.height, CGFloat(126), accuracy: 0.01, "\(what): five 21 pt items", file: file, line: line)
         switch corner {
         case .topRight, .bottomRight:
             XCTAssertEqual(visible.maxX - island.maxX, 10, accuracy: 0.01, "\(what): 10 pt from the edge (L2)", file: file, line: line)
@@ -94,7 +94,7 @@ final class PanelIslandTests: XCTestCase {
             XCTAssertEqual(item.minX - island.minX, 3, accuracy: 0.01)
             XCTAssertEqual(island.maxY - item.maxY, 3 + CGFloat(index) * 24, accuracy: 0.01)
         }
-        XCTAssertEqual(L.itemFrame(3, in: island).minY - island.minY, 3, accuracy: 0.01)
+        XCTAssertEqual(L.itemFrame(4, in: island).minY - island.minY, 3, accuracy: 0.01)
         let rightLabel = L.labelWindowFrame(island: island, corner: .topRight, spot: standing)
         XCTAssertEqual(island.minX - rightLabel.maxX, 6, accuracy: 0.01, "right corners: the label sits left of the island")
         let leftLabel = L.labelWindowFrame(island: island, corner: .bottomLeft, spot: standing)

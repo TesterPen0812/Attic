@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -152,5 +153,62 @@ final class IslandTopRowRefineTests: XCTestCase {
         XCTAssertEqual(more.minX - tabs.maxX, 2 * TasksDesignMetrics.footerGap)
         XCTAssertEqual(tabs.height, more.height, "one line")
         XCTAssertEqual(tabs.minY, more.minY)
+    }
+
+    // MARK: Settings in the island
+
+    func testSettingsIsTheIslandsLastItemAndNeverAPage() {
+        typealias L = PanelIslandLayout
+        XCTAssertEqual(L.items.last, .settings)
+        XCTAssertEqual(L.items.count, L.pages.count + 1)
+        XCTAssertEqual(L.height(), 126, "3 + 5 × 21 + 4 × 3 + 3 + 3")
+        XCTAssertEqual(L.flatLength(), 146, "3 + 5 × 25 + 4 × 3 + 3 + 3")
+        XCTAssertEqual(L.restDots(current: 0).count, L.pages.count, "a dot per page, none for Settings")
+
+        for size in [CGSize(width: 27, height: L.height()), CGSize(width: L.flatLength(), height: 27)] {
+            let island = CGRect(origin: .zero, size: size)
+            let lastPage = L.itemFrame(L.pages.count - 1, in: island), settings = L.itemFrame(L.pages.count, in: island)
+            XCTAssertTrue(island.insetBy(dx: L.inset - 0.01, dy: L.inset - 0.01).contains(settings), "inside the capsule's inset")
+            let apart = size.width > size.height ? settings.minX - lastPage.maxX : lastPage.minY - settings.maxY
+            XCTAssertEqual(apart, L.gap + L.settingsExtraGap)
+            XCTAssertNil(PanelIslandPullTracker.page(at: CGPoint(x: settings.midX, y: settings.midY), in: island),
+                         "Settings can't be pulled out")
+        }
+    }
+
+    func testTheIslandsSettingsItemOpensSettingsAndNeverSwitchesPage() {
+        var delays: [() -> Void] = []
+        let island = PanelIslandModel(schedule: { _, run in delays.append(run) })
+        var opened = 0, requests = 0, clicks = 0
+        island.onOpenSettings = { opened += 1 }
+        island.onClick = { clicks += 1 }
+        let subscription = island.requests.sink { _ in requests += 1 }
+        defer { subscription.cancel() }
+
+        island.clickSettings()
+        XCTAssertEqual(opened, 1)
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(clicks, 0, "the page switch's activation is not Settings'")
+        XCTAssertEqual(island.page, .tasks)
+
+        island.suppressesClicks = true
+        island.clickSettings()
+        XCTAssertEqual(opened, 1, "the end of a pull is not a click")
+    }
+
+    func testPointingAtSettingsNamesItLikeAPage() {
+        var delays: [() -> Void] = []
+        let island = PanelIslandModel(schedule: { _, run in delays.append(run) })
+        island.point(atItem: .settings)
+        XCTAssertEqual(island.pointedItem, .settings)
+        XCTAssertNil(island.pointed, "not a page")
+        XCTAssertNil(island.labelItem, "the first name waits")
+        delays.forEach { $0() }
+        XCTAssertEqual(island.labelItem, .settings)
+        XCTAssertEqual(island.labelItem?.title, "Settings")
+        island.point(at: .notes)
+        XCTAssertEqual(island.labelPage, .notes, "moving on: at once")
+        island.leave(item: .settings)
+        XCTAssertEqual(island.pointed, .notes, "leaving an item the pointer already left changes nothing")
     }
 }

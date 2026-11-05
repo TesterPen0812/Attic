@@ -50,9 +50,9 @@ final class PanelIslandPositionTests: XCTestCase {
         eq(sideInset, spot.side == .screen ? 43 : PanelGeometry.screenInset, "the panel's side edge")
         eq(top ? visible.maxY - panel.maxY : panel.minY - visible.minY, screenEnd ? 43 : PanelGeometry.screenInset, "the panel's end")
         eq(panel.width, size.width, "the panel keeps its size")
-        // The island: 27 × 99, or 115 × 27 lying flat (L12: 25 pt items).
-        eq(island.width, spot.isFlat ? 115 : 27, "width")
-        eq(island.height, spot.isFlat ? 27 : 99, "height")
+        // The island: 27 × 126, or 146 × 27 lying flat (L12: 25 pt items).
+        eq(island.width, spot.isFlat ? 146 : 27, "width")
+        eq(island.height, spot.isFlat ? 27 : 126, "height")
         // L2: 6 pt from the panel, 10 pt from the screen's edge.
         switch spot.side {
         case .screen:

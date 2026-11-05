@@ -86,6 +86,25 @@ enum PanelIslandSpot: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// One of the island's items: a page, or Settings after them (Accepted
+/// 2026-11-05, "Settings in the island"). Settings opens its own window, so
+/// it never takes the selection chip, a dot at rest or a pull.
+enum PanelIslandItem: Hashable {
+    case page(PanelPage)
+    case settings
+
+    var page: PanelPage? {
+        if case let .page(page) = self { page } else { nil }
+    }
+
+    var title: String {
+        switch self {
+        case let .page(page): page.title
+        case .settings: String(localized: "Settings")
+        }
+    }
+}
+
 /// Which side of the island its name label shows on: always the panel's.
 enum PanelIslandLabelSide: Equatable { case left, right, above, below }
 
@@ -116,8 +135,11 @@ enum PanelIslandLayout {
     /// Placed on whole points toward the panel's end (15 pt, 28.5 pt
     /// centres), so the window lands exactly where it is placed.
     static let endInset: CGFloat = 15.5
-    /// L12: lying flat, the items are 25 × 21 (the capsule 115 × 27).
+    /// L12: lying flat, the items are 25 × 21.
     static let flatItemWidth: CGFloat = 25
+    /// Settings sits this much further from the pages than they do from
+    /// each other: it is an action, not one more page.
+    static let settingsExtraGap: CGFloat = 3
 
     // D4, dots at rest: a 13 × 43 capsule, a dot per page 10 pt apart, the
     // current page's 6 pt at full ink, the others 5 pt at 32 %.
@@ -185,6 +207,8 @@ enum PanelIslandLayout {
     static let windowMargin: CGFloat = 22
 
     static var pages: [PanelPage] { PanelPage.allCases }
+    /// The pages, then Settings.
+    static var items: [PanelIslandItem] { pages.map(PanelIslandItem.page) + [.settings] }
 
     /// An item's icon face: every item in full ink (the design's `isl.ink`),
     /// the chip alone marking the current page (the owner's recording of
@@ -199,13 +223,16 @@ enum PanelIslandLayout {
     /// one name is ever on screen (the owner's recording of build 1).
     static func labelFadesOut(pointed: PanelPage?) -> Bool { pointed == nil }
 
-    static func height(count: Int = PanelPage.allCases.count) -> CGFloat {
-        2 * inset + CGFloat(count) * item + CGFloat(max(count - 1, 0)) * gap
+    /// Standing: 2 × 3 + 5 × 21 + 4 × 3 + 3 = 126 pt.
+    static func height() -> CGFloat {
+        let count = items.count
+        return 2 * inset + CGFloat(count) * item + CGFloat(count - 1) * gap + settingsExtraGap
     }
 
-    /// Lying flat: 2 × 3 + 4 × 25 + 3 × 3 = 115 pt (L12).
-    static func flatLength(count: Int = PanelPage.allCases.count) -> CGFloat {
-        2 * inset + CGFloat(count) * flatItemWidth + CGFloat(max(count - 1, 0)) * gap
+    /// Lying flat: 2 × 3 + 5 × 25 + 4 × 3 + 3 = 146 pt.
+    static func flatLength() -> CGFloat {
+        let count = items.count
+        return 2 * inset + CGFloat(count) * flatItemWidth + CGFloat(count - 1) * gap + settingsExtraGap
     }
 
     /// Whether a flat island lies under the panel (a top corner's open end,
@@ -258,7 +285,7 @@ enum PanelIslandLayout {
         return area
     }
 
-    /// The capsule's size: 27 × 99 standing, 115 × 27 lying flat.
+    /// The capsule's size: 27 × 126 standing, 146 × 27 lying flat.
     static func size(spot: PanelIslandSpot) -> CGSize {
         spot.isFlat ? CGSize(width: flatLength(), height: width) : CGSize(width: width, height: height())
     }
@@ -308,13 +335,14 @@ enum PanelIslandLayout {
     }
 
     /// An item's square in screen points: top to bottom, or left to right
-    /// in a flat island (wider than tall), in the pages' order.
+    /// in a flat island (wider than tall), in the items' order.
     static func itemFrame(_ index: Int, in island: CGRect) -> CGRect {
+        let extra = index >= pages.count ? settingsExtraGap : 0
         if island.width > island.height {
-            let step = CGFloat(index) * (flatItemWidth + gap)
+            let step = CGFloat(index) * (flatItemWidth + gap) + extra
             return CGRect(x: island.minX + inset + step, y: island.minY + inset, width: flatItemWidth, height: item)
         }
-        let step = CGFloat(index) * (item + gap)
+        let step = CGFloat(index) * (item + gap) + extra
         return CGRect(x: island.minX + inset, y: island.maxY - inset - item - step, width: item, height: item)
     }
 
@@ -373,10 +401,10 @@ enum PanelIslandLayout {
         }
     }
 
-    /// Lying flat, the end of the island a page's name shows at: the
-    /// first half's on the left, the rest on the right.
-    static func flatLabelOnLeft(_ page: PanelPage) -> Bool {
-        (pages.firstIndex(of: page) ?? 0) < (pages.count + 1) / 2
+    /// Lying flat, the end of the island an item's name shows at: the
+    /// first half of the pages' on the left, the rest on the right.
+    static func flatLabelOnLeft(_ item: PanelIslandItem) -> Bool {
+        (items.firstIndex(of: item) ?? 0) < (pages.count + 1) / 2
     }
 
     /// How the island's stand-in keeps its place on the surface as the
@@ -412,10 +440,14 @@ enum PanelIslandLayout {
 final class PanelIslandModel: ObservableObject {
     @Published private(set) var page: PanelPage = .tasks
     /// The item under the pointer. Never switches.
-    @Published private(set) var pointed: PanelPage?
+    @Published private(set) var pointedItem: PanelIslandItem?
     /// The item whose name label shows (L8): the first after 400 ms, the
     /// next at once while one shows or went less than 500 ms ago.
-    @Published private(set) var labelPage: PanelPage?
+    @Published private(set) var labelItem: PanelIslandItem?
+    /// The page under the pointer, if it is on one.
+    var pointed: PanelPage? { pointedItem?.page }
+    /// The page whose name label shows, if it is one's.
+    var labelPage: PanelPage? { labelItem?.page }
     /// D4: awake, the island draws its items; at rest, a dot per page.
     @Published private(set) var isAwake = false
     /// Where the island sits, for the rest capsule's place.
@@ -464,6 +496,8 @@ final class PanelIslandModel: ObservableObject {
     }
 
     var onOpenInOwnPanel: ((PanelPage) -> Void)?
+    /// The island's Settings item: the app's one Settings window.
+    var onOpenSettings: () -> Void = { AppCoordinator.shared?.openSettings() }
     var onPutBack: ((PanelPage) -> Void)?
 
     /// The menu and VoiceOver run these same commands. A page already out
@@ -504,33 +538,38 @@ final class PanelIslandModel: ObservableObject {
     }
 
     /// The pointer is over `page`'s item (nil: over none).
-    func point(at page: PanelPage?) {
-        if pointed == nil, page != nil { approaches.send() }
-        if pointed != page { pointed = page }
+    func point(at page: PanelPage?) { point(atItem: page.map(PanelIslandItem.page)) }
+
+    /// The pointer is over `item` (nil: over none).
+    func point(atItem item: PanelIslandItem?) {
+        if pointedItem == nil, item != nil { approaches.send() }
+        if pointedItem != item { pointedItem = item }
         labelTurn &+= 1
-        guard let page else {
-            if labelPage != nil {
-                labelPage = nil
+        guard let item else {
+            if labelItem != nil {
+                labelItem = nil
                 labelHiddenAt = now()
             }
             return
         }
         wake()
         let recently = labelHiddenAt.map { now().timeIntervalSince($0) < PanelIslandLayout.labelFollow } ?? false
-        if labelPage != nil || recently {
-            if labelPage != page { labelPage = page }
+        if labelItem != nil || recently {
+            if labelItem != item { labelItem = item }
             return
         }
         let turn = labelTurn
         schedule(PanelIslandLayout.labelDelay) { [weak self] in
-            guard let self, self.labelTurn == turn, self.pointed == page else { return }
-            self.labelPage = page
+            guard let self, self.labelTurn == turn, self.pointedItem == item else { return }
+            self.labelItem = item
         }
     }
 
     /// The pointer left `page`'s item (another item may have it already).
-    func leave(_ page: PanelPage) {
-        if pointed == page { point(at: nil) }
+    func leave(_ page: PanelPage) { leave(item: .page(page)) }
+
+    func leave(item: PanelIslandItem) {
+        if pointedItem == item { point(atItem: nil) }
     }
 
     func click(_ page: PanelPage) {
@@ -538,6 +577,12 @@ final class PanelIslandModel: ObservableObject {
         guard !suppressesClicks else { return }
         onClick?()
         requests.send(page)
+    }
+
+    func clickSettings() {
+        wake()
+        guard !suppressesClicks else { return }
+        onOpenSettings()
     }
 
     // MARK: Resting and waking (D4)
@@ -576,7 +621,7 @@ final class PanelIslandModel: ObservableObject {
     func settle() {
         settleTurn &+= 1
         pointerNear = false
-        if pointed != nil { point(at: nil) }
+        if pointedItem != nil { point(atItem: nil) }
         if isAwake { isAwake = false }
     }
 }
@@ -586,10 +631,12 @@ final class PanelIslandModel: ObservableObject {
 /// The island (Accepted 2026-10-31 "Tall island", improved 2026-11-03): a
 /// capsule in the panel's own surface with an item per page, the current
 /// page on the grey selection chip, which travels to a new page on the pop
-/// spring (L5). Not in use and not pointed at, it rests as dots, one per
-/// page, in a narrow capsule on the panel's side (D4); waking, each dot
-/// travels to its item's place and grows into its icon. VoiceOver reads
-/// "Pages" with a named button per page, the current one selected.
+/// spring (L5), and Settings after them (Accepted 2026-11-05). Not in use
+/// and not pointed at, it rests as dots, one per page, in a narrow capsule
+/// on the panel's side (D4); waking, each dot travels to its item's place
+/// and grows into its icon, and Settings grows out of the last dot.
+/// VoiceOver reads "Pages" with a named button per page, the current one
+/// selected, then Settings.
 struct PanelIslandView: View {
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
@@ -599,7 +646,7 @@ struct PanelIslandView: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
-    @FocusState private var focused: PanelPage?
+    @FocusState private var focused: PanelIslandItem?
 
     private typealias L = PanelIslandLayout
 
@@ -691,8 +738,8 @@ struct PanelIslandView: View {
                     .allowsHitTesting(false)
                 // The hover's own chip, travelling as the marker does
                 // (Accepted 2026-11-05, "Animated selection").
-                AtticHoverChip(frame: awake ? model.pointed.flatMap(L.pages.firstIndex(of:)).map(itemRect) : nil,
-                               shown: model.pointed != model.page, cornerRadius: chipRadius)
+                AtticHoverChip(frame: awake ? model.pointedItem.flatMap(L.items.firstIndex(of:)).map(itemRect) : nil,
+                               shown: model.pointedItem != .page(model.page), cornerRadius: chipRadius)
             }
             ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
                 let rect = itemRect(index)
@@ -706,8 +753,55 @@ struct PanelIslandView: View {
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
             }
+            let settings = itemRect(L.pages.count)
+            Group {
+                if interactive {
+                    settingsItem(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                } else {
+                    settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                }
+            }
+            .frame(width: settings.width, height: settings.height)
+            .offset(x: settings.minX, y: settings.minY)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    /// Settings as drawn: no dot of its own at rest. It folds into the last
+    /// page's dot and grows back out of it, in the same motion as the pages.
+    private func settingsFace(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
+        let rect = itemRect(L.pages.count)
+        let centre = dotCentre(dots.count - 1, dots: dots)
+        let offset = awake ? CGSize.zero : CGSize(width: centre.x - rect.midX, height: centre.y - rect.midY)
+        let faceStyle = L.face(isSelected: false, solid: design.effectiveSurface == .solid)
+        return ZStack {
+            if awake, chips, model.pointedItem == .settings {
+                AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
+                    .fill(AtticSelectionMarker.hoverFill(design.tokens).color)
+            }
+            AtticIcon(systemName: "gearshape", size: AtticPageButtonMetrics.iconSize, weight: faceStyle.weight, ink: faceStyle.ink)
+                .scaleEffect(awake ? 1 : L.restDot / AtticPageButtonMetrics.iconSize)
+                .opacity(awake ? 1 : 0)
+                .offset(offset)
+        }
+        .frame(width: rect.width, height: rect.height)
+        .contentShape(Rectangle())
+    }
+
+    private func settingsItem(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
+        Button { model.clickSettings() } label: {
+            settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+        }
+        .buttonStyle(.plain)
+        .focused($focused, equals: .settings)
+        .focusEffectDisabled()
+        .atticFocusRing(focused == .settings && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
+        .onHover { inside in
+            if inside { model.point(atItem: .settings) } else { model.leave(item: .settings) }
+        }
+        .allowsHitTesting(awake)
+        .accessibilityLabel(PanelIslandItem.settings.title)
+        .accessibilityIdentifier("panel-island-settings")
     }
 
     /// An item as drawn: the hover fill (and under Reduce Motion its own
@@ -766,11 +860,11 @@ struct PanelIslandView: View {
             face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
-        .focused($focused, equals: page)
+        .focused($focused, equals: .page(page))
         .focusEffectDisabled()
         // Outlines are for keyboard focus only (Owner notes on
         // Attic Wave 2, "No outline from a click").
-        .atticFocusRing(focused == page && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
+        .atticFocusRing(focused == .page(page) && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
         .onHover { inside in
             if inside { model.point(at: page) } else { model.leave(page) }
         }
@@ -838,7 +932,7 @@ struct PanelIslandLabels: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
     /// The last name shown, kept while it fades out.
-    @State private var lastPage: PanelPage?
+    @State private var lastItem: PanelIslandItem?
 
     private typealias L = PanelIslandLayout
 
@@ -846,47 +940,49 @@ struct PanelIslandLabels: View {
     /// and changes its name at once, so two names never show together,
     /// even while one fades (Accepted 2026-11-04, #11).
     var body: some View {
-        let shownPage = model.isAwake ? model.labelPage : nil
-        let page = shownPage ?? lastPage
+        let shownItem = model.isAwake ? model.labelItem : nil
+        let item = shownItem ?? lastItem
         let size = model.isFlat
             ? CGSize(width: L.flatLength() + 2 * (L.labelGap + L.labelRoom), height: L.width)
             : CGSize(width: L.labelRoom, height: L.height())
         ZStack(alignment: .topLeading) {
-            if let page {
-                label(page, shown: shownPage != nil)
-                    .frame(width: slot(page, in: size).width, height: slot(page, in: size).height,
-                           alignment: alignment(page))
-                    .offset(x: slot(page, in: size).minX, y: slot(page, in: size).minY)
+            if let item {
+                label(item, shown: shownItem != nil)
+                    .frame(width: slot(item, in: size).width, height: slot(item, in: size).height,
+                           alignment: alignment(item))
+                    .offset(x: slot(item, in: size).minX, y: slot(item, in: size).minY)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(false)
-        .onChange(of: model.labelPage, initial: true) { _, now in
-            if let now, lastPage != now { lastPage = now }
+        .onChange(of: model.labelItem, initial: true) { _, now in
+            if let now, lastItem != now { lastItem = now }
         }
     }
 
-    /// Where a page's name sits in the label window.
-    private func slot(_ page: PanelPage, in size: CGSize) -> CGRect {
+    /// Where an item's name sits in the label window.
+    private func slot(_ item: PanelIslandItem, in size: CGSize) -> CGRect {
         if model.isFlat {
             let side = L.labelRoom
-            return CGRect(x: L.flatLabelOnLeft(page) ? 0 : size.width - side, y: 0, width: side, height: size.height)
+            return CGRect(x: L.flatLabelOnLeft(item) ? 0 : size.width - side, y: 0, width: side, height: size.height)
         }
-        let index = CGFloat(L.pages.firstIndex(of: page) ?? 0)
-        return CGRect(x: 0, y: L.inset + index * (L.item + L.gap), width: size.width, height: L.item)
+        let index = L.items.firstIndex(of: item) ?? 0
+        // The item's own place, measured from the window's top.
+        let island = CGRect(origin: .zero, size: CGSize(width: L.width, height: size.height))
+        return CGRect(x: 0, y: island.maxY - L.itemFrame(index, in: island).maxY, width: size.width, height: L.item)
     }
 
-    private func alignment(_ page: PanelPage) -> Alignment {
-        if model.isFlat { return L.flatLabelOnLeft(page) ? .trailing : .leading }
+    private func alignment(_ item: PanelIslandItem) -> Alignment {
+        if model.isFlat { return L.flatLabelOnLeft(item) ? .trailing : .leading }
         return model.labelSide == .left ? .trailing : .leading
     }
 
-    /// A page's name: it slides in 4 pt from the island's side.
-    private func label(_ page: PanelPage, shown: Bool) -> some View {
+    /// An item's name: it slides in 4 pt from the island's side.
+    private func label(_ item: PanelIslandItem, shown: Bool) -> some View {
         let towardIsland: CGSize = model.isFlat
-            ? CGSize(width: L.flatLabelOnLeft(page) ? L.labelSlide : -L.labelSlide, height: 0)
+            ? CGSize(width: L.flatLabelOnLeft(item) ? L.labelSlide : -L.labelSlide, height: 0)
             : (model.labelSide == .left ? CGSize(width: L.labelSlide, height: 0) : CGSize(width: -L.labelSlide, height: 0))
-        return Text(page.title)
+        return Text(item.title)
             .font(.system(size: L.labelFontSize, weight: .medium))
             .foregroundStyle(design.tokens.ink(.heading).color)
             .lineLimit(1)

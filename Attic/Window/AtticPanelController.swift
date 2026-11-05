@@ -377,7 +377,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // shows makes a snapshot taken before stale.
         uiState.island.$page.removeDuplicates().map { _ in false }
             .merge(with: uiState.island.$outPages.removeDuplicates().map { _ in false },
-                   uiState.island.$pointed.removeDuplicates().map { _ in true })
+                   uiState.island.$pointedItem.removeDuplicates().map { _ in true })
             .dropFirst(3)
             .sink { [weak self] hoverOnly in self?.contentContainer?.noteContentMayChange(hoverOnly: hoverOnly) }
             .store(in: &cancellables)
