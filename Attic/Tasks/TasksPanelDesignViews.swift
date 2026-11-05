@@ -636,7 +636,7 @@ struct TasksFoldBody: ViewModifier, Animatable {
     func body(content: Content) -> some View {
         let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
         TasksFoldLayout(visible: visible) { content }
-            .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
+            .modifier(RenderLabComposerClip(visible: visible ?? TasksFoldClip.open))
             .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
     }
 }
@@ -668,6 +668,16 @@ struct TasksFoldClip: Shape {
 
     func path(in rect: CGRect) -> Path {
         Path(CGRect(x: rect.minX - 1_000, y: rect.minY - 1_000, width: rect.width + 2_000, height: 1_000 + visible))
+    }
+}
+
+private struct RenderLabComposerClip: ViewModifier {
+    let visible: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RenderLabFlags.noComposerClip { content }
+        else { content.clipShape(TasksFoldClip(visible: visible)) }
     }
 }
 

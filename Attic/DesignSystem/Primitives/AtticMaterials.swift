@@ -123,7 +123,7 @@ struct AtticRecipeShapeBackground<S: InsettableShape>: View {
     var body: some View {
         let reach = min(max(recipe.sheenReach, 0.01), 0.45)
         ZStack {
-            if recipe.shadow.alpha > 0 {
+            if recipe.shadow.alpha > 0 && !RenderLabFlags.noControlShadow {
                 AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
             }
             if let base = recipe.base {
@@ -593,16 +593,20 @@ struct AtticOutsideShadow<S: Shape>: View {
     }
 
     var body: some View {
-        ZStack {
-            shape
-                .fill(Color.black)
-                .padding(0.5)
-                .shadow(color: color.color, radius: radius, x: 0, y: y)
-            shape
-                .fill(Color.black)
-                .blendMode(.destinationOut)
+        Group {
+            if !RenderLabFlags.noControlShadow {
+                ZStack {
+                    shape
+                        .fill(Color.black)
+                        .padding(0.5)
+                        .shadow(color: color.color, radius: radius, x: 0, y: y)
+                    shape
+                        .fill(Color.black)
+                        .blendMode(.destinationOut)
+                }
+                .compositingGroup()
+            }
         }
-        .compositingGroup()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

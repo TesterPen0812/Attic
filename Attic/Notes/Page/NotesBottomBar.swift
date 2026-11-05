@@ -65,7 +65,7 @@ struct NotesTagBar: View {
 
     var body: some View {
         let m = NotesBarMetrics.self
-        let motion = design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)
+        let motion = design.reduceMotion || RenderLabFlags.noTagLayout ? nil : TasksDesignMetrics.curve(0.26)
         let collapsed = tags.isEmpty
         PanelTagBarWidth(collapsed: collapsed) {
             // Sizes the bar: All and the tags at their own widths.
@@ -81,8 +81,8 @@ struct NotesTagBar: View {
         }
         .frame(height: m.control)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion), value: tags)
-        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion), value: selection)
+        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion || RenderLabFlags.noTagLayout), value: tags)
+        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion || RenderLabFlags.noTagLayout), value: selection)
     }
 
     /// The width's motion as tags come and go (the app's expand preset;
@@ -154,17 +154,7 @@ struct NotesTagBar: View {
                 withAnimation(motion) { proxy.scrollTo(chosen ?? allID, anchor: .center) }
             }
         }
-        .mask {
-            HStack(spacing: 0) {
-                LinearGradient(colors: [.black.opacity(cutOff.leading ? 0 : 1), .black],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: m.endFade)
-                Rectangle()
-                LinearGradient(colors: [.black, .black.opacity(cutOff.trailing ? 0 : 1)],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: m.endFade)
-            }
-        }
+        .modifier(RenderLabTagMask(cutOff: cutOff))
         .clipShape(shape)
         .frame(height: m.control)
         // The glass behind the pills, never over them.
@@ -172,6 +162,29 @@ struct NotesTagBar: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
         .accessibilityIdentifier(idPrefix)
+    }
+}
+
+private struct RenderLabTagMask: ViewModifier {
+    let cutOff: NotesTagBarCutOff
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RenderLabFlags.noTagMask {
+            content
+        } else {
+            content.mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(cutOff.leading ? 0 : 1), .black],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: NotesBarMetrics.endFade)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .black.opacity(cutOff.trailing ? 0 : 1)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: NotesBarMetrics.endFade)
+                }
+            }
+        }
     }
 }
 

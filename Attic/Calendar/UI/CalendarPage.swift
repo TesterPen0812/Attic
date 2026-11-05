@@ -126,7 +126,7 @@ struct CalendarPage: View {
                 // fades in below it once it is held (item 14, owner 2026-10-31).
                 // Both the cut and the held row follow the scroll in the same
                 // frame, so each frame draws the week once.
-                .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
+                .modifier(RenderLabCalendarMask(rowTop: rowTop, pinned: flags.pinned))
                 .overlay(alignment: .top) {
                     if let pinnedIndex, let rowTop {
                         CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
@@ -315,6 +315,20 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .padding(.horizontal, layout.chromeInsets.leading)
         .padding(.bottom, layout.chromeInsets.bottom)
+    }
+}
+
+private struct RenderLabCalendarMask: ViewModifier {
+    let rowTop: CGFloat?
+    let pinned: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RenderLabFlags.noCalendarMask {
+            content
+        } else {
+            content.mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: pinned) }
+        }
     }
 }
 

@@ -328,7 +328,7 @@ struct PanelSharedBottomBar: View {
     /// card has gone (the design's `transition-delay: 90ms`).
     static func rowAnimation(taken: Bool, reduceMotion: Bool) -> Animation? {
         let animation = AtticMotionPreset.popover.animation(reduceMotion: reduceMotion, showing: !taken)
-        return taken || reduceMotion ? animation : animation?.delay(0.09)
+        return taken || reduceMotion || RenderLabFlags.noBottomRowDelay ? animation : animation?.delay(0.09)
     }
 
     /// Where the bar sits in the panel; the "+" card grows from this

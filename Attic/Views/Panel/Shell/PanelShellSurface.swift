@@ -22,17 +22,27 @@ struct PanelShellSurface: ViewModifier {
             // under the surface is invisible on every material.
             .background { shape.fill(Color.black.opacity(1.0 / 255)) }
             .overlay { AtticPanelRim(cornerSize: cornerSize) }
-            .clipShape(shape)
+            .modifier(RenderLabPanelClip(shape: shape))
             // Keep the full surface in the native event region: blank
             // surface must not click through at WindowServer.
             .contentShape(shape)
             .background {
                 // Outside the clip on purpose: the shadow belongs to the
                 // visible squircle, not to the rectangular AppKit window.
-                if let elevation {
+                if let elevation, !RenderLabFlags.noPanelShadow {
                     AtticPanelOutsideShadow(shape: shape, elevation: elevation)
                         .allowsHitTesting(false)
                 }
             }
+    }
+}
+
+private struct RenderLabPanelClip: ViewModifier {
+    let shape: Squircle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RenderLabFlags.noPanelClip { content }
+        else { content.clipShape(shape) }
     }
 }

@@ -559,7 +559,7 @@ final class PanelIslandModel: ObservableObject {
             return
         }
         let turn = labelTurn
-        schedule(PanelIslandLayout.labelDelay) { [weak self] in
+        schedule(RenderLabFlags.noIslandLabelDelay ? 0 : PanelIslandLayout.labelDelay) { [weak self] in
             guard let self, self.labelTurn == turn, self.pointedItem == item else { return }
             self.labelItem = item
         }
@@ -611,7 +611,7 @@ final class PanelIslandModel: ObservableObject {
         guard isAwake, !pointerNear, !isSnapTarget, !isPulling else { return }
         settleTurn &+= 1
         let turn = settleTurn
-        schedule(PanelIslandLayout.settleDelay) { [weak self] in
+        schedule(RenderLabFlags.noIslandSettleDelay ? 0 : PanelIslandLayout.settleDelay) { [weak self] in
             guard let self, self.settleTurn == turn, !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
             self.settle()
         }
@@ -900,26 +900,40 @@ private struct PanelIslandSurface: View {
         AtticSurfaceBackground(model: design.tokens.panel, shape: shape, nativeGlassSize: panelSize)
             .overlay { AtticPanelRim(cornerSize: cornerRadius, exponent: AtticShape.controlExponent) }
             .background {
-                // L4: the layers fall outside the capsule only, so a
-                // see-through surface never darkens.
-                ZStack {
-                    ForEach(Array(shadow.layers.enumerated()), id: \.offset) { _, layer in
-                        shape.fill(Color.black)
-                            .shadow(color: .black.opacity(layer.opacity), radius: layer.blur / 2, x: 0, y: layer.y)
+                if !RenderLabFlags.noIslandShadow {
+                    // L4: the layers fall outside the capsule only.
+                    ZStack {
+                        ForEach(Array(shadow.layers.enumerated()), id: \.offset) { _, layer in
+                            shape.fill(Color.black)
+                                .shadow(color: .black.opacity(layer.opacity), radius: layer.blur / 2, x: 0, y: layer.y)
+                        }
+                        shape.inset(by: -shadow.edgeWidth / 2)
+                            .stroke(Color.black.opacity(shadow.edgeOpacity), lineWidth: shadow.edgeWidth)
                     }
-                    shape.inset(by: -shadow.edgeWidth / 2)
-                        .stroke(Color.black.opacity(shadow.edgeOpacity), lineWidth: shadow.edgeWidth)
+                    .modifier(RenderLabIslandMask(shape: shape))
+                    .allowsHitTesting(false)
                 }
-                .mask {
-                    Rectangle()
-                        .padding(-PanelIslandLayout.windowMargin)
-                        .overlay { shape.blendMode(.destinationOut) }
-                        .compositingGroup()
-                }
-                .allowsHitTesting(false)
             }
             .contentShape(shape)
             .accessibilityHidden(true)
+    }
+}
+
+private struct RenderLabIslandMask: ViewModifier {
+    let shape: Squircle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if RenderLabFlags.noIslandMask {
+            content
+        } else {
+            content.mask {
+                Rectangle()
+                    .padding(-PanelIslandLayout.windowMargin)
+                    .overlay { shape.blendMode(.destinationOut) }
+                    .compositingGroup()
+            }
+        }
     }
 }
 

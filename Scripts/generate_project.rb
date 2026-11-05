@@ -273,6 +273,7 @@ app.build_configurations.each do |config|
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
   if config.name == 'Local'
     settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_IDLE_SAMPLER'
+    settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_RENDER_LAB'
     settings['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) ATTIC_IDLE_SAMPLER=1'
   end
   settings['MARKETING_VERSION'] = '1.1'

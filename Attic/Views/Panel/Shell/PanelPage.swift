@@ -116,7 +116,7 @@ struct PanelPageMotion: Equatable {
 
     /// The motion for a switch now, in the current feel.
     static func current(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> PanelPageMotion {
-        guard !reduceMotion else { return .instant }
+        guard !reduceMotion && !RenderLabFlags.noPageMotion else { return .instant }
         let base = AtticMotionPreset.pageSwitch.spring(in: tuning)
         return PanelPageMotion(spring: AtticMotionSpring(response: base.response * speed, bounce: base.bounce))
     }
@@ -149,7 +149,7 @@ struct PanelPageMotion: Equatable {
     /// The top row's in-place fade: out at once, in once the old has gone.
     func inPlaceOpacityAnimation(incoming: Bool) -> Animation? {
         guard travels else { return nil }
-        return incoming ? .easeOut(duration: Self.fadeIn).delay(Self.fadeInDelay) : .easeIn(duration: Self.fadeOut)
+        return incoming ? .easeOut(duration: Self.fadeIn).delay(RenderLabFlags.noTopRowDelay ? 0 : Self.fadeInDelay) : .easeIn(duration: Self.fadeOut)
     }
 }
 

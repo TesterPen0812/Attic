@@ -315,6 +315,10 @@ build_arguments=(
     CODE_SIGN_STYLE=Manual
     "CODE_SIGN_IDENTITY=$signing_identity"
 )
+if [[ "$configuration" == Local && "$bundle_id" == com.taha.Attic.preview.renderlab ]]; then
+    # The isolated Render Lab keeps its flags in optimized Local builds too.
+    build_arguments+=("OTHER_SWIFT_FLAGS=\$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_RENDER_LAB -DATTIC_IDLE_SAMPLER")
+fi
 if [[ -n "$development_team" ]]; then
     build_arguments+=("DEVELOPMENT_TEAM=$development_team")
 fi
