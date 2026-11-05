@@ -375,6 +375,10 @@ final class CalendarEventWriterTests: XCTestCase {
         let source = EventKitCalendarEventSource(store: WriterReadStore(store), notificationCenter: center)
         let taskStore = try makeTestStore()
         let model = CalendarPageModel(store: taskStore, source: source, now: { self.draft().start })
+        // Hidden pages defer refresh until presentation; this case verifies
+        // the visible page's immediate cache invalidation after writes.
+        model.setVisible(true)
+        defer { model.setVisible(false) }
         model.setQuery("Lunch")
         model.commitSearch()
         await model.waitForEventReadsForTesting()
