@@ -35,9 +35,13 @@ final class CalendarPageModel: ObservableObject {
     let taskRows = CalendarTaskRowState()
     let eventRows: CalendarEventRowState
     private(set) var source: CalendarEventSource
-    let calendar: Calendar
+    /// Production reads the current zone on demand; tests may pin a calendar.
+    private let pinnedCalendar: Calendar?
+    var calendar: Calendar { pinnedCalendar ?? CalendarMonthMath.calendar(timeZone: .current) }
     private let now: () -> Date
-    private let locale: Locale
+    private let pinnedLocale: Locale?
+    private var locale: Locale { pinnedLocale ?? .current }
+    private var dateEnvironment: DatePresentationEnvironment
     private let resumeDefaults: UserDefaults?
     private var hasRequestedAccess = false
     private var searchTask: Task<Void, Never>?
@@ -69,17 +73,19 @@ final class CalendarPageModel: ObservableObject {
     }
     #endif
 
-    init(store: TaskStore, source: CalendarEventSource, calendar: Calendar = CalendarMonthMath.calendar(),
-         locale: Locale = .current, now: @escaping () -> Date = Date.init,
+    init(store: TaskStore, source: CalendarEventSource, calendar: Calendar? = nil,
+         locale: Locale? = nil, now: @escaping () -> Date = Date.init,
          makeWriter: (() throws -> CalendarEventWriter)? = nil, resumeDefaults: UserDefaults? = nil) {
         self.resumeDefaults = resumeDefaults
         self.store = store
         self.eventRows = CalendarEventRowState(makeWriter: makeWriter)
         self.source = source
-        self.calendar = calendar
-        self.locale = locale
+        self.pinnedCalendar = calendar
+        self.pinnedLocale = locale
+        let currentCalendar = calendar ?? CalendarMonthMath.calendar(timeZone: .current)
+        dateEnvironment = DatePresentationEnvironment(calendar: currentCalendar, locale: locale ?? .current)
         self.now = now
-        let today = DueDay(date: now(), calendar: calendar)
+        let today = DueDay(date: now(), calendar: currentCalendar)
         let selected = resumeDefaults?.data(forKey: "AtticCalendar.selectedDay")
             .flatMap { try? JSONDecoder().decode(DueDay.self, from: $0) }
             .flatMap { DueDay(year: $0.year, month: $0.month, day: $0.day) } ?? today
@@ -170,13 +176,32 @@ final class CalendarPageModel: ObservableObject {
     // MARK: Building
 
     private func refreshToday() {
+        if refreshDateEnvironment() { rebuild(); return }
         let today = DueDay(date: now(), calendar: calendar)
         if today != snapshot.today { rebuild() }
+    }
+
+    /// Calendar and locale may change while this model stays retained.
+    /// Invalidate interval and formatted-task projections before using either.
+    @discardableResult
+    private func refreshDateEnvironment() -> Bool {
+        let current = DatePresentationEnvironment(calendar: calendar, locale: locale)
+        guard current != dateEnvironment else { return false }
+        dateEnvironment = current
+        sourceGeneration &+= 1
+        eventTask?.cancel()
+        eventSearchTask?.cancel()
+        eventRequest = nil
+        searchRequest = nil
+        eventCache = nil
+        searchCache = nil
+        return true
     }
 
     /// The clock changes the line's chronological position without fetching
     /// tasks, marking grid days or re-requesting Calendar events.
     func refreshNowPosition() {
+        if refreshDateEnvironment() { rebuild(); return }
         let moment = now()
         guard DueDay(date: moment, calendar: calendar) == snapshot.today else {
             rebuild()
@@ -191,6 +216,7 @@ final class CalendarPageModel: ObservableObject {
     }
 
     func rebuild(selected: DueDay? = nil, query: String? = nil) {
+        refreshDateEnvironment()
         let today = DueDay(date: now(), calendar: calendar)
         let selected = selected ?? snapshot.selected
         let query = query ?? snapshot.query
@@ -368,6 +394,12 @@ final class CalendarPageModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuild() }
             .store(in: &cancellables)
+        for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.publisher(for: name)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.rebuild() }
+                .store(in: &cancellables)
+        }
         observeSource()
     }
 
