@@ -305,6 +305,13 @@ enum IdleLatencyTrace {
     private static var lastCleanup: (start: TimeInterval, end: TimeInterval)?
     private static var firstFrameWatch: IdleLatencyFirstFrameWatch?
     private static var lastPanelPressAt: TimeInterval?
+    /// Discrete input clock for cold-action eligibility. Passive pointer
+    /// approach/reveal markers must not reset the first-click idle window.
+    private static var lastDiscreteInputAt: TimeInterval?
+    #if ATTIC_IDLE_SAMPLER && arch(arm64)
+    private static var measurement: (id: Int, began: TimeInterval, thread: UInt32,
+                                     initial: IdleLatencySnapshot, sampler: IdleLatencyStackSampler?)?
+    #endif
 
     private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -323,6 +330,10 @@ enum IdleLatencyTrace {
         begin("panel_action", original: original, context: context)
     }
 
+    /// Account for typing, rapid untraced presses, scrolls and dragging without
+    /// emitting any additional trace lines or starting a sampler.
+    static func untracedInput() { lastDiscreteInputAt = now }
+
     static func cleanupBegan() {
         cleanupStart = now
         log.notice("cleanup_begin uptime=\(now, privacy: .public)")
@@ -338,6 +349,15 @@ enum IdleLatencyTrace {
     static func begin(_ kind: String, original: TimeInterval?, context: Context) {
         let entry = now
         let origin = original.flatMap { $0 > 0 && $0 <= entry ? $0 : nil } ?? entry
+        let idleSeconds = lastDiscreteInputAt.map { max(0, entry - $0) }
+        if kind == "panel_action" || kind == "island_action" {
+            lastDiscreteInputAt = entry
+        }
+        #if ATTIC_IDLE_SAMPLER && arch(arm64)
+        if let previous = measurement { retire(previous) }
+        let thread = AtticIdleMach.mainThread()
+        let initial = AtticIdleMach.snapshot(thread)
+        #endif
         serial &+= 1
         current = (serial, origin, entry)
         firstFrameWatch?.stop()
@@ -348,6 +368,11 @@ enum IdleLatencyTrace {
         let page = String(describing: context.page)
         let mode = String(describing: context.mode)
         log.notice("input id=\(serial, privacy: .public) kind=\(kind, privacy: .public) origin=\(origin, privacy: .public) callback=\(entry, privacy: .public) delivery_ms=\((entry - origin) * 1000, privacy: .public) page=\(page, privacy: .public) hidden_s=\(hiddenFor, privacy: .public) released=\(context.released, privacy: .public) snapshot=\(context.snapshot, privacy: .public) hide_mode=\(mode, privacy: .public) activity=\(context.activity, privacy: .public) cleanup_overlap=\(overlapping, privacy: .public)")
+        #if ATTIC_IDLE_SAMPLER && arch(arm64)
+        let sampler = IdleLatencyStackSampler.startIfEligible(idleSeconds: idleSeconds, thread: thread)
+        measurement = (serial, entry, thread, initial, sampler)
+        log.notice("memory_start id=\(serial, privacy: .public) idle_since_action_s=\((idleSeconds ?? -1), privacy: .public) valid=\(initial.valid, privacy: .public) footprint_bytes=\(initial.footprint, privacy: .public) resident_bytes=\(initial.resident, privacy: .public) compressed_bytes=\(initial.compressed, privacy: .public)")
+        #endif
     }
 
     static func point(_ phase: String) {
@@ -389,7 +414,62 @@ enum IdleLatencyTrace {
         guard current?.id == id else { return }
         log.notice("first_frame_candidate id=\(id, privacy: .public) since_input_ms=\((timestamp - origin) * 1000, privacy: .public)")
         firstFrameWatch = nil
+        #if ATTIC_IDLE_SAMPLER && arch(arm64)
+        if let measure = measurement, measure.id == id {
+            let ending = AtticIdleMach.snapshot(measure.thread)
+            let change = ending.counters.delta(since: measure.initial.counters)
+            let valid = ending.valid & measure.initial.valid
+            log.notice("action_delta id=\(id, privacy: .public) wall_ms=\((timestamp - measure.began) * 1000, privacy: .public) valid=\(valid, privacy: .public) main_user_us=\(change.userUS, privacy: .public) main_system_us=\(change.systemUS, privacy: .public) process_faults=\(change.faults, privacy: .public) process_pageins=\(change.pageins, privacy: .public) process_cow_faults=\(change.cowFaults, privacy: .public) system_wide_decompressions=\(change.systemDecompressions, privacy: .public)")
+            retire(measure, logSamples: true)
+            measurement = nil
+        }
+        #endif
     }
+
+    #if ATTIC_IDLE_SAMPLER && arch(arm64)
+    /// Called on main after candidate or supersession. Serial queue drain
+    /// ensures the Mach right is not released until sampling has stopped.
+    private static func retire(_ measure: (id: Int, began: TimeInterval, thread: UInt32,
+                                         initial: IdleLatencySnapshot, sampler: IdleLatencyStackSampler?),
+                               logSamples: Bool = false) {
+        guard let sampler = measure.sampler else {
+            AtticIdleMach.release(measure.thread)
+            return
+        }
+        Task { @MainActor in
+            let samples = await sampler.finish()
+            AtticIdleMach.release(measure.thread)
+            if logSamples { emitSamples(samples, id: measure.id) }
+        }
+    }
+
+    /// Image table gives each compact stack token a binary name and UUID.
+    /// dyld lookup and Logger are strictly after thread_resume and queue drain.
+    private static func emitSamples(_ samples: [IdleLatencyStackSample], id: Int) {
+        var images: [String: Int] = [:]
+        for (index, sample) in samples.enumerated() {
+            var entries: [String] = []
+            for pc in sample.frames {
+                guard let image = AtticIdleMach.image(for: pc) else {
+                    entries.append("?+0x\(String(pc, radix: 16))")
+                    continue
+                }
+                let key = image.name + ":" + image.uuid
+                let imageID: Int
+                if let known = images[key] {
+                    imageID = known
+                } else {
+                    imageID = images.count
+                    images[key] = imageID
+                    log.notice("sample_image id=\(id, privacy: .public) image=\(imageID, privacy: .public) name=\(image.name, privacy: .public) uuid=\(image.uuid, privacy: .public)")
+                }
+                entries.append("\(imageID)+0x\(String(image.offset, radix: 16))")
+            }
+            let stack = entries.joined(separator: ",")
+            log.notice("sample id=\(id, privacy: .public) n=\(index, privacy: .public) after_start_ms=\(sample.afterStartMS, privacy: .public) run_state=\(sample.runState, privacy: .public) waiting=\(sample.waiting, privacy: .public) status=\(sample.status, privacy: .public) stack=\(stack, privacy: .public)")
+        }
+    }
+    #endif
 }
 
 /// Only installed for the next display-link opportunity after input/flush.

@@ -128,6 +128,9 @@ canvas_lab.build_configurations.each do |config|
   config.build_settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
 end
 app_group = add_swift_sources(project, app, 'Attic', 'Attic')
+idle_mach = app_group.new_file('Performance/IdleLatencyMach.c')
+app.source_build_phase.add_file_reference(idle_mach)
+unit_host.source_build_phase.add_file_reference(idle_mach)
 add_swift_sources(
   project,
   unit_host,
@@ -268,6 +271,10 @@ app.build_configurations.each do |config|
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['SWIFT_EMIT_LOC_STRINGS'] = 'YES'
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  if config.name == 'Local'
+    settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_IDLE_SAMPLER'
+    settings['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) ATTIC_IDLE_SAMPLER=1'
+  end
   settings['MARKETING_VERSION'] = '1.1'
   settings['CURRENT_PROJECT_VERSION'] = '11'
   if config.name == 'Release'
@@ -311,6 +318,10 @@ unit_host.build_configurations.each do |config|
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS'
+  if config.name == 'Local'
+    settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_IDLE_SAMPLER'
+    settings['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) ATTIC_IDLE_SAMPLER=1'
+  end
   settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_UNIT_TEST_HOST'
   settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'AtticUnitTestHost/InvisiblePresentation.h'
 end
@@ -345,6 +356,7 @@ unit_tests.build_configurations.each do |config|
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS -module-alias Attic=AtticUnitTestHost'
+  settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_IDLE_SAMPLER' if config.name == 'Local'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'

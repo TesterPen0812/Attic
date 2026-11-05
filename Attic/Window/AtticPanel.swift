@@ -373,9 +373,16 @@ final class AtticPanel: NSPanel {
             if IdleLatencyTrace.shouldTracePanelPress, let context = onIdleTraceContext?() {
                 IdleLatencyTrace.panelPressBegan(original: event.timestamp, context: context)
                 tracingIdlePress = true
+            } else {
+                IdleLatencyTrace.untracedInput()
             }
+        } else if [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
+            IdleLatencyTrace.untracedInput()
         }
         defer {
+            if tracingIdlePress, Self.takesFirstPress(event.type) {
+                IdleLatencyTrace.point("mouse_down_returned")
+            }
             if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("sendEvent_dispatched")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
