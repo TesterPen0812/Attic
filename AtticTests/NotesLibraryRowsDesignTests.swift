@@ -198,6 +198,16 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
         XCTAssertNil(cache.cached(id, key: edited), "a gone note's thumbnail goes")
     }
 
+    func testSW01EvictingOneThumbnailKeepsTheRestOfTheCache() throws {
+        let cache = NoteThumbnailCache()
+        let key = NoteThumbnailCache.Key(content: NoteThumbnailContent(title: "A", text: "B", hasImages: false), dark: false, scale: 1)
+        let ids = (0...NoteThumbnailCache.limit).map { _ in UUID() }
+        for id in ids { XCTAssertNotNil(cache.image(id, key: key)) }
+        XCTAssertNil(cache.cached(ids[0], key: key), "The oldest entry may be evicted")
+        XCTAssertNotNil(cache.cached(ids[1], key: key), "Inserting one entry must not evict every cached image")
+        XCTAssertNotNil(cache.cached(ids[NoteThumbnailCache.limit], key: key))
+    }
+
     // MARK: Geometry
 
     func testARowIsTheDesignsHeightWithItsThumbnailAndTwoLines() throws {
