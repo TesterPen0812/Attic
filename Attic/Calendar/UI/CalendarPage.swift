@@ -68,11 +68,15 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            model.pageAppeared()
+            // A retained, prewarmed Calendar is mounted but not the shown page.
+            if isCurrent { model.pageAppeared() }
             model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
                 guard let library else { return }
                 toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
             }
+        }
+        .onChange(of: isCurrent) { _, current in
+            if current { model.pageAppeared() }
         }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
