@@ -222,7 +222,6 @@ struct ComposerCard: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .atticOwnFocusRing(.rounded(radius: ComposerMetrics.kindButton / 2, height: ComposerMetrics.kindButton))
                 .help(kind.title)
                 .accessibilityLabel(kind.title)
                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -513,7 +512,6 @@ struct ComposerCard: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .atticOwnFocusRing(.rounded(radius: ComposerMetrics.chipHeight / 2, height: ComposerMetrics.chipHeight))
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .accessibilityIdentifier("composer-priority-\(priority)")
             }
@@ -603,7 +601,6 @@ struct ComposerCard: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: ComposerMetrics.chipHeight / 2, height: ComposerMetrics.chipHeight))
         .help(label)
         .accessibilityLabel(label)
         .accessibilityIdentifier("composer-chip-\(id)")
@@ -668,7 +665,6 @@ struct ComposerCard: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: ComposerMetrics.createHeight / 2, height: ComposerMetrics.createHeight))
         .disabled(!can)
         .fixedSize()
         .accessibilityIdentifier("composer-create")
