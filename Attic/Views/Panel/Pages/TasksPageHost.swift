@@ -150,6 +150,9 @@ struct TasksPageHost: View {
         }
         .onDisappear {
             editHold.setSuspended(true)
+            // The shell retains the model after this host is released. Its
+            // warm span must not claim that now-discarded list views exist.
+            model.pagerSwipe.motion.coolDown(releasingPages: true)
         }
         // Kept built behind another page, it shows again where it was left
         // (its tab, its selection): only a reveal of the panel starts it on

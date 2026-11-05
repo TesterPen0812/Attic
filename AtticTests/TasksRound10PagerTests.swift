@@ -107,6 +107,46 @@ final class TasksRound10PagerTests: XCTestCase {
         XCTAssertEqual(swipe.span.warm, 0...2, "a quick tab switch after reveal should not rebuild the tabs")
     }
 
+    func testUnmountingTasksHostCoolsTabsBeforeRemount() throws {
+        let suite = "PagerUnmount.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = TasksPageState()
+        let uiState = PanelUIState()
+        let settings = AppSettings(defaults: defaults)
+        let size = CGSize(width: 320, height: 520)
+        let chrome = PanelChromeInteractionState()
+        func root(mounted: Bool) -> some View {
+            Group {
+                if mounted {
+                    TasksPageHost(store: store, uiState: uiState, settings: settings, state: state,
+                                  layout: PanelPageLayout(cornerSize: 24, panelSize: size),
+                                  chromeInteractionState: chrome, primaryInputFocusRequest: 0)
+                } else {
+                    Color.clear
+                }
+            }
+        }
+        let hosting = NSHostingView(rootView: root(mounted: true))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        let mountedModel = state.model(for: store, toasts: nil)
+        mountedModel.pagerSwipe.span.warm = 0...2
+
+        hosting.rootView = root(mounted: false)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertNil(mountedModel.pagerSwipe.span.warm, "released list views must not remain marked as warm")
+
+        hosting.rootView = root(mounted: true)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertNil(mountedModel.pagerSwipe.span.warm, "remount must warm one tab at a time")
+    }
+
     // MARK: - Hosted
 
     /// ⌘F on Done during a swipe (the view's own route into the search):
