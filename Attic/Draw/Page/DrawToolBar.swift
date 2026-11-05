@@ -151,6 +151,7 @@ struct DrawCell<Label: View>: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: height))
         .onHover { hovered = $0 }
         .help(help)
         .accessibilityLabel(help)

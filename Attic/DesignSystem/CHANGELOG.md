@@ -1,3 +1,10 @@
+## 2026-11-05 · Keyboard focus on custom page controls
+
+Calendar day keys, Draw toolbar chips, small controls, status and notice
+actions now reuse the existing keyboard-only focus ring. Settings tracks
+keyboard versus pointer navigation so mouse interaction keeps its prior look.
+No control geometry, token, animation or mouse hover treatment changes.
+
 ## 2026-11-04 · First visits and task-page controls
 
 Notes warms behind the current page with native input suspended. Keyboard

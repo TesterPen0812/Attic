@@ -1306,6 +1306,7 @@ struct AtticSmallButton: View {
         }
         .buttonStyle(AtticFlatPressStyle())
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: height))
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)

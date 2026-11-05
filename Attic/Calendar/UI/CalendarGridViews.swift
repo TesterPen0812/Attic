@@ -97,6 +97,7 @@ struct CalendarKey: View {
         }
         .buttonStyle(CalendarKeyButtonStyle(style: day.style))
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: CalendarDesign.keyRadius, height: CalendarDesign.keyHeight))
         .accessibilityLabel(Self.accessibilityName(day.day))
         .accessibilityAddTraits(day.isSelected ? .isSelected : [])
         .accessibilityIdentifier("calendar-day-\(day.day.rawValue)")

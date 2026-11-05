@@ -52,6 +52,7 @@ struct SettingsView: View {
     let library: AtticLibrary?
 
     @StateObject private var navigation = SettingsNavigation()
+    @StateObject private var keyboardFocusTracker = AtticKeyboardFocusTracker()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -69,6 +70,7 @@ struct SettingsView: View {
             }
         }
         .ignoresSafeArea()
+        .atticKeyboardFocusTracking(keyboardFocusTracker)
         .environmentObject(navigation)
         // Customisation changes only the background and the accent; the
         // window follows the chosen Light, Dark or System, and so do its

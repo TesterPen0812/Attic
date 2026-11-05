@@ -82,6 +82,7 @@ private struct AtticToastButton: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @State private var hovered = false
     @FocusState private var focused: Bool
 
@@ -107,6 +108,8 @@ private struct AtticToastButton: View {
                 .contentShape(AtticUndoToast.buttonShape(outer: outerRadius))
         }
         .buttonStyle(.plain)
+        .atticFocusRing(acceptsKeyboardFocus && focused && keyboardFocusVisible,
+                        cornerRadius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius)
         .onHover { hovered = $0 }
     }
 }
@@ -177,6 +180,8 @@ private struct AtticNoticeButton: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: AtticUndoToast.buttonShape().cornerRadius,
+                                    height: AtticControlSize.smallHeight))
         .onHover { hovered = $0 }
     }
 }
@@ -552,6 +557,7 @@ struct AtticStatusPill: View {
             }
             .buttonStyle(AtticUndimmedButtonStyle())
             .focusEffectDisabled()
+            .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
             .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
             .accessibilityHint(String(localized: "Shows details"))
             .accessibilityIdentifier("notes-status-primary")
