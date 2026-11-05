@@ -139,6 +139,27 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertNil(floating.rows.rowID, "the other owner may close normally")
     }
 
+    func testV7QuitWaitsForAnExistingInFlightCalendarSave() async throws {
+        let f = try Fixture(); defer { f.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(f.rows)
+        await f.rows.toggle(f.event)
+        f.rows.title = "Already saving"
+        f.writer.hold = true
+        let earlierClose = Task { await f.rows.close() }
+        for _ in 0..<100 where f.writer.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(f.writer.gate, "the existing save reached its writer")
+        var quitResult: Bool?
+        let quit = Task { @MainActor in quitResult = await registry.prepareForTerminationDurably() }
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertNil(quitResult, "quit must await the already running save")
+        gate.resume()
+        await XCTAssertTrueAsync(await earlierClose.value)
+        await quit.value
+        XCTAssertEqual(quitResult, true)
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, "Already saving")
+    }
+
     func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()

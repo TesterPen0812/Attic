@@ -35,7 +35,9 @@ final class CalendarDraftTerminationRegistry {
         }
         var failedOwner: Owner?
         for (rows, owner) in owners {
-            if !(await rows.close()), failedOwner == nil { failedOwner = owner }
+            let settled = await rows.waitForInFlightWorkBeforeQuit()
+            let closed = settled ? await rows.close() : false
+            if !closed, failedOwner == nil { failedOwner = owner }
         }
         if let failedOwner { return .refused(failedOwner) }
         // An await can admit a newly mounted panel or newer typing. Never
