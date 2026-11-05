@@ -737,10 +737,20 @@ struct AtticAppearancePreview<Panel: View>: View {
             panel
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
-                .shadow(
-                    color: .black.opacity(design.mode == .dark ? AtticSettingsMetrics.previewShadowAlphaDark : AtticSettingsMetrics.previewShadowAlphaLight),
-                    radius: AtticSettingsMetrics.previewShadow.radius, y: AtticSettingsMetrics.previewShadow.y
-                )
+                .background {
+                    // Cast only the panel outline. Its cut-out leaves the
+                    // translucent miniature and wallpaper untouched.
+                    AtticPanelOutsideShadow(
+                        shape: Squircle(cornerRadius: PanelCornerSize.defaultValue * scale,
+                                        exponent: AtticStyle.panelSquircleExponent),
+                        elevation: AtticPanelSurfaceElevation(
+                            opacity: design.mode == .dark ? AtticSettingsMetrics.previewShadowAlphaDark : AtticSettingsMetrics.previewShadowAlphaLight,
+                            radius: AtticSettingsMetrics.previewShadow.radius,
+                            offsetY: AtticSettingsMetrics.previewShadow.y
+                        )
+                    )
+                    .allowsHitTesting(false)
+                }
                 .padding(.top, AtticSettingsMetrics.previewTop)
                 .environment(\.atticProbesDisabled, true)
                 .allowsHitTesting(false)
