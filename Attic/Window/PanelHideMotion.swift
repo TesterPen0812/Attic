@@ -1254,7 +1254,15 @@ final class PanelGenieView: NSView {
     func beginFlight(progress: Double, corner: ScreenCorner, takeOver: @escaping () -> Void) {
         self.corner = corner
         self.progress = progress
+        // Reused layers still hold the last flight's IOSurfaces. Clear both
+        // before exposing this flight; its own first frame arrives with the
+        // live-host takeover in the GPU completion transaction.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        meshLayer.contents = nil
+        controlsMeshLayer.contents = nil
         isHidden = false
+        CATransaction.commit()
         takeOverOnFirstFrame = takeOver
         if !render() {
             // No render target is available (the existing no-Metal fallback).

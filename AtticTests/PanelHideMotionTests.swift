@@ -587,6 +587,8 @@ final class PanelHideMotionShipTests: XCTestCase {
                               dark: false)
         var staleTakeover = false
         genie.beginFlight(progress: 0, corner: .topRight) { staleTakeover = true }
+        XCTAssertNil(genie.shownFrame, "a new flight cannot show an IOSurface from the previous snapshot")
+        XCTAssertNil(genie.shownControlsFrame, "controls must not show their previous surface either")
         genie.stop()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertFalse(staleTakeover)
