@@ -196,7 +196,7 @@ struct CalendarPage: View {
     /// then ‹ › in one capsule, ••• and Search. Opening Search folds the
     /// rest away and the field fills the row.
     private func topRow(_ snapshot: CalendarPageSnapshot) -> some View {
-        PanelTopRow(page: .calendar, layout: layout, searchOpen: searchOpen) {
+        PanelTopRow(page: .calendar, layout: layout, searchOpen: searchOpen, moreCommands: { moreCommands() }) {
             CalendarMonthTitle(month: snapshot.month, isWeekView: flags.weekView,
                                onToggleWeekView: { toggleWeekView(weekCount: snapshot.weeks.count) })
         } pageSwitch: {
@@ -228,6 +228,31 @@ struct CalendarPage: View {
             // Leaving an empty search puts it away.
             if !focused, model.searchText.trimmingCharacters(in: .whitespaces).isEmpty { searchOpen = false }
         }
+    }
+
+    /// ••• (Accepted 2026-11-05, "Page-specific options"): the views the
+    /// page has, as read when it opens, and going to today.
+    private func moreCommands() -> [AtticMenuCommand] {
+        let snapshot = model.snapshot
+        return Self.moreCommands(isWeekView: flags.weekView, isOnToday: snapshot.selected == snapshot.today,
+                                 setWeekView: { week in
+                                     if week != flags.weekView { toggleWeekView(weekCount: model.snapshot.weeks.count) }
+                                 },
+                                 goToToday: { afterClosingEvent(model.goToToday) })
+    }
+
+    /// Month and Week are the two views the grid has (the title folds one
+    /// into the other). There is no Day view: the agenda under the grid
+    /// lists every day, and offering Day would change nothing on screen.
+    static func moreCommands(isWeekView: Bool, isOnToday: Bool, setWeekView: @escaping (Bool) -> Void,
+                             goToToday: @escaping () -> Void) -> [AtticMenuCommand] {
+        [
+            .header(String(localized: "View")),
+            AtticMenuCommand(verbatim: String(localized: "Month"), state: isWeekView ? .off : .on) { setWeekView(false) },
+            AtticMenuCommand(verbatim: String(localized: "Week"), state: isWeekView ? .on : .off) { setWeekView(true) },
+            AtticMenuCommand(verbatim: String(localized: "Go to Today"), shortcut: KeyboardShortcut("t", modifiers: .command),
+                             isDisabled: isOnToday, startsSection: true, action: goToToday)
+        ]
     }
 
     private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {

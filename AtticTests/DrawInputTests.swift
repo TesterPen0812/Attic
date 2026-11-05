@@ -742,7 +742,7 @@ final class DrawInputTests: XCTestCase {
             let card = try XCTUnwrap(frame(of: "draw-library-menu", in: rig), "\(width): the menu card")
             let field = try XCTUnwrap(frame(of: "draw-title-filter", in: rig), "\(width): the title filter")
             let title = try XCTUnwrap(frame(of: "draw-title-filter", in: rig), "\(width): the title capsule is the filter")
-            for id in ["panel-pin-button", "panel-settings-button", "draw-search-button"] {
+            for id in ["panel-pin-button", "panel-more-button", "draw-search-button"] {
                 let control = try XCTUnwrap(frame(of: id, in: rig), "\(width): \(id)")
                 XCTAssertFalse(card.intersects(control), "\(width): the card clears \(id) (\(card) / \(control))")
                 XCTAssertFalse(field.intersects(control), "\(width): the field clears \(id)")

@@ -29,6 +29,7 @@ final class PanelSharedChrome: ObservableObject {
     /// What the controls do, per page. Not observable: only a click reads them.
     private var barActions: [PanelPage: PanelBottomBarActions] = [:]
     private var searchActions: [PanelPage: () -> Void] = [:]
+    private var moreCommands: [PanelPage: () -> [AtticMenuCommand]] = [:]
 
     // MARK: Bottom bar
 
@@ -78,8 +79,16 @@ final class PanelSharedChrome: ObservableObject {
 
     func search(on page: PanelPage) { searchActions[page]?() }
 
+    /// What ••• offers on `page`, built when it opens.
+    func setMore(_ commands: @escaping () -> [AtticMenuCommand], for page: PanelPage) {
+        moreCommands[page] = commands
+    }
+
+    func more(on page: PanelPage) -> [AtticMenuCommand] { moreCommands[page]?() ?? [] }
+
     func removeTopRow(for page: PanelPage) {
         searchActions[page] = nil
+        moreCommands[page] = nil
         if topRows[page] != nil { topRows[page] = nil }
     }
 
@@ -396,7 +405,7 @@ private struct PanelSharedTopControlsObserver: View {
         let covered = chrome.covered.contains(page)
         HStack(spacing: PanelTopRowLayout.gap) {
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
-                PanelTopRowMoreButton(shared: true)
+                PanelTopRowMoreButton(shared: true, page: page) { chrome.more(on: page) }
             }
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
                 PanelTopRowSearchButton(label: look.searchLabel, identifier: look.searchIdentifier, shared: true) {

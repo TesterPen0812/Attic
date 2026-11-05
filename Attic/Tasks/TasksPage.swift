@@ -740,7 +740,8 @@ struct TasksPage: View {
             // words, ••• and Search on the right; the search folds the
             // rest away and fills the row. No filter button or list chips:
             // the tag bar at the bottom filters.
-            PanelTopRow(page: .tasks, layout: layout, searchOpen: shown) {
+            PanelTopRow(page: .tasks, layout: layout, searchOpen: shown,
+                        moreCommands: { model.tab == .done ? model.doneCommands() : viewCommands(for: model.tab) }) {
                 TasksTopTabs(selection: Binding(get: { model.tab }, set: { model.select(tab: $0) }))
             } search: {
                 if shown {
@@ -767,12 +768,12 @@ struct TasksPage: View {
                         .transition(.opacity)
                 }
             }
-            // ⌥⌘V's anchor at the row's end, mounted whatever the row shows.
+            // ⌥⌘V's anchor where ••• sits, mounted whatever the row shows.
             .overlay(alignment: .topTrailing) {
                 AtticMenuAnchor(holder: viewOptionsAnchor)
                     .frame(width: control, height: control)
                     .padding(.top, chrome.top)
-                    .padding(.trailing, chrome.trailing)
+                    .padding(.trailing, chrome.trailing + control + PanelTopRowLayout.gap)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }

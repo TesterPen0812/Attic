@@ -5,7 +5,8 @@ import SwiftUI
 /// The panel's top row on every page (Accepted 2026-10-29/30, "Top row and
 /// bottom bar"): Pin alone on the left (the shell draws it), a page's own
 /// leading text after it (Calendar's month), and on the right the page's
-/// own switch, then ••• (Settings), then Search at the far right.
+/// own switch, then ••• (the page's options, Accepted 2026-11-05; Settings
+/// is the island's), then Search at the far right.
 ///
 /// While the search is open, Pin, the leading text, the switch and •••
 /// fold away and the field fills the row, with the chrome inset on both
@@ -357,6 +358,8 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
     let layout: PanelPageLayout
     /// The search field is open: everything else folds away.
     var searchOpen = false
+    /// What ••• offers on this page, read when it opens.
+    var moreCommands: () -> [AtticMenuCommand] = { [] }
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var pageSwitch: () -> Switch
     @ViewBuilder var search: () -> Search
@@ -381,7 +384,7 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                     Spacer(minLength: gap)
                     HStack(spacing: PanelTopRowLayout.switchGap) {
                         pageSwitch()
-                        PanelTopRowMoreButton()
+                        PanelTopRowMoreButton(page: page, commands: moreCommands)
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: PanelPageLayout.coordinateSpace).minX } action: {
                         report(trailingStart: $0)
@@ -425,16 +428,18 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
 
 extension PanelTopRow where Leading == EmptyView {
     init(page: PanelPage, layout: PanelPageLayout, searchOpen: Bool = false,
+         moreCommands: @escaping () -> [AtticMenuCommand] = { [] },
          @ViewBuilder pageSwitch: @escaping () -> Switch, @ViewBuilder search: @escaping () -> Search) {
-        self.init(page: page, layout: layout, searchOpen: searchOpen, leading: { EmptyView() },
+        self.init(page: page, layout: layout, searchOpen: searchOpen, moreCommands: moreCommands, leading: { EmptyView() },
                   pageSwitch: pageSwitch, search: search)
     }
 }
 
 extension PanelTopRow where Leading == EmptyView, Switch == EmptyView {
     init(page: PanelPage, layout: PanelPageLayout, searchOpen: Bool = false,
+         moreCommands: @escaping () -> [AtticMenuCommand] = { [] },
          @ViewBuilder search: @escaping () -> Search) {
-        self.init(page: page, layout: layout, searchOpen: searchOpen, leading: { EmptyView() },
+        self.init(page: page, layout: layout, searchOpen: searchOpen, moreCommands: moreCommands, leading: { EmptyView() },
                   pageSwitch: { EmptyView() }, search: search)
     }
 }
@@ -485,29 +490,38 @@ struct PanelTopRowSearchButton: View {
     }
 }
 
-/// ••• on the top row: Settings, in place of the gear (Accepted
-/// 2026-10-29/30). It opens the Settings window. In the panel the shell
-/// draws it (`shared`); a page's own is a clear stand-in.
+/// ••• on the top row: the current page's options, in the app's solid menu
+/// (Accepted 2026-11-05, "Page-specific options"). `commands` is read when
+/// it opens, so ticks are current. In the panel the shell draws it
+/// (`shared`); a page's own is a clear stand-in that lends the shell what
+/// the page offers.
 struct PanelTopRowMoreButton: View {
     var shared = false
-    var action: () -> Void = { AppCoordinator.shared?.openSettings() }
+    let page: PanelPage
+    let commands: () -> [AtticMenuCommand]
 
     @Environment(\.atticDesign) private var design
     @Environment(\.panelSharedChrome) private var chrome
+    @State private var anchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let side = AtticControlSize.headerControl
-        if !shared, chrome != nil {
+        if !shared, let chrome {
             Color.clear
                 .frame(width: side, height: side)
                 .accessibilityHidden(true)
+                .onAppear { chrome.setMore(commands, for: page) }
         } else {
-            AtticRaisedButton(systemName: "ellipsis.circle", label: "Settings", size: CGSize(width: side, height: side),
-                              help: String(localized: "Settings (⌘,)"), emphasisedGlyph: true,
-                              flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
-                              action: action)
-                .atticDesignCorners()
-                .accessibilityIdentifier("panel-settings-button")
+            AtticRaisedButton(systemName: "ellipsis.circle", label: "Options", size: CGSize(width: side, height: side),
+                              help: String(localized: "Options"), emphasisedGlyph: true,
+                              flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
+                guard let view = anchor.view else { return }
+                AtticNativeMenu.popUp(commands(), in: view)
+            }
+            .atticDesignCorners()
+            .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
+            .accessibilityHint(String(localized: "Opens a menu"))
+            .accessibilityIdentifier("panel-more-button")
         }
     }
 }

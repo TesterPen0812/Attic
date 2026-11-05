@@ -157,7 +157,7 @@ final class PanelSharedChromeTests: XCTestCase {
         let tagBarIDs: [PanelSection: String] = [.tasks: "tasks-tag-bar", .notes: "notes-tag-bar"]
         for (from, to) in [(PanelSection.tasks, PanelSection.notes), (.notes, .calendar), (.calendar, .tasks)] {
             let pin = try XCTUnwrap(frame(of: "panel-pin-button", in: host), "\(from): the pin")
-            let more = try XCTUnwrap(frame(of: "panel-settings-button", in: host), "\(from): •••")
+            let more = try XCTUnwrap(frame(of: "panel-more-button", in: host), "\(from): •••")
             let search = try XCTUnwrap(frame(of: try XCTUnwrap(searchIDs[from]), in: host), "\(from): Search")
             let plus = try XCTUnwrap(frame(of: try XCTUnwrap(plusIDs[from]), in: host), "\(from): +")
             var boxes = [box(around: CGPoint(x: pin.midX, y: pin.midY)),
@@ -226,7 +226,7 @@ final class PanelSharedChromeTests: XCTestCase {
                                   + "(worst \(worst) outside \(before[index])…\(after[index]);\(trace))")
             }
             for (id, was) in [(try XCTUnwrap(plusIDs[to]), plus),
-                              (try XCTUnwrap(searchIDs[to]), search), ("panel-settings-button", more), ("panel-pin-button", pin)] {
+                              (try XCTUnwrap(searchIDs[to]), search), ("panel-more-button", more), ("panel-pin-button", pin)] {
                 let now = try XCTUnwrap(frame(of: id, in: host), "\(from) → \(to): \(id) is drawn")
                 for (a, b) in [(now.minX, was.minX), (now.minY, was.minY), (now.width, was.width), (now.height, was.height)] {
                     XCTAssertEqual(a, b, accuracy: 0.5, "\(from) → \(to): \(id) keeps its frame (\(now) vs \(was))")

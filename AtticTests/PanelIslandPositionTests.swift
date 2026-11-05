@@ -71,7 +71,7 @@ final class PanelIslandPositionTests: XCTestCase {
         // bottom: the last item with the bottom bar), on whole points
         // toward the panel's end: within half a point.
         if !spot.isFlat {
-            let first = L.itemFrame(0, in: island), last = L.itemFrame(L.pages.count - 1, in: island)
+            let first = L.itemFrame(0, in: island), last = L.itemFrame(L.items.count - 1, in: island)
             let atTop = { XCTAssertEqual(panel.maxY - first.midY, 29, accuracy: 0.5, "\(what): the first item level with the top row", file: file, line: line) }
             let atBottom = { XCTAssertEqual(last.midY - panel.minY, 29, accuracy: 0.5, "\(what): the last item level with the bottom bar", file: file, line: line) }
             switch spot.position {

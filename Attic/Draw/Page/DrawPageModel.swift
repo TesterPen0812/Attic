@@ -975,6 +975,30 @@ final class DrawPageModel: ObservableObject {
         resumeDefaults.set(data, forKey: "AtticDraw.viewports")
     }
 
+    /// ••• (Accepted 2026-11-05, "Page-specific options"): what the board
+    /// and the current canvas can do, under their own keys.
+    func moreCommands() -> [AtticMenuCommand] {
+        let empty = objects.isEmpty
+        return [
+            AtticMenuCommand(verbatim: String(localized: "Zoom to Fit"), shortcut: KeyboardShortcut("1", modifiers: .shift),
+                             isDisabled: empty) { [weak self] in self?.fit() },
+            AtticMenuCommand(verbatim: String(localized: "Actual Size"), shortcut: KeyboardShortcut("0", modifiers: .shift)) { [weak self] in
+                self?.actualSize()
+            },
+            AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: KeyboardShortcut("a", modifiers: .command),
+                             isDisabled: empty, startsSection: true) { [weak self] in self?.selectAll() },
+            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in self?.newCanvas() },
+            AtticMenuCommand(verbatim: String(localized: "Copy as Image"), isDisabled: empty) { [weak self] in
+                guard let self, let canvasID = self.canvasID else { return }
+                self.images.copyCanvas(canvasID)
+            },
+            AtticMenuCommand(verbatim: String(localized: "Export…"), isDisabled: empty) { [weak self] in
+                guard let self, let canvasID = self.canvasID else { return }
+                self.images.exportCanvas(canvasID)
+            }
+        ]
+    }
+
     /// ⇧1 and a click on the pill.
     func fit() {
         setViewport(DrawViewport.fit(DrawGeometry.union(objects), in: clearRect), byUser: false)

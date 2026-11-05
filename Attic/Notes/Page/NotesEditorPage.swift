@@ -445,7 +445,7 @@ struct NotesEditorPage: View {
         let finding = topFindShown
         // Board | list in the page-switch slot, only on the notes list
         // (Accepted 2026-10-30, "Notes board"); the search folds it.
-        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown || finding) {
+        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown || finding, moreCommands: { moreCommands() }) {
             if controller.isLibraryPresented {
                 NotesLayoutSwitch(selection: $library.layout)
                     .atticDesignCorners()
@@ -472,6 +472,22 @@ struct NotesEditorPage: View {
         .animation(PanelTopRowLayout.searchAnimation(shown: shown || finding, reduceMotion: design.reduceMotion),
                    value: shown || finding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// ••• (Accepted 2026-11-05, "Page-specific options"): on an open note
+    /// the note's own menu; over All notes the list's view and its history.
+    private func moreCommands() -> [AtticMenuCommand] {
+        if showsEditor { return noteMenuCommands() }
+        return Self.libraryMoreCommands(layout: library.layout, history: Self.historyCommands(for: controller)) { layout in
+            withAnimation(NotesLayoutSwitch.selectionAnimation(reduceMotion: design.reduceMotion)) { library.layout = layout }
+        }
+    }
+
+    static func libraryMoreCommands(layout: NotesLibraryLayout, history: [AtticMenuCommand],
+                                    choose: @escaping (NotesLibraryLayout) -> Void) -> [AtticMenuCommand] {
+        [.header(String(localized: "View"))] + NotesLibraryLayout.allCases.map { choice in
+            AtticMenuCommand(verbatim: choice.title, state: choice == layout ? .on : .off) { choose(choice) }
+        } + history
     }
 
     /// The top row's Search button's name (and tooltip) on each page.

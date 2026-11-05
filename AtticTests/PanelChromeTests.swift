@@ -113,9 +113,9 @@ final class PanelChromeTests: XCTestCase {
         let search = PanelTopRowLayout.searchButtonFrame(layout)
         let more = PanelTopRowLayout.moreButtonFrame(layout)
         XCTAssertEqual(search.maxX, 340 - chrome.trailing, accuracy: 0.001, "Search at the far right")
-        XCTAssertEqual(search.minX - more.maxX, 3, accuracy: 0.001, "••• one 6 px gap before it")
+        XCTAssertEqual(search.minX - more.maxX, 5, accuracy: 0.001, "••• one gap before it")
         let tabs = PanelTopRowLayout.switchFrame(layout, width: TasksTopTabsMetrics.width)
-        XCTAssertEqual(more.minX - tabs.maxX, 3, accuracy: 0.001)
+        XCTAssertEqual(more.minX - tabs.maxX, 10, accuracy: 0.001)
         let field = PanelTopRowLayout.fieldFrame(layout)
         XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)
         XCTAssertEqual(340 - field.maxX, chrome.trailing, accuracy: 0.001)
@@ -370,7 +370,7 @@ final class PanelChromeTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size)
             let insets = layout.chromeInsets
             // Top row: Pin · · · Now Later Done, •••, Search.
-            let top = try assertRow(["panel-pin-button", "tasks-page-tabs", "panel-settings-button", "tasks-find-button"], in: host)
+            let top = try assertRow(["panel-pin-button", "tasks-page-tabs", "panel-more-button", "tasks-find-button"], in: host)
             XCTAssertEqual(top[0].minX, insets.leading, accuracy: 0.5, "Pin alone on the left")
             XCTAssertEqual(top[3].maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "Search at the far right")
             XCTAssertEqual(top[1].width, TasksTopTabsMetrics.width, accuracy: 0.5)
@@ -412,7 +412,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
             XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
             XCTAssertNil(element("tasks-page-tabs", in: host), "the switch folds away")
-            XCTAssertNil(element("panel-settings-button", in: host), "••• folds away")
+            XCTAssertNil(element("panel-more-button", in: host), "••• folds away")
             XCTAssertEqual(chrome.modeDockWidth, host.bounds.width, "no drag lane under the open field")
         }
     }
@@ -495,7 +495,7 @@ final class PanelChromeTests: XCTestCase {
             spin(1.0)
             let layout = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size)
             let insets = layout.chromeInsets
-            let notesTop = try assertRow(["panel-pin-button", "panel-settings-button", "notes-search-button"], in: host)
+            let notesTop = try assertRow(["panel-pin-button", "panel-more-button", "notes-search-button"], in: host)
             XCTAssertEqual(notesTop[2].maxX, host.bounds.width - insets.trailing, accuracy: 0.5)
             let notesBottom = try assertRow(["notes-tag-bar", "notes-new-note"], in: host)
             XCTAssertEqual(notesBottom[0].minX, insets.leading, accuracy: 0.5)
@@ -504,7 +504,7 @@ final class PanelChromeTests: XCTestCase {
 
             state.selectSection(.calendar)
             spin(1.5)
-            let calTop = try assertRow(["panel-pin-button", "calendar-month-pill", "panel-settings-button",
+            let calTop = try assertRow(["panel-pin-button", "calendar-month-pill", "panel-more-button",
                                         "calendar-search-button"], in: host)
             XCTAssertEqual(calTop[1].minX - calTop[0].maxX, 8, accuracy: 1, "the month 16 px after the pin")
             // ‹ › in one capsule before •••: 21 pt cells in its 3 pt inset.
@@ -514,7 +514,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(previous.midY, calTop[2].midY, accuracy: 0.5, "on the top row")
             XCTAssertEqual(next.midX - previous.midX, 21 + 1, accuracy: 0.5, "21 pt cells 1 pt apart")
             XCTAssertGreaterThan(previous.midX - 10.5, calTop[1].maxX)
-            XCTAssertEqual(calTop[2].minX - (next.midX + 10.5), 3 + 3, accuracy: 0.5, "the capsule's inset, then a 6 px gap")
+            XCTAssertEqual(calTop[2].minX - (next.midX + 10.5), 3 + 10, accuracy: 0.5, "the capsule's inset, then the switch's gap")
             // Today shows only while another day is selected (Accepted
             // "Calendar page", the Today button), so the row is "+" alone
             // (Accepted 2026-10-31 "Tall island": no switch in the bar).
@@ -1206,10 +1206,10 @@ final class PanelChromeTests: XCTestCase {
             spin(1.5)
             XCTAssertTrue(draft.pages.showLibrary())
             spin(1.0)
-            let top = try assertRow(["panel-pin-button", "notes-layout-switch", "panel-settings-button", "notes-search-button"],
+            let top = try assertRow(["panel-pin-button", "notes-layout-switch", "panel-more-button", "notes-search-button"],
                                     in: host)
             XCTAssertEqual(top[1].width, NotesLayoutSwitchMetrics.width, accuracy: 0.5)
-            XCTAssertEqual(top[2].minX - top[1].maxX, 3, accuracy: 0.5, "a 6 px gap before •••")
+            XCTAssertEqual(top[2].minX - top[1].maxX, 10, accuracy: 0.5, "the switch's gap before •••")
             _ = try assertRow(["notes-tag-bar", "notes-new-note"], in: host)
             XCTAssertNotNil(element("notes-library-group-today", in: host), "the list, with its sections")
 

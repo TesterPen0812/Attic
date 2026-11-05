@@ -95,7 +95,7 @@ final class PanelIntegrationTests: XCTestCase {
         panel.uiState.openTaskNote(task.id, from: .tasks, backTitle: "Back to Now")
         spin(until: { element("task-note-back") != nil })
         XCTAssertNil(element("composer-title"), "the card must give Back its row when a task page opens")
-        XCTAssertNil(element("panel-settings-button"), "only the task page's note menu is drawn while it covers the list")
+        XCTAssertNil(element("panel-more-button"), "only the task page's note menu is drawn while it covers the list")
         let back = try XCTUnwrap(element("task-note-back"))
         XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
         spin(until: { panel.uiState.openTaskNoteID == nil })

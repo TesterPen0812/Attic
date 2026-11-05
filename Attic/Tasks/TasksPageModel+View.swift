@@ -119,6 +119,25 @@ extension TasksPageModel {
     /// A choice in View Options (or Show All, Reset View): only that page
     /// changes. Rows the view hides leave the selection; VoiceOver hears
     /// what is shown now. Remembered with the page (L7).
+    /// ••• on Done (Accepted 2026-11-05, "Page-specific options"): Done has
+    /// no view options (its log is by day), so it offers what its days do.
+    func doneCommands() -> [AtticMenuCommand] {
+        let days = doneDays()
+        let folded = days.filter(\.folded).count
+        return [
+            AtticMenuCommand(verbatim: String(localized: "Collapse All Days"), isDisabled: folded == days.count) { [weak self] in
+                self?.setDoneDaysFolded(true)
+            },
+            AtticMenuCommand(verbatim: String(localized: "Expand All Days"), isDisabled: folded == 0) { [weak self] in
+                self?.setDoneDaysFolded(false)
+            }
+        ]
+    }
+
+    private func setDoneDaysFolded(_ folded: Bool) {
+        foldAllGroups(doneDays().map(\.key), folded: folded, on: .done)
+    }
+
     func setViewOptions(_ options: TasksViewOptions, for tab: TasksTab) {
         guard tab != .done, options != viewOptions(for: tab) else { return }
         viewOptionsByTab[tab] = options.isDefault ? nil : options

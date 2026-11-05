@@ -132,7 +132,7 @@ final class AdaptiveFindTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size)
             let scroll = try XCTUnwrap(engine.scrollView)
             let insetBefore = scroll.contentInsets.top
-            for id in ["panel-pin-button", "panel-settings-button", "notes-search-button"] {
+            for id in ["panel-pin-button", "panel-more-button", "notes-search-button"] {
                 XCTAssertNotNil(element(id, in: host), "\(id) at rest")
             }
 
@@ -146,7 +146,7 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertEqual(field.maxX, expected.maxX, accuracy: 1)
             XCTAssertEqual(field.minY, expected.minY, accuracy: 1)
             XCTAssertEqual(field.height, PanelTopRowLayout.control, accuracy: 0.5)
-            for id in ["panel-pin-button", "panel-settings-button", "notes-search-button", "notes-header-title"] {
+            for id in ["panel-pin-button", "panel-more-button", "notes-search-button", "notes-header-title"] {
                 XCTAssertNil(element(id, in: host), "\(id) folds away")
             }
             XCTAssertEqual(scroll.contentInsets.top, insetBefore, accuracy: 0.001, "nothing pushes the note down")
@@ -159,7 +159,7 @@ final class AdaptiveFindTests: XCTestCase {
             spin(0.8)
             XCTAssertFalse(engine.find.isShown)
             XCTAssertNil(element("note-find-bar", in: host))
-            for id in ["panel-pin-button", "panel-settings-button", "notes-search-button"] {
+            for id in ["panel-pin-button", "panel-more-button", "notes-search-button"] {
                 XCTAssertNotNil(element(id, in: host), "\(id) is back")
             }
             XCTAssertEqual(scroll.contentInsets.top, insetBefore, accuracy: 0.001)

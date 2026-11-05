@@ -394,6 +394,12 @@ final class TasksPageModel: ObservableObject {
         for id in keep where store.task(withID: id) != nil { selection.insert(id) }
     }
 
+    func foldAllGroups(_ keys: [String], folded: Bool, on tab: TasksTab) {
+        var set = foldedGroups[tab] ?? []
+        if folded { set.formUnion(keys) } else { set.subtract(keys) }
+        foldedGroups[tab] = set
+    }
+
     func toggleGroup(_ key: String, on tab: TasksTab) {
         var set = foldedGroups[tab] ?? []
         if set.contains(key) { set.remove(key) } else { set.insert(key) }

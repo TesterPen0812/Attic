@@ -177,6 +177,21 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(model.doneDays().first?.folded, true)
     }
 
+    func testDoneOffersToCollapseAndExpandItsDays() throws {
+        let id = try add("Finished", due: nil)
+        XCTAssertTrue(model.toggleDone(id).isApplied)
+        model.releaseHold(id)
+        var commands = model.doneCommands()
+        XCTAssertEqual(commands.map(\.title), ["Collapse All Days", "Expand All Days"])
+        XCTAssertEqual(commands.map(\.isDisabled), [false, true])
+        commands[0].action()
+        XCTAssertEqual(model.doneDays().first?.folded, true)
+        commands = model.doneCommands()
+        XCTAssertEqual(commands.map(\.isDisabled), [true, false])
+        commands[1].action()
+        XCTAssertEqual(model.doneDays().first?.folded, false)
+    }
+
     func testAFinishedTaskLeavesNowAfterItsHoldAndUndoBringsItBack() throws {
         try add("First", due: nil)
         let done = try add("Second", due: nil)

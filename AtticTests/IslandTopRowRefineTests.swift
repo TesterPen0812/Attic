@@ -211,4 +211,54 @@ final class IslandTopRowRefineTests: XCTestCase {
         island.leave(item: .settings)
         XCTAssertEqual(island.pointed, .notes, "leaving an item the pointer already left changes nothing")
     }
+
+    // MARK: Page-specific options
+
+    private func titles(_ commands: [AtticMenuCommand]) -> [String] { commands.map(\.title) }
+
+    func testTheChromeHandsOutWhatTheCurrentPageOffers() {
+        let chrome = PanelSharedChrome()
+        XCTAssertTrue(chrome.more(on: .tasks).isEmpty)
+        var built = 0
+        chrome.setMore({ built += 1; return [AtticMenuCommand(verbatim: "One") {}] }, for: .tasks)
+        XCTAssertEqual(built, 0, "built when it opens")
+        XCTAssertEqual(titles(chrome.more(on: .tasks)), ["One"])
+        XCTAssertTrue(chrome.more(on: .notes).isEmpty, "each page its own")
+        chrome.removeTopRow(for: .tasks)
+        XCTAssertTrue(chrome.more(on: .tasks).isEmpty)
+    }
+
+    func testCalendarOffersTheViewsItHas() {
+        var asked: [Bool] = [], today = 0
+        let commands = CalendarPage.moreCommands(isWeekView: true, isOnToday: false, setWeekView: { asked.append($0) },
+                                                 goToToday: { today += 1 })
+        XCTAssertEqual(titles(commands), ["View", "Month", "Week", "Go to Today"], "no Day: the page has no such view")
+        XCTAssertEqual(commands[1].state, .off)
+        XCTAssertEqual(commands[2].state, .on)
+        commands[1].action()
+        commands[3].action()
+        XCTAssertEqual(asked, [false])
+        XCTAssertEqual(today, 1)
+        let onToday = CalendarPage.moreCommands(isWeekView: false, isOnToday: true, setWeekView: { _ in }, goToToday: {})
+        XCTAssertEqual(onToday[1].state, .on)
+        XCTAssertTrue(onToday[3].isDisabled)
+    }
+
+    func testTheNotesListOffersItsLayoutsAndItsHistory() {
+        var chosen: [NotesLibraryLayout] = []
+        let history = [AtticMenuCommand(verbatim: "Undo", startsSection: true) {}]
+        let commands = NotesEditorPage.libraryMoreCommands(layout: .list, history: history) { chosen.append($0) }
+        XCTAssertEqual(titles(commands), ["View", "Board", "List", "Undo"])
+        XCTAssertEqual(commands[2].state, .on)
+        commands[1].action()
+        XCTAssertEqual(chosen, [.board])
+    }
+
+    func testDrawOffersWhatTheBoardAndCanvasDo() {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let commands = model.moreCommands()
+        XCTAssertEqual(titles(commands), ["Zoom to Fit", "Actual Size", "Select All", "New Canvas", "Copy as Image", "Export…"])
+        XCTAssertEqual(commands.filter(\.isDisabled).map(\.title), ["Zoom to Fit", "Select All", "Copy as Image", "Export…"],
+                       "nothing on the board yet")
+    }
 }

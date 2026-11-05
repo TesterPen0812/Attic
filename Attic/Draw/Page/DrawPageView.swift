@@ -66,7 +66,7 @@ struct DrawPageHost: View {
     private func updateShown() { model.setShown(isCurrent && !panelHidden) }
 
     private var topRow: some View {
-        PanelTopRow(page: .canvas, layout: layout, searchOpen: model.isSearching) {
+        PanelTopRow(page: .canvas, layout: layout, searchOpen: model.isSearching, moreCommands: { [model] in model.moreCommands() }) {
             if model.isSearching {
                 DrawSearchField(model: model, search: model.search)
                     .accessibilityIdentifier("draw-search")
