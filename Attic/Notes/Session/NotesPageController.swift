@@ -350,6 +350,10 @@ final class NotesPageController: ObservableObject {
     private var startRequested = false
     private var didRecoverAtLaunch = false
     private var recoveryWork: Task<Void, Never>?
+    /// One-shot waiters resume on the final serialized checkpoint, timeout or
+    /// cancellation; checking a pending write never wakes on a 10 ms loop.
+    private var recoveryDrainWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var recoveryDrainTimeouts: [UUID: Task<Void, Never>] = [:]
     private var stagingCollectionWork: Task<Void, Never>?
     private var stagingCollectionToken: UUID?
     private var recoveryLoading = false
@@ -635,19 +639,45 @@ final class NotesPageController: ObservableObject {
         let deadline = recoveryClockNow() + recoveryResponseTimeout
         let hadPendingWork = recoveryWork != nil
         if hadPendingWork { recoveryWaitDidStart?() }
-        while recoveryWork != nil {
-            guard recoveryClockNow() < deadline, !Task.isCancelled else {
+        if hadPendingWork {
+            let waiterID = UUID()
+            let drained = await withTaskCancellationHandler {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    guard !Task.isCancelled, recoveryClockNow() < deadline else {
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    guard recoveryWork != nil else {
+                        continuation.resume(returning: true)
+                        return
+                    }
+                    recoveryDrainWaiters[waiterID] = continuation
+                    recoveryDrainTimeouts[waiterID] = Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: recoveryResponseTimeout)
+                        guard !Task.isCancelled else { return }
+                        self?.finishRecoveryWaiter(waiterID, drained: false)
+                    }
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.finishRecoveryWaiter(waiterID, drained: false) }
+            }
+            guard drained, !Task.isCancelled else {
                 reportRecoveryRetentionWarning(completedAction
                     ? "Recovery data is still being saved."
                     : "Recovery data is still being saved. Try again when saving finishes.",
                     kind: .stillSaving, severity: completedAction ? .progress : .information)
                 return false
             }
-            try? await Task.sleep(for: .milliseconds(10))
         }
         if hadPendingWork { await recoveryWaitDidDrain?() }
         clearPendingRecoveryWarnings()
         return true
+    }
+
+    private func finishRecoveryWaiter(_ id: UUID, drained: Bool) {
+        guard let continuation = recoveryDrainWaiters.removeValue(forKey: id) else { return }
+        recoveryDrainTimeouts.removeValue(forKey: id)?.cancel()
+        continuation.resume(returning: drained)
     }
 
     private func clearPendingRecoveryWarnings() {
@@ -660,27 +690,36 @@ final class NotesPageController: ObservableObject {
     /// Attachment reads are cancellable, unlike an in-flight checkpoint write.
     /// A bounded response must also cover hydration and Keep as New's copy.
     private func performBoundedUserIO<T: Sendable>(completedAction: Bool = false, _ action: @escaping @MainActor () async -> T) async -> T? {
-        var result: T?
-        var finished = false
         let message = completedAction ? "Attachment data is still being read."
             : "Attachment data is still being read. Try again when loading finishes."
         func clearWarning() {
             recoveryWarnings.removeAll { $0 == message }
             for session in cache.values where session.notice == message { session.notice = nil }
         }
+        let (stream, continuation) = AsyncStream<T?>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let task = Task { @MainActor in
-            result = await action()
-            finished = true
+            let result = await action()
+            continuation.yield(result)
+            continuation.finish()
             clearWarning()
         }
-        let deadline = ContinuousClock.now + recoveryResponseTimeout
-        while !finished {
-            guard ContinuousClock.now < deadline, !Task.isCancelled else {
-                task.cancel()
-                reportRecoveryRetentionWarning(message, kind: .stillReading, severity: completedAction ? .progress : .information)
-                return nil
-            }
-            try? await Task.sleep(for: .milliseconds(10))
+        let timeout = Task { @MainActor in
+            try? await Task.sleep(for: recoveryResponseTimeout)
+            guard !Task.isCancelled else { return }
+            continuation.yield(nil)
+            continuation.finish()
+        }
+        let result: T? = await withTaskCancellationHandler {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next() ?? nil
+        } onCancel: {
+            continuation.finish()
+        }
+        timeout.cancel()
+        guard let result, !Task.isCancelled else {
+            task.cancel()
+            reportRecoveryRetentionWarning(message, kind: .stillReading, severity: completedAction ? .progress : .information)
+            return nil
         }
         clearWarning()
         return result
@@ -695,6 +734,11 @@ final class NotesPageController: ObservableObject {
             await action()
             if self?.recoveryWorkToken == token {
                 self?.recoveryWork = nil
+                if let self {
+                    for id in Array(self.recoveryDrainWaiters.keys) {
+                        self.finishRecoveryWaiter(id, drained: true)
+                    }
+                }
                 self?.clearPendingRecoveryWarnings()
             }
         }

@@ -2530,6 +2530,8 @@ extension NoteSlice3bTests {
             }
             let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
             controller.recoveryResponseTimeout = .milliseconds(60)
+            let frozen = ContinuousClock.now
+            controller.recoveryClockNow = { frozen }
             await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
             let session = try XCTUnwrap(controller.active)
             // Create real library Undo/Redo work, then suspend preservation of
