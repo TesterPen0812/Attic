@@ -99,6 +99,14 @@ final class TasksRound10PagerTests: XCTestCase {
         XCTAssertFalse(swipe.motion.isSettling)
     }
 
+    func testHideRetainsPreviouslyBuiltLightweightTabs() {
+        swipe.span.warm = 0...2
+        model.pageDidHide()
+        XCTAssertEqual(swipe.span.warm, 0...2, "hidden lightweight tab hosts keep their built state")
+        model.resetForReveal()
+        XCTAssertEqual(swipe.span.warm, 0...2, "a quick tab switch after reveal should not rebuild the tabs")
+    }
+
     // MARK: - Hosted
 
     /// ⌘F on Done during a swipe (the view's own route into the search):

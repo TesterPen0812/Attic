@@ -56,7 +56,7 @@ final class TasksPagerSpan: ObservableObject {
     /// it starts to move (each build took 50–100 ms on screen, the lag the
     /// owner felt). Hidden ones are hidden in AppKit (their scroll views),
     /// so they draw nothing, take no clicks and are not read by VoiceOver.
-    /// Let go when the panel hides; a shell switch retains the warm lists.
+    /// Retained while hidden under the shell's lightweight host budget.
     @Published var warm: ClosedRange<Int>?
 }
 
@@ -1165,9 +1165,9 @@ extension TasksPageModel {
     /// its gesture and settle, and rests on the model's tab at once.
     func suspendPager() {
         pagerSwipe.suspend()
-        // A covered Tasks page keeps its already-built lists for Back and
-        // the next tab click. Hiding the panel still releases them.
-        pagerSwipe.motion.coolDown(releasingPages: isHidden)
+        // Keep the lightweight tab hosts built for the next reveal, while
+        // cancelling queued warmer work. The shell still releases heavy pages.
+        pagerSwipe.motion.coolDown(releasingPages: isHidden && !PanelUIState.retainsLightweightHostsWhenHidden)
         showPagerPage(animated: false)
     }
 
