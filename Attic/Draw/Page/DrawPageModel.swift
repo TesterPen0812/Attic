@@ -187,6 +187,8 @@ final class DrawPageModel: ObservableObject {
     /// A file Save Image or Export… couldn't write, or an image that
     /// couldn't be added: shown in the same notice, without Retry.
     @Published private var actionProblem: String?
+    /// A bounded quit attempt can refuse while original image bytes are still loading.
+    @Published private var quitImportPending = false
 
     private let resumeDefaults: UserDefaults?
     private var viewportMemorySave: DispatchWorkItem?
@@ -249,7 +251,11 @@ final class DrawPageModel: ObservableObject {
         if let problem = saveProblem, problem.message != dismissedSaveProblem {
             return PanelNoticeContent(message: problem.message, canRetry: true)
         }
-        return actionProblem.map { PanelNoticeContent(message: $0, canRetry: false) }
+        if let actionProblem { return PanelNoticeContent(message: actionProblem, canRetry: false) }
+        if quitImportPending {
+            return PanelNoticeContent(message: String(localized: "Importing images…"), canRetry: false)
+        }
+        return nil
     }
 
     /// Shows a problem that has nothing to retry (a file that couldn't be
@@ -291,15 +297,26 @@ final class DrawPageModel: ObservableObject {
         }
     }
 
-    /// The app's quit: the stroke in progress and any import finish, the
-    /// open canvas's thumbnail renders, and unsettled edits are retried or
-    /// reconciled. False while one is still unsaved (quit stops).
+    /// The app's quit: finish input, give imports a bounded chance to save,
+    /// then settle saved edits. A still-running import refuses termination;
+    /// its task stays owned by this model and completes normally. Thumbnails
+    /// are regenerable and never hold the quit reply indefinitely.
     func prepareToQuit() async -> Bool {
         finishLiveInput()
         flushViewportMemory()
-        while let next = imports.values.first { await next.value }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(750))
+        while !imports.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        guard imports.isEmpty else {
+            quitImportPending = true
+            return false
+        }
+        quitImportPending = false
         flushThumbnail()
-        for render in thumbnailRenders.values { await render.task.value }
+        while !thumbnailRenders.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
         if store.hasUnsettledEdits { retrySave() }
         return !store.hasUnsettledEdits
     }
@@ -997,6 +1014,7 @@ final class DrawPageModel: ObservableObject {
 
     func importFinished(_ token: UUID) {
         imports[token] = nil
+        if imports.isEmpty { quitImportPending = false }
     }
 
     /// Folds a store result into the open canvas's objects.
