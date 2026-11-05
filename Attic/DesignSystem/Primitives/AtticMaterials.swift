@@ -747,8 +747,11 @@ struct AtticSurfaceBackground<S: Shape>: View {
         ZStack {
             if model.kind != .solid {
                 underlay
-                // The foundation, with Dark's dark tint over it (A37).
-                shape.fill(model.backing.color)
+                // The foundation, with Dark's dark tint over it (A37). The
+                // Quiet test shows its stack bare: no foundation, no Tint.
+                if !quietBlur {
+                    shape.fill(model.backing.color)
+                }
             } else if model.porcelain {
                 // Visual A: the flat surface, with its top sheen kept within
                 // the first 24 pt.
@@ -763,7 +766,7 @@ struct AtticSurfaceBackground<S: Shape>: View {
             } else {
                 shape.fill(model.base.color)
             }
-            if !model.tintStops.isEmpty {
+            if !model.tintStops.isEmpty, !quietBlur {
                 if let tintHeight {
                     ZStack(alignment: .top) {
                         model.washColor.withAlpha(model.tintOpacity(at: 1)).color
@@ -807,7 +810,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 AtticQuietBlur().clipShape(shape)
             }
             Group {
-                if let nativeGlassSize {
+                if quietBlur {
+                    AtticQuietGlass().clipShape(shape)
+                } else if let nativeGlassSize {
                     GeometryReader { proxy in
                         shape.fill(Color.clear).glassEffect(.regular, in: shape)
                             .frame(width: nativeGlassSize.width, height: nativeGlassSize.height)
@@ -889,6 +894,17 @@ final class AtticQuietBlurView: NSVisualEffectView {
         if let layer { Self.strip(layer) }
     }
 
+    // The effect's sublayers can arrive after the first updateLayer.
+    override func layout() {
+        super.layout()
+        if let layer { Self.strip(layer) }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let layer { Self.strip(layer) }
+    }
+
     private static func strip(_ layer: CALayer) {
         layer.backgroundColor = nil
         if layer.className == "CAChameleonLayer" {
@@ -902,6 +918,16 @@ final class AtticQuietBlurView: NSVisualEffectView {
         }
         layer.sublayers?.forEach(strip)
     }
+}
+
+/// Quiet.md's sidebar glass: a plain NSGlassEffectView, no tint or style.
+struct AtticQuietGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.cornerRadius = 0
+        return view
+    }
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {}
 }
 
 struct AtticQuietBlur: NSViewRepresentable {
