@@ -389,6 +389,24 @@ final class CalendarPageTests: XCTestCase {
 
     // MARK: - Model updates
 
+    func testR18HiddenRevisionsWaitForVisibleCalendarAndPublishTheLatestTasks() throws {
+        let store = try makeTestStore()
+        let model = CalendarPageModel(store: store, source: CalendarEventSourceStub(), calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let before = model.publishCount
+        _ = store.commit([TaskDraft(title: "One", dueDay: day(2026, 10, 29))])
+        _ = store.commit([TaskDraft(title: "Two", dueDay: day(2026, 10, 29))])
+        XCTAssertEqual(model.publishCount, before, "hidden Calendar defers presentation")
+        model.setVisible(true)
+        XCTAssertEqual(model.publishCount, before + 1, "visible page catches up in one rebuild")
+        let titles = model.snapshot.groups.flatMap(\.items).compactMap { item -> String? in
+            if case let .task(task) = item { return task.title }
+            return nil
+        }
+        XCTAssertTrue(titles.contains("One"))
+        XCTAssertTrue(titles.contains("Two"))
+    }
+
     func testModelPublishesOnlyRealChangesAndCachesEvents() throws {
         let store = try makeTestStore()
         let source = CalendarEventSourceStub(events: [event("e", "Gym", start: date(2026, 10, 30, 7), end: date(2026, 10, 30, 8))])

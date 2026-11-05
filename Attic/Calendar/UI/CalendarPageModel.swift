@@ -58,6 +58,11 @@ final class CalendarPageModel: ObservableObject {
     private var searchRequest: (query: String, interval: DateInterval)?
     private var eventTask: Task<Void, Never>?
     private var eventSearchTask: Task<Void, Never>?
+    private var cachedTasks: (revision: UInt64, today: DueDay, environment: DatePresentationEnvironment,
+                              entries: [CalendarTaskEntry])?
+    private var isVisible = false
+    private var needsVisibleRebuild = false
+    private var taskRebuildQueued = false
     private var cancellables: Set<AnyCancellable> = []
 
     #if DEBUG
@@ -113,6 +118,18 @@ final class CalendarPageModel: ObservableObject {
             guard let self else { return }
             _ = await self.source.requestAccess()
             self.sourceChanged()
+        }
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible {
+            refreshToday()
+            if needsVisibleRebuild {
+                needsVisibleRebuild = false
+                rebuild()
+            }
         }
     }
 
@@ -188,6 +205,7 @@ final class CalendarPageModel: ObservableObject {
         let current = DatePresentationEnvironment(calendar: calendar, locale: locale)
         guard current != dateEnvironment else { return false }
         dateEnvironment = current
+        cachedTasks = nil
         sourceGeneration &+= 1
         eventTask?.cancel()
         eventSearchTask?.cancel()
@@ -368,7 +386,11 @@ final class CalendarPageModel: ObservableObject {
     /// Every listed task with a due day (subtasks too): open ones show on
     /// their day and in search; done ones show on their day, done.
     private func taskEntries(today: DueDay) -> [CalendarTaskEntry] {
-        store.tasks.compactMap { task -> CalendarTaskEntry? in
+        if let cachedTasks, cachedTasks.revision == store.revision,
+           cachedTasks.today == today, cachedTasks.environment == dateEnvironment {
+            return cachedTasks.entries
+        }
+        let entries: [CalendarTaskEntry] = store.tasks.compactMap { task -> CalendarTaskEntry? in
             guard task.deletedAt == nil, let due = task.dueDay else { return nil }
             let subtasks = task.parentID == nil ? store.subtasks(of: task.id) : []
             var row = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today, calendar: calendar, locale: locale)
@@ -378,6 +400,8 @@ final class CalendarPageModel: ObservableObject {
             if !(isOpen && due < today) { row.due = nil }
             return CalendarTaskEntry(id: task.id, title: task.title, due: due, isOpen: isOpen, row: row, dueTimeMinutes: task.dueTimeMinutes)
         }
+        cachedTasks = (store.revision, today, dateEnvironment, entries)
+        return entries
     }
 
     // MARK: Observation
@@ -386,8 +410,18 @@ final class CalendarPageModel: ObservableObject {
         store.$revision
             .dropFirst()
             .sink { [weak self] _ in
-                // `$revision` is sent before the store's lists change.
-                DispatchQueue.main.async { self?.rebuild() }
+                // `$revision` sends before its value is stored. One next-turn
+                // drain sees the final revision and all published task arrays.
+                guard let self else { return }
+                if !self.isVisible { self.needsVisibleRebuild = true; return }
+                guard !self.taskRebuildQueued else { return }
+                self.taskRebuildQueued = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.taskRebuildQueued = false
+                    if self.isVisible { self.rebuild() }
+                    else { self.needsVisibleRebuild = true }
+                }
             }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .NSCalendarDayChanged)

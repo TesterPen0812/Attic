@@ -69,6 +69,7 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
+            model.setVisible(isCurrent)
             // A retained, prewarmed Calendar is mounted but not the shown page.
             if isCurrent { model.pageAppeared() }
             model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
@@ -77,8 +78,10 @@ struct CalendarPage: View {
             }
         }
         .onChange(of: isCurrent) { _, current in
+            model.setVisible(current)
             if current { model.pageAppeared() }
         }
+        .onDisappear { model.setVisible(false) }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             if isCurrent { model.refreshNowPosition() }
         }
