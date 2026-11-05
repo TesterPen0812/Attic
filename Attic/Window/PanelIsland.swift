@@ -988,8 +988,14 @@ final class PanelIslandWindow: NSPanel {
     override func sendEvent(_ event: NSEvent) {
         if AtticPanel.takesFirstPress(event.type), let context = onIdleTraceContext?() {
             IdleLatencyTrace.begin("island_action", original: event.timestamp, context: context)
+        } else if AtticPanel.takesFirstPress(event.type)
+                    || [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
+            IdleLatencyTrace.untracedInput()
         }
         defer {
+            if AtticPanel.takesFirstPress(event.type) {
+                IdleLatencyTrace.point("mouse_down_returned")
+            }
             if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("island_sendEvent_dispatched")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
