@@ -654,6 +654,25 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNotNil(model.pasteboard.data(forType: .png))
     }
 
+    func testOlderCopyRenderCannotOverwriteNewerClipboardCopy() async throws {
+        let gate = Draw3Gate()
+        let first = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 20, height: 20), content: .shape(.rectangle))
+        let second = DrawObject(frame: DrawFrame(x: 100, y: 0, width: 20, height: 20), content: .shape(.ellipse))
+        model.images.copyRenderer = { objects, dark in
+            if objects.count == 1 { await gate.wait() }
+            return DrawExport.render(objects, format: .png, dark: dark)
+        }
+        model.images.copyAsImage([first])
+        let older = model.images.lastTask
+        await Task.yield()
+        model.images.copyAsImage([first, second])
+        await model.images.lastTask?.value
+        let newest = try XCTUnwrap(model.pasteboard.data(forType: .png))
+        gate.open()
+        await older?.value
+        XCTAssertEqual(model.pasteboard.data(forType: .png), newest)
+    }
+
     func testCopyAsImageForOneImageIsOneItemWithTheOriginalByteForByte() async throws {
         model.setTool(.select)
         for type in [UTType.png, .jpeg] {
