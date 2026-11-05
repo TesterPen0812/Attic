@@ -738,6 +738,8 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// A small satellite crops the panel-sized material. Native regular glass
     /// switches to a dark control treatment at narrow dimensions.
     var nativeGlassSize: CGSize?
+    /// Test preview: Quiet.md's colourless blur beneath the glass.
+    var quietBlur = false
 
     @Environment(\.atticCapture) private var capture
 
@@ -801,6 +803,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
             AtticVisualEffect(material: .sidebar)
                 .clipShape(shape)
         } else if model.kind == .glass {
+            if quietBlur {
+                AtticQuietBlur().clipShape(shape)
+            }
             Group {
                 if let nativeGlassSize {
                     GeometryReader { proxy in
@@ -865,6 +870,45 @@ struct AtticStandInWallpaper: View {
     }
 }
 
+/// Test preview only: the blur Quiet.md keeps under its window. GPUI's
+/// `BlurredView` (Apache-2.0): the `.selection` material, always active, with
+/// the wallpaper tint layer hidden and the saturation filter removed.
+final class AtticQuietBlurView: NSVisualEffectView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        material = .selection
+        blendingMode = .behindWindow
+        state = .active
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func updateLayer() {
+        super.updateLayer()
+        if let layer { Self.strip(layer) }
+    }
+
+    private static func strip(_ layer: CALayer) {
+        layer.backgroundColor = nil
+        if layer.className == "CAChameleonLayer" {
+            layer.isHidden = true
+            return
+        }
+        if var filters = layer.filters,
+           let saturate = filters.firstIndex(where: { String(describing: $0).contains("Saturat") }) {
+            filters.remove(at: saturate)
+            layer.filters = filters
+        }
+        layer.sublayers?.forEach(strip)
+    }
+}
+
+struct AtticQuietBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> AtticQuietBlurView { AtticQuietBlurView(frame: .zero) }
+    func updateNSView(_ view: AtticQuietBlurView, context: Context) {}
+}
+
 /// `NSVisualEffectView` for the translucent Settings sidebar.
 struct AtticVisualEffect: NSViewRepresentable {
     var material: NSVisualEffectView.Material
@@ -906,7 +950,7 @@ struct AtticPanelStageSurface: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent), quietBlur: true)
     }
 }
 
