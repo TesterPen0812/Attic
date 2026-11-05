@@ -116,6 +116,18 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored[0].content, .shape(.rectangle), "The eraser leaves shapes alone")
     }
 
+    func testEraserUsesStrokeSamplesEvenWhenStoredFrameIsStale() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let samples = [DrawPoint(x: 90, y: 100), DrawPoint(x: 110, y: 100)]
+        let stroke = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 1, height: 1),
+                                content: .stroke(samples))
+        XCTAssertTrue(store.perform(.put([stroke]), on: id).isSaved)
+        model.syncExternalChanges()
+        model.setTool(.eraser)
+        drag([CGPoint(x: 100, y: 92), CGPoint(x: 100, y: 108)])
+        XCTAssertTrue(stored.isEmpty, "The broad-phase must preserve hit-testing against actual samples")
+    }
+
     func testTextPlacesABoxAndTypesStraightAway() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
