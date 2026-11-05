@@ -17,7 +17,7 @@ final class CalendarDraftTerminationRegistry {
 
     private var entries: [Entry] = []
 
-    func register(_ rows: CalendarEventRowState, owner: Owner = .docked) {
+    func register(_ rows: CalendarEventRowState, owner: Owner) {
         entries.removeAll { $0.rows == nil }
         guard !entries.contains(where: { $0.rows === rows }) else { return }
         entries.append(Entry(rows, owner: owner))
@@ -60,8 +60,8 @@ final class CalendarPageState: ObservableObject {
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
-    func model(store: TaskStore, resumeDefaults: UserDefaults? = nil,
-               owner: CalendarDraftTerminationRegistry.Owner = .docked) -> CalendarPageModel {
+    func model(store: TaskStore, resumeDefaults: UserDefaults?,
+               owner: CalendarDraftTerminationRegistry.Owner) -> CalendarPageModel {
         if let model { return model }
         let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
             guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
@@ -96,7 +96,8 @@ struct CalendarPageHost: View {
         CalendarTaskRowActions(
             toggleDone: { [store] id in CalendarAgendaCommands.toggleDone(id, store: store) },
             open: { [uiState, state, store] id in
-                let query = state.model(store: store, owner: uiState.isFloating ? .floating : .docked)
+                let query = state.model(store: store, resumeDefaults: uiState.resumeDefaults,
+                                        owner: uiState.isFloating ? .floating : .docked)
                     .searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
                 if let taskNotes { taskNotes.open(id, String(localized: "Back to Calendar")) }

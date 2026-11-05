@@ -265,7 +265,8 @@ struct AtticPanelView: View {
     private var openCalendarDay: (DueDay) -> Void {
         { [weak calendarPageState, weak uiState, store, noteDraft, canvasSession, settings] day in
             guard let calendarPageState, let uiState else { return }
-            let calendar = calendarPageState.model(store: store)
+            let calendar = calendarPageState.model(store: store, resumeDefaults: uiState.resumeDefaults,
+                                                    owner: uiState.isFloating ? .floating : .docked)
             calendar.goToToday()
             calendar.select(day)
             Self.selectSection(.calendar, uiState: uiState, noteDraft: noteDraft, canvasSession: canvasSession,
@@ -294,7 +295,8 @@ struct AtticPanelView: View {
     private var composerPage: ComposerPage? {
         switch currentPage {
         case .tasks: .tasks(tasksPageState.model(for: store, toasts: toasts).tab)
-        case .calendar: .calendar(selected: calendarPageState.model(store: store).newTaskDay)
+        case .calendar: .calendar(selected: calendarPageState.model(store: store,
+            resumeDefaults: uiState.resumeDefaults, owner: uiState.isFloating ? .floating : .docked).newTaskDay)
         case .notes: .notes
         default: nil
         }
@@ -380,7 +382,8 @@ struct AtticPanelView: View {
         let services = taskNoteEntryServices
         return TaskNoteEntryServices(
             open: { [uiState, calendarPageState, store, weak pages = noteDraft.pages] id, backTitle in
-                let query = calendarPageState.model(store: store).searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let query = calendarPageState.model(store: store, resumeDefaults: uiState.resumeDefaults,
+                    owner: uiState.isFloating ? .floating : .docked).searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 pages?.pendingTaskSearchQuery = query.isEmpty ? nil : query
                 uiState.openTaskNote(id, from: .calendar, row: id, backTitle: backTitle)
             },

@@ -108,8 +108,8 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         let docked = try Fixture(); defer { docked.finish() }
         let detached = try Fixture(); defer { detached.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(docked.rows)
-        registry.register(detached.rows)
+        registry.register(docked.rows, owner: .docked)
+        registry.register(detached.rows, owner: .floating)
         await docked.rows.toggle(docked.event)
         await detached.rows.toggle(detached.event)
         docked.rows.title = "Docked edit"
@@ -142,7 +142,7 @@ final class AdaptiveCalendarEventTests: XCTestCase {
     func testV7QuitWaitsForAnExistingInFlightCalendarSave() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(f.rows)
+        registry.register(f.rows, owner: .docked)
         await f.rows.toggle(f.event)
         f.rows.title = "Already saving"
         f.writer.hold = true
@@ -163,7 +163,7 @@ final class AdaptiveCalendarEventTests: XCTestCase {
     func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()
-        registry.register(f.rows)
+        registry.register(f.rows, owner: .docked)
         await f.rows.toggle(f.event)
         f.rows.title = "First edit"
         f.backend.commitError = .saveFailed("Full disk")
