@@ -1412,3 +1412,9 @@ Behaviour only: no token, colour, radius, size or motion preset changed.
   read as one preference value, so a cut-short tag picker settles at once.
 - **VoiceOver**: a dropdown row is "selected" only while it has the list's
   highlight; a tick is the menu item's mark (`AXMenuItemMarkChar`).
+## 2026-11-05 · Light selected-key ink restored (V-11)
+
+Light Create and selected Calendar day keys again use the resolved heading ink
+with pure white text in standard and increased contrast. The inverse colour
+pair applies only in Dark, as originally intended.
+

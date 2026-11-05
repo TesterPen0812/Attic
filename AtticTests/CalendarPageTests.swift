@@ -93,15 +93,22 @@ final class CalendarPageTests: XCTestCase {
         let box = try XCTUnwrap(inkBox(selected, minAlpha: 0.5))
         XCTAssertGreaterThan(box.width, 70, "the key fills its cell, wider than a 30 pt square")
         XCTAssertEqual(box.height, 60, accuracy: 2, "60 px tall")
-        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
-            let tokens = AtticColorTokens.resolve(context)
-            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.inverseFill),
-                           "the selected key uses its paired inverse fill")
-            XCTAssertEqual(CalendarKey.numberColour(.white, style: .selected, tokens: tokens), tokens.ink(.onInverse),
-                           "the selected number remains legible in both appearances")
-            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selectedToday, isPressed: false, tokens: tokens), CalendarDesign.red,
-                           "red on today")
-            XCTAssertNil(CalendarKeyButtonStyle.fill(style: .plain, isPressed: false, tokens: tokens), "other days: no key")
+        for mode in AtticDesignContext.Mode.allCases {
+            for increased in [false, true] {
+                let context = AtticDesignContext(mode: mode, increaseContrast: increased)
+                let tokens = AtticColorTokens.resolve(context)
+                XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.inverseFill),
+                               "the selected key uses its paired inverse fill")
+                XCTAssertEqual(CalendarKey.numberColour(.white, style: .selected, tokens: tokens), tokens.ink(.onInverse),
+                               "the selected number remains legible in both appearances")
+                if mode == .light {
+                    XCTAssertEqual(tokens.ink(.inverseFill), tokens.ink(.heading), "Light keeps the original heading-ink key")
+                    XCTAssertEqual(tokens.ink(.onInverse), AtticRGBA(0xFFFFFF), "Light keeps the original white key number")
+                }
+                XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selectedToday, isPressed: false, tokens: tokens), CalendarDesign.red,
+                               "red on today")
+                XCTAssertNil(CalendarKeyButtonStyle.fill(style: .plain, isPressed: false, tokens: tokens), "other days: no key")
+            }
         }
         for plain in [day(2026, 10, 30), day(2026, 10, 28), day(2026, 10, 29)] {
             let image = try render(key(plain, today: day(2026, 10, 29), selected: day(2026, 10, 31)))
