@@ -1248,6 +1248,14 @@ struct TaskNotePageContainer: View {
             .padding(.horizontal, layout.chromeInsets.leading)
             .padding(.bottom, layout.chromeInsets.bottom)
         }
+        .background(alignment: .topLeading) {
+            if openFailed {
+                TaskNoteFailedOpeningEscapeReceiver(onEscape: back)
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .onKeyPress(.escape) { back(); return .handled }
     }
 
@@ -1316,6 +1324,43 @@ struct TaskNotePageContainer: View {
             open()
         }
     }
+}
+
+/// The failed-open page has no text editor to own Escape. Give it a native
+/// responder only for that state; the normal editor retains its own key path.
+private struct TaskNoteFailedOpeningEscapeReceiver: NSViewRepresentable {
+    let onEscape: () -> Void
+
+    final class EscapeView: NSView {
+        var onEscape: (() -> Void)?
+        override var acceptsFirstResponder: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 53 {
+                onEscape?()
+            } else {
+                super.keyDown(with: event)
+            }
+        }
+
+        override func cancelOperation(_ sender: Any?) { onEscape?() }
+    }
+
+    func makeNSView(context: Context) -> EscapeView {
+        let view = EscapeView()
+        view.onEscape = onEscape
+        return view
+    }
+
+    func updateNSView(_ view: EscapeView, context: Context) { view.onEscape = onEscape }
 }
 
 extension NotesPageController {
