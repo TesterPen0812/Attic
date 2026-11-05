@@ -84,7 +84,7 @@ struct AtticSettingsScrollPage<Content: View>: View {
                 column.frame(maxHeight: .infinity, alignment: .top)
             }
         }
-        .mask(AtticSettingsEdgeMask())
+        .modifier(RenderLabSettingsMask())
         .atticIdentifier(identifier)
     }
 
@@ -96,6 +96,13 @@ struct AtticSettingsScrollPage<Content: View>: View {
         .padding(.horizontal, AtticSpacing.settingsGroupInset)
         .padding(.bottom, AtticEdgeBlur.settingsBottom)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RenderLabSettingsMask: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if RenderLabFlags.noSettingsMask { content }
+        else { content.mask(AtticSettingsEdgeMask()) }
     }
 }
 

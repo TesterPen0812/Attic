@@ -738,8 +738,9 @@ struct AtticAppearancePreview<Panel: View>: View {
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
                 .shadow(
-                    color: .black.opacity(design.mode == .dark ? AtticSettingsMetrics.previewShadowAlphaDark : AtticSettingsMetrics.previewShadowAlphaLight),
-                    radius: AtticSettingsMetrics.previewShadow.radius, y: AtticSettingsMetrics.previewShadow.y
+                    color: RenderLabFlags.noSettingsPreviewShadow ? .clear : .black.opacity(design.mode == .dark ? AtticSettingsMetrics.previewShadowAlphaDark : AtticSettingsMetrics.previewShadowAlphaLight),
+                    radius: RenderLabFlags.noSettingsPreviewShadow ? 0 : AtticSettingsMetrics.previewShadow.radius,
+                    y: AtticSettingsMetrics.previewShadow.y
                 )
                 .padding(.top, AtticSettingsMetrics.previewTop)
                 .environment(\.atticProbesDisabled, true)

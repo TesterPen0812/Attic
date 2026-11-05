@@ -251,7 +251,9 @@ private struct ComposerGrowFrame: ViewModifier, Animatable {
         #endif
         let shape = AtticControlShape.shape(cornerRadius: geometry.cornerRadius, exponent: AtticShape.controlExponent)
         content
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomTrailing)
+            .frame(width: RenderLabFlags.noComposerGrowLayout ? card.width : geometry.size.width,
+                   height: RenderLabFlags.noComposerGrowLayout ? card.height : geometry.size.height,
+                   alignment: .bottomTrailing)
             .clipShape(shape)
             .background {
                 if drawn {

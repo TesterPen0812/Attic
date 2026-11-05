@@ -407,7 +407,7 @@ struct NotesLayoutSwitch: View {
 
     private func choose(_ layout: NotesLibraryLayout) {
         guard layout != selection else { return }
-        withAnimation(Self.selectionAnimation(reduceMotion: design.reduceMotion)) { selection = layout }
+        withAnimation(Self.selectionAnimation(reduceMotion: design.reduceMotion || RenderLabFlags.noNotesLayoutMotion)) { selection = layout }
     }
 
     var body: some View {
@@ -455,7 +455,7 @@ struct NotesLayoutSwitch: View {
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
-        .animation(Self.selectionAnimation(reduceMotion: design.reduceMotion), value: selection)
+        .animation(Self.selectionAnimation(reduceMotion: design.reduceMotion || RenderLabFlags.noNotesLayoutMotion), value: selection)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()

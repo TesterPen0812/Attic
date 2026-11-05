@@ -167,8 +167,8 @@ struct NotesEditorPage: View {
         // for a new or another note (keystrokes are never held back: the
         // text view takes the keyboard at once, and nothing here animates
         // per keystroke).
-        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
-        .animation(Self.noteSlideAnimation(hasShownNote: hasShownNote, reduceMotion: design.reduceMotion),
+        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion || RenderLabFlags.noNotesSlide), value: controller.isLibraryPresented)
+        .animation(Self.noteSlideAnimation(hasShownNote: hasShownNote, reduceMotion: design.reduceMotion || RenderLabFlags.noNotesSlide),
                    value: controller.active?.id)
         .onChange(of: controller.active?.id) { _, id in
             if id != nil { hasShownNote = true }
@@ -393,7 +393,7 @@ struct NotesEditorPage: View {
     }
 
     private func slide(from edge: Edge) -> AnyTransition {
-        design.reduceMotion ? .opacity : .move(edge: edge).combined(with: .opacity)
+        design.reduceMotion || RenderLabFlags.noNotesSlide ? .opacity : .move(edge: edge).combined(with: .opacity)
     }
 
     /// The scrolled-away title, back between the pin and the page button; it

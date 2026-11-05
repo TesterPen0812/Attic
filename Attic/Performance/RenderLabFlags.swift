@@ -9,7 +9,10 @@ enum RenderLabFlags {
             "CALENDAR_MASK", "TAG_MASK", "MENU_MASK", "PANEL_CLIP", "ISLAND_MASK",
             "PANEL_SHADOW", "CONTROL_SHADOW", "ISLAND_SHADOW", "PAGE_MOTION",
             "TOP_ROW_DELAY", "BOTTOM_ROW_DELAY", "ISLAND_LABEL_DELAY",
-            "ISLAND_SETTLE_DELAY", "TAG_LAYOUT", "COMPOSER_CLIP"
+            "ISLAND_SETTLE_DELAY", "TAG_LAYOUT", "COMPOSER_CLIP",
+            "DROPDOWN_INSERTION_MASK", "DROPDOWN_CONTENT_MASK", "DROPDOWN_VIEWPORT_MASK",
+            "DROPDOWN_REVEAL", "SETTINGS_PREVIEW_SHADOW", "SETTINGS_MASK",
+            "COMPOSER_GROW_LAYOUT", "NOTES_LAYOUT_MOTION", "NOTES_SLIDE"
         ]
         let environment = ProcessInfo.processInfo.environment
         guard Bundle.main.bundleIdentifier == "com.taha.Attic.preview.renderlab" else { return [] }
@@ -37,4 +40,13 @@ enum RenderLabFlags {
     static var noIslandSettleDelay: Bool { off("ISLAND_SETTLE_DELAY") }
     static var noTagLayout: Bool { off("TAG_LAYOUT") }
     static var noComposerClip: Bool { off("COMPOSER_CLIP") }
+    static var noDropdownInsertionMask: Bool { off("DROPDOWN_INSERTION_MASK") }
+    static var noDropdownContentMask: Bool { off("DROPDOWN_CONTENT_MASK") }
+    static var noDropdownViewportMask: Bool { off("DROPDOWN_VIEWPORT_MASK") }
+    static var noDropdownReveal: Bool { off("DROPDOWN_REVEAL") }
+    static var noSettingsPreviewShadow: Bool { off("SETTINGS_PREVIEW_SHADOW") }
+    static var noSettingsMask: Bool { off("SETTINGS_MASK") }
+    static var noComposerGrowLayout: Bool { off("COMPOSER_GROW_LAYOUT") }
+    static var noNotesLayoutMotion: Bool { off("NOTES_LAYOUT_MOTION") }
+    static var noNotesSlide: Bool { off("NOTES_SLIDE") }
 }

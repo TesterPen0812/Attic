@@ -1352,11 +1352,11 @@ enum AtticDropdownReveal {
 
     /// The effect's clock runs linearly; `frame` applies the curve, so the
     /// card and its contents can keep their own timings on one clock.
-    static var openAnimation: Animation { .linear(duration: openDuration) }
+    static var openAnimation: Animation { .linear(duration: RenderLabFlags.noDropdownReveal ? 0 : openDuration) }
     /// The card's opacity on its own, 0 → 1 on the curve: what an inserted
     /// card fades in by (`AtticUnfoldPresence`).
-    static var openOpacityAnimation: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: openDuration) }
-    static var closeAnimation: Animation { .linear(duration: closeDuration) }
+    static var openOpacityAnimation: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: RenderLabFlags.noDropdownReveal ? 0 : openDuration) }
+    static var closeAnimation: Animation { .linear(duration: RenderLabFlags.noDropdownReveal ? 0 : closeDuration) }
     /// The motion's opening animation (callers that animate the presenting
     /// state alongside it).
     static var revealAnimation: Animation { openAnimation }
@@ -1474,8 +1474,16 @@ struct AtticUnfoldInsertion: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         // Its fade is the unfold's: opaque early (U-41).
-        content.mask { AtticInsertionCut(open: shown > 0) }
+        content.modifier(RenderLabDropdownInsertionMask(open: shown > 0))
             .opacity(AtticDropdownReveal.opacity(progress: shown))
+    }
+}
+
+private struct RenderLabDropdownInsertionMask: ViewModifier {
+    var open: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if RenderLabFlags.noDropdownInsertionMask { content }
+        else { content.mask { AtticInsertionCut(open: open) } }
     }
 }
 
@@ -1639,10 +1647,9 @@ struct AtticUnfoldContent: ViewModifier {
     func body(content: Content) -> some View {
         let active = (scrolls || !treated) ? unfold : nil
         content
-            .mask {
-                AtticUnfoldContentMask(reveal: active?.reveal, fromTop: active?.fromTop ?? true, cornerRadius: cornerRadius)
-                    .equatable()
-            }
+            .modifier(RenderLabDropdownContentMask(reveal: active?.reveal,
+                                                   fromTop: active?.fromTop ?? true,
+                                                   cornerRadius: cornerRadius))
             .blur(radius: active?.contentBlur ?? 0)
             .environment(\.atticUnfoldTreated, true)
     }
@@ -1653,6 +1660,22 @@ struct AtticUnfoldContent: ViewModifier {
         if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.contentMaskBuilds += 1 }
         #endif
         return AtticUnfoldShape(cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop).path(in: rect)
+    }
+}
+
+private struct RenderLabDropdownContentMask: ViewModifier {
+    let reveal: CGFloat?
+    let fromTop: Bool
+    let cornerRadius: CGFloat
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if RenderLabFlags.noDropdownContentMask { content }
+        else {
+            content.mask {
+                AtticUnfoldContentMask(reveal: reveal, fromTop: fromTop,
+                                       cornerRadius: cornerRadius).equatable()
+            }
+        }
     }
 }
 
@@ -2354,7 +2377,7 @@ struct AtticDropdownViewport<Content: View>: View {
                     } action: { _, next in
                         if next != cut { cut = next }
                     }
-                    .mask { AtticDropdownViewportFade(cut: cut) }
+                    .modifier(RenderLabDropdownViewportMask(cut: cut))
                     // A height limit means the rows run on below it: say so
                     // from the first frame (the scroll reports only changes).
                     .onAppear { if height != nil, cut == AtticDropdownViewportCut() { cut.below = true } }
@@ -2373,6 +2396,15 @@ struct AtticDropdownViewport<Content: View>: View {
         } else {
             content.modifier(AtticUnfoldContent())
         }
+    }
+}
+
+private struct RenderLabDropdownViewportMask: ViewModifier {
+    let cut: AtticDropdownViewportCut
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if RenderLabFlags.noDropdownViewportMask { content }
+        else { content.mask { AtticDropdownViewportFade(cut: cut) } }
     }
 }
 
