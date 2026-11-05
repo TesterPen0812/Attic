@@ -428,8 +428,30 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(model.snapshot.pinnedWeekIndex, 4)
         let afterSelect = model.sourceFetches
         source.replace([])
-        XCTAssertEqual(model.sourceFetches, afterSelect + 1, "a source change fetches again")
+        XCTAssertEqual(model.sourceFetches, afterSelect, "a hidden source change defers all event reads")
+        model.setVisible(true)
+        XCTAssertEqual(model.sourceFetches, afterSelect + 1, "the newly visible page fetches changed events")
         XCTAssertTrue(model.snapshot.weeks.flatMap(\.days).allSatisfy { $0.marks.eventColours.isEmpty })
+    }
+
+    func testR17HiddenDayTimeZoneLocaleAndSourceUpdatesRebuildOnceOnReveal() throws {
+        let store = try makeTestStore()
+        let source = CalendarEventSourceStub(events: [event("e", "Before", start: date(2026, 10, 30, 9), end: date(2026, 10, 30, 10))])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let before = model.rebuildCount
+        source.replace([event("e", "After", start: date(2026, 10, 30, 9), end: date(2026, 10, 30, 10))])
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.post(name: name, object: nil)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertEqual(model.rebuildCount, before, "hidden notifications and source changes are invalidations only")
+        model.setVisible(true)
+        XCTAssertEqual(model.rebuildCount, before + 1, "one latest rebuild after the entire hidden burst")
+        XCTAssertTrue(model.snapshot.groups.flatMap(\.items).contains { item in
+            if case let .event(event) = item { return event.title == "After" }
+            return false
+        }, "revealed snapshot reflects the latest source")
     }
 
     func testWithoutAccessOnlyTasksShow() throws {

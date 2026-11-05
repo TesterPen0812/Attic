@@ -68,6 +68,8 @@ final class CalendarPageModel: ObservableObject {
     #if DEBUG
     /// Test seam: how many snapshots the page has published.
     private(set) var publishCount = 0
+    /// Work done even if the resulting snapshot is unchanged.
+    private(set) var rebuildCount = 0
     /// Test seam: how many times the page asked the source for events.
     private(set) var sourceFetches = 0
     /// A deterministic test boundary for the currently requested event snapshot.
@@ -125,10 +127,11 @@ final class CalendarPageModel: ObservableObject {
         guard visible != isVisible else { return }
         isVisible = visible
         if visible {
-            refreshToday()
             if needsVisibleRebuild {
                 needsVisibleRebuild = false
                 rebuild()
+            } else {
+                refreshToday()
             }
         }
     }
@@ -234,6 +237,9 @@ final class CalendarPageModel: ObservableObject {
     }
 
     func rebuild(selected: DueDay? = nil, query: String? = nil) {
+        #if DEBUG
+        rebuildCount += 1
+        #endif
         refreshDateEnvironment()
         let today = DueDay(date: now(), calendar: calendar)
         let selected = selected ?? snapshot.selected
@@ -288,7 +294,7 @@ final class CalendarPageModel: ObservableObject {
                           self.eventRequest == interval else { return }
                     self.eventCache = (interval, events)
                     self.eventRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -327,14 +333,14 @@ final class CalendarPageModel: ObservableObject {
                               self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                         for event in batch where seen.insert(event).inserted { matches.append(event) }
                         self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
-                        self.rebuild()
+                        self.rebuildOrDefer()
                     }
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                     self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
                     self.searchCacheComplete = true
                     self.searchRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -354,7 +360,7 @@ final class CalendarPageModel: ObservableObject {
                     self.searchCache = (query, interval, events)
                     self.searchCacheComplete = true
                     self.searchRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -380,7 +386,12 @@ final class CalendarPageModel: ObservableObject {
         searchRequest = nil
         eventCache = nil
         searchCache = nil
-        rebuild()
+        rebuildOrDefer()
+    }
+
+    private func rebuildOrDefer() {
+        if isVisible { rebuild() }
+        else { needsVisibleRebuild = true }
     }
 
     /// Every listed task with a due day (subtasks too): open ones show on
@@ -426,12 +437,19 @@ final class CalendarPageModel: ObservableObject {
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuild() }
+            .sink { [weak self] _ in
+                self?.cachedTasks = nil
+                self?.rebuildOrDefer()
+            }
             .store(in: &cancellables)
         for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
             NotificationCenter.default.publisher(for: name)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.rebuild() }
+                .sink { [weak self] _ in
+                    _ = self?.refreshDateEnvironment()
+                    self?.cachedTasks = nil
+                    self?.rebuildOrDefer()
+                }
                 .store(in: &cancellables)
         }
         observeSource()
