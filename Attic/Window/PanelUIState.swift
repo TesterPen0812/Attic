@@ -43,8 +43,9 @@ final class PanelKeyState: ObservableObject {
 
 @MainActor
 final class PanelUIState: ObservableObject {
-    /// The owner's current light-host budget: one shared footer/composer host
-    /// and previously built Tasks tab hosts. Heavy page content still expires.
+    /// Provisional engineering default pending owner-side idle and memory
+    /// measurements: retain the shared footer/composer and warmed Tasks tabs.
+    /// Heavy page content still expires under the existing release policy.
     static let retainsLightweightHostsWhenHidden = true
     let resumeDefaults: UserDefaults?
 
