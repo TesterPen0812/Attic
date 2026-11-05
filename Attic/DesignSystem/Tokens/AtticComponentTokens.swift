@@ -1115,7 +1115,8 @@ enum AtticPickerMetrics {
 /// here): 7 above and below 15 pt lines, a 1.5 gap before the meta line,
 /// files as 28 pt tiles 4 below it; the row is its own highlight, radius 12.
 enum TasksRowDesign {
-    static let paddingY: CGFloat = 7
+    /// 8 (Accepted 2026-11-05, rows "get room to read"; was 7).
+    static let paddingY: CGFloat = 8
     static let paddingX: CGFloat = 9
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5

@@ -141,4 +141,16 @@ final class IslandTopRowRefineTests: XCTestCase {
                        "it fades where it was")
         XCTAssertLessThan(AtticSelectionMarker.hoverAlpha, AtticSelectionMarker.fillAlpha)
     }
+
+    // MARK: Header spacing
+
+    func testTheTopRowKeepsTheSwitchApartFromItsIcons() {
+        let layout = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 340, height: 600))
+        let search = PanelTopRowLayout.searchButtonFrame(layout), more = PanelTopRowLayout.moreButtonFrame(layout)
+        let tabs = PanelTopRowLayout.switchFrame(layout, width: 100)
+        XCTAssertEqual(search.minX - more.maxX, TasksDesignMetrics.footerGap, "the bottom bar's gap")
+        XCTAssertEqual(more.minX - tabs.maxX, 2 * TasksDesignMetrics.footerGap)
+        XCTAssertEqual(tabs.height, more.height, "one line")
+        XCTAssertEqual(tabs.minY, more.minY)
+    }
 }

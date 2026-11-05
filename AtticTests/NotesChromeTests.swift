@@ -23,7 +23,7 @@ final class NotesChromeTests: XCTestCase {
         let more = PanelTopRowLayout.moreButtonFrame(layout)
         XCTAssertEqual(more.maxX, button.minX - PanelTopRowLayout.gap, accuracy: 0.001)
         let pageSwitch = PanelTopRowLayout.switchFrame(layout, width: 60)
-        XCTAssertEqual(pageSwitch.maxX, more.minX - PanelTopRowLayout.gap, accuracy: 0.001)
+        XCTAssertEqual(pageSwitch.maxX, more.minX - PanelTopRowLayout.switchGap, accuracy: 0.001)
         XCTAssertEqual(PanelTopRowLayout.leading(layout), chrome.leading + 27 + PanelTopRowLayout.leadingGap, accuracy: 0.001)
         let field = PanelTopRowLayout.fieldFrame(layout)
         XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)

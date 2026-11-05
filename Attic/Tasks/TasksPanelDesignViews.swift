@@ -85,9 +85,11 @@ enum TasksDesignMetrics {
         reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
     }
 
-    // Group header: padding 18 18 6 18 px, 22 px text on a 28 px line, gap 8 px.
-    static let groupHeaderTop: CGFloat = 9
-    static let groupHeaderBottom: CGFloat = 3
+    // Group header: 22 px text on a 28 px line, gap 8 px. Its padding was
+    // 18 18 6 18 px; Accepted 2026-11-05 ("Header spacing": less crowding)
+    // gives it 22 above and 8 below.
+    static let groupHeaderTop: CGFloat = 11
+    static let groupHeaderBottom: CGFloat = 4
     static let groupHeaderLine: CGFloat = 14
     static let groupHeaderGap: CGFloat = 4
     static let groupChevron: CGFloat = 6.5
@@ -111,20 +113,22 @@ enum TasksDesignMetrics {
     /// File tile 46 px wide.
     static let fileTileWidth: CGFloat = 23
 
-    // Top row: controls 54 px (`AtticControlSize.headerControl`), 6 px apart.
+    // Top row: controls 54 px (`AtticControlSize.headerControl`), 10 px
+    // apart (Accepted 2026-11-05, "Header spacing"; was 6 px).
     /// The design's inner controls (`rInner`, 28 px): the date button, tag
     /// pills, Clear filters. Each clamps to half its side, as CSS does.
     static let innerRadius: CGFloat = 14
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
-    static let headerGap: CGFloat = 3
+    static let headerGap: CGFloat = 5
 
     // Bottom bar: gap 10 px; its controls are the top row's 27 pt capsules.
     static let footerGap: CGFloat = 5
     static let footerRadius: CGFloat = AtticRadius.header
 
-    /// The list starts 2 under the header (4 px).
-    static let listTopGap: CGFloat = 2
+    /// The list starts 6 under the header (Accepted 2026-11-05, "Header
+    /// spacing"; was 2).
+    static let listTopGap: CGFloat = 6
 }
 
 /// A row's files as tiles (the owner's panel design): images at their own

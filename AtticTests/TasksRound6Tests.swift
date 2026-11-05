@@ -149,7 +149,7 @@ final class TasksRound6Tests: XCTestCase {
         let control = PanelTopRowLayout.control, gap = PanelTopRowLayout.gap
         let rowEnd = AtticLayout.panelSize.width - layout.chromeInsets.trailing
         let magnifierX = rowEnd - control / 2
-        let tabsEnd = rowEnd - control - gap - control - gap
+        let tabsEnd = rowEnd - control - gap - control - PanelTopRowLayout.switchGap
         let doneX = tabsEnd - TasksTopTabsMetrics.inset - TasksTopTabsMetrics.cell.width / 2
         // A click on the Done tab, as a person arrives there.
         hosted.click(y: y, x: doneX)

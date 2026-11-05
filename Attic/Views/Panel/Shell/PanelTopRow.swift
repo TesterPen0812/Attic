@@ -18,8 +18,12 @@ import SwiftUI
 /// the row's places, and they fold with the current page's search through
 /// `PanelTopRowState`.
 enum PanelTopRowLayout {
-    /// Between the switch, ••• and Search (6 px).
+    /// Between ••• and Search (Accepted 2026-11-05, "Header spacing": the
+    /// bottom bar's gap, was 3).
     static let gap: CGFloat = TasksDesignMetrics.headerGap
+    /// Between the page's own switch and the top row's icons: twice that,
+    /// so what navigates reads apart from what acts.
+    static let switchGap: CGFloat = 2 * gap
     /// From the pin to the page's leading text (16 px).
     static let leadingGap: CGFloat = 8
     static var control: CGFloat { AtticControlSize.headerControl }
@@ -45,10 +49,10 @@ enum PanelTopRowLayout {
         searchButtonFrame(layout).offsetBy(dx: -(control + gap), dy: 0)
     }
 
-    /// The page switch's frame for a switch `width` wide: one gap before •••.
+    /// The page switch's frame for a switch `width` wide: `switchGap` before •••.
     static func switchFrame(_ layout: PanelPageLayout, width: CGFloat) -> CGRect {
         let more = moreButtonFrame(layout)
-        return CGRect(x: more.minX - gap - width, y: more.minY, width: width, height: control)
+        return CGRect(x: more.minX - switchGap - width, y: more.minY, width: width, height: control)
     }
 
     /// The open field: the whole row, the chrome inset on both sides.
@@ -60,7 +64,7 @@ enum PanelTopRowLayout {
 
     /// The right-hand controls' width: the switch (if any), •••, Search.
     static func trailingWidth(switchWidth: CGFloat) -> CGFloat {
-        (switchWidth > 0 ? switchWidth + gap : 0) + control + gap + control
+        (switchWidth > 0 ? switchWidth + switchGap : 0) + control + gap + control
     }
 
     /// The search's open and close, as on Tasks: the design's ease (240 ms)
@@ -375,7 +379,7 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                             report(leading: $0)
                         }
                     Spacer(minLength: gap)
-                    HStack(spacing: gap) {
+                    HStack(spacing: PanelTopRowLayout.switchGap) {
                         pageSwitch()
                         PanelTopRowMoreButton()
                     }

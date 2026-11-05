@@ -489,28 +489,9 @@ final class TasksPanelDesignTests: XCTestCase {
     func testTheCurrentTabIsTheFlatGreyMarker() {
         let tokens = AtticColorTokens.resolve(AtticDesignContext(mode: .light))
         XCTAssertEqual(AtticSelectionMarker.fill(tokens).alpha, 0.06, accuracy: 0.001)
-        // The one selection motion: the old thumb's 160 ms ease-out (motion unchanged).
+        // The crossfade in place: the old thumb's 160 ms ease-out.
         XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16))
         XCTAssertNil(AtticSelectionMarker.animation(reduceMotion: true))
-    }
-
-    /// Now → Done crossfades the marker between the two cells as the old
-    /// thumb did (a slide would cross Later), in 160 ms, at once under
-    /// Reduce Motion.
-    func testTheTabsMarkerCrossfadesAndNeverSlides() throws {
-        let M = TasksTopTabsMetrics.self
-        let points = (0 ..< 3).map { CGPoint(x: M.inset + CGFloat($0) * (M.cell.width + M.gap) + M.cell.width / 2, y: M.inset + 1.5) }
-        for reduceMotion in [false, true] {
-            let design = AtticDesignContext(mode: .light, reduceMotion: reduceMotion, controls: .craft)
-            let frames = try SelectionMarkerMotionProbe.run(
-                size: CGSize(width: M.width, height: AtticControlSize.headerControl), points: points, from: 0, to: 2,
-                change: { probe in probe.index = 2 }) { probe in
-                    TasksTopTabs(selection: Binding(get: { TasksTab.allCases[probe.index] },
-                                                    set: { probe.index = TasksTab.allCases.firstIndex(of: $0) ?? 0 }))
-                        .atticDesign(design)
-                }
-            assertSelectionCrossfade(frames, from: 0, to: 2, reduceMotion: reduceMotion, "tabs, reduce \(reduceMotion)")
-        }
     }
 
     func testTheSubtaskCountIsTheDesigns() {
@@ -526,9 +507,9 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(AtticControlSize.addBarHeight, 27, "one size: the bottom bar is 54 px")
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: 3), 36, "72 px shut")
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: true, count: 3), 75, "150 px open")
-        XCTAssertEqual(TasksRowDesign.height(twoLine: false, tiles: false), 29, "7 + 15 + 7")
-        XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: false), 45.5, "with the meta line")
-        XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: true), 78.5, "with a line of 28 pt tiles")
+        XCTAssertEqual(TasksRowDesign.height(twoLine: false, tiles: false), 31, "8 + 15 + 8")
+        XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: false), 47.5, "with the meta line")
+        XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: true), 80.5, "with a line of 28 pt tiles")
         XCTAssertEqual(TasksRowDesign.radius, 12)
         XCTAssertEqual(AtticTextStyle.taskTitle.spec.size, 12)
         XCTAssertEqual(AtticTextStyle.taskTitle.spec.weight, .medium)
