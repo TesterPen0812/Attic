@@ -86,9 +86,6 @@ struct CalendarPage: View {
             if current { model.pageAppeared() }
         }
         .onDisappear { model.setVisible(false) }
-        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
-            if isCurrent { model.refreshNowPosition() }
-        }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         .onChange(of: snapshot.weeks.count) { _, count in

@@ -37,6 +37,32 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(morning.items.map(\.id), ["now", "event-early", "event-late"])
     }
 
+    func testR16CalendarOwnsOneClockTimerOnlyWhileVisible() throws {
+        let store = try makeTestStore()
+        var clock = date(2026, 10, 29, 8)
+        let source = CalendarEventSourceStub(events: [
+            event("later", "Later", start: date(2026, 10, 29, 11), end: date(2026, 10, 29, 12))
+        ])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { clock })
+        XCTAssertNil(model.nowTimerForTesting, "a prewarmed or hidden Calendar has no clock timer")
+        model.setVisible(true)
+        let timer = try XCTUnwrap(model.nowTimerForTesting)
+        XCTAssertTrue(timer.isValid)
+        model.setVisible(true)
+        XCTAssertTrue(model.nowTimerForTesting === timer, "repeated visibility does not create another timer")
+        let before = model.snapshot.groups[0].items.map(\.id)
+        XCTAssertEqual(before, ["now", "event-later"])
+        clock = date(2026, 10, 29, 13)
+        timer.fire()
+        XCTAssertEqual(model.snapshot.groups[0].items.map(\.id), ["event-later", "now"], "the model timer advances the now line")
+        model.setVisible(false)
+        XCTAssertNil(model.nowTimerForTesting)
+        XCTAssertFalse(timer.isValid, "panel hide immediately invalidates the timer")
+        model.setVisible(true)
+        XCTAssertNotNil(model.nowTimerForTesting)
+        model.setVisible(false)
+    }
+
     // MARK: - Month and week math
 
     func testOctober2026StartsOnMondayTheTwentyEighthOfSeptember() {

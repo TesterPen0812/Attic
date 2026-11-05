@@ -61,6 +61,9 @@ final class CalendarPageModel: ObservableObject {
     private var cachedTasks: (revision: UInt64, today: DueDay, environment: DatePresentationEnvironment,
                               entries: [CalendarTaskEntry])?
     private var isVisible = false
+    /// Exactly one clock tick source, owned by the retained model only while
+    /// its page is on screen (including when the shell keeps it mounted).
+    private var nowPositionTimer: Timer?
     private var needsVisibleRebuild = false
     private var taskRebuildQueued = false
     private var cancellables: Set<AnyCancellable> = []
@@ -70,6 +73,7 @@ final class CalendarPageModel: ObservableObject {
     private(set) var publishCount = 0
     /// Work done even if the resulting snapshot is unchanged.
     private(set) var rebuildCount = 0
+    var nowTimerForTesting: Timer? { nowPositionTimer }
     /// Test seam: how many times the page asked the source for events.
     private(set) var sourceFetches = 0
     /// A deterministic test boundary for the currently requested event snapshot.
@@ -103,6 +107,7 @@ final class CalendarPageModel: ObservableObject {
     }
 
     deinit {
+        nowPositionTimer?.invalidate()
         searchTask?.cancel()
         eventTask?.cancel()
         eventSearchTask?.cancel()
@@ -133,7 +138,20 @@ final class CalendarPageModel: ObservableObject {
             } else {
                 refreshToday()
             }
+            startNowPositionTimer()
+        } else {
+            nowPositionTimer?.invalidate()
+            nowPositionTimer = nil
         }
+    }
+
+    private func startNowPositionTimer() {
+        guard nowPositionTimer == nil else { return }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshNowPosition() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        nowPositionTimer = timer
     }
 
     func select(_ day: DueDay) {
