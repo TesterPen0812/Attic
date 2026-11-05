@@ -191,10 +191,11 @@ final class PanelShellTests: XCTestCase {
         ui.loadPageContent()
         let motion = PanelPageMotion.current(reduceMotion: false)
         ui.switchPage(to: .notes, motion: motion)
-        XCTAssertTrue(ui.isPageSwitchSliding)
-        let settled = expectation(description: "the slide settles")
-        DispatchQueue.main.asyncAfter(deadline: .now() + motion.settleDuration + 0.1) { settled.fulfill() }
-        wait(for: [settled], timeout: 3)
+        // With no rendered page in this model test, there is no slide to
+        // finish; SwiftUI's completion runs immediately. A fixed deadline
+        // would incorrectly keep this state true for the full duration.
+        XCTAssertFalse(ui.isPageSwitchSliding)
+        ui.switchPage(to: .canvas, motion: motion)
         XCTAssertFalse(ui.isPageSwitchSliding)
         ui.switchPage(to: .tasks, motion: .instant)
         XCTAssertFalse(ui.isPageSwitchSliding)

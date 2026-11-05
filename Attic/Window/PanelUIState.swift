@@ -335,16 +335,16 @@ final class PanelUIState: ObservableObject {
         guard selectedSection != section, !routeElsewhere(section) else { return }
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1
+        let generation = pageSlideGeneration
         let sliding = motion.travels
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
-        withAnimation(motion.animation) {
+        withAnimation(motion.animation, completionCriteria: .removed) {
             selectSection(section)
             alongside()
-        }
-        guard sliding else { return }
-        let generation = pageSlideGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + motion.settleDuration) { [weak self] in
-            guard let self, self.pageSlideGeneration == generation else { return }
+        } completion: { [weak self] in
+            // The page's actual animation has finished. An interrupted
+            // switch owns a newer generation and must keep its transit state.
+            guard sliding, let self, self.pageSlideGeneration == generation else { return }
             self.pageTransit.sliding = false
         }
     }
