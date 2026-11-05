@@ -174,6 +174,22 @@ final class CalendarPageModel: ObservableObject {
         if today != snapshot.today { rebuild() }
     }
 
+    /// The clock changes the line's chronological position without fetching
+    /// tasks, marking grid days or re-requesting Calendar events.
+    func refreshNowPosition() {
+        let moment = now()
+        guard DueDay(date: moment, calendar: calendar) == snapshot.today else {
+            rebuild()
+            return
+        }
+        let groups = snapshot.groups.map { CalendarAgenda.advancingNow(in: $0, to: moment, calendar: calendar) }
+        guard groups != snapshot.groups else { return }
+        snapshot.groups = groups
+        #if DEBUG
+        publishCount += 1
+        #endif
+    }
+
     func rebuild(selected: DueDay? = nil, query: String? = nil) {
         let today = DueDay(date: now(), calendar: calendar)
         let selected = selected ?? snapshot.selected

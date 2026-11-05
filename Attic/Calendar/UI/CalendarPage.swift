@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The Calendar page in the panel (owner's panel design, 28 Oct; Task
@@ -77,6 +78,9 @@ struct CalendarPage: View {
         }
         .onChange(of: isCurrent) { _, current in
             if current { model.pageAppeared() }
+        }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            if isCurrent { model.refreshNowPosition() }
         }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }

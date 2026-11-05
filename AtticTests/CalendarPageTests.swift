@@ -24,6 +24,19 @@ final class CalendarPageTests: XCTestCase {
                       calendarTitle: "Home", colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9))
     }
 
+    func testR16NowLineAdvancesAcrossEventBoundariesWithoutRebuildingTheGrid() {
+        let today = day(2026, 10, 29)
+        let events = [event("early", "Early", start: date(2026, 10, 29, 9), end: date(2026, 10, 29, 9, 30)),
+                      event("late", "Late", start: date(2026, 10, 29, 11), end: date(2026, 10, 29, 11, 30))]
+        let group = CalendarAgenda.groups(selected: today, clock: .init(today: today, now: date(2026, 10, 29, 10)),
+                                          events: events, tasks: [], calendar: calendar)[0]
+        XCTAssertEqual(group.items.map(\.id), ["event-early", "now", "event-late"])
+        let evening = CalendarAgenda.advancingNow(in: group, to: date(2026, 10, 29, 12), calendar: calendar)
+        XCTAssertEqual(evening.items.map(\.id), ["event-early", "event-late", "now"])
+        let morning = CalendarAgenda.advancingNow(in: evening, to: date(2026, 10, 29, 8), calendar: calendar)
+        XCTAssertEqual(morning.items.map(\.id), ["now", "event-early", "event-late"])
+    }
+
     // MARK: - Month and week math
 
     func testOctober2026StartsOnMondayTheTwentyEighthOfSeptember() {
