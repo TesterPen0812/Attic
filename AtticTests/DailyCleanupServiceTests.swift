@@ -5,6 +5,29 @@ import SwiftData
 final class DailyCleanupServiceTests: XCTestCase {
 
     @MainActor
+    func testNotificationBurstCoalescesCleanupAndAllowsLaterWake() async throws {
+        let store = try makeTestStore()
+        var passes = 0
+        let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in passes += 1 })
+        service.start()
+        XCTAssertEqual(passes, 1)
+
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+                     NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.post(name: name, object: nil)
+        }
+        let queued = try XCTUnwrap(service.queuedCleanupTask)
+        await queued.value
+        XCTAssertEqual(passes, 2, "One notification burst must run only one cleanup pass")
+
+        NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+        let later = try XCTUnwrap(service.queuedCleanupTask)
+        await later.value
+        XCTAssertEqual(passes, 3, "A later notification must still run overdue cleanup")
+        service.stop()
+    }
+
+    @MainActor
     func testR1_03CleanupKeepsCanonicallyEqualButByteDivergentTitles() throws {
         let now = Date(timeIntervalSince1970: 500_000)
         let old = now.addingTimeInterval(-3 * 24 * 60 * 60)

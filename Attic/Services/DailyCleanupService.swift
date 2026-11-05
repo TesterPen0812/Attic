@@ -12,6 +12,7 @@ final class DailyCleanupService {
     private var timer: Timer?
     private var generation: UUID?
     private(set) var queuedCleanupTask: Task<Void, Never>?
+    private var cleanupDirty = false
     private var notificationTokens: [NSObjectProtocol] = []
     private var workspaceTokens: [NSObjectProtocol] = []
 
@@ -64,6 +65,7 @@ final class DailyCleanupService {
 
     func stop() {
         generation = nil
+        cleanupDirty = false
         queuedCleanupTask?.cancel()
         queuedCleanupTask = nil
         timer?.invalidate()
@@ -92,8 +94,21 @@ final class DailyCleanupService {
     }
 
     private func enqueueCleanup(for generation: UUID) {
+        guard self.generation == generation else { return }
+        cleanupDirty = true
+        guard queuedCleanupTask == nil else { return }
         queuedCleanupTask = Task { @MainActor [weak self] in
-            self?.cleanupAndReschedule(for: generation)
+            // Let a burst of wake/day/activation notifications settle before
+            // the first store read. One task owns all subsequent requests.
+            await Task.yield()
+            guard let self else { return }
+            while !Task.isCancelled, self.generation == generation, self.cleanupDirty {
+                self.cleanupDirty = false
+                self.cleanupAndReschedule(for: generation)
+                await Task.yield()
+            }
+            // An old generation must never erase a new run's task handle.
+            if self.generation == generation { self.queuedCleanupTask = nil }
         }
     }
 
