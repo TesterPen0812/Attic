@@ -98,14 +98,16 @@ final class DailyCleanupService {
         cleanupDirty = true
         guard queuedCleanupTask == nil else { return }
         queuedCleanupTask = Task { @MainActor [weak self] in
-            // Let a burst of wake/day/activation notifications settle before
-            // the first store read. One task owns all subsequent requests.
-            await Task.yield()
             guard let self else { return }
+            // Notifications from wake, activation and a day change arrive on
+            // separate main-queue turns. Give them a short shared window and
+            // defer this synchronous maintenance past immediate activation.
             while !Task.isCancelled, self.generation == generation, self.cleanupDirty {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { break }
+                guard !Task.isCancelled, self.generation == generation else { break }
                 self.cleanupDirty = false
                 self.cleanupAndReschedule(for: generation)
-                await Task.yield()
             }
             // An old generation must never erase a new run's task handle.
             if self.generation == generation { self.queuedCleanupTask = nil }

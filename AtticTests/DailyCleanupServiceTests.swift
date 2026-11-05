@@ -5,6 +5,28 @@ import SwiftData
 final class DailyCleanupServiceTests: XCTestCase {
 
     @MainActor
+    func testV10NotificationsOnSeparateMainQueueTurnsShareOneCleanup() async throws {
+        let store = try makeTestStore()
+        var passes = 0
+        let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in passes += 1 })
+        service.start()
+        defer { service.stop() }
+        XCTAssertEqual(passes, 1)
+
+        NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+        try await Task.sleep(for: .milliseconds(30))
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        let queued = try XCTUnwrap(service.queuedCleanupTask)
+        await queued.value
+        XCTAssertEqual(passes, 2, "wake and activation arriving on separate main turns should share one pass")
+
+        NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
+        let later = try XCTUnwrap(service.queuedCleanupTask)
+        await later.value
+        XCTAssertEqual(passes, 3, "a later event must still catch overdue cleanup")
+    }
+
+    @MainActor
     func testNotificationBurstCoalescesCleanupAndAllowsLaterWake() async throws {
         let store = try makeTestStore()
         var passes = 0
