@@ -183,6 +183,8 @@ protocol DrawStoreProtocol: AnyObject {
     func search(_ query: String) throws -> [DrawSearchMatch]
     func create(name: String?) -> DrawCanvas
     func open(_ id: UUID) throws -> DrawSnapshot
+    /// The canvas presently owned by the Draw page; never evict its session.
+    func activate(_ id: UUID)
     func deletedImages(in id: UUID) throws -> [DrawObject]
     /// Every image deleted from a live canvas, from metadata only (no
     /// original bytes, no thumbnails, no board state).

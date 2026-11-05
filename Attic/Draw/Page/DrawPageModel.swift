@@ -519,6 +519,7 @@ final class DrawPageModel: ObservableObject {
         if let canvasID { viewports[canvasID] = viewport }
         flushViewportMemory()
         guard let snapshot = try? store.open(id) else { return }
+        store.activate(id)
         canvasID = id
         resumeDefaults?.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
         canvasName = snapshot.canvas.name
