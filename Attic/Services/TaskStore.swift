@@ -2773,7 +2773,10 @@ final class TaskStore: ObservableObject {
             if !text.isEmpty { itemTaskParts[task.id] = (root, text); changed.insert(root) }
         }
         var grouped: [UUID: [String]] = [:]
-        for (_, part) in itemTaskParts.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where ids == nil || changed.contains(part.root) {
+        // Only the affected roots need ordering after an incremental edit.
+        // Sorting the entire index made every single-row save scale with all tasks.
+        let affectedParts = itemTaskParts.filter { ids == nil || changed.contains($0.value.root) }
+        for (_, part) in affectedParts.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             grouped[part.root, default: []].append(part.text)
         }
         for root in changed { itemTaskTerms[root] = grouped[root].map { $0.joined(separator: "\n") as NSString } }
@@ -3970,9 +3973,12 @@ final class TaskStore: ObservableObject {
             let presentationStart = ContinuousClock.now
             #endif
             var presentationReadFailed = false
+            var presentationReloaded = false
+            var publishedWinners: [TaskItem]?
             if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                 do {
-                    try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    publishedWinners = try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    presentationReloaded = publishedWinners == nil
                     errorNotice = nil
                 } catch {
                     // Durability already succeeded. A presentation read must
@@ -3982,7 +3988,7 @@ final class TaskStore: ObservableObject {
                     report("\(presentationFailure): \(error.localizedDescription)", owner: owner)
                 }
             } else {
-                do { try reloadTasks(); errorNotice = nil }
+                do { try reloadTasks(); presentationReloaded = true; errorNotice = nil }
                 catch { report("\(presentationFailure): \(error.localizedDescription)", owner: owner) }
             }
             #if ATTIC_OPERATION_CRASH_TESTS
@@ -3996,7 +4002,9 @@ final class TaskStore: ObservableObject {
             // never roll back a save that succeeded; it rebuilds the index
             // from a fresh read instead.
             var indexReadFailed = false
-            if !changedIDs.isEmpty {
+            // A full reload already indexed every canonical replica. Incremental
+            // publication has the same confirmed winners available for search.
+            if !changedIDs.isEmpty && !presentationReloaded {
                 let ids = Array(changedIDs)
                 do {
                     // The plain writer already confirmed every physical
@@ -4004,7 +4012,9 @@ final class TaskStore: ObservableObject {
                     // incomplete or invalidated families still use SQL.
                     let changedRows: [TaskItem]
                     #if os(macOS)
-                    if let confirmed = WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context) {
+                    if let publishedWinners {
+                        changedRows = publishedWinners
+                    } else if let confirmed = WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context) {
                         changedRows = confirmed
                     } else {
                         changedRows = try context.fetch(
@@ -4058,7 +4068,7 @@ final class TaskStore: ObservableObject {
     /// Publish the complete confirmed logical family to BOTH list and index,
     /// choosing the presentation winner again (never deduplicating mutations).
     /// Stable families replace only changed slots; membership changes refresh.
-    private func publishPlainCommit(_ changedIDs: Set<UUID>, removedRows: Bool) throws {
+    private func publishPlainCommit(_ changedIDs: Set<UUID>, removedRows: Bool) throws -> [TaskItem]? {
         let ids = Array(changedIDs)
         let confirmed = try WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context)
             ?? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
@@ -4067,7 +4077,7 @@ final class TaskStore: ObservableObject {
         guard !removedRows, Set(winners.map(\.id)) == changedIDs,
               winners.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(winners) else {
             try reloadTasks()
-            return
+            return nil
         }
         for row in winners {
             if let position = index.positions[row.id], tasks[position] !== row {
@@ -4076,6 +4086,7 @@ final class TaskStore: ObservableObject {
         }
         index.rebind(winners, revision: revision &+ 1)
         familyIndexCache = index
+        return winners
     }
 
     private func reloadTasks(using initialContext: ModelContext? = nil) throws {
