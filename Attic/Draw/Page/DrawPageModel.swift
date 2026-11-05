@@ -1025,10 +1025,19 @@ final class DrawPageModel: ObservableObject {
         case .saved(let delta):
             guard delta.canvas.id == canvasID else { return }
             canvasName = delta.canvas.name
-            var byID = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
-            for id in delta.removedIDs { byID[id] = nil }
-            for object in delta.upserted { byID[object.id] = object }
-            objects = byID.values.sorted(by: Self.order)
+            if delta.removedIDs.isEmpty, delta.upserted.count == 1,
+               let changed = delta.upserted.first,
+               let index = objects.firstIndex(where: { $0.id == changed.id }),
+               objects[index].zIndex == changed.zIndex {
+                // The common text/shape update keeps its layer: update that
+                // slot without reconstructing and sorting the entire canvas.
+                objects[index] = changed
+            } else {
+                var byID = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
+                for id in delta.removedIDs { byID[id] = nil }
+                for object in delta.upserted { byID[object.id] = object }
+                objects = byID.values.sorted(by: Self.order)
+            }
             lastError = nil
         case .retry(let message), .held(let message):
             // The store keeps the visible after-draft.
