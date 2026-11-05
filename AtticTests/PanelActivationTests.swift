@@ -219,6 +219,63 @@ final class PanelActivationTests: XCTestCase {
 /// hidden. Its daemon may be slow; it must never hold the first panel click.
 @MainActor
 final class LoginItemRefreshTests: XCTestCase {
+    private final class RegistrationGate: @unchecked Sendable {
+        private let lock = NSLock()
+        let release = DispatchSemaphore(value: 0)
+        private var registered = false
+        private var fail = false
+        private var calls: [(enabled: Bool, onMain: Bool)] = []
+
+        func status() -> SMAppService.Status {
+            lock.lock(); defer { lock.unlock() }
+            return registered ? .enabled : .notRegistered
+        }
+        func setFailure(_ value: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            fail = value
+        }
+        func recorded() -> [(enabled: Bool, onMain: Bool)] {
+            lock.lock(); defer { lock.unlock() }
+            return calls
+        }
+        func change(_ requested: Bool) throws {
+            lock.lock(); calls.append((requested, Thread.isMainThread)); lock.unlock()
+            _ = release.wait(timeout: .now() + 3)
+            lock.lock(); defer { lock.unlock() }
+            if fail { throw NSError(domain: "LoginItemTest", code: 1) }
+            registered = requested
+        }
+    }
+
+    func testRegistrationRunsOnWorkerAndFailedToggleKeepsConfirmedState() async {
+        let gate = RegistrationGate()
+        let service = LoginItemService(readStatus: { gate.status() }, changeRegistration: { try gate.change($0) })
+        defer { gate.release.signal(); gate.release.signal() }
+
+        service.setEnabled(true)
+        XCTAssertTrue(service.isUpdating)
+        XCTAssertFalse(service.isEnabled, "the control reflects only confirmed state")
+        for _ in 0..<200 where gate.recorded().count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(gate.recorded().count, 1)
+        XCTAssertEqual(gate.recorded().first?.enabled, true)
+        XCTAssertEqual(gate.recorded().first?.onMain, false)
+        gate.release.signal()
+        for _ in 0..<200 where !service.isEnabled { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.isEnabled)
+        XCTAssertFalse(service.isUpdating)
+
+        gate.setFailure(true)
+        service.setEnabled(false)
+        XCTAssertTrue(service.isUpdating)
+        XCTAssertTrue(service.isEnabled, "an unconfirmed off request cannot flip the switch")
+        for _ in 0..<200 where gate.recorded().count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        gate.release.signal()
+        for _ in 0..<200 where service.isUpdating { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(service.isEnabled, "registration failure must preserve the real status")
+        XCTAssertNotNil(service.errorMessage)
+        XCTAssertEqual(gate.recorded().last?.onMain, false)
+    }
+
     private final class Probe: @unchecked Sendable {
         let mutex = NSLock()
         var onMain: [Bool] = []

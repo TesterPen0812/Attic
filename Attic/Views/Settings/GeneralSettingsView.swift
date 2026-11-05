@@ -18,6 +18,7 @@ struct GeneralSettingsView: View {
                     identifier: "setting-launch-at-login"
                 )
                 .help(String(localized: "Open Attic automatically when you log in"))
+                .disabled(loginItemService.isUpdating)
 
                 if SettingsVisibility.showsLoginApproval(requiresApproval: loginItemService.requiresApproval) {
                     AtticGroupDivider()
