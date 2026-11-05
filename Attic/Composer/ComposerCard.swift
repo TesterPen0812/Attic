@@ -81,6 +81,7 @@ struct ComposerCard: View {
     /// The priority just picked, highlighted on the row until it closes
     /// (Accepted 2026-11-04, #3: Low clicked, None stayed lit).
     @State private var pickedPriority: TaskPriority?
+    @State private var priorityPickGeneration = 0
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
 
@@ -120,12 +121,19 @@ struct ComposerCard: View {
         // Closing: still drawn for the shrink, but takes no input.
         .disabled(!model.isOpen)
         .onAppear { if model.isOpen { titleFocused = true } }
-        .onChange(of: model.isOpen) { _, open in
-            guard !open else { return }
+        .onChange(of: model.isOpen) { _, isOpen in
+            guard !isOpen else { return }
+            open = nil
+            priorityPickGeneration &+= 1
+            pickedPriority = nil
             titleFocused = false
             writingFocused = false
         }
         .onChange(of: model.kind) { _, _ in open = nil }
+        .onChange(of: open) { _, newPicker in
+            priorityPickGeneration &+= 1
+            if newPicker != .priority { pickedPriority = nil }
+        }
         .onChange(of: model.focusRequest) { _, _ in
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
@@ -475,11 +483,15 @@ struct ComposerCard: View {
             ForEach([TaskPriority.none, .low, .medium, .high], id: \.self) { priority in
                 let selected = (pickedPriority ?? model.values.priority ?? .none) == priority
                 Button {
+                    priorityPickGeneration &+= 1
+                    let generation = priorityPickGeneration
                     pickedPriority = priority
                     model.tasks.pickPriority(priority, editor: model.editor)
                     // The pick lights up, then the row closes.
                     DispatchQueue.main.asyncAfter(deadline: .now() + Self.pickedBeat) {
-                        if open == .priority { open = nil }
+                        guard generation == priorityPickGeneration, open == .priority,
+                              model.isOpen, model.kind == .task else { return }
+                        open = nil
                         pickedPriority = nil
                     }
                 } label: {
