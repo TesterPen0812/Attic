@@ -1997,20 +1997,26 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// deadline; resume afterwards instead of building through its frames.
     private func scheduleKeptPagesBuild(generation: Int, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.keptPagesBuildGeneration == generation,
-                  self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
+            guard let self, self.keptPagesBuildGeneration == generation else { return }
+            let preparingHiddenReveal = !self.panel.isVisible && !self.uiState.isPageContentLoaded
+            guard preparingHiddenReveal || (self.panel.isVisible && self.uiState.isPageContentLoaded) else { return }
+            let inputBusy = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.25
+                || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .scrollWheel) < 0.25
+            guard !self.isPanelMotionActive, !self.isInteractiveDismissal, !self.panel.isPressing,
+                  NSEvent.pressedMouseButtons == 0, self.uiState.canPrepareBuiltPages, !inputBusy else {
+                self.scheduleKeptPagesBuild(generation: generation, after: 0.05)
+                return
+            }
+            if preparingHiddenReveal {
+                self.buildPagesIfNeeded()
+                self.schedulePageRelease()
+                return
+            }
             let current = PanelPage(self.uiState.selectedSection)
             guard let page = PanelPage.allCases.first(where: {
                 $0 != current && !self.uiState.isElsewhere($0.section)
                     && PanelUIState.prewarms($0) && !self.uiState.builtPages.contains($0)
             }) else { return }
-            let inputBusy = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.25
-                || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .scrollWheel) < 0.25
-            guard !self.isPanelMotionActive, !self.isInteractiveDismissal, !self.panel.isPressing,
-                  self.uiState.canPrepareBuiltPages, !inputBusy else {
-                self.scheduleKeptPagesBuild(generation: generation, after: 0.05)
-                return
-            }
             self.uiState.prepareBuiltPage(page)
             self.scheduleKeptPagesBuild(generation: generation, after: 0.05)
         }
@@ -2021,8 +2027,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// follows, the usual hidden release frees a heavy page again.
     func preparePagesForReveal() {
         guard !panel.isVisible, !uiState.isPageContentLoaded else { return }
-        buildPagesIfNeeded()
-        schedulePageRelease()
+        keptPagesBuildGeneration &+= 1
+        scheduleKeptPagesBuild(generation: keptPagesBuildGeneration, after: 0)
     }
 
     /// How long the panel stays hidden before its pages are released (spec:

@@ -479,6 +479,8 @@ final class PanelShellTests: XCTestCase {
         state.setInteractionLock(.taskComposer, isActive: true)
         controller.releasePagesIfSafe()
         XCTAssertFalse(state.isPageContentLoaded, "focus and the add bar's draft (kept by the shell) do not hold the pages")
+        XCTAssertTrue(PanelUIState.retainsLightweightHostsWhenHidden && state.hasEverLoadedPageContent,
+                      "shared footer hosts remain eligible for the hidden panel")
         XCTAssertNil(controller.toasts.current)
 
         controller.show(on: screen, corner: .topRight)
@@ -561,8 +563,16 @@ final class PanelShellTests: XCTestCase {
         )
         state.selectSection(.canvas)
         XCTAssertFalse(state.isPageContentLoaded)
+        state.setInteractionLock(.blockingSave, isActive: true)
         controller.preparePagesForReveal()
-        XCTAssertTrue(state.isPageContentLoaded, "built while the pointer approaches")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+        XCTAssertFalse(state.isPageContentLoaded, "approach preparation must respect an active save")
+        state.setInteractionLock(.blockingSave, isActive: false)
+        let warmDeadline = Date().addingTimeInterval(2)
+        while !state.isPageContentLoaded, Date() < warmDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(state.isPageContentLoaded, "built through the guarded scheduler during approach")
         controller.preparePagesForReveal()
         XCTAssertTrue(state.isPageContentLoaded)
         controller.releasePagesIfSafe()

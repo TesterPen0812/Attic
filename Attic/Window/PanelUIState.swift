@@ -43,6 +43,9 @@ final class PanelKeyState: ObservableObject {
 
 @MainActor
 final class PanelUIState: ObservableObject {
+    /// The owner's current light-host budget: one shared footer/composer host
+    /// and previously built Tasks tab hosts. Heavy page content still expires.
+    static let retainsLightweightHostsWhenHidden = true
     let resumeDefaults: UserDefaults?
 
     init(resumeDefaults: UserDefaults? = nil) {
@@ -215,9 +218,11 @@ final class PanelUIState: ObservableObject {
     /// panel holds only the shell. What pages need to keep (drafts, undo,
     /// the open note or canvas) lives outside their views.
     @Published private(set) var isPageContentLoaded = false
+    private(set) var hasEverLoadedPageContent = false
 
     func loadPageContent() {
         guard !isPageContentLoaded else { return }
+        hasEverLoadedPageContent = true
         isPageContentLoaded = true
         builtPages = [PanelPage(selectedSection)]
     }

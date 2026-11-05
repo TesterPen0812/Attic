@@ -141,14 +141,14 @@ struct AtticPanelView: View {
         .overlay(alignment: .bottom) {
             // The bottom bar every page shares (owner, 2026-10-31): drawn
             // once, so a page switch never moves, fades or rebuilds it.
-            if uiState.isPageContentLoaded {
+            if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
                 PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout)
             }
         }
         .overlay {
             // Over the bar, never in it: the card takes the bar's row (P4)
             // while the bar's own pills and "+" fade out under it.
-            if uiState.isPageContentLoaded {
+            if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
                 ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome, room: composerState.room)
             }
         }
