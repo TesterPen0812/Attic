@@ -965,6 +965,7 @@ final class PanelIslandWindow: NSPanel {
     /// The left button's presses, drags and releases, in screen points,
     /// before SwiftUI sees them (pulling a page off the island).
     var onPointer: ((PanelIslandPointer) -> Void)?
+    var onIdleTraceContext: (() -> IdleLatencyTrace.Context?)?
 
     private var pressing = false
     private var trackedRelease = false
@@ -985,6 +986,15 @@ final class PanelIslandWindow: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if AtticPanel.takesFirstPress(event.type), let context = onIdleTraceContext?() {
+            IdleLatencyTrace.begin("island_action", original: event.timestamp, context: context)
+        }
+        defer {
+            if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+                IdleLatencyTrace.point("island_sendEvent_dispatched")
+                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+            }
+        }
         if AtticPanel.takesFirstPress(event.type) {
             pressing = true; trackedRelease = false
             (parent as? AtticPanel)?.beginFirstPress()
@@ -1123,6 +1133,7 @@ final class PanelIslandWindows {
     var capsuleFrame: CGRect { model.isAwake ? islandFrame : restFrame }
     /// Pulls off the island (the pull-out answers them).
     var onPull: ((PanelIslandPull) -> Void)?
+    var onIdleTraceContext: (() -> IdleLatencyTrace.Context?)?
     private var pullTracker = PanelIslandPullTracker()
     /// The island drawn in the panel's motion layer, so it hides and shows
     /// as one shape with the panel (Accepted "Tall island", "Hiding and
@@ -1165,6 +1176,7 @@ final class PanelIslandWindows {
             content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus, isStandIn: true)))
         standIn.setAccessibilityElement(false)
         self.standIn = standIn
+        island.onIdleTraceContext = { [weak self] in self?.onIdleTraceContext?() }
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
     }
 
@@ -1262,8 +1274,14 @@ final class PanelIslandWindows {
     /// also clears the pointed item, since the island then hears no exit.
     /// Left alone while a button is held, so a pull off the island keeps
     /// its drag and release.
-    func updatePassthrough(at point: CGPoint) {
-        if island.isVisible { model.track(pointer: point, rest: restFrame, awake: islandFrame) }
+    func updatePassthrough(at point: CGPoint, eventTimestamp: TimeInterval? = nil) {
+        if island.isVisible {
+            let wasAwake = model.isAwake
+            model.track(pointer: point, rest: restFrame, awake: islandFrame)
+            if !wasAwake, model.isAwake, let eventTimestamp, let context = onIdleTraceContext?() {
+                IdleLatencyTrace.begin("island_wake", original: eventTimestamp, context: context)
+            }
+        }
         guard NSEvent.pressedMouseButtons == 0 else { return }
         let ignores = island.frame.contains(point) && !capsuleFrame.contains(point)
         guard island.ignoresMouseEvents != ignores else { return }

@@ -359,6 +359,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             settings: settings, tasksMemory: tasksMemory))
 
         super.init()
+        islandWindows.onIdleTraceContext = { [weak self] in self?.idleLatencyContext() }
         configurePullOut()
         configurePanel()
         bindContentSize()
@@ -465,7 +466,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         ) != nil
     }
 
-    func updateMousePassthrough(at point: CGPoint) {
+    func updateMousePassthrough(at point: CGPoint, eventTimestamp: TimeInterval? = nil) {
         // Dock auto-hide/orientation changes can alter visibleFrame without a
         // display-configuration notification. Reconcile on existing pointer
         // activity; no additional polling or rendering loop is needed.
@@ -474,7 +475,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
            lastUsableFrame != usableFrame(on: screen, corner: currentCorner) {
             recoverPanelInsideUsableArea(preferredScreen: screen)
         }
-        islandWindows.updatePassthrough(at: point)
+        islandWindows.updatePassthrough(at: point, eventTimestamp: eventTimestamp)
         guard !isLiveResizing else {
             if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
             return
@@ -2263,17 +2264,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.updateMousePassthrough(at: self.pointerLocation())
+                self.updateMousePassthrough(at: self.pointerLocation(), eventTimestamp: event.timestamp)
             }
             return event
         }
-        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
             // AppKit invokes global event-monitor handlers on the main thread.
             // Keep acquisition synchronous so a fast outside-in move cannot
             // outrun the corner halo before the next mouse event arrives.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.updateMousePassthrough(at: self.pointerLocation())
+                self.updateMousePassthrough(at: self.pointerLocation(), eventTimestamp: event.timestamp)
             }
         }
         updateMousePassthrough(at: pointerLocation())
