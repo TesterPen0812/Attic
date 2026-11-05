@@ -359,7 +359,8 @@ final class CalendarEventTransactions {
         try begin()
         let previous = try editable(id)
         guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
-        let draft = draft.roundedToMinutes
+        // Only newly created events use minute rounding. An edit may retain
+        // existing seconds or fractions, including during Undo and Redo.
         try validate(draft)
         try transaction(id, before: previous) { try store.stageEdit(previous, draft: draft) }
         guard let saved = record.entries[id] else { throw CalendarEventWriteError.eventMissing }
