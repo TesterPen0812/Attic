@@ -580,6 +580,32 @@ final class PanelShellTests: XCTestCase {
         XCTAssertFalse(state.isPageContentLoaded, "no reveal followed: a heavy page is released again")
     }
 
+    func testFullyPreparedPagesDoNotRetryDuringAnUnrelatedSave() throws {
+        let suite = "KeptPages.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: uiState)
+        let previousDelay = AtticPanelController.keptPagesBuildDelay
+        AtticPanelController.keptPagesBuildDelay = 0.01
+        defer {
+            AtticPanelController.keptPagesBuildDelay = previousDelay
+            defaults.removePersistentDomain(forName: suite)
+            _ = controller.requestHide { _ in }
+        }
+        XCTAssertTrue(controller.show(on: try XCTUnwrap(NSScreen.main), corner: .topRight))
+        for page in PanelPage.allCases { uiState.prepareBuiltPage(page) }
+        uiState.setInteractionLock(.blockingSave, isActive: true)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        XCTAssertGreaterThan(controller.keptPagesBuildAttemptsForTesting, 0, "exercise the actual scheduled warmer")
+        XCTAssertLessThanOrEqual(controller.keptPagesBuildAttemptsForTesting, 2,
+            "when every page is already built, an active save must not create a 20 Hz retry chain")
+    }
+
     func testOnlyHeavyPagesAreReleasedWhenHidden() {
         XCTAssertFalse(AtticPanelController.releasesWhenHidden(.tasks))
         XCTAssertFalse(AtticPanelController.releasesWhenHidden(.backlog))

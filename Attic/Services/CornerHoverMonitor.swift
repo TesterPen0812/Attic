@@ -536,7 +536,9 @@ final class CornerHoverMonitor {
     /// corner. No cadence starts a timer.
     private func applySamplingCadence(_ cadence: CornerHoverSamplingCadence) {
         guard isRunning, cadence != scheduledCadence else { return }
+        let leavingResponsiveCorner = scheduledCadence == .responsive && cadence != .responsive
         scheduledCadence = cadence
+        if leavingResponsiveCorner { panelController.cancelHiddenPagePreparation() }
         updateResponsivenessActivity(for: cadence)
         if cadence == .responsive {
             // Near the corner of a hidden panel: build its pages during the
@@ -608,6 +610,7 @@ final class CornerHoverMonitor {
     func sampleForTesting(at location: CGPoint, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         samplePointer(at: location, uptime: uptime)
     }
+    func pointerActivityForTesting(at location: CGPoint) { pointerActivityObserved(at: location) }
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {

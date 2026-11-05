@@ -140,6 +140,7 @@ final class CornerRevealSettingsTests: XCTestCase {
 
     private struct Panel {
         let settings: AppSettings
+        let uiState: PanelUIState
         let controller: AtticPanelController
         let monitor: CornerHoverMonitor
     }
@@ -157,7 +158,24 @@ final class CornerRevealSettingsTests: XCTestCase {
                                               noteDraft: noteDraft, settings: settings, uiState: uiState)
         let monitor = CornerHoverMonitor(settings: settings, panelController: controller, uiState: uiState,
                                          store: store, noteStore: notes, canvasStore: canvasStore, noteDraft: noteDraft)
-        return Panel(settings: settings, controller: controller, monitor: monitor)
+        return Panel(settings: settings, uiState: uiState, controller: controller, monitor: monitor)
+    }
+
+    func testPointerLeavingCornerCancelsHiddenWarmerRetries() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        rig.uiState.setInteractionLock(.blockingSave, isActive: true)
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
+        rig.monitor.pointerActivityForTesting(at: corner)
+        spin(0.08) // let the hidden guarded retry chain start while the save blocks it
+        XCTAssertFalse(rig.uiState.isPageContentLoaded)
+        rig.monitor.pointerActivityForTesting(at: CGPoint(x: frame.midX, y: frame.midY))
+        rig.uiState.setInteractionLock(.blockingSave, isActive: false)
+        spin(0.25)
+        XCTAssertFalse(rig.uiState.isPageContentLoaded,
+            "leaving the hotspot must cancel hidden retries before they can mount pages")
     }
 
     private func spin(_ seconds: TimeInterval = 0.1) {
