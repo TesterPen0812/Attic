@@ -116,6 +116,7 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     private struct RowsKey: Equatable {
         let revision: UInt64
+        let currentHasPendingEdit: Bool
         let query: String
         let canvasID: UUID?
         let today: DueDay
@@ -164,7 +165,9 @@ final class DrawLibraryMenuModel: ObservableObject {
     var rows: [Row] {
         guard AtticDraw.isEnabled else { return [] }
         let instant = now()
-        let key = RowsKey(revision: store.revision, query: query, canvasID: currentCanvasID,
+        let key = RowsKey(revision: store.revision,
+            currentHasPendingEdit: currentCanvasID.map { store.pendingEdits[$0] != nil } ?? false,
+            query: query, canvasID: currentCanvasID,
             today: DueDay(date: instant, calendar: calendar),
             environment: DatePresentationEnvironment(calendar: calendar, locale: .current))
         if let rowsCache, rowsCache.key == key { return rowsCache.rows }
@@ -195,6 +198,7 @@ final class DrawLibraryMenuModel: ObservableObject {
             case .linkedFrom: false
             case .export: drawn && actions.export != nil
             case .copyAsImage: drawn && actions.copyAsImage != nil
+            case .duplicate: hasCanvas && (current.map { store.pendingEdits[$0.id] == nil } ?? false)
             default: hasCanvas
             }
             rows.append(Row(kind: .command(command), title: command.title, isEnabled: enabled,
@@ -287,9 +291,17 @@ final class DrawLibraryMenuModel: ObservableObject {
         case .linkedFrom:
             return
         case .duplicate:
-            guard let copy = try? store.duplicate(canvas.id) else { return }
-            finish()
-            actions.open(copy.id)
+            guard store.pendingEdits[canvas.id] == nil else { return }
+            do {
+                guard let copy = try store.duplicate(canvas.id) else {
+                    showCommandError(String(localized: "The canvas couldn’t be duplicated."))
+                    return
+                }
+                finish()
+                actions.open(copy.id)
+            } catch {
+                showCommandError(String(localized: "The canvas couldn’t be duplicated: \(error.localizedDescription)"))
+            }
         case .export:
             guard let export = actions.export else { return }
             finish()
@@ -301,6 +313,10 @@ final class DrawLibraryMenuModel: ObservableObject {
         case .delete:
             delete(canvas)
         }
+    }
+
+    private func showCommandError(_ message: String) {
+        toasts?.show(message, actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
     }
 
     /// Delete: the canvas goes to Recently Deleted, the board moves to the

@@ -288,6 +288,28 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(try store.library(deleted: true).map(\.id), [canvas.id])
     }
 
+    func testDuplicateCommandDisablesAsSoonAsSourceHasPendingEdits() throws {
+        final class SaveGate { var fail = false }
+        let gate = SaveGate()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = DrawPersistentStore(container: container, save: { context in
+            if gate.fail { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        })
+        let canvas = store.create(name: "Draft")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Saved"))]), on: canvas.id).isSaved)
+        let model = DrawLibraryMenuModel(store: store, actions: actions())
+        model.currentCanvasID = canvas.id
+        func enabled() -> Bool { model.rows.first { $0.id == "command-duplicate" }?.isEnabled == true }
+        XCTAssertTrue(enabled())
+        gate.fail = true
+        XCTAssertFalse(store.perform(.rename("Pending"), on: canvas.id).isSaved)
+        XCTAssertFalse(enabled(), "A cached menu must reflect the pending write immediately")
+        model.perform(.duplicate)
+        XCTAssertTrue(log.isEmpty)
+        XCTAssertEqual(try store.library().count, 1)
+    }
+
     func testTheMenuIsTheMenusWideCardWithItsRows() {
         let seed = seed()
         let model = menu(seed, open: seed.kitchen)
