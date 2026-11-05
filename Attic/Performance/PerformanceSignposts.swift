@@ -284,6 +284,125 @@ enum PerformanceSignposts {
     }
 }
 
+/// Sparse diagnostic points for the first interaction after idle and its
+/// immediate repeat. `notice` persists in the unified log in optimized builds.
+/// No item IDs, titles, typed text, or item dates enter this stream.
+@MainActor
+enum IdleLatencyTrace {
+    struct Context {
+        let page: PanelSection
+        let released: Bool
+        let snapshot: Bool
+        let mode: PanelHideAnimation
+        let activity: Bool
+    }
+
+    private static let log = Logger(subsystem: "com.taha.Attic", category: "IdleLatency")
+    private static var serial = 0
+    private static var current: (id: Int, origin: TimeInterval, started: TimeInterval)?
+    private static var hiddenAt: TimeInterval?
+    private static var cleanupStart: TimeInterval?
+    private static var lastCleanup: (start: TimeInterval, end: TimeInterval)?
+    private static var firstFrameWatch: IdleLatencyFirstFrameWatch?
+
+    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    static func hidden() { hiddenAt = now }
+
+    static func cleanupBegan() {
+        cleanupStart = now
+        log.notice("cleanup_begin uptime=\(now, privacy: .public)")
+    }
+
+    static func cleanupEnded() {
+        let end = now
+        if let start = cleanupStart { lastCleanup = (start, end) }
+        cleanupStart = nil
+        log.notice("cleanup_end uptime=\(end, privacy: .public)")
+    }
+
+    static func begin(_ kind: String, original: TimeInterval?, context: Context) {
+        let entry = now
+        let origin = original.flatMap { $0 > 0 && $0 <= entry ? $0 : nil } ?? entry
+        serial &+= 1
+        current = (serial, origin, entry)
+        firstFrameWatch?.stop()
+        firstFrameWatch = nil
+        let hiddenFor = hiddenAt.map { max(0, entry - $0) } ?? -1
+        let overlapping = cleanupStart.map { $0 <= entry } == true
+            || lastCleanup.map { $0.start <= entry && $0.end >= origin } == true
+        let page = String(describing: context.page)
+        let mode = String(describing: context.mode)
+        log.notice("input id=\(serial, privacy: .public) kind=\(kind, privacy: .public) origin=\(origin, privacy: .public) callback=\(entry, privacy: .public) delivery_ms=\((entry - origin) * 1000, privacy: .public) page=\(page, privacy: .public) hidden_s=\(hiddenFor, privacy: .public) released=\(context.released, privacy: .public) snapshot=\(context.snapshot, privacy: .public) hide_mode=\(mode, privacy: .public) activity=\(context.activity, privacy: .public) cleanup_overlap=\(overlapping, privacy: .public)")
+    }
+
+    static func point(_ phase: String) {
+        guard let trace = current, now - trace.started < 8 else { return }
+        log.notice("point id=\(trace.id, privacy: .public) phase=\(phase, privacy: .public) from_input_ms=\((now - trace.origin) * 1000, privacy: .public)")
+    }
+
+    static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
+        let start = now
+        defer {
+            if let trace = current, start >= trace.started, now - start < 8 {
+                log.notice("span id=\(trace.id, privacy: .public) phase=\(phase, privacy: .public) start_ms=\((start - trace.origin) * 1000, privacy: .public) elapsed_ms=\((now - start) * 1000, privacy: .public)")
+            }
+        }
+        return try body()
+    }
+
+    static func followUpScheduled(at deadline: TimeInterval) {
+        guard let trace = current, now - trace.started < 8 else { return }
+        log.notice("followup_schedule id=\(trace.id, privacy: .public) due=\(deadline, privacy: .public)")
+    }
+
+    static func followUpFired(scheduled: TimeInterval) {
+        guard let trace = current, now - trace.started < 8 else { return }
+        log.notice("followup_fire id=\(trace.id, privacy: .public) due=\(scheduled, privacy: .public) actual=\(now, privacy: .public) late_ms=\((now - scheduled) * 1000, privacy: .public)")
+    }
+
+    /// A display-link tick following a committed transaction is the first
+    /// *eligible* changed frame, not proof of compositor scan-out pixels.
+    static func firstFrameOpportunity(in view: NSView?) {
+        guard let trace = current, now - trace.started < 8, let view else { return }
+        firstFrameWatch?.stop()
+        let watch = IdleLatencyFirstFrameWatch(id: trace.id, origin: trace.origin)
+        firstFrameWatch = watch
+        watch.start(in: view)
+    }
+
+    fileprivate static func frameObserved(id: Int, origin: TimeInterval, timestamp: TimeInterval) {
+        guard current?.id == id else { return }
+        log.notice("first_frame_candidate id=\(id, privacy: .public) since_input_ms=\((timestamp - origin) * 1000, privacy: .public)")
+        firstFrameWatch = nil
+    }
+}
+
+/// Only installed for one frame after an input/flush. No idle display link.
+@MainActor
+private final class IdleLatencyFirstFrameWatch: NSObject {
+    let id: Int
+    let origin: TimeInterval
+    private var link: CADisplayLink?
+
+    init(id: Int, origin: TimeInterval) { self.id = id; self.origin = origin }
+
+    func start(in view: NSView) {
+        guard view.window?.screen != nil else { return }
+        let link = view.displayLink(target: self, selector: #selector(frame(_:)))
+        self.link = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        stop()
+        IdleLatencyTrace.frameObserved(id: id, origin: origin, timestamp: timestamp)
+    }
+
+    func stop() { link?.invalidate(); link = nil }
+}
+
 /// A frame count over a motion (round 11): a display link on the main
 /// screen counts each frame and the refreshes it missed, and the interval
 /// ends with both ("frames=… late=…"). Instruments reads it with the

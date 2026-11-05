@@ -259,6 +259,8 @@ final class CornerHoverMonitor {
         if let refusal = preparePresentation(openComposer: openComposer, section: section) {
             return .refused(refusal)
         }
+        IdleLatencyTrace.begin("explicit_reveal", original: nil,
+                               context: panelController.idleLatencyContext(activity: responsivenessActivity != nil))
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         let wasVisible = stateMachine.isVisible
@@ -393,6 +395,7 @@ final class CornerHoverMonitor {
             break
         case .reveal:
             guard let activeScreen else { return }
+            IdleLatencyTrace.point("reveal_decision")
             PerformanceSignposts.beginReveal()
             // Pull any CloudKit import out of SwiftData's context cache before
             // calculating the panel contents. This only runs on reveal, not on
@@ -413,7 +416,7 @@ final class CornerHoverMonitor {
         }
     }
 
-    private func pointerActivityObserved(at location: CGPoint) {
+    private func pointerActivityObserved(at location: CGPoint, eventTimestamp: TimeInterval? = nil) {
         guard isRunning else { return }
         let decision = samplingState.update(
             pointer: location,
@@ -423,6 +426,10 @@ final class CornerHoverMonitor {
         )
         let cadenceChanged = decision.cadence != scheduledCadence
         applySamplingCadence(decision.cadence)
+        if cadenceChanged, decision.cadence == .responsive, !stateMachine.isVisible {
+            IdleLatencyTrace.begin("corner_approach", original: eventTimestamp,
+                                   context: panelController.idleLatencyContext(activity: responsivenessActivity != nil))
+        }
         guard decision.shouldSampleImmediately else { return }
         // A boundary crossing samples at once. Event-driven sampling while
         // visible coalesces bursts: one sample per interval plus a trailing
@@ -499,13 +506,16 @@ final class CornerHoverMonitor {
     }
 
     private func scheduleFollowUp(after delay: TimeInterval) {
+        let due = ProcessInfo.processInfo.systemUptime + max(0.01, delay) + 0.02
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
+            IdleLatencyTrace.followUpFired(scheduled: due)
             self.samplePointer()
         }
         followUpWork = work
         followUpCountForTesting += 1
+        IdleLatencyTrace.followUpScheduled(at: due)
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, delay) + 0.02, execute: work)
     }
 
@@ -627,17 +637,17 @@ final class CornerHoverMonitor {
                     self?.followUpWork?.cancel()
                     self?.followUpWork = nil
                 }
-                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation, eventTimestamp: event.timestamp)
             }
             return event
         }
         globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
-            [weak self] _ in
+            [weak self] event in
             // AppKit delivers global event-monitor callbacks on the main thread.
             // The handler only runs the cheap cadence state until a boundary
             // crossing requests one immediate full sample.
             MainActor.assumeIsolated {
-                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation, eventTimestamp: event.timestamp)
             }
         }
     }

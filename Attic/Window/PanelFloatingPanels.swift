@@ -30,6 +30,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
     private let store: TaskStore
+    private let settings: AppSettings
     private var cancellables: Set<AnyCancellable> = []
     private var keyLookAwaitsRelease = false
     private var fadeGeneration = 0
@@ -46,6 +47,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     init(page: PanelPage, frame: CGRect, pinned: Bool, dependencies deps: PanelPageDependencies) {
         self.page = page
         store = deps.store
+        settings = deps.settings
         uiState.becomeFloating(on: page)
         uiState.isPanelPinned = pinned
         uiState.updatePanelSize(frame.size)
@@ -90,6 +92,12 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         AtticPanelResizePolicy.configure(panel)
         panel.delegate = self
         panel.activeAppearance = { [weak uiState] in uiState?.isPanelKey ?? false }
+        panel.onIdleTraceContext = { [weak self] in
+            guard let self else { return nil }
+            return IdleLatencyTrace.Context(page: self.uiState.selectedSection,
+                released: !self.uiState.isPageContentLoaded, snapshot: false,
+                mode: self.settings.hideAnimation, activity: false)
+        }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
         panel.onUnhandledUndo = { [weak self] redo in

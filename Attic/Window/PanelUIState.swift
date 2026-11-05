@@ -324,6 +324,7 @@ final class PanelUIState: ObservableObject {
     /// switch with `motion` (and `alongside` in the same transaction), and
     /// records it for the pages' transitions.
     func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
+        IdleLatencyTrace.point("page_change_decision")
         guard selectedSection != section, !routeElsewhere(section) else { return }
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1

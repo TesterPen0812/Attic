@@ -294,6 +294,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.contentView as? AtticPanelContentContainer
     }
 
+    func idleLatencyContext(activity: Bool = false) -> IdleLatencyTrace.Context {
+        let mode = settings.hideAnimation
+        return IdleLatencyTrace.Context(
+            page: uiState.selectedSection,
+            released: !uiState.isPageContentLoaded,
+            snapshot: contentContainer?.hasPreparedSnapshot(mode, surface: genieSurface(for: mode)) ?? false,
+            mode: mode,
+            activity: activity
+        )
+    }
+
     init(
         store: TaskStore,
         noteStore: NoteStore,
@@ -507,14 +518,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         cancelPageRelease()
         // Build the pages now, before the first frame is shown, so the panel
         // never slides in empty; the reveal signpost includes it.
-        buildPagesIfNeeded()
+        IdleLatencyTrace.span("show_build_layout") { buildPagesIfNeeded() }
         defer {
             buildKeptPagesAfterReveal()
             // Publish the ordered window and its presentation together before
             // returning to input delivery. A pending collapse transaction can
             // otherwise leave WindowServer routing the first click behind it,
             // even while AppKit already reports the panel visible.
-            if panel.isVisible { CATransaction.flush() }
+            if panel.isVisible {
+                IdleLatencyTrace.span("transaction_flush") { CATransaction.flush() }
+                IdleLatencyTrace.point("transaction_flushed")
+                IdleLatencyTrace.firstFrameOpportunity(in: hostingView)
+            }
         }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
@@ -701,6 +716,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.contentContainer?.resetReducedFade()
                 self.performanceVisibilityChanges += 1
                 self.uiState.panelDidHide()
+                IdleLatencyTrace.hidden()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.toasts.dismiss()
@@ -790,6 +806,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // same answer from creation. Keyboard state still updates after the
         // release, but controls no longer substitute a drawn material.
         panel.activeAppearance = { true }
+        panel.onIdleTraceContext = { [weak self] in self?.idleLatencyContext() }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -1607,7 +1624,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             container.setCollapseProgress(1, corner: corner, reduceMotion: true, fades: true)
         } else {
             container.dockedCornerForAlternate = corner
-            container.prepareAlternateCollapsed(mode, corner: corner, surface: genieSurface(for: mode))
+            IdleLatencyTrace.span("snapshot_prepare") {
+                container.prepareAlternateCollapsed(mode, corner: corner, surface: genieSurface(for: mode))
+            }
         }
     }
 
@@ -1931,8 +1950,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func buildPagesIfNeeded() {
         guard !uiState.isPageContentLoaded else { return }
-        uiState.loadPageContent()
-        hostingView.layoutSubtreeIfNeeded()
+        IdleLatencyTrace.span("page_build") { uiState.loadPageContent() }
+        IdleLatencyTrace.span("page_layout") { hostingView.layoutSubtreeIfNeeded() }
     }
 
     /// After launch, once the main thread is idle: build the Tasks page

@@ -99,6 +99,8 @@ final class DailyCleanupService {
 
     private func cleanupAndReschedule(for generation: UUID) {
         guard self.generation == generation else { return }
+        IdleLatencyTrace.cleanupBegan()
+        defer { IdleLatencyTrace.cleanupEnded() }
         let timestamp = now()
         // Foreground/wake refresh is a fallback for delayed or dropped
         // CloudKit remote-change pushes; a local-only build has no remote

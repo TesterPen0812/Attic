@@ -18,6 +18,7 @@ final class AtticPanel: NSPanel {
     var onTrackpadDismissProgress: ((CGFloat) -> Void)?
     var onTrackpadDismissCancelled: (() -> Void)?
     var onDirectContentInteraction: (() -> Void)?
+    var onIdleTraceContext: (() -> IdleLatencyTrace.Context?)?
     /// A mouse button came up over the panel (after the window delivered it).
     var onPressEnded: (() -> Void)?
     /// A press the panel received is still down (O14-01).
@@ -366,7 +367,16 @@ final class AtticPanel: NSPanel {
     private(set) var lastScrollEventTime: TimeInterval = 0
 
     override func sendEvent(_ event: NSEvent) {
+        let isActionStart = Self.takesFirstPress(event.type) || event.type == .keyDown
+        let isActionEnd = [.leftMouseUp, .rightMouseUp, .otherMouseUp, .keyDown].contains(event.type)
+        if isActionStart, let context = onIdleTraceContext?() {
+            IdleLatencyTrace.begin("panel_action", original: event.timestamp, context: context)
+        }
         defer {
+            if isActionEnd {
+                IdleLatencyTrace.point("sendEvent_dispatched")
+                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+            }
             if changesContent(event) {
                 onContentMayChange?([.mouseMoved, .mouseEntered, .mouseExited].contains(event.type))
             }
@@ -1663,10 +1673,12 @@ final class AtticPanelContentContainer: NSView {
         let standInOpacity = standInLayer?.opacity ?? 0
         standInLayer?.opacity = 1
         let extras = islandStandIn.flatMap { view in view.layer.map { [(layer: $0, clip: view.frame)] } } ?? []
-        genieView.captureSnapshot(of: motionView, tiers: hostingView.layer, surfaceRect: hostingView.frame,
-                                  cornerRadius: hostingView.panelCornerRadius,
-                                  dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                                  hidesSurfaceMaterial: live?.kind == .frosted, extras: extras)
+        IdleLatencyTrace.span("snapshot_capture") {
+            genieView.captureSnapshot(of: motionView, tiers: hostingView.layer, surfaceRect: hostingView.frame,
+                                      cornerRadius: hostingView.panelCornerRadius,
+                                      dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+                                      hidesSurfaceMaterial: live?.kind == .frosted, extras: extras)
+        }
         standInLayer?.opacity = standInOpacity
         CATransaction.commit()
         if opacity != 1 {
