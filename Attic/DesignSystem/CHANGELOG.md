@@ -1419,4 +1419,3 @@ Behaviour only: no token, colour, radius, size or motion preset changed.
 Light Create and selected Calendar day keys again use the resolved heading ink
 with pure white text in standard and increased contrast. The inverse colour
 pair applies only in Dark, as originally intended.
-
