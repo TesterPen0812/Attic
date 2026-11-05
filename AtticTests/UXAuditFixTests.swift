@@ -328,6 +328,38 @@ final class UXAuditFixTests: XCTestCase {
         assertCornerAlpha(actual, expected, extent: 14)
     }
 
+    func testPopoverRowFaceUsesLivePressOverHoverAndKeepsDisabledFillClear() throws {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            var design = AtticDesignContext(mode: mode)
+            design.reduceMotion = true
+            design.reduceTransparency = false
+            func face(pressed: Bool, enabled: Bool = true) throws -> NSColor {
+                let bitmap = try shapeBitmap(AtticPopoverRowFace(systemName: nil, title: "", detail: nil,
+                    isHighlighted: true, reservesIconSlot: false, checked: nil, hovered: true)
+                    .environment(\.atticIsPressed, pressed)
+                    .environment(\.isEnabled, enabled)
+                    .frame(width: 120).atticDesign(design))
+                return try XCTUnwrap(bitmap.colorAt(x: 400, y: 56))
+            }
+            func expected(_ color: AtticRGBA) throws -> NSColor {
+                let bitmap = try shapeBitmap(Squircle(cornerRadius: 14, exponent: AtticShape.controlExponent)
+                    .fill(color.color).frame(width: 120, height: 28))
+                return try XCTUnwrap(bitmap.colorAt(x: 400, y: 56))
+            }
+            func assertSameColor(_ lhs: NSColor, _ rhs: NSColor, file: StaticString = #filePath, line: UInt = #line) {
+                let left = lhs.usingColorSpace(.deviceRGB) ?? lhs
+                let right = rhs.usingColorSpace(.deviceRGB) ?? rhs
+                XCTAssertEqual(left.alphaComponent, right.alphaComponent, accuracy: 0.01, file: file, line: line)
+                XCTAssertEqual(left.redComponent, right.redComponent, accuracy: 0.01, file: file, line: line)
+                XCTAssertEqual(left.greenComponent, right.greenComponent, accuracy: 0.01, file: file, line: line)
+                XCTAssertEqual(left.blueComponent, right.blueComponent, accuracy: 0.01, file: file, line: line)
+            }
+            assertSameColor(try face(pressed: true), try expected(design.tokens.pressed))
+            assertSameColor(try face(pressed: false), try expected(design.tokens.selected))
+            assertSameColor(try face(pressed: true, enabled: false), try expected(.clear))
+        }
+    }
+
     func testAcceptedShapesUnavailableImageHasTheSmallObjectContour() throws {
         var design = AtticDesignContext(mode: .light)
         design.reduceMotion = true

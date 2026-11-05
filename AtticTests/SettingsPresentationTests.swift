@@ -402,6 +402,14 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertEqual(size.height, SettingsWindowLayout.preferredContentSize.height)
     }
 
+    func testContentScrollsOnlyWhenAppKitLowersTheSettingsMinimum() {
+        let minimum = SettingsWindowLayout.minimumContentSize
+        XCTAssertFalse(SettingsWindowLayout.needsContentScroll(minimum))
+        XCTAssertTrue(SettingsWindowLayout.needsContentScroll(CGSize(width: minimum.width - 1, height: minimum.height)))
+        XCTAssertTrue(SettingsWindowLayout.needsContentScroll(CGSize(width: minimum.width, height: minimum.height - 1)))
+        XCTAssertTrue(SettingsWindowLayout.needsContentScroll(.zero))
+    }
+
     func testWindowFitsCompactVisibleFrameWithoutDroppingBelowMinimum() {
         let size = SettingsWindowLayout.fittedContentSize(
             to: NSRect(x: 0, y: 0, width: 680, height: 520)

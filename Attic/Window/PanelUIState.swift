@@ -300,6 +300,10 @@ final class PanelUIState: ObservableObject {
     @Published private(set) var revealCount: UInt64 = 0
     @Published private(set) var hideCount: UInt64 = 0
 
+    /// AppKit's ordered-front / ordered-out lifecycle, independent of
+    /// prewarmed page content and page selection.
+    var isPanelOnScreen: Bool { revealCount > hideCount }
+
     func panelDidReveal() { revealCount &+= 1 }
     func panelDidHide() { hideCount &+= 1 }
 

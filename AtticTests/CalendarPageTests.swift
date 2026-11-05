@@ -24,6 +24,45 @@ final class CalendarPageTests: XCTestCase {
                       calendarTitle: "Home", colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9))
     }
 
+    func testR16NowLineAdvancesAcrossEventBoundariesWithoutRebuildingTheGrid() {
+        let today = day(2026, 10, 29)
+        let events = [event("early", "Early", start: date(2026, 10, 29, 9), end: date(2026, 10, 29, 9, 30)),
+                      event("late", "Late", start: date(2026, 10, 29, 11), end: date(2026, 10, 29, 11, 30))]
+        let group = CalendarAgenda.groups(selected: today, clock: .init(today: today, now: date(2026, 10, 29, 10)),
+                                          events: events, tasks: [], calendar: calendar)[0]
+        XCTAssertEqual(group.items.map(\.id), ["event-early", "now", "event-late"])
+        let evening = CalendarAgenda.advancingNow(in: group, to: date(2026, 10, 29, 12), calendar: calendar)
+        XCTAssertEqual(evening.items.map(\.id), ["event-early", "event-late", "now"])
+        let morning = CalendarAgenda.advancingNow(in: evening, to: date(2026, 10, 29, 8), calendar: calendar)
+        XCTAssertEqual(morning.items.map(\.id), ["now", "event-early", "event-late"])
+    }
+
+    func testR16CalendarOwnsOneClockTimerOnlyWhileVisible() throws {
+        let store = try makeTestStore()
+        var clock = date(2026, 10, 29, 8)
+        let source = CalendarEventSourceStub(events: [
+            event("later", "Later", start: date(2026, 10, 29, 11), end: date(2026, 10, 29, 12))
+        ])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { clock })
+        XCTAssertNil(model.nowTimerForTesting, "a prewarmed or hidden Calendar has no clock timer")
+        model.setVisible(true)
+        let timer = try XCTUnwrap(model.nowTimerForTesting)
+        XCTAssertTrue(timer.isValid)
+        model.setVisible(true)
+        XCTAssertTrue(model.nowTimerForTesting === timer, "repeated visibility does not create another timer")
+        let before = model.snapshot.groups[0].items.map(\.id)
+        XCTAssertEqual(before, ["now", "event-later"])
+        clock = date(2026, 10, 29, 13)
+        timer.fire()
+        XCTAssertEqual(model.snapshot.groups[0].items.map(\.id), ["event-later", "now"], "the model timer advances the now line")
+        model.setVisible(false)
+        XCTAssertNil(model.nowTimerForTesting)
+        XCTAssertFalse(timer.isValid, "panel hide immediately invalidates the timer")
+        model.setVisible(true)
+        XCTAssertNotNil(model.nowTimerForTesting)
+        model.setVisible(false)
+    }
+
     // MARK: - Month and week math
 
     func testOctober2026StartsOnMondayTheTwentyEighthOfSeptember() {
@@ -80,13 +119,22 @@ final class CalendarPageTests: XCTestCase {
         let box = try XCTUnwrap(inkBox(selected, minAlpha: 0.5))
         XCTAssertGreaterThan(box.width, 70, "the key fills its cell, wider than a 30 pt square")
         XCTAssertEqual(box.height, 60, accuracy: 2, "60 px tall")
-        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
-            let tokens = AtticColorTokens.resolve(context)
-            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.heading),
-                           "the selected key is ink")
-            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selectedToday, isPressed: false, tokens: tokens), CalendarDesign.red,
-                           "red on today")
-            XCTAssertNil(CalendarKeyButtonStyle.fill(style: .plain, isPressed: false, tokens: tokens), "other days: no key")
+        for mode in AtticDesignContext.Mode.allCases {
+            for increased in [false, true] {
+                let context = AtticDesignContext(mode: mode, increaseContrast: increased)
+                let tokens = AtticColorTokens.resolve(context)
+                XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.inverseFill),
+                               "the selected key uses its paired inverse fill")
+                XCTAssertEqual(CalendarKey.numberColour(.white, style: .selected, tokens: tokens), tokens.ink(.onInverse),
+                               "the selected number remains legible in both appearances")
+                if mode == .light {
+                    XCTAssertEqual(tokens.ink(.inverseFill), tokens.ink(.heading), "Light keeps the original heading-ink key")
+                    XCTAssertEqual(tokens.ink(.onInverse), AtticRGBA(0xFFFFFF), "Light keeps the original white key number")
+                }
+                XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selectedToday, isPressed: false, tokens: tokens), CalendarDesign.red,
+                               "red on today")
+                XCTAssertNil(CalendarKeyButtonStyle.fill(style: .plain, isPressed: false, tokens: tokens), "other days: no key")
+            }
         }
         for plain in [day(2026, 10, 30), day(2026, 10, 28), day(2026, 10, 29)] {
             let image = try render(key(plain, today: day(2026, 10, 29), selected: day(2026, 10, 31)))
@@ -374,6 +422,24 @@ final class CalendarPageTests: XCTestCase {
 
     // MARK: - Model updates
 
+    func testR18HiddenRevisionsWaitForVisibleCalendarAndPublishTheLatestTasks() throws {
+        let store = try makeTestStore()
+        let model = CalendarPageModel(store: store, source: CalendarEventSourceStub(), calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let before = model.publishCount
+        _ = store.commit([TaskDraft(title: "One", dueDay: day(2026, 10, 29))])
+        _ = store.commit([TaskDraft(title: "Two", dueDay: day(2026, 10, 29))])
+        XCTAssertEqual(model.publishCount, before, "hidden Calendar defers presentation")
+        model.setVisible(true)
+        XCTAssertEqual(model.publishCount, before + 1, "visible page catches up in one rebuild")
+        let titles = model.snapshot.groups.flatMap(\.items).compactMap { item -> String? in
+            if case let .task(task) = item { return task.title }
+            return nil
+        }
+        XCTAssertTrue(titles.contains("One"))
+        XCTAssertTrue(titles.contains("Two"))
+    }
+
     func testModelPublishesOnlyRealChangesAndCachesEvents() throws {
         let store = try makeTestStore()
         let source = CalendarEventSourceStub(events: [event("e", "Gym", start: date(2026, 10, 30, 7), end: date(2026, 10, 30, 8))])
@@ -388,8 +454,30 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(model.snapshot.pinnedWeekIndex, 4)
         let afterSelect = model.sourceFetches
         source.replace([])
-        XCTAssertEqual(model.sourceFetches, afterSelect + 1, "a source change fetches again")
+        XCTAssertEqual(model.sourceFetches, afterSelect, "a hidden source change defers all event reads")
+        model.setVisible(true)
+        XCTAssertEqual(model.sourceFetches, afterSelect + 1, "the newly visible page fetches changed events")
         XCTAssertTrue(model.snapshot.weeks.flatMap(\.days).allSatisfy { $0.marks.eventColours.isEmpty })
+    }
+
+    func testR17HiddenDayTimeZoneLocaleAndSourceUpdatesRebuildOnceOnReveal() throws {
+        let store = try makeTestStore()
+        let source = CalendarEventSourceStub(events: [event("e", "Before", start: date(2026, 10, 30, 9), end: date(2026, 10, 30, 10))])
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let before = model.rebuildCount
+        source.replace([event("e", "After", start: date(2026, 10, 30, 9), end: date(2026, 10, 30, 10))])
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.post(name: name, object: nil)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertEqual(model.rebuildCount, before, "hidden notifications and source changes are invalidations only")
+        model.setVisible(true)
+        XCTAssertEqual(model.rebuildCount, before + 1, "one latest rebuild after the entire hidden burst")
+        XCTAssertTrue(model.snapshot.groups.flatMap(\.items).contains { item in
+            if case let .event(event) = item { return event.title == "After" }
+            return false
+        }, "revealed snapshot reflects the latest source")
     }
 
     func testWithoutAccessOnlyTasksShow() throws {

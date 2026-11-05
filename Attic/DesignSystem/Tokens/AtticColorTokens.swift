@@ -681,6 +681,11 @@ struct AtticColorTokens: Equatable, Sendable {
             }
         }
 
+        // The original Light selected day and Create controls used the
+        // fully resolved heading ink. Keep that exact result (including
+        // increased contrast and themed surfaces); only Dark is inverted.
+        if !dark { inks[.inverseFill] = inks[.heading]! }
+
         func panelPairs() -> [AtticSurfaceModel.Pair] {
             // Tag fills follow the accent as it is now (it may be retuned).
             AtticSurfaceModel.readabilityPairs(
@@ -1090,7 +1095,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .label: AtticRGBA(0x5F605F), .helper: AtticRGBA(0x898A89), .muted: AtticRGBA(0xA6A7A8), .placeholder: AtticRGBA(0xA6A7A8),
                     .chromeHeading: AtticRGBA(0x1E1F1F), .chromeBody: AtticRGBA(0x494B4A), .chromeHint: AtticRGBA(0x898A89),
                     .icon: AtticRGBA(0x888888), .chromeIcon: AtticRGBA(0x7A7B7A), .glyph: AtticRGBA(0x2F3130), .chevron: AtticRGBA(0x888888),
-                    .inverseFill: AtticRGBA(0x2A2B2B), .onInverse: AtticRGBA(0xFAFAFA),
+                    .inverseFill: AtticRGBA(0x1E1F1F), .onInverse: AtticRGBA(0xFFFFFF),
                     .disabledText: AtticRGBA(0x767776), .disabledIcon: AtticRGBA(0xA3A4A3)
                 ]
             case (false, true):
@@ -1099,7 +1104,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .label: AtticRGBA(0x454645), .helper: AtticRGBA(0x4B4C4B), .muted: AtticRGBA(0x4B4C4B), .placeholder: AtticRGBA(0x4B4C4B),
                     .chromeHeading: AtticRGBA(0x111212), .chromeBody: AtticRGBA(0x2A2B2B), .chromeHint: AtticRGBA(0x4B4C4B),
                     .icon: AtticRGBA(0x5B5C5B), .chromeIcon: AtticRGBA(0x5B5C5B), .glyph: AtticRGBA(0x161717), .chevron: AtticRGBA(0x5B5C5B),
-                    .inverseFill: AtticRGBA(0x161717), .onInverse: AtticRGBA(0xFFFFFF),
+                    .inverseFill: AtticRGBA(0x111212), .onInverse: AtticRGBA(0xFFFFFF),
                     .disabledText: AtticRGBA(0x575857), .disabledIcon: AtticRGBA(0x8A8B8A)
                 ]
             case (true, false):

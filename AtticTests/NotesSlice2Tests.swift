@@ -629,6 +629,25 @@ final class NotesLibraryModelTests: XCTestCase {
         }
     }
 
+    func testR10AsyncLibraryOpenDismissalPreservesOnlyANewerQuery() throws {
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        XCTAssertTrue(controller.requestNewNote())
+        let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+
+        XCTAssertTrue(controller.showLibrary())
+        library.query = "first search"
+        // The asynchronous open started with "first search". The user has
+        // already typed a second query when it finishes.
+        library.query = "second search"
+        library.dismissAfterOpenedNote(controller, requestedQuery: "first search")
+        XCTAssertFalse(controller.isLibraryPresented)
+        XCTAssertEqual(library.query, "second search")
+
+        XCTAssertTrue(controller.showLibrary())
+        library.dismissAfterOpenedNote(controller, requestedQuery: "second search")
+        XCTAssertEqual(library.query, "", "Only the query the completed open owns may be cleared")
+    }
+
     func testWarmedTagInventoryDoesNotRereadTheLibraryWhileTypingOrSavingText() throws {
         for index in 0..<1_000 {
             let note = NoteItem(title: "Unrelated \(index)")

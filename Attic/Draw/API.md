@@ -104,8 +104,10 @@ and every old-Canvas reader (the Canvas store, Search's library, Recently
 Deleted, tags, workspace tokens and inventory, links and titles, all through
 the counted `fetchCanvasReplicas` funnel) leaves the old rows unread and
 unchanged. The quit route calls `DrawPageModel.prepareToQuit()`, which settles
-the stroke in progress, waits for every image import in flight, retries or
-reconciles unsettled edits and returns false while any is unsaved. Undo survives session switches, not app relaunch.
+the stroke in progress, gives in-flight image imports a bounded chance to finish,
+retries or reconciles unsettled edits and returns false while any import or edit
+is still outstanding. Thumbnail generation is a regenerable cache and does not
+block quit after the bound. Undo survives session switches, not app relaunch.
 
 
 The page can receive identity-scoped `resumeDefaults`; without them it is fully

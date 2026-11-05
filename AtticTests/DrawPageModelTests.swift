@@ -381,6 +381,24 @@ final class DrawPageModelTests: XCTestCase {
 
     // MARK: Text boxes
 
+    func testRepeatedSingleObjectSavesKeepLayerOrderAndZChangesStillReorder() {
+        let bottom = DrawObject(zIndex: 1, content: .shape(.rectangle))
+        var writing = DrawObject(zIndex: 2, content: .text("A"))
+        let top = DrawObject(zIndex: 3, content: .shape(.ellipse))
+        XCTAssertTrue(model.perform(.put([bottom, writing, top])).isSaved)
+        for text in ["AB", "ABC", "ABCD"] {
+            writing.content = .text(text)
+            XCTAssertTrue(model.perform(.put([writing])).isSaved)
+            XCTAssertEqual(model.objects.map(\.id), [bottom.id, writing.id, top.id])
+        }
+        model.undo()
+        XCTAssertEqual(model.objects.map(\.text), ["", "ABC", ""])
+        writing.zIndex = 4
+        XCTAssertTrue(model.perform(.put([writing])).isSaved)
+        XCTAssertEqual(model.objects.map(\.id), [bottom.id, top.id, writing.id])
+        XCTAssertEqual(model.objects.last?.text, "ABCD")
+    }
+
     func testUndoWorksWhileTyping() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))

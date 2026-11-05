@@ -82,6 +82,7 @@ private struct AtticToastButton: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @State private var hovered = false
     @FocusState private var focused: Bool
 
@@ -107,6 +108,8 @@ private struct AtticToastButton: View {
                 .contentShape(AtticUndoToast.buttonShape(outer: outerRadius))
         }
         .buttonStyle(.plain)
+        .atticFocusRing(acceptsKeyboardFocus && focused && keyboardFocusVisible,
+                        cornerRadius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius)
         .onHover { hovered = $0 }
     }
 }
@@ -143,7 +146,7 @@ struct AtticNotice: View {
             if let actionTitle, let onAction {
                 AtticNoticeButton(title: actionTitle, action: onAction)
             }
-            AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
+            AtticSmallButton(systemName: "xmark", label: "Dismiss", acceptsKeyboardFocus: false, action: onDismiss)
                 .accessibilityIdentifier("panel-error-dismiss")
         }
         .padding(.leading, AtticToastMetrics.leadingPadding)
@@ -177,6 +180,7 @@ private struct AtticNoticeButton: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .focusable(false)
         .onHover { hovered = $0 }
     }
 }
@@ -552,14 +556,16 @@ struct AtticStatusPill: View {
             }
             .buttonStyle(AtticUndimmedButtonStyle())
             .focusEffectDisabled()
+            .focusable(false)
             .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
             .accessibilityHint(String(localized: "Shows details"))
             .accessibilityIdentifier("notes-status-primary")
             if let inlineAction {
-                AtticToastButton(title: inlineAction.title, outerRadius: radius, action: inlineAction.handler)
+                AtticToastButton(title: inlineAction.title, outerRadius: radius, acceptsKeyboardFocus: false,
+                                 action: inlineAction.handler)
                     .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
             } else if let onCancel {
-                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
+                AtticSmallButton(systemName: "xmark", label: "Cancel", acceptsKeyboardFocus: false, action: onCancel)
                     .accessibilityIdentifier("notes-status-cancel")
             }
         }

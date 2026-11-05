@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The Calendar page in the panel (owner's panel design, 28 Oct; Task
@@ -13,10 +14,14 @@ struct CalendarPage: View {
     let taskActions: CalendarTaskRowActions
     /// The footer's "+": the add-a-task flow, for the selected day.
     let onNewTask: (DueDay) -> Void
+    /// The native panel is actually ordered front. Prewarming a selected
+    /// page must not request Calendar access or start visible-page work.
+    var panelIsVisible = true
 
     @Environment(\.atticDesign) private var design
     @Environment(\.panelSharedChrome) private var sharedChrome
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+    private var isReallyVisible: Bool { isCurrent && panelIsVisible }
     @Environment(\.atticPanelToasts) private var toasts
     @Environment(\.panelComposer) private var composer
     @State private var scrollPosition = ScrollPosition(y: 0)
@@ -68,12 +73,19 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            model.pageAppeared()
+            model.setVisible(isReallyVisible)
+            // A retained, prewarmed Calendar is mounted but not the shown page.
+            if isReallyVisible { model.pageAppeared() }
             model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
                 guard let library else { return }
                 toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
             }
         }
+        .onChange(of: isReallyVisible) { _, current in
+            model.setVisible(current)
+            if current { model.pageAppeared() }
+        }
+        .onDisappear { model.setVisible(false) }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         .onChange(of: snapshot.weeks.count) { _, count in

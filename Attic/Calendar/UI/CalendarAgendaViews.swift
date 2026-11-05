@@ -196,6 +196,7 @@ struct CalendarDateTile: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: CalendarDesign.tileRadius))
         .accessibilityLabel(CalendarKey.accessibilityName(group.day))
         .accessibilityIdentifier("calendar-tile-\(group.day.rawValue)")
     }
@@ -358,6 +359,7 @@ struct CalendarEventRow: View {
                     Button("Delete", role: .destructive) { Task { await rows.delete() } }
                         .accessibilityIdentifier("calendar-event-delete-\(event.id)")
                         .disabled(rows.busy)
+                        .atticOwnFocusRing(.rounded(radius: 9, height: 18))
                 } else {
                     choiceLabel(event.calendarTitle, dot: event.colour)
                     choiceLabel(event.isAllDay ? String(localized: "All day")
@@ -367,6 +369,7 @@ struct CalendarEventRow: View {
                     Button("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }
                         .fixedSize()
                         .accessibilityIdentifier("calendar-event-open-\(event.id)")
+                        .atticOwnFocusRing(.rounded(radius: 9, height: 18))
                 }
             }
             .font(.system(size: 9))
@@ -424,6 +427,7 @@ struct CalendarEventRow: View {
     private func choice(_ title: String, selected: Bool = false, dot: CalendarEventColour? = nil,
                         action: @escaping () -> Void) -> some View {
         Button(action: action) { choiceLabel(title, selected: selected, dot: dot) }
+            .atticOwnFocusRing(.rounded(radius: 9, height: 18))
             .accessibilityAddTraits(selected ? .isSelected : [])
     }
 

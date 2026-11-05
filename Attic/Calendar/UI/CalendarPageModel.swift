@@ -35,9 +35,13 @@ final class CalendarPageModel: ObservableObject {
     let taskRows = CalendarTaskRowState()
     let eventRows: CalendarEventRowState
     private(set) var source: CalendarEventSource
-    let calendar: Calendar
+    /// Production reads the current zone on demand; tests may pin a calendar.
+    private let pinnedCalendar: Calendar?
+    var calendar: Calendar { pinnedCalendar ?? CalendarMonthMath.calendar(timeZone: .current) }
     private let now: () -> Date
-    private let locale: Locale
+    private let pinnedLocale: Locale?
+    private var locale: Locale { pinnedLocale ?? .current }
+    private var dateEnvironment: DatePresentationEnvironment
     private let resumeDefaults: UserDefaults?
     private var hasRequestedAccess = false
     private var searchTask: Task<Void, Never>?
@@ -54,11 +58,22 @@ final class CalendarPageModel: ObservableObject {
     private var searchRequest: (query: String, interval: DateInterval)?
     private var eventTask: Task<Void, Never>?
     private var eventSearchTask: Task<Void, Never>?
+    private var cachedTasks: (revision: UInt64, today: DueDay, environment: DatePresentationEnvironment,
+                              entries: [CalendarTaskEntry])?
+    private var isVisible = false
+    /// Exactly one clock tick source, owned by the retained model only while
+    /// its page is on screen (including when the shell keeps it mounted).
+    private var nowPositionTimer: Timer?
+    private var needsVisibleRebuild = false
+    private var taskRebuildQueued = false
     private var cancellables: Set<AnyCancellable> = []
 
     #if DEBUG
     /// Test seam: how many snapshots the page has published.
     private(set) var publishCount = 0
+    /// Work done even if the resulting snapshot is unchanged.
+    private(set) var rebuildCount = 0
+    var nowTimerForTesting: Timer? { nowPositionTimer }
     /// Test seam: how many times the page asked the source for events.
     private(set) var sourceFetches = 0
     /// A deterministic test boundary for the currently requested event snapshot.
@@ -69,17 +84,19 @@ final class CalendarPageModel: ObservableObject {
     }
     #endif
 
-    init(store: TaskStore, source: CalendarEventSource, calendar: Calendar = CalendarMonthMath.calendar(),
-         locale: Locale = .current, now: @escaping () -> Date = Date.init,
+    init(store: TaskStore, source: CalendarEventSource, calendar: Calendar? = nil,
+         locale: Locale? = nil, now: @escaping () -> Date = Date.init,
          makeWriter: (() throws -> CalendarEventWriter)? = nil, resumeDefaults: UserDefaults? = nil) {
         self.resumeDefaults = resumeDefaults
         self.store = store
         self.eventRows = CalendarEventRowState(makeWriter: makeWriter)
         self.source = source
-        self.calendar = calendar
-        self.locale = locale
+        self.pinnedCalendar = calendar
+        self.pinnedLocale = locale
+        let currentCalendar = calendar ?? CalendarMonthMath.calendar(timeZone: .current)
+        dateEnvironment = DatePresentationEnvironment(calendar: currentCalendar, locale: locale ?? .current)
         self.now = now
-        let today = DueDay(date: now(), calendar: calendar)
+        let today = DueDay(date: now(), calendar: currentCalendar)
         let selected = resumeDefaults?.data(forKey: "AtticCalendar.selectedDay")
             .flatMap { try? JSONDecoder().decode(DueDay.self, from: $0) }
             .flatMap { DueDay(year: $0.year, month: $0.month, day: $0.day) } ?? today
@@ -90,6 +107,7 @@ final class CalendarPageModel: ObservableObject {
     }
 
     deinit {
+        nowPositionTimer?.invalidate()
         searchTask?.cancel()
         eventTask?.cancel()
         eventSearchTask?.cancel()
@@ -108,6 +126,32 @@ final class CalendarPageModel: ObservableObject {
             _ = await self.source.requestAccess()
             self.sourceChanged()
         }
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible {
+            if needsVisibleRebuild {
+                needsVisibleRebuild = false
+                rebuild()
+            } else {
+                refreshToday()
+            }
+            startNowPositionTimer()
+        } else {
+            nowPositionTimer?.invalidate()
+            nowPositionTimer = nil
+        }
+    }
+
+    private func startNowPositionTimer() {
+        guard nowPositionTimer == nil else { return }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshNowPosition() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        nowPositionTimer = timer
     }
 
     func select(_ day: DueDay) {
@@ -170,11 +214,51 @@ final class CalendarPageModel: ObservableObject {
     // MARK: Building
 
     private func refreshToday() {
+        if refreshDateEnvironment() { rebuild(); return }
         let today = DueDay(date: now(), calendar: calendar)
         if today != snapshot.today { rebuild() }
     }
 
+    /// Calendar and locale may change while this model stays retained.
+    /// Invalidate interval and formatted-task projections before using either.
+    @discardableResult
+    private func refreshDateEnvironment() -> Bool {
+        let current = DatePresentationEnvironment(calendar: calendar, locale: locale)
+        guard current != dateEnvironment else { return false }
+        dateEnvironment = current
+        cachedTasks = nil
+        sourceGeneration &+= 1
+        eventTask?.cancel()
+        eventSearchTask?.cancel()
+        eventRequest = nil
+        searchRequest = nil
+        eventCache = nil
+        searchCache = nil
+        return true
+    }
+
+    /// The clock changes the line's chronological position without fetching
+    /// tasks, marking grid days or re-requesting Calendar events.
+    func refreshNowPosition() {
+        if refreshDateEnvironment() { rebuild(); return }
+        let moment = now()
+        guard DueDay(date: moment, calendar: calendar) == snapshot.today else {
+            rebuild()
+            return
+        }
+        let groups = snapshot.groups.map { CalendarAgenda.advancingNow(in: $0, to: moment, calendar: calendar) }
+        guard groups != snapshot.groups else { return }
+        snapshot.groups = groups
+        #if DEBUG
+        publishCount += 1
+        #endif
+    }
+
     func rebuild(selected: DueDay? = nil, query: String? = nil) {
+        #if DEBUG
+        rebuildCount += 1
+        #endif
+        refreshDateEnvironment()
         let today = DueDay(date: now(), calendar: calendar)
         let selected = selected ?? snapshot.selected
         let query = query ?? snapshot.query
@@ -228,7 +312,7 @@ final class CalendarPageModel: ObservableObject {
                           self.eventRequest == interval else { return }
                     self.eventCache = (interval, events)
                     self.eventRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -267,14 +351,14 @@ final class CalendarPageModel: ObservableObject {
                               self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                         for event in batch where seen.insert(event).inserted { matches.append(event) }
                         self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
-                        self.rebuild()
+                        self.rebuildOrDefer()
                     }
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                     self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
                     self.searchCacheComplete = true
                     self.searchRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -294,7 +378,7 @@ final class CalendarPageModel: ObservableObject {
                     self.searchCache = (query, interval, events)
                     self.searchCacheComplete = true
                     self.searchRequest = nil
-                    self.rebuild()
+                    self.rebuildOrDefer()
                 }
                 #if DEBUG
                 sourceFetches += 1
@@ -320,13 +404,22 @@ final class CalendarPageModel: ObservableObject {
         searchRequest = nil
         eventCache = nil
         searchCache = nil
-        rebuild()
+        rebuildOrDefer()
+    }
+
+    private func rebuildOrDefer() {
+        if isVisible { rebuild() }
+        else { needsVisibleRebuild = true }
     }
 
     /// Every listed task with a due day (subtasks too): open ones show on
     /// their day and in search; done ones show on their day, done.
     private func taskEntries(today: DueDay) -> [CalendarTaskEntry] {
-        store.tasks.compactMap { task -> CalendarTaskEntry? in
+        if let cachedTasks, cachedTasks.revision == store.revision,
+           cachedTasks.today == today, cachedTasks.environment == dateEnvironment {
+            return cachedTasks.entries
+        }
+        let entries: [CalendarTaskEntry] = store.tasks.compactMap { task -> CalendarTaskEntry? in
             guard task.deletedAt == nil, let due = task.dueDay else { return nil }
             let subtasks = task.parentID == nil ? store.subtasks(of: task.id) : []
             var row = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today, calendar: calendar, locale: locale)
@@ -336,6 +429,8 @@ final class CalendarPageModel: ObservableObject {
             if !(isOpen && due < today) { row.due = nil }
             return CalendarTaskEntry(id: task.id, title: task.title, due: due, isOpen: isOpen, row: row, dueTimeMinutes: task.dueTimeMinutes)
         }
+        cachedTasks = (store.revision, today, dateEnvironment, entries)
+        return entries
     }
 
     // MARK: Observation
@@ -344,14 +439,37 @@ final class CalendarPageModel: ObservableObject {
         store.$revision
             .dropFirst()
             .sink { [weak self] _ in
-                // `$revision` is sent before the store's lists change.
-                DispatchQueue.main.async { self?.rebuild() }
+                // `$revision` sends before its value is stored. One next-turn
+                // drain sees the final revision and all published task arrays.
+                guard let self else { return }
+                if !self.isVisible { self.needsVisibleRebuild = true; return }
+                guard !self.taskRebuildQueued else { return }
+                self.taskRebuildQueued = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.taskRebuildQueued = false
+                    if self.isVisible { self.rebuild() }
+                    else { self.needsVisibleRebuild = true }
+                }
             }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuild() }
+            .sink { [weak self] _ in
+                self?.cachedTasks = nil
+                self?.rebuildOrDefer()
+            }
             .store(in: &cancellables)
+        for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.publisher(for: name)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    _ = self?.refreshDateEnvironment()
+                    self?.cachedTasks = nil
+                    self?.rebuildOrDefer()
+                }
+                .store(in: &cancellables)
+        }
         observeSource()
     }
 

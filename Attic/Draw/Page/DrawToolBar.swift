@@ -43,7 +43,9 @@ enum DrawPageMetrics {
     static func menuListRoom(boardHeight: CGFloat, chromeTop: CGFloat, chromeBottom: CGFloat) -> CGFloat {
         let room = boardHeight - chromeTop - capsule - menuGap - chromeBottom
             - AtticGlassMenuShape.inset * 2 + bottomGrace
-        return max(DrawLibraryMetrics.maxListHeight, room)
+        // Expand in tall panels; in a tight work area the list scrolls
+        // inside the room that actually exists, with no forced height floor.
+        return max(0, room)
     }
 }
 
@@ -149,6 +151,7 @@ struct DrawCell<Label: View>: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: height))
         .onHover { hovered = $0 }
         .help(help)
         .accessibilityLabel(help)

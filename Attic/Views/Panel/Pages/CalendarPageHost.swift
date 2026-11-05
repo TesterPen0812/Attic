@@ -60,14 +60,15 @@ final class CalendarPageState: ObservableObject {
 struct CalendarPageHost: View {
     let store: TaskStore
     @ObservedObject var state: CalendarPageState
-    let uiState: PanelUIState
+    @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
     /// The footer's "+": the add-a-task flow, for that day.
     let onNewTask: (DueDay) -> Void
     var taskNotes: TaskNoteEntryServices?
 
     var body: some View {
-        CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults), layout: layout, taskActions: taskActions, onNewTask: onNewTask)
+        CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults), layout: layout,
+                     taskActions: taskActions, onNewTask: onNewTask, panelIsVisible: uiState.isPanelOnScreen)
     }
 
     private var taskActions: CalendarTaskRowActions {

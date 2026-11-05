@@ -117,6 +117,32 @@ enum CalendarAgenda {
         }
     }
 
+    /// Move just the time marker when the clock advances. All-day events,
+    /// overdue tasks and untimed tasks keep their positions and identity.
+    static func advancingNow(in group: CalendarAgendaGroup, to now: Date, calendar: Calendar) -> CalendarAgendaGroup {
+        guard group.isToday, group.items.contains(.now) else { return group }
+        var updated = group
+        updated.items.removeAll { $0 == .now }
+        let dayStart = group.day.startDate(in: calendar)
+        let next = updated.items.firstIndex { item in
+            let instant: Date?
+            switch item {
+            case let .event(event): instant = event.isAllDay ? nil : event.start
+            case let .task(task):
+                if task.due == group.day, let minutes = task.dueTimeMinutes,
+                   (0..<1440).contains(minutes), let dayStart {
+                    instant = calendar.date(bySettingHour: minutes / 60, minute: minutes % 60,
+                                            second: 0, of: dayStart, matchingPolicy: .nextTime,
+                                            repeatedTimePolicy: .first)
+                } else { instant = nil }
+            case .now: instant = nil
+            }
+            return instant.map { $0 > now } ?? false
+        } ?? updated.items.endIndex
+        updated.items.insert(.now, at: next)
+        return updated
+    }
+
     private static func group(day: DueDay, clock: Clock, events: [CalendarEvent], tasks: [CalendarTaskEntry],
                               showsNow: Bool, calendar: Calendar) -> CalendarAgendaGroup {
         let allDay = events.filter(\.isAllDay)

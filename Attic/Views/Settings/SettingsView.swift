@@ -52,31 +52,25 @@ struct SettingsView: View {
     let library: AtticLibrary?
 
     @StateObject private var navigation = SettingsNavigation()
+    @StateObject private var keyboardFocusTracker = AtticKeyboardFocusTracker()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
-            SettingsSidebar()
-                .frame(width: AtticLayout.settingsSidebarWidth)
-            AtticContentCard {
-                page
-                    .id(navigation.selection)
-                    // A crossfade in every feel (pages never scale).
-                    .transition(AtticMotionPreset.pageSwitch.transition(
-                        reduceMotion: reduceMotion || settings.animations == .reduced, edge: nil, anchor: .top))
+        GeometryReader { available in
+            if SettingsWindowLayout.needsContentScroll(available.size) {
+                ScrollView([.horizontal, .vertical]) {
+                    settingsContent
+                        .frame(minWidth: SettingsWindowLayout.minimumContentSize.width,
+                               minHeight: SettingsWindowLayout.minimumContentSize.height)
+                }
+                .scrollIndicators(.visible)
+            } else {
+                settingsContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
-            // makes the gap to the sidebar.
-            .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
-            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced),
-                       value: navigation.selection)
         }
-        .background(AtticSidebarBackground())
         .ignoresSafeArea()
-        .frame(
-            minWidth: SettingsWindowLayout.minimumContentSize.width,
-            minHeight: SettingsWindowLayout.minimumContentSize.height
-        )
+        .atticKeyboardFocusTracking(keyboardFocusTracker)
         .environmentObject(navigation)
         // Customisation changes only the background and the accent; the
         // window follows the chosen Light, Dark or System, and so do its
@@ -98,6 +92,26 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItemService.refresh()
         }
+    }
+
+    private var settingsContent: some View {
+        HStack(spacing: 0) {
+            SettingsSidebar()
+                .frame(width: AtticLayout.settingsSidebarWidth)
+            AtticContentCard {
+                page
+                    .id(navigation.selection)
+                    // A crossfade in every feel (pages never scale).
+                    .transition(AtticMotionPreset.pageSwitch.transition(
+                        reduceMotion: reduceMotion || settings.animations == .reduced, edge: nil, anchor: .top))
+            }
+            // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
+            // makes the gap to the sidebar.
+            .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
+            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced),
+                       value: navigation.selection)
+        }
+        .background(AtticSidebarBackground())
     }
 
     @ViewBuilder

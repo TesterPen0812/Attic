@@ -284,6 +284,77 @@ final class DrawLibraryTests: XCTestCase {
 
     // MARK: Search
 
+    private final class SearchSpyStore: DrawStore {
+        var searchCount = 0
+        var failSearch = false
+        var failOpen = false
+
+        init() { super.init(repository: DrawMemoryRepository()) }
+
+        override func search(_ query: String) throws -> [DrawSearchMatch] {
+            searchCount += 1
+            if failSearch { throw NSError(domain: "DrawSearchTests", code: 1) }
+            return try super.search(query)
+        }
+
+        override func open(_ id: UUID) throws -> DrawSnapshot {
+            if failOpen { throw NSError(domain: "DrawOpenTests", code: 2) }
+            return try super.open(id)
+        }
+    }
+
+    func testSearchCachesByQueryAndStoreRevisionWithoutHoverReads() throws {
+        let store = SearchSpyStore()
+        let canvas = store.create(name: "Workshop")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Workbench"))]), on: canvas.id).isSaved)
+        let search = DrawSearchModel(store: store, actions: actions())
+
+        search.query = "work"
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertEqual(store.searchCount, 1)
+        for _ in 0..<4 {
+            _ = search.results
+            search.hover(try XCTUnwrap(search.results.first), inside: true)
+            search.moveHighlight(by: 1)
+        }
+        XCTAssertEqual(store.searchCount, 1, "highlighting must not hit persistence")
+
+        search.query = "bench"
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertEqual(store.searchCount, 2)
+        XCTAssertTrue(store.perform(.rename("Bench"), on: canvas.id).isSaved)
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertEqual(store.searchCount, 3, "a durable revision refreshes search")
+    }
+
+    func testSearchAndRevealFailuresRemainVisibleAndRecoverable() throws {
+        let store = SearchSpyStore()
+        let canvas = store.create(name: "Workshop")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Workbench"))]), on: canvas.id).isSaved)
+        let search = DrawSearchModel(store: store, actions: actions())
+
+        store.failSearch = true
+        search.query = "work"
+        XCTAssertTrue(search.results.isEmpty)
+        XCTAssertNotNil(search.searchError)
+        XCTAssertEqual(store.searchCount, 1)
+        _ = search.results
+        XCTAssertEqual(store.searchCount, 1, "a failed query must also be cached")
+
+        store.failSearch = false
+        search.query = "bench"
+        let result = try XCTUnwrap(search.results.first)
+        XCTAssertNil(search.searchError)
+        store.failOpen = true
+        XCTAssertFalse(search.open(result))
+        XCTAssertNotNil(search.openError)
+        XCTAssertTrue(log.isEmpty, "a failed reveal must not silently open elsewhere")
+        store.failOpen = false
+        XCTAssertTrue(search.open(result))
+        XCTAssertNil(search.openError)
+        XCTAssertEqual(log, ["reveal \(canvas.id) \(result.textBoxIDs[0])"])
+    }
+
     func testSearchFindsCanvasesAndATextMatchRevealsItsBox() throws {
         let seed = seed()
         let search = DrawSearchModel(store: seed.store, actions: actions())

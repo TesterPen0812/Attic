@@ -223,6 +223,45 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(stored.filter(\.isImage).count, 2, "Quit waited for both imports, not only the latest")
     }
 
+    func testQuitReturnsPromptlyWhileAnImportIsStillOwnedAndCanFinish() async throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let token = UUID()
+        let (stream, release) = AsyncStream<Void>.makeStream()
+        let importTask = Task { @MainActor in
+            for await _ in stream {}
+            _ = store.perform(.put([DrawObject(content: .text("Completed import"))]), on: id)
+            model.importFinished(token)
+        }
+        model.importStarted(token, importTask)
+
+        let began = ContinuousClock.now
+        let ready = await model.prepareToQuit()
+        XCTAssertFalse(ready, "quit must be refused while the import remains in flight")
+        XCTAssertLessThan(began.duration(to: .now), .seconds(2), "a stuck import must not hold up the quit reply")
+        XCTAssertNotNil(model.saveNotice, "existing notice shows that the import is still running")
+
+        release.finish()
+        await importTask.value
+        XCTAssertEqual(try store.open(id).objects.count, 1, "refusing quit kept the import alive to save")
+        XCTAssertNil(model.saveNotice)
+        let finished = await model.prepareToQuit()
+        XCTAssertTrue(finished)
+    }
+
+    func testSlowRegenerableThumbnailDoesNotBlockQuitAfterContentIsSaved() async {
+        model.thumbnailRenderer = { _, _ in
+            try? await Task.sleep(for: .seconds(3))
+            return nil
+        }
+        model.setTool(.pen)
+        drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        let began = ContinuousClock.now
+        let ready = await model.prepareToQuit()
+        XCTAssertTrue(ready)
+        XCTAssertLessThan(began.duration(to: .now), .seconds(2))
+        XCTAssertEqual(stored.count, 1, "the stroke was committed before the thumbnail")
+    }
+
     func testDrawObjectsOnThePasteboardStillPasteAsObjects() async throws {
         put(DrawObject(frame: DrawFrame(x: 10, y: 10, width: 40, height: 40), content: .shape(.rectangle)))
         model.selectAll()
@@ -703,6 +742,14 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertGreaterThan(needed, DrawLibraryMetrics.maxListHeight, "The old default scrolls")
         let room = DrawPageMetrics.menuListRoom(boardHeight: PanelGeometry.minimumHeight, chromeTop: 15.5, chromeBottom: 15.5)
         XCTAssertLessThanOrEqual(needed, room, "At the panel's smallest height the list fits without scrolling")
+    }
+
+    func testDrawMenuRoomNeverExceedsShortAvailableHeight() {
+        let available = DrawPageMetrics.menuListRoom(boardHeight: 110, chromeTop: 15.5, chromeBottom: 15.5)
+        XCTAssertGreaterThan(available, 0)
+        XCTAssertLessThan(available, DrawLibraryMetrics.maxListHeight,
+                           "a short display must scroll rather than force the default menu height")
+        XCTAssertEqual(DrawPageMetrics.menuListRoom(boardHeight: 0, chromeTop: 15.5, chromeBottom: 15.5), 0)
     }
 
     // MARK: Save problems
