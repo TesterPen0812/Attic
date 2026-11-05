@@ -122,6 +122,23 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertNil(detached.rows.rowID)
     }
 
+    func testV6QuitRefusalNamesTheActualFailedCalendarOwner() async throws {
+        let docked = try Fixture(); defer { docked.finish() }
+        let floating = try Fixture(); defer { floating.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(docked.rows, owner: .docked)
+        registry.register(floating.rows, owner: .floating)
+        await docked.rows.toggle(docked.event)
+        await floating.rows.toggle(floating.event)
+        docked.rows.title = "" // invalid: this draft belongs to the docked page
+        floating.rows.title = "Valid floating edit"
+
+        let outcome = await registry.prepareForTerminationResult()
+        XCTAssertEqual(outcome, .refused(.docked))
+        XCTAssertNotNil(docked.rows.rowID, "failed owner must keep its draft")
+        XCTAssertNil(floating.rows.rowID, "the other owner may close normally")
+    }
+
     func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
         let f = try Fixture(); defer { f.finish() }
         let registry = CalendarDraftTerminationRegistry()
