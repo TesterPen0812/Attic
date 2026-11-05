@@ -368,13 +368,21 @@ extension NoteStore {
            replicas[0].revisionID == baseRevisionID { return 0 }
         var seen = Set<NotePreservationState>()
         var displaced: [NoteItem] = []
+        var latestByNoteID: [UUID: NoteVersion] = [:]
+        var checkedNoteIDs = Set<UUID>()
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
         let commonBaseState = Set(baseReplicas.map(NotePreservationState.init)).count == 1
             ? baseReplicas.first.map(NotePreservationState.init) : nil
         for replica in replicas where seen.insert(NotePreservationState(replica)).inserted {
             if baseRevisionID != nil, replica.revisionID == baseRevisionID,
                commonBaseState == NotePreservationState(replica) { continue }
-            if let latest = latestVersion(noteID: replica.id), try isSameState(latest, replica) { continue }
+            // Replicas of one logical note compare against the same snapshot.
+            // Avoid repeating its database lookup for every physical copy.
+            if checkedNoteIDs.insert(replica.id).inserted,
+               let latest = latestVersion(noteID: replica.id) {
+                latestByNoteID[replica.id] = latest
+            }
+            if let latest = latestByNoteID[replica.id], try isSameState(latest, replica) { continue }
             displaced.append(replica)
         }
         // Only rows actually displaced need a dependency inventory. Ordinary
@@ -1016,13 +1024,28 @@ extension NoteStore {
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
     func thinVersions(noteID: UUID) {
+        let day: TimeInterval = 86_400
+        let now = currentDate
+        let targetID = noteID
+        do {
+            // Every version younger than one day is retained. When no older
+            // version exists, avoid decoding history and scanning proposals.
+            let cutoff = now.addingTimeInterval(-day)
+            var candidates = FetchDescriptor<NoteVersion>(predicate: #Predicate {
+                $0.noteID == targetID && $0.createdAt <= cutoff
+            })
+            candidates.fetchLimit = 1
+            guard try !modelContext.fetch(candidates).isEmpty else { return }
+        } catch {
+            // Uncertain retention reads must keep existing snapshots.
+            return
+        }
         let physical: [NoteVersion]
         let protectedIDs: Set<UUID>
         let recoveryBases: Set<UUID>
         do {
             // Discover UUIDs on this note, then fetch their complete physical
             // families. A divergent replica can belong to another note.
-            let targetID = noteID
             let target = try modelContext.fetch(FetchDescriptor<NoteVersion>(
                 predicate: #Predicate { $0.noteID == targetID }))
             let familyIDs = Array(Set(target.map(\.id)))
@@ -1054,9 +1077,7 @@ extension NoteStore {
         }.compactMap { family in family.max { $0.createdAt < $1.createdAt } }.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
         }
-        let day: TimeInterval = 86_400
         let hour: TimeInterval = 3_600
-        let now = currentDate
         var buckets = Set<Int64>()
         var keptTimes = Set<Date>()
         var removed = false

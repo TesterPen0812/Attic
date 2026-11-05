@@ -666,6 +666,27 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(versions(id).count, 1)
     }
 
+    func testRecentVersionsSkipRetentionScanUntilAnOlderVersionNeedsThinning() throws {
+        let (id, _) = try create(document("Current"))
+        var proposalScans = 0
+        store.pendingEditRetentionRowsOverride = { _ in
+            proposalScans += 1
+            return []
+        }
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .leave))
+        XCTAssertEqual(proposalScans, 0, "recent versions need no proposal or history-retention scan")
+        XCTAssertEqual(versions(id).count, 1)
+
+        let old = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-35 * 86_400),
+                              reason: .pause, content: try NoteContentCodec.encode(document("Old")),
+                              contentFormat: 1, title: "Old", body: "", attachmentIDs: [], sourceRevisionID: UUID())
+        store.modelContext.insert(old)
+        try store.modelContext.save()
+        store.thinVersions(noteID: id)
+        XCTAssertEqual(proposalScans, 1, "older versions still require a full retention check")
+        XCTAssertFalse(versions(id).contains { $0.id == old.id })
+    }
+
     func testVersionThinningKeepsHourlyAndDailySnapshotsAndProposalBase() throws {
         let (id, _) = try create(document("Current"))
         let now = Date()
