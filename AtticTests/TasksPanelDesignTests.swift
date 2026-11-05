@@ -255,7 +255,7 @@ final class TasksPanelDesignTests: XCTestCase {
 
     func testEmptyStatesUseTheDesignsCopy() {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false).title, "Nothing to do right now")
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing for later")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: false).title, "Nothing in Backlog")
         XCTAssertEqual(TasksPanelDesign.empty(tab: .done, query: "", filtered: false),
                        .init(title: "Nothing completed yet", body: "", canClear: false))
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: " milk ", filtered: false),
@@ -533,7 +533,7 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.priorityMark.spec.weight, .bold)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: false), 0.8)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: true), 2, "Increase Contrast keeps its ring")
-        XCTAssertEqual(TasksTopTabsMetrics.width, 134, "Now · Later · Done: 3 + 3 × 42 + 2 + 3")
+        XCTAssertEqual(TasksTopTabsMetrics.width, 134, "Now · Backlog · Done: 3 + 3 × 42 + 2 + 3")
         XCTAssertEqual(TasksPanelDesign.tileLabel("Last invoice.pdf"), "PDF")
     }
 

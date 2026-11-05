@@ -3,19 +3,20 @@ import Combine
 import SwiftUI
 
 /// Where the Tasks page is: Now (in progress and to do, then "Completed
-/// today"), Later (the backlog), or the Done log. Direction A shows them as
-/// tabs; "Later" is only the display name: the model, storage and agent
-/// tools still call it `backlog`.
+/// today"), Backlog, or the Done log. Direction A shows them as tabs. The
+/// model, storage and agent tools have always called it `backlog`; the
+/// `later` names left in code (the ⌘B shortcut, `tasks-choose-from-later`)
+/// are from when it was shown as Later, and are never displayed.
 enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
     case now, backlog, done
 
     var id: Int { rawValue }
 
-    /// The tab's name ("Now · Later · Done").
+    /// The tab's name ("Now · Backlog · Done").
     var title: String {
         switch self {
         case .now: String(localized: "Now")
-        case .backlog: String(localized: "Later")
+        case .backlog: String(localized: "Backlog")
         case .done: String(localized: "Done")
         }
     }
@@ -730,8 +731,8 @@ final class TasksPageModel: ObservableObject {
         // in the key). A folded group's rows are left out of the list.
         let times = Dictionary(store.tasks.compactMap { task in task.dueTimeMinutes.map { (task.id, $0) } },
                                uniquingKeysWith: { first, _ in first })
-        // Later is the backlog (Accepted 2026-10-29): one list, no date
-        // groups. Now's Today also shows for the next event alone.
+        // Backlog (Accepted 2026-10-29): one list, no date groups. Now's
+        // Today also shows for the next event alone.
         var groups = tab == .backlog
             ? TasksPanelDesign.backlogGroups(open.map(\.id))
             : TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, times: times, today: key.today,
@@ -823,7 +824,7 @@ final class TasksPageModel: ObservableObject {
         [
             .now: hasDoneToday ? String(localized: "You’re caught up.")
                 : (backlogCount > 0 ? String(localized: "Nothing active.") : String(localized: "Add your first task.")),
-            .backlog: String(localized: "Nothing for later.")
+            .backlog: String(localized: "Nothing in Backlog.")
         ]
     }
 
@@ -1701,7 +1702,7 @@ final class TasksPageModel: ObservableObject {
             : library.updateTasks(movable, status: .backlog)
         guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
-        showToast(movable.count == 1 ? String(localized: "Moved to Later") : String(localized: "Moved \(movable.count) tasks to Later"))
+        showToast(movable.count == 1 ? String(localized: "Moved to Backlog") : String(localized: "Moved \(movable.count) tasks to Backlog"))
         return succeeded
     }
 
@@ -2025,7 +2026,7 @@ final class TasksPageModel: ObservableObject {
     var addPlaceholder: String {
         switch tab {
         case .now, .done: String(localized: "Add a task")
-        case .backlog: String(localized: "Add to later")
+        case .backlog: String(localized: "Add to Backlog")
         }
     }
 

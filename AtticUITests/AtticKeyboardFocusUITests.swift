@@ -201,7 +201,7 @@ final class AtticKeyboardFocusUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
         XCTAssertEqual(text(of: lastAction), "Open page · \(title)")
         app.typeKey("b", modifierFlags: .command)
-        XCTAssertEqual(text(of: lastAction), "Move to Later · \(title)")
+        XCTAssertEqual(text(of: lastAction), "Move to Backlog · \(title)")
         app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
         XCTAssertEqual(text(of: lastAction), "Delete · \(title)")
         // The ring stays on the row throughout.

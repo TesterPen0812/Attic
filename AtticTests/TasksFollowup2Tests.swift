@@ -88,11 +88,11 @@ final class TasksFollowup2Tests: XCTestCase {
         let commands = hosted.page.taskCommands(row.id, tab: .now)
         // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Complete,
         // Start Working │ Edit Title, Add Subtask │ Date ›, Tags ›, Priority ›
-        // │ Move to Later, More › │ Delete (Open Page and Remove from Tasks
+        // │ Move to Backlog, More › │ Delete (Open Page and Remove from Tasks
         // come with C2: 12 rows), with Copy and Duplicate inside More ›.
         let layout = AtticGlassMenuCard.layout(commands)
         XCTAssertEqual(Self.kinds(layout), ["Complete", "Start Working", "—", "Edit Title", "Add Subtask", "—",
-                                            "Date", "Tags", "Priority", "—", "Move to Later", "More", "—", "Delete"])
+                                            "Date", "Tags", "Priority", "—", "Move to Backlog", "More", "—", "Delete"])
         XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "rule 1: 184 pt")
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(commands), [], "rule 2: an icon on every row")
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
@@ -304,7 +304,7 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(model.searchQuery(for: .backlog), "")
         XCTAssertTrue(model.narrows(.now))
         XCTAssertEqual(model.searchPlaceholder(for: .now), "Search Now")
-        XCTAssertEqual(model.searchPlaceholder(for: .backlog), "Search Later")
+        XCTAssertEqual(model.searchPlaceholder(for: .backlog), "Search Backlog")
     }
 
     /// In Manual Order with a filter, a move goes one place among the rows

@@ -208,7 +208,7 @@ private struct TasksImageTile: View {
     }
 }
 
-/// Now · Later · Done in words, the Tasks page's own switch on the top row
+/// Now · Backlog · Done in words, the Tasks page's own switch on the top row
 /// (Accepted 2026-10-29/30, "Top row and bottom bar"): the top row's 27 pt
 /// glass capsule, 3 pt inset, 42 × 21 pt cells 1 pt apart, the current
 /// tab on the flat grey marker (one selection marker), its word in the
@@ -673,7 +673,7 @@ struct TasksElsewhereLinks: View {
         ForEach(elsewhere, id: \.tab) { part in
             AtticText(verbatim: " · ", style: .rowMeta, ink: .helper)
             TasksFindCountLink(title: String(localized: "\(part.count) in \(part.tab.title)")) { follow(part.tab) }
-                .accessibilityIdentifier("tasks-find-count-\(part.tab.title.lowercased())")
+                .accessibilityIdentifier("tasks-find-count-\(part.tab.identifier)")
         }
     }
 }

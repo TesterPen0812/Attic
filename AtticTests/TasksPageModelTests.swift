@@ -142,10 +142,10 @@ final class TasksPageModelTests: XCTestCase {
     /// Direction A's empty states: Now says why it is empty; Later has its own.
     func testEmptyListsSayWhyTheyAreEmpty() throws {
         XCTAssertEqual(model.emptyMessage[.now], "Add your first task.")
-        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later.")
+        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing in Backlog.")
         _ = try XCTUnwrap(add("Idea", tab: .backlog))
         XCTAssertEqual(model.emptyMessage[.now], "Nothing active.")
-        XCTAssertTrue(model.offersLater, "with \"Choose from Later\" under it")
+        XCTAssertTrue(model.offersLater, "with \"Choose from Backlog\" under it")
         let done = try XCTUnwrap(add("Water plants"))
         model.complete(done)
         XCTAssertEqual(model.emptyMessage[.now], "You’re caught up.")
@@ -155,7 +155,7 @@ final class TasksPageModelTests: XCTestCase {
         let a = try XCTUnwrap(add("A"))
         let b = try XCTUnwrap(add("B"))
         model.moveToBacklog([a])
-        XCTAssertEqual(model.toasts.current?.message, "Moved to Later")
+        XCTAssertEqual(model.toasts.current?.message, "Moved to Backlog")
         XCTAssertEqual(titles(.backlog), ["A"])
         model.undo()
         XCTAssertNil(model.toasts.current)
@@ -243,7 +243,7 @@ final class TasksPageModelTests: XCTestCase {
 
         let idea = try XCTUnwrap(add("Paint the fence", tab: .backlog))
         XCTAssertEqual(store.task(withID: idea)?.status, .backlog)
-        XCTAssertEqual(model.addPlaceholder, "Add to later")
+        XCTAssertEqual(model.addPlaceholder, "Add to Backlog")
         XCTAssertNil(add("   "), "blank text adds nothing")
 
         model.select(tab: .now)
@@ -408,7 +408,7 @@ final class TasksPageModelTests: XCTestCase {
         let page = TasksPageModel(library: library, toasts: toasts)
         let a = try XCTUnwrap(add("A"))
         page.moveToBacklog([a])
-        XCTAssertEqual(toasts.current?.message, "Moved to Later")
+        XCTAssertEqual(toasts.current?.message, "Moved to Backlog")
         XCTAssertEqual(toasts.current?.actionTitle, "Undo")
         toasts.performAction()
         XCTAssertNil(toasts.current)

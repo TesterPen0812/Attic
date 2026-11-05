@@ -214,7 +214,7 @@ final class AgentTaskTools {
         [
             "name": "duplicate_task",
             "title": "Duplicate Attic Task",
-            "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags and due date, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Later task stays in Later, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
+            "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags and due date, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Backlog task stays in Backlog, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -236,7 +236,7 @@ final class AgentTaskTools {
         [
             "name": "move_subtask",
             "title": "Move Attic Subtask",
-            "description": "Move a subtask to another main task, or make it a main task of its own, as the person's Move to Task… and Make Standalone Task do. It keeps its id, title, state, priority, tags, date and its own files; files attached to its old main task stay there. Moved, it goes to the end of the new task's subtasks; the new task must be an unfinished main task (not the subtask's own). Made standalone (parent_id null), it goes right below its old main task, in Later when that task is in Later. Subtasks stay one level deep: a task with subtasks never becomes a subtask. One undoable step. Returns the task.",
+            "description": "Move a subtask to another main task, or make it a main task of its own, as the person's Move to Task… and Make Standalone Task do. It keeps its id, title, state, priority, tags, date and its own files; files attached to its old main task stay there. Moved, it goes to the end of the new task's subtasks; the new task must be an unfinished main task (not the subtask's own). Made standalone (parent_id null), it goes right below its old main task, in Backlog when that task is in Backlog. Subtasks stay one level deep: a task with subtasks never becomes a subtask. One undoable step. Returns the task.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,

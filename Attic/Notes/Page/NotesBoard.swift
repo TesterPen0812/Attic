@@ -367,7 +367,7 @@ struct NotesBoardPin: Shape {
 // MARK: - The board | list switch
 
 /// The switch's sizes: the top row's 27 pt glass with two 21 pt cells,
-/// 1 pt apart, in its 3 pt inset (as Now · Later · Done).
+/// 1 pt apart, in its 3 pt inset (as Now · Backlog · Done).
 enum NotesLayoutSwitchMetrics {
     static let inset: CGFloat = AtticPageButtonMetrics.inset
     static let cell: CGFloat = AtticPageButtonMetrics.segment

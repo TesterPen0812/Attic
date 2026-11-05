@@ -160,7 +160,7 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         // Dropdown content: answers (owner, 2026-10-24), sheet 3: grouped
         // under Now, then Later, headers instead of a detail.
         XCTAssertEqual(choices.map(\.title), ["Party", "Someday trip"])
-        XCTAssertEqual(choices.first { $0.title == "Someday trip" }?.group, "Later")
+        XCTAssertEqual(choices.first { $0.title == "Someday trip" }?.group, "Backlog")
         XCTAssertEqual(choices.first { $0.title == "Party" }?.group, "Now")
         XCTAssertEqual(choices.indices.filter { AtticTaskPicker.startsGroup(choices, at: $0) }, [0, 1], "each group gets its header")
         XCTAssertEqual(TaskMovePickerView.filter(choices, query: " TRIP ").map(\.title), ["Someday trip"])

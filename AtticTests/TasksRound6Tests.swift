@@ -140,7 +140,7 @@ final class TasksRound6Tests: XCTestCase {
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
         try requireKeyWindowTests()
         // The panel design (Accepted 2026-10-29/30, "Top row and bottom
-        // bar"): Now · Later · Done on the top row's right, then •••, then
+        // bar"): Now · Backlog · Done on the top row's right, then •••, then
         // the magnifier at the row's end.
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }

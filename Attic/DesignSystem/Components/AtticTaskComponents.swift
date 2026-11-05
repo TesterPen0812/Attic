@@ -19,7 +19,7 @@ struct AtticTaskActions {
     /// A click on the row, ⌘Return and VoiceOver "Open page" (named by
     /// `names.openPage`).
     let openPage: () -> Void
-    /// ⌘B and VoiceOver "Move to Later" (or "Move to Now" on Later).
+    /// ⌘B and VoiceOver "Move to Backlog" (or "Move to Now" on Later).
     var moveToBacklog: (() -> Void)?
     /// Delete and VoiceOver "Delete".
     var delete: (() -> Void)?
@@ -54,7 +54,7 @@ struct AtticTaskActions {
 
     /// The VoiceOver actions a task offers, named for its state: Complete
     /// (or Mark as not done), Start working (or Stop working), Restore to
-    /// Now, Open page, Edit title, Move to Later, Delete; only those it can
+    /// Now, Open page, Edit title, Move to Backlog, Delete; only those it can
     /// perform.
     func accessibilityActions(for state: AtticTaskState) -> [(name: String, handler: () -> Void)] {
         var list: [(name: String, handler: () -> Void)] = [
@@ -67,7 +67,7 @@ struct AtticTaskActions {
         list.append((names.openPage, openPage))
         if let editTitle { list.append((String(localized: "Edit title"), editTitle)) }
         if let moveToBacklog {
-            list.append((state == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Later"), moveToBacklog))
+            list.append((state == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Backlog"), moveToBacklog))
         }
         if let changePriority { list.append((String(localized: "Change priority"), changePriority)) }
         if let addSubtask { list.append((String(localized: "Add subtask"), addSubtask)) }
@@ -1047,7 +1047,7 @@ extension EnvironmentValues {
     @Entry var atticPageTabsOnGlass = false
 }
 
-/// Direction A's page tabs under the header ("Now · Later · Done"), in
+/// Direction A's page tabs under the header ("Now · Backlog · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
 /// page semibold in the strong ink (owner, 2026-09-27) with a 2 pt

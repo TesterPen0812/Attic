@@ -85,7 +85,7 @@ final class AtticGalleryDemo {
             toggleDone: record("Complete", title),
             toggleWorking: record("Start working", title),
             openPage: record("Open page", title),
-            moveToBacklog: record("Move to Later", title),
+            moveToBacklog: record("Move to Backlog", title),
             delete: record("Delete", title)
         )
     }
@@ -274,7 +274,7 @@ enum AtticGallerySamples {
 
     static let pageTabs: [AtticPageTabs<Int>.Item] = [
         .init(page: 0, title: String(localized: "Now")),
-        .init(page: 1, title: String(localized: "Later")),
+        .init(page: 1, title: String(localized: "Backlog")),
         .init(page: 2, title: String(localized: "Done"))
     ]
 }
@@ -523,7 +523,7 @@ private struct PageSwitchBoard: View {
             }
         }
         SpecimenRow {
-            AtticSpecimen("Later selected, hover on Done") {
+            AtticSpecimen("Backlog selected, hover on Done") {
                 AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(1), statePinnedPage: 2).atticForcedState(.hover)
             }
         }
@@ -557,8 +557,8 @@ private struct AddBarBoard: View {
             AtticSpecimen("With text: send button inside", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
-            AtticSpecimen("Later page", fullWidth: true) {
-                AtticAddBar(placeholder: "Add to later", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+            AtticSpecimen("Backlog page", fullWidth: true) {
+                AtticAddBar(placeholder: "Add to Backlog", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Recognised pieces turn secondary; a date gets its calendar", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
@@ -720,7 +720,7 @@ private struct StatusCircleBoard: View {
         case .todo: "To do: a grey ring"
         case .inProgress: "In progress: the ring with a centre dot (a pie once a subtask is ticked)"
         case .done: "Done: a quiet grey disc with a darker check"
-        case .backlog: "Later: a dashed grey ring"
+        case .backlog: "Backlog: a dashed grey ring"
         }
     }
 }
@@ -746,7 +746,7 @@ private struct TaskRowsBoard: View {
         AtticSpecimen("Keyboard focus", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.focused) }
         AtticSpecimen("Disabled (while saving)", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.disabled) }
         AtticSpecimen("Done: struck through, faded", fullWidth: true) { GalleryTaskRow(model: rows[4]) }
-        AtticSpecimen("Later", fullWidth: true) {
+        AtticSpecimen("Backlog", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Plan Friday retro", state: .backlog, priority: .low))
         }
         AtticSpecimen("Touching selected rows merge", fullWidth: true) {
@@ -872,7 +872,7 @@ private struct FeedbackBoard: View {
             AtticUndoToast(message: String(localized: "Task deleted"), onUndo: demo.record("Undo")).padding(.horizontal, 16)
         }
         AtticSpecimen("Undo hover", fullWidth: true) {
-            AtticUndoToast(message: String(localized: "Moved to Later"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
+            AtticUndoToast(message: String(localized: "Moved to Backlog"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
         }
         AtticSpecimen("Live: slides up, fades under Reduce Motion", fullWidth: true) {
             VStack(alignment: .leading, spacing: 8) {
@@ -892,8 +892,8 @@ private struct FeedbackBoard: View {
         BoardHeading(title: "Empty · one quiet italic line, where the first row goes")
         AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task.")) }
         AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up.")) }
-        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active.")) }
-        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later.")) }
+        AtticSpecimen("Now, tasks waiting in Backlog", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active.")) }
+        AtticSpecimen("Backlog", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing in Backlog.")) }
         AtticSpecimen("Done", fullWidth: true) { AtticEmptyLine(text: String(localized: "Finished tasks collect here.")) }
         AtticSpecimen("Search with no results", fullWidth: true) { AtticEmptyLine(text: String(localized: "No tasks match “invoice”.")) }
         BoardHeading(title: "Error · never hidden, with the next step")

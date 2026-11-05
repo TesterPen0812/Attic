@@ -247,7 +247,7 @@ extension TasksPageModel {
     func searchPlaceholder(for tab: TasksTab) -> String {
         switch tab {
         case .now: String(localized: "Search Now")
-        case .backlog: String(localized: "Search Later")
+        case .backlog: String(localized: "Search Backlog")
         case .done: String(localized: "Search done tasks")
         }
     }

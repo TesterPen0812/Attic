@@ -21,8 +21,10 @@ enum TasksPanelDesign {
         case noDate
         /// A Done page day (the day the tasks were finished).
         case finished(Date)
-        /// Later's one list (Accepted 2026-10-29, "Later is the backlog"):
-        /// every put-off task, no date groups, no header.
+        /// Backlog's one list (Accepted 2026-10-29): every put-off task, in
+        /// the list's own order, no date groups. A put-off task has no date
+        /// (giving it one moves it to Now), so the list's one heading says
+        /// so (Accepted 2026-11-05, "Later becomes Backlog").
         case backlog
     }
 
@@ -42,7 +44,7 @@ enum TasksPanelDesign {
         }
 
         /// Whether the group draws a header (Later's one list has none).
-        var showsHeader: Bool { kind != .backlog }
+        var showsHeader: Bool { !title.isEmpty }
 
         /// The key a fold is remembered by (per page).
         var key: String { kind.key }
@@ -98,10 +100,10 @@ enum TasksPanelDesign {
         return groups
     }
 
-    /// Later's list (Accepted 2026-10-29): one group without a header, the
-    /// list's order kept; nothing when Later is empty.
+    /// Backlog's list: one group under "No date", the list's order kept;
+    /// nothing when Backlog is empty.
     static func backlogGroups(_ ids: [UUID]) -> [Group] {
-        ids.isEmpty ? [] : [Group(kind: .backlog, title: "", isOverdue: false, ids: ids)]
+        ids.isEmpty ? [] : [Group(kind: .backlog, title: String(localized: "No date"), isOverdue: false, ids: ids)]
     }
 
     /// Now's groups with the next event (Accepted 2026-10-29, "the next
@@ -246,7 +248,7 @@ enum TasksPanelDesign {
             return Empty(title: String(localized: "Nothing to do right now"),
                          body: "", canClear: false)
         case .backlog:
-            return Empty(title: String(localized: "Nothing for later"),
+            return Empty(title: String(localized: "Nothing in Backlog"),
                          body: "", canClear: false)
         case .done:
             return Empty(title: String(localized: "Nothing completed yet"),

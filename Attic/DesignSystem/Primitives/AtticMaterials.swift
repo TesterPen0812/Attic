@@ -484,7 +484,7 @@ extension View {
         modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
     }
 
-    /// A group of plain labels on the top line (Now · Later · Done, All
+    /// A group of plain labels on the top line (Now · Backlog · Done, All
     /// notes and its tags) on one floating glass capsule (top glass,
     /// 2026-10-22): the raised material at the Medium height, reaching
     /// `AtticTopGlassMetrics.capsulePadding` past the labels, which keep

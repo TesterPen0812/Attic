@@ -38,7 +38,7 @@ final class C2MenusTests: XCTestCase {
         let layout = AtticGlassMenuCard.layout(commands)
         XCTAssertEqual(TasksFollowup2Tests.kinds(layout),
                        ["Complete", "Start Working", "—", "Open Page", "Edit Title", "Add Subtask", "—",
-                        "Date", "Tags", "Priority", "—", "Move to Later", "More", "—", "Remove from Tasks", "Delete"])
+                        "Date", "Tags", "Priority", "—", "Move to Backlog", "More", "—", "Remove from Tasks", "Delete"])
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(commands), [], "an icon on every row")
         let open = try XCTUnwrap(commands.first { $0.title == "Open Page" })
         XCTAssertEqual(open.shortcut, AtticTaskShortcut.openPage, "⌘Return still opens the page")

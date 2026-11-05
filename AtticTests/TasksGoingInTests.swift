@@ -199,12 +199,12 @@ final class TasksGoingInTests: XCTestCase {
 
     // MARK: - Later is the backlog
 
-    func testLaterIsOneListWithoutDateGroups() throws {
+    func testBacklogIsOneListWithoutDateGroups() throws {
         try add("Someday A", tab: .backlog)
         try add("Someday B", tab: .backlog)
         let groups = model.sections(for: .backlog).groups
         XCTAssertEqual(groups.map(\.kind), [.backlog], "one group")
-        XCTAssertFalse(try XCTUnwrap(groups.first).showsHeader, "without a header")
+        XCTAssertEqual(try XCTUnwrap(groups.first).title, "No date", "under one heading")
         XCTAssertEqual(model.rows(for: .backlog).map(\.model.title).sorted(), ["Someday A", "Someday B"])
         try add("Due", due: 1)
         XCTAssertTrue(model.sections(for: .now).groups.allSatisfy(\.showsHeader), "Now keeps its date groups")

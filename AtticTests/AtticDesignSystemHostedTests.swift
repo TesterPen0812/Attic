@@ -501,10 +501,10 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         )
         XCTAssertEqual(item.description, "Email beta testers, to do, high priority, due Friday, tagged launch, 1 of 3 subtasks")
         let names = item.actions.map(actionName)
-        for name in ["Complete", "Start working", "Open page", "Move to Later", "Delete", "Show subtasks"] {
+        for name in ["Complete", "Start working", "Open page", "Move to Backlog", "Delete", "Show subtasks"] {
             XCTAssertTrue(names.contains(name), "Missing VoiceOver action \(name): \(names)")
         }
-        for (name, expected) in [("Start working", "start"), ("Complete", "complete"), ("Open page", "open"), ("Move to Later", "backlog"), ("Delete", "delete"), ("Show subtasks", "expand")] {
+        for (name, expected) in [("Start working", "start"), ("Complete", "complete"), ("Open page", "open"), ("Move to Backlog", "backlog"), ("Delete", "delete"), ("Show subtasks", "expand")] {
             fired.removeAll()
             let raw = try XCTUnwrap(item.actions.first { actionName($0) == name })
             perform(raw, on: item.element)
@@ -524,7 +524,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 
         let items = accessibilityItems()
         XCTAssertEqual(items.filter { $0.description == "Pages" }.count, 2, "one group for the button, one for the tabs")
-        for name in ["Tasks", "Notes", "Canvas", "Now", "Later", "Done"] {
+        for name in ["Tasks", "Notes", "Canvas", "Now", "Backlog", "Done"] {
             XCTAssertTrue(items.contains { $0.description == name && $0.role == kAXButtonRole as String },
                           "\(name) is a named button: \(items.map(\.description))")
         }
@@ -535,7 +535,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             return (value as? Bool) == true
         }
         XCTAssertTrue(selected("Tasks") && selected("Now"))
-        XCTAssertFalse(selected("Notes") || selected("Later"))
+        XCTAssertFalse(selected("Notes") || selected("Backlog"))
 
         let canvas = try XCTUnwrap(accessibilityItems().first { $0.description == "Canvas" })
         AXUIElementPerformAction(canvas.element, kAXPressAction as CFString)

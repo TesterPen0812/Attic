@@ -611,7 +611,7 @@ enum AtticMenuSymbols {
             ("Start Working", "play.circle"), ("Stop Working", "stop.circle"), ("Edit Title", "pencil"),
             ("Show Details", "info.circle"), ("Close Details", "info.circle"),
             ("Date", "calendar"), ("Tags", "tag"), ("Priority", "flag"),
-            ("Move to Later", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus"),
+            ("Move to Backlog", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus"),
             ("Copy", "doc.on.doc"), ("Duplicate", "plus.square.on.square"), ("More", "ellipsis.circle"),
             ("Delete", "trash"),
             ("Move Up", "arrow.up"), ("Move Down", "arrow.down"), ("Rename", "pencil"), ("Pin", "pin"), ("Unpin", "pin.slash"),

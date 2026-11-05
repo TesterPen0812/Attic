@@ -15,7 +15,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .tasks: "Tasks"
-        case .backlog: "Later"
+        case .backlog: "Backlog"
         case .notes: "Notes"
         case .calendar: "Calendar"
         case .canvas: "Canvas"
@@ -39,7 +39,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     var newItemTitle: String {
         switch self {
         case .tasks: "New Task"
-        case .backlog: "New Task for Later"
+        case .backlog: "New Task for Backlog"
         case .notes: "New Note"
         case .calendar: "New Task"
         case .canvas: "Canvas"

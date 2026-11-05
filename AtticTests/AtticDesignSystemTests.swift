@@ -518,7 +518,7 @@ final class AtticDesignSystemTests: XCTestCase {
             editTitle: { fired.append("edit") }, names: .init(openPage: "Open files")
         )
         XCTAssertEqual(live.accessibilityActions(for: .todo).map(\.name),
-                       ["Complete", "Start working", "Open files", "Edit title", "Move to Later", "Delete"])
+                       ["Complete", "Start working", "Open files", "Edit title", "Move to Backlog", "Delete"])
         let archived = AtticTaskActions(
             toggleDone: { fired.append("done") }, openPage: { fired.append("details") },
             restoreToNow: { fired.append("restore") }, names: .init(openPage: "Show details")

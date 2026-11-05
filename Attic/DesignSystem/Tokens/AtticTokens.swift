@@ -258,7 +258,7 @@ enum AtticLayout {
     static let subtaskPitch: CGFloat = 28
     /// Subtask text column: checkbox at the row's text column, text after it.
 
-    /// Direction A's page tabs ("Now · Later · Done") in place of the
+    /// Direction A's page tabs ("Now · Backlog · Done") in place of the
     /// title: the chip row on the panel's 18 pt line (12 inside the page),
     /// 14 below the header, the list 10 below the chips.
     /// The "Now" label starts on the circles' line (Phase 0's qualities).

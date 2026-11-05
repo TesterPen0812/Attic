@@ -417,7 +417,7 @@ final class TasksRound10Tests: XCTestCase {
         let titles = AtticMenuCommand.titles(in: commands)
         // The menu word is Delete (One item: owner answers, 2026-10-23,
         // answer 3), replacing slice 1's "Delete Task".
-        for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later", "Add Subtask",
+        for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Backlog", "Add Subtask",
                       "Move Up", "Move Down", "Copy", "Duplicate", "Delete", "Pick a Date…", "All Tags…"] {
             XCTAssertTrue(titles.contains(title), "\(title) in \(titles)")
         }

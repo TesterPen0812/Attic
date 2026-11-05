@@ -13,7 +13,7 @@ extension TasksPageModel {
         let targets = store.moveTargets(forSubtask: id)
         let now = targets.filter { $0.listedStatus != .backlog }, later = targets.filter { $0.listedStatus == .backlog }
         return now.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Now")) }
-            + later.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Later")) }
+            + later.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Backlog")) }
     }
 
     /// Chosen in Move to Task…: the subtask goes to the end of that task's
@@ -43,7 +43,7 @@ extension TasksPageModel {
         if focusedSubtaskID == id { focusedSubtaskID = nil }
         selectOnly(id)
         addedRequest = ScrollRequest(id: id)
-        let listed = store.task(withID: id)?.listedStatus == .backlog ? String(localized: "Later") : String(localized: "Now")
+        let listed = store.task(withID: id)?.listedStatus == .backlog ? String(localized: "Backlog") : String(localized: "Now")
         showToast(String(localized: "“\(title)” is now a task in \(listed)"))
         return outcome
     }

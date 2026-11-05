@@ -1047,7 +1047,7 @@ enum AtticNoteObjectMetrics {
 /// Top glass (option "B for the top", 2026-10-22): with rows and notes
 /// running under the top line, its plain controls float on the raised
 /// material the corner buttons and the composer strip use. A tab group
-/// (Now · Later · Done, All notes and its tags) sits in one capsule; each
+/// (Now · Backlog · Done, All notes and its tags) sits in one capsule; each
 /// icon (Find, View Options, the library's magnifier) in its own circle; an
 /// open search field on the same material. The labels stay where they were.
 enum AtticTopGlassMetrics {

@@ -722,7 +722,7 @@ struct TasksPage: View {
 
     // MARK: - Tabs
 
-    /// Now · Later · Done under the header, in place of a title and the
+    /// Now · Backlog · Done under the header, in place of a title and the
     /// page pill. The tabs stay put while the pages swipe under them. A
     /// magnifier sits at the line's end on every page (owner item 17, card B
     /// of v22; follow-up part 2, item 6), and on Now and Later View Options
@@ -736,7 +736,7 @@ struct TasksPage: View {
         let shown = drawnSearchShown
         let _ = searchRedraw
         return VStack(alignment: .leading, spacing: 0) {
-            // The top row (Accepted 2026-10-29/30): Now · Later · Done in
+            // The top row (Accepted 2026-10-29/30): Now · Backlog · Done in
             // words, ••• and Search on the right; the search folds the
             // rest away and fills the row. No filter button or list chips:
             // the tag bar at the bottom filters.
@@ -1542,7 +1542,7 @@ struct TasksPage: View {
                         let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters, tag: model.tagFilter(on: tab))
                         TasksEmptyState(empty: empty, clear: { clearFilters(on: tab) },
                                         action: tab == .now && model.offersLater && !empty.canClear
-                                            ? (String(localized: "Choose from Later"), { model.select(tab: .backlog) }) : nil,
+                                            ? (String(localized: "Choose from Backlog"), { model.select(tab: .backlog) }) : nil,
                                         // T3: no results here, the other tabs' matches as links.
                                         elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: tab),
                                         follow: { followSearch(from: tab, to: $0) })
@@ -2153,7 +2153,7 @@ struct TasksPage: View {
         }
         // The task menu's content (Dropdown content: answers, owner,
         // 2026-10-24, answer 1 A): Complete, Start Working │ Open Page, Edit
-        // Title, Add Subtask │ Date ›, Tags ›, Priority › │ Move to Later,
+        // Title, Add Subtask │ Date ›, Tags ›, Priority › │ Move to Backlog,
         // More › │ Remove from Tasks, Delete. Copy and Duplicate live in
         // More ›, with Add Files… and Move Up/Down; a selection, which has
         // no More ›, keeps them on the root.
@@ -2195,7 +2195,7 @@ struct TasksPage: View {
                 menuCommand(key) { [weak model] targets in model?.moveToNow(targets) ?? .failed(.taskGone) }
             })
         } else if tab == .now {
-            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later,
+            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Backlog"), shortcut: AtticTaskShortcut.later,
                                          startsSection: true) {
                 menuCommand(key) { [weak model] targets in model?.moveToBacklog(targets) ?? .failed(.taskGone) }
             })
@@ -3300,7 +3300,7 @@ struct TasksPage: View {
                   })),
             model.tab == .backlog
                 ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } })
-                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
+                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Backlog", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
         ], summary: selectionSummary(ids), inBar: true, filterTag: model.tagFilter(on: model.tab).map { tag in
             (TasksPanelDesign.tagChipTitle(tag),
@@ -3734,7 +3734,7 @@ extension TaskStatus {
         case .todo: "To Do"
         case .inProgress: "In Progress"
         case .done: "Done"
-        case .backlog: "Later"
+        case .backlog: "Backlog"
         }
     }
 }

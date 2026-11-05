@@ -52,7 +52,7 @@ struct SettingsPanelMiniature: View {
 
     private static let tabs: [AtticPageTabs<Int>.Item] = [
         .init(page: 0, title: String(localized: "Now")),
-        .init(page: 1, title: String(localized: "Later")),
+        .init(page: 1, title: String(localized: "Backlog")),
         .init(page: 2, title: String(localized: "Done"))
     ]
 

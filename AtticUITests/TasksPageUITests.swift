@@ -241,13 +241,13 @@ final class TasksPageUITests: XCTestCase {
 
     func testRightClickMovesToLaterWithAnUndoToast() throws {
         row("Book dentist").rightClick()
-        let move = app.menuItems["Move to Later"]
+        let move = app.menuItems["Move to Backlog"]
         XCTAssertTrue(move.waitForExistence(timeout: 3))
         // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
         // clicked through the pointer (`GlassMenuUITestSupport`).
-        clickGlassMenuItem(move, titled: "Move to Later", in: app)
+        clickGlassMenuItem(move, titled: "Move to Backlog", in: app)
         waitFor(!row("Book dentist").exists, "it leaves Now")
-        let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Moved to Later")).firstMatch
+        let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Moved to Backlog")).firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 3), "the Undo toast shows")
         window.buttons["Undo"].click()
         waitFor(row("Book dentist").exists, "Undo brings it back")
@@ -269,14 +269,14 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Tabs, Later and Done
 
-    /// Now · Later · Done are one "Pages" group of named buttons; each
+    /// Now · Backlog · Done are one "Pages" group of named buttons; each
     /// shows its list and reads as the selected one.
     func testTheTabsMoveBetweenNowLaterAndDone() throws {
         let group = window.descendants(matching: .any)["tasks-page-tabs"]
         XCTAssertTrue(group.exists)
         XCTAssertEqual(group.label, "Pages")
         XCTAssertTrue(tab("now").isSelected)
-        XCTAssertEqual(tab("backlog").label, "Later")
+        XCTAssertEqual(tab("backlog").label, "Backlog")
 
         tab("backlog").click()
         waitFor(row("Plan the spring trip").isHittable, "Later lists its tasks")
@@ -602,7 +602,7 @@ final class TasksPageUITests: XCTestCase {
         func barButton(_ label: String) -> XCUIElement {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
         }
-        let move = barButton("Move 2 tasks to Later")
+        let move = barButton("Move 2 tasks to Backlog")
         XCTAssertTrue(move.waitForExistence(timeout: 3), "the selection bar shows")
         barButton("Set priority of 2 tasks").click()
         let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
@@ -726,7 +726,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
         // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Copy and
         // Duplicate sit inside More.
-        for title in ["Complete", "Start Working", "Edit Title", "Add Subtask", "Date", "Tags", "Priority", "Move to Later",
+        for title in ["Complete", "Start Working", "Edit Title", "Add Subtask", "Date", "Tags", "Priority", "Move to Backlog",
                       "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
@@ -958,7 +958,7 @@ final class TasksPageUITests: XCTestCase {
 
     /// Round 5 (the class of the owner's blocker): the date picker has no
     /// field, and its keys are still its own, never the row's Delete,
-    /// Complete, Start working or Move to Later.
+    /// Complete, Start working or Move to Backlog.
     func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()

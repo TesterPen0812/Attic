@@ -97,7 +97,7 @@ final class AdaptiveTasksTests: XCTestCase {
             model.setSearchQuery("launch", for: .now)
             spin(0.5)
             XCTAssertNotNil(element("tasks-find-count", in: host), "Find's count")
-            let later = try XCTUnwrap(element("tasks-find-count-later", in: host), "· 1 in Later")
+            let later = try XCTUnwrap(element("tasks-find-count-backlog", in: host), "· 1 in Later")
             XCTAssertNil(element("tasks-find-count-done", in: host), "no part for Done's 0")
             XCTAssertTrue(later.accessibilityPerformPress?() ?? false)
             spin(0.5)
@@ -119,8 +119,8 @@ final class AdaptiveTasksTests: XCTestCase {
             spin(0.5)
             XCTAssertNotNil(element("tasks-empty-line", in: host), "No results on Now")
             XCTAssertNil(element("tasks-find-count", in: host), "no count line: Now has no matches")
-            let later = try XCTUnwrap(element("tasks-find-count-later", in: host), "· 2 in Later on the No results line")
-            XCTAssertEqual(later.accessibilityLabel?(), "2 in Later")
+            let later = try XCTUnwrap(element("tasks-find-count-backlog", in: host), "· 2 in Later on the No results line")
+            XCTAssertEqual(later.accessibilityLabel?(), "2 in Backlog")
             XCTAssertNil(element("tasks-find-count-done", in: host), "no part for Done's 0")
             XCTAssertTrue(later.accessibilityPerformPress?() ?? false)
             spin(0.5)
@@ -134,7 +134,7 @@ final class AdaptiveTasksTests: XCTestCase {
             XCTAssertNotNil(element("tasks-empty-line", in: host), "No results on Done")
             let now = try XCTUnwrap(element("tasks-find-count-now", in: host), "· 1 in Now on Done's No results line")
             XCTAssertEqual(now.accessibilityLabel?(), "1 in Now")
-            XCTAssertNil(element("tasks-find-count-later", in: host))
+            XCTAssertNil(element("tasks-find-count-backlog", in: host))
 
             // No matches anywhere: just "No results".
             model.setSearchQuery("zebra", for: .done)

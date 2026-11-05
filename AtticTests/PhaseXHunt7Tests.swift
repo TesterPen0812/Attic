@@ -130,7 +130,7 @@ final class PhaseXHunt7Tests: XCTestCase {
                 taskSelection = Set(ids)
                 guard taskPage.toggleDone(ids).isApplied else { return (index, "\(label): completion refused") }
                 for id in ids { taskValues[id]!.status = complete ? .done : .todo; taskValues[id]!.logged = false }
-            case 2: // Move to Later, then Undo and Redo the same menu command.
+            case 2: // Move to Backlog, then Undo and Redo the same menu command.
                 let choices = roots.dropFirst(3).filter { taskValues[$0]?.status == .todo }
                 if let id = choices.first {
                     taskPage.select(tab: .now); expectedTab = .now

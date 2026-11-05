@@ -254,6 +254,27 @@ final class IslandTopRowRefineTests: XCTestCase {
         XCTAssertEqual(chosen, [.board])
     }
 
+    // MARK: Later becomes Backlog
+
+    func testTheBacklogIsNamedBacklogEverywhereItShows() {
+        XCTAssertEqual(TasksTab.backlog.title, "Backlog")
+        XCTAssertEqual(TasksTab.backlog.identifier, "backlog", "the identifier stays")
+        XCTAssertEqual(PanelSection.backlog.title, "Backlog")
+        XCTAssertEqual(PanelSection.backlog.rawValue, "backlog", "the stored value stays")
+        XCTAssertEqual(TaskStatus.backlog.menuTitle, "Backlog")
+        XCTAssertEqual(TaskStatus.backlog.rawValue, "backlog", "the stored value stays")
+    }
+
+    func testTheBacklogListSitsUnderOneNoDateHeading() throws {
+        let ids = [UUID(), UUID()]
+        let group = try XCTUnwrap(TasksPanelDesign.backlogGroups(ids).first)
+        XCTAssertEqual(group.title, "No date")
+        XCTAssertTrue(group.showsHeader)
+        XCTAssertTrue(group.rowsShowDate, "a row with a date would still show it")
+        XCTAssertEqual(group.ids, ids, "the list's order")
+        XCTAssertTrue(TasksPanelDesign.backlogGroups([]).isEmpty, "no heading over an empty list")
+    }
+
     func testDrawOffersWhatTheBoardAndCanvasDo() {
         let model = DrawPageModel(store: DrawInMemoryStore())
         let commands = model.moreCommands()

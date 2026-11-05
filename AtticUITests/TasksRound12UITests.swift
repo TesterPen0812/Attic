@@ -65,7 +65,7 @@ final class TasksRound12UITests: XCTestCase {
     func testARightClickActsOnTheRowUnderThePointerNotTheSelectedOne() throws {
         select("Book dentist")
         row("Email beta testers").rightClick()
-        let move = app.menuItems["Move to Later"]
+        let move = app.menuItems["Move to Backlog"]
         XCTAssertTrue(move.waitForExistence(timeout: 3), "the row's menu opens")
         move.click()
         waitFor(!row("Email beta testers").exists, "the row right-clicked leaves Now")

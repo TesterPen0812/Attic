@@ -13,7 +13,7 @@ enum TaskStatus: String, Codable, CaseIterable, Identifiable {
         case .todo: "To do"
         case .inProgress: "In Progress"
         case .done: "Done"
-        case .backlog: "Later"
+        case .backlog: "Backlog"
         }
     }
 
@@ -54,7 +54,7 @@ enum TaskScope: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .tasks: "Tasks"
-        case .backlog: "Later"
+        case .backlog: "Backlog"
         }
     }
 
@@ -82,7 +82,7 @@ enum TaskScope: String, CaseIterable, Identifiable {
     var newItemTitle: String {
         switch self {
         case .tasks: "New Task"
-        case .backlog: "New Task for Later"
+        case .backlog: "New Task for Backlog"
         }
     }
 

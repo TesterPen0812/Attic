@@ -83,7 +83,7 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(group.waitForExistence(timeout: 3))
         XCTAssertEqual(group.label, "Pages", "the tabs are one group for VoiceOver")
         XCTAssertTrue(tab("now").isSelected, "Tasks opens on Now")
-        for (page, title, task) in [("backlog", "Later", "Plan the spring trip"), ("done", "Done", "Send invoice"),
+        for (page, title, task) in [("backlog", "Backlog", "Plan the spring trip"), ("done", "Done", "Send invoice"),
                                     ("now", "Now", "Book dentist")] {
             let choice = tab(page)
             XCTAssertEqual(choice.label, title)
@@ -261,7 +261,7 @@ final class TasksEmptyStateUITests: XCTestCase {
                        "one row apart")
 
         app.buttons["tasks-page-backlog"].click()
-        XCTAssertTrue(emptyLine("Nothing for later.").waitForExistence(timeout: 3), "Later says it is empty")
+        XCTAssertTrue(emptyLine("Nothing in Backlog.").waitForExistence(timeout: 3), "Later says it is empty")
 
         app.buttons["tasks-page-done"].click()
         let finished = app.descendants(matching: .any)

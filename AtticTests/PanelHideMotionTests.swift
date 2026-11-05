@@ -1033,7 +1033,7 @@ final class PanelHideMotionShipTests: XCTestCase {
         try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
         let control = AtticControlSize.headerControl
         let header = scan.pills.filter { $0.rect.midY > surface.midY }.sorted { $0.rect.minX < $1.rect.minX }
-        // The top row (Accepted 2026-10-30): Pin, Now · Later · Done, •••, Search.
+        // The top row (Accepted 2026-10-30): Pin, Now · Backlog · Done, •••, Search.
         XCTAssertEqual(header.map { ($0.rect.width * 2).rounded() / 2 }, [control, TasksTopTabsMetrics.width, control, control],
                        "\(header.map(\.rect))")
         for pill in header { XCTAssertEqual(pill.rect.height, control, accuracy: 0.5, "\(pill.rect)") }

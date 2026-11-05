@@ -182,7 +182,7 @@ final class TasksRound13Tests: XCTestCase {
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Complete,
         // Start Working, Edit Title, Add Subtask (4th), Date (5th), Tags,
-        // Priority, Move to Later, More (9th), Delete.
+        // Priority, Move to Backlog, More (9th), Delete.
         let row = try openActionsMenu(hosted, on: "Call the plumber", keys: Array(repeating: down, count: 4) + [("\r", 36)])
         XCTAssertEqual(hosted.model.newSubtaskParentID, row, "Return ran Add Subtask")
         XCTAssertNil(hosted.model.editingTitleID, "and did not edit the parent's title")
