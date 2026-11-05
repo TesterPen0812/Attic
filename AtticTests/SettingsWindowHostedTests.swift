@@ -81,6 +81,33 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
+    func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
+        let size = SettingsWindowLayout.preferredContentSize
+        let host = NSHostingView(rootView: GeometryReader { geometry in
+            SettingsAdaptiveScroll(size: geometry.size) {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: AtticLayout.settingsSidebarWidth)
+                    Color.clear.frame(maxWidth: .infinity)
+                }
+            }
+        })
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        host.layoutSubtreeIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap(scrollViews)
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 })
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 2,
+                                 "The default 860-point window must not have inaccessible horizontal content")
+    }
+
     private func makeWindow() -> SettingsWindow {
         let window = SettingsWindow(contentViewController: NSHostingController(rootView: Color.clear))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]

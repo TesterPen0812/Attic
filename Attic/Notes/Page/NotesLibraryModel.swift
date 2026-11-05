@@ -31,6 +31,7 @@ final class NotesLibraryModel: ObservableObject {
     @Published var layout: NotesLibraryLayout {
         didSet {
             guard layout != oldValue else { return }
+            navigationGeneration &+= 1
             preferences?.set(layout.rawValue, forKey: NotesLibraryLayout.defaultsKey)
         }
     }
@@ -105,6 +106,9 @@ final class NotesLibraryModel: ObservableObject {
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
+    private var navigationGeneration: UInt64 = 0
+    private var navigationCache: (generation: UInt64, ids: [UUID], positions: [UUID: Int])?
+    private(set) var navigationBuildCount = 0
     /// Each stored note's preview body, read once per content identity,
     /// including fresh-context changes that keep the same revision token.
     private var proposalIDs: (revision: UInt64, ids: Set<UUID>)?
@@ -189,6 +193,14 @@ final class NotesLibraryModel: ObservableObject {
             guard let self, revision != self.taskRevision else { return }
             self.taskRevision = revision
             guard let store = self.observedStore else { return }
+            let owners = Set(store.notes.compactMap(\.taskID))
+            if let changed = self.taskStore?.revisionChangedTaskIDs,
+               changed.isDisjoint(with: owners), self.taskMetadataKey?.owners == owners {
+                // The published change cannot affect a displayed task note.
+                // Advance the cache key so subsequent view passes stay cheap.
+                self.taskMetadataKey = (revision, owners)
+                return
+            }
             let previous = self.taskMetadata
             self.taskMetadata = self.readTaskMetadata(store)
             guard self.taskMetadata != previous else { return }
@@ -324,8 +336,18 @@ final class NotesLibraryModel: ObservableObject {
                           dateEnvironment: DatePresentationEnvironment(calendar: calendar),
                           tag: tagFilter, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
+        navigationGeneration &+= 1
 
         var notes = oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
+        // The controller keeps decoded summaries across library remounts.
+        // Prune by identity, independent of count or the active search/filter.
+        let liveIDs = Set(store.notes.lazy.filter { $0.deletedAt == nil }.map(\.id))
+        if summaries.bodies.keys.contains(where: { !liveIDs.contains($0) }) {
+            summaries.bodies = summaries.bodies.filter { liveIDs.contains($0.key) }
+        }
+        if writingKnown.keys.contains(where: { !liveIDs.contains($0) }) {
+            writingKnown = writingKnown.filter { liveIDs.contains($0.key) }
+        }
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
         if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {
@@ -368,11 +390,6 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= today { todayRows.append(model) }
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
-            }
-            // Deleted notes' bodies go (the full list was just read).
-            if summaries.bodies.count > allNotes.count {
-                let stored = Set(allNotes.map(\.id))
-                summaries.bodies = summaries.bodies.filter { stored.contains($0.key) }
             }
             thumbnails.keep(only: Set(allNotes.map(\.id)).union(draftRows.map(\.id)))
             result = [
@@ -476,6 +493,7 @@ final class NotesLibraryModel: ObservableObject {
     /// A header's click: its rows fold away or come back. A folded row
     /// can't keep the keyboard.
     func toggleGroup(_ id: String, in groups: [Group]) {
+        navigationGeneration &+= 1
         if foldedGroups.contains(id) {
             foldedGroups.remove(id)
         } else {
@@ -600,9 +618,17 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     func moveHighlight(by step: Int, in groups: [Group], from selected: UUID?) {
-        let ids = orderedIDs(groups)
+        if navigationCache?.generation != navigationGeneration {
+            let ids = orderedIDs(groups)
+            navigationBuildCount += 1
+            navigationCache = (navigationGeneration, ids,
+                               Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) }))
+        }
+        guard let navigationCache else { return }
+        let ids = navigationCache.ids
         guard !ids.isEmpty else { return }
-        let current = highlightedID.flatMap(ids.firstIndex(of:)) ?? selected.flatMap(ids.firstIndex(of:))
+        let current = highlightedID.flatMap { navigationCache.positions[$0] }
+            ?? selected.flatMap { navigationCache.positions[$0] }
         let next = current.map { min(max($0 + step, 0), ids.count - 1) } ?? (step > 0 ? 0 : ids.count - 1)
         highlightedID = ids[next]
     }

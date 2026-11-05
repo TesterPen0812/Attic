@@ -387,6 +387,9 @@ final class TaskStore: ObservableObject {
     var tagInventoryDidRefresh: () -> Void = {}
 
     @Published private(set) var revision: UInt64 = 0
+    /// IDs touched by the most recently published revision. Nil means a
+    /// full reload or an uncertain change; subscribers must then refresh.
+    private(set) var revisionChangedTaskIDs: Set<UUID>?
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
     /// The command layer built over this store (the app has one), so a page
     /// handed only the store still records its changes in the same undo
@@ -2754,6 +2757,7 @@ final class TaskStore: ObservableObject {
         itemWritingTerms = next
         doneSearchMatches = nil
         // This is a presentation invalidation; it writes no model rows.
+        revisionChangedTaskIDs = []
         revision &+= 1
         familyIndexCache?.revision = revision
     }
@@ -4034,6 +4038,8 @@ final class TaskStore: ObservableObject {
                     indexReadFailed = true
                 }
             }
+            revisionChangedTaskIDs = indexReadFailed || presentationReadFailed || presentationReloaded
+                ? nil : changedIDs
             revision &+= 1
             familyIndexCache?.revision = revision
             if indexReadFailed || presentationReadFailed { refresh() }
@@ -4112,6 +4118,7 @@ final class TaskStore: ObservableObject {
         tasks = winners.filter {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
+        revisionChangedTaskIDs = nil
         revision &+= 1
         familyIndexCache = nil
     }

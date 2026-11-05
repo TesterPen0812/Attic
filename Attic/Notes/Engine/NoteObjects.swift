@@ -310,6 +310,10 @@ final class NoteObjectRenderer {
     private var design: AtticDesignContext
     private var checkboxes: [Bool: NSImage] = [:]
     private var chips: [String: NSImage] = [:]
+    private var chipRecency: [String: UInt64] = [:]
+    private var chipClock: UInt64 = 0
+    private static let chipLimit = 64
+    var cachedDateChipCount: Int { chips.count }
     private var scale: CGFloat
     /// What a file card or a failed image draws (the engine's state and
     /// command validation), and the column the card spans.
@@ -335,6 +339,7 @@ final class NoteObjectRenderer {
         guard changed else { return false }
         checkboxes.removeAll()
         chips.removeAll()
+        chipRecency.removeAll()
         return true
     }
 
@@ -351,10 +356,20 @@ final class NoteObjectRenderer {
     }
 
     func dateChip(_ label: String) -> NSImage {
-        if let image = chips[label] { return image }
+        chipClock &+= 1
+        if let image = chips[label] {
+            chipRecency[label] = chipClock
+            return image
+        }
         let image = render(AtticDateChip(label: label))
             ?? NSImage(size: CGSize(width: 60, height: AtticControlSize.tagHeight))
+        if chips.count >= Self.chipLimit,
+           let oldest = chipRecency.min(by: { $0.value < $1.value })?.key {
+            chips.removeValue(forKey: oldest)
+            chipRecency.removeValue(forKey: oldest)
+        }
         chips[label] = image
+        chipRecency[label] = chipClock
         return image
     }
 

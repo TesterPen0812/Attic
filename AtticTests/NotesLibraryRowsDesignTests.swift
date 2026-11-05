@@ -28,6 +28,19 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
     private func library() -> NotesLibraryModel { NotesLibraryModel(search: { _ in [] }, store: store) }
 
+    func testSW04ArrowNavigationReusesOrderedIDsUntilRowsChange() throws {
+        let first = try create("first")
+        _ = try create("second")
+        let model = library()
+        var groups = model.unfolded(model.groups(store: store, drafts: [], prepareSummaries: false))
+        for _ in 0..<20 { model.moveHighlight(by: 1, in: groups, from: nil) }
+        XCTAssertEqual(model.navigationBuildCount, 1)
+        _ = try create("third")
+        groups = model.unfolded(model.groups(store: store, drafts: [], prepareSummaries: false))
+        model.moveHighlight(by: -1, in: groups, from: first)
+        XCTAssertEqual(model.navigationBuildCount, 2, "a changed inventory must rebuild the navigation index")
+    }
+
     // MARK: Line two
 
     func testTheRowShowsTheFirstTagSkippingTheFilteredOne() throws {
@@ -196,6 +209,16 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
         cache.keep(only: [])
         XCTAssertNil(cache.cached(id, key: edited), "a gone note's thumbnail goes")
+    }
+
+    func testSW01EvictingOneThumbnailKeepsTheRestOfTheCache() throws {
+        let cache = NoteThumbnailCache()
+        let key = NoteThumbnailCache.Key(content: NoteThumbnailContent(title: "A", text: "B", hasImages: false), dark: false, scale: 1)
+        let ids = (0...NoteThumbnailCache.limit).map { _ in UUID() }
+        for id in ids { XCTAssertNotNil(cache.image(id, key: key)) }
+        XCTAssertNil(cache.cached(ids[0], key: key), "The oldest entry may be evicted")
+        XCTAssertNotNil(cache.cached(ids[1], key: key), "Inserting one entry must not evict every cached image")
+        XCTAssertNotNil(cache.cached(ids[NoteThumbnailCache.limit], key: key))
     }
 
     // MARK: Geometry

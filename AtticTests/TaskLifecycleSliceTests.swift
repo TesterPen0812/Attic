@@ -162,6 +162,18 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(model.taskMetadataFetchCount, 2)
     }
 
+    func testSW02UnrelatedTaskRevisionDoesNotRefetchNotesMetadata() throws {
+        let linked = try seed(.boundary)
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes, taskStore: tasks)
+        XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).contains {
+            $0.title == tasks.task(withID: linked)?.title
+        })
+        XCTAssertEqual(model.taskMetadataFetchCount, 1)
+        XCTAssertNotNil(tasks.create(title: "Unrelated task"))
+        _ = model.groups(store: notes.store, drafts: [])
+        XCTAssertEqual(model.taskMetadataFetchCount, 1, "An unrelated task save must not fetch Notes task metadata")
+    }
+
     func testOpusR7TaskNoteSearchKeepsSearchIndexMatches() async throws {
         let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         // The index can match a filename or date chip absent from title/body.

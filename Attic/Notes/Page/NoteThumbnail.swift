@@ -48,13 +48,17 @@ final class NoteThumbnailCache {
     }
 
     private var images: [UUID: (key: Key, image: CGImage)] = [:]
+    private var lastUsed: [UUID: UInt64] = [:]
+    private var accessClock: UInt64 = 0
     /// How many thumbnails were drawn (tests: once per revision).
     private(set) var renderCount = 0
-    /// The most notes kept; past it the cache starts again.
+    /// The most notes kept; the least recently used entry goes first.
     static let limit = 600
 
     func cached(_ id: UUID, key: Key) -> CGImage? {
         guard let kept = images[id], kept.key == key else { return nil }
+        accessClock &+= 1
+        lastUsed[id] = accessClock
         return kept.image
     }
 
@@ -64,8 +68,14 @@ final class NoteThumbnailCache {
         if let kept = cached(id, key: key) { return kept }
         guard let image = Self.render(key) else { return nil }
         renderCount += 1
-        if images.count >= Self.limit, images[id] == nil { images.removeAll(keepingCapacity: true) }
+        if images.count >= Self.limit, images[id] == nil,
+           let oldest = lastUsed.min(by: { $0.value < $1.value })?.key {
+            images.removeValue(forKey: oldest)
+            lastUsed.removeValue(forKey: oldest)
+        }
         images[id] = (key, image)
+        accessClock &+= 1
+        lastUsed[id] = accessClock
         return image
     }
 
@@ -73,6 +83,7 @@ final class NoteThumbnailCache {
     func keep(only ids: Set<UUID>) {
         guard images.keys.contains(where: { !ids.contains($0) }) else { return }
         images = images.filter { ids.contains($0.key) }
+        lastUsed = lastUsed.filter { ids.contains($0.key) }
     }
 
     /// The card and its contents at the key's scale, with the shadow's
@@ -199,6 +210,10 @@ struct NoteThumbnailView: View {
     @Environment(\.atticDesign) private var design
     /// The key last drawn: a change re-reads the cache.
     @State private var drawn: NoteThumbnailCache.Key?
+    /// A mounted row keeps its current image even if the shared LRU evicts it.
+    @State private var visibleImage: CGImage?
+    @State private var visibleID: UUID?
+    @State private var visibleKey: NoteThumbnailCache.Key?
 
     var body: some View {
         let m = NoteThumbnailMetrics.self
@@ -206,7 +221,8 @@ struct NoteThumbnailView: View {
         // Read so that drawing it (in `.task`) shows it.
         let _ = drawn
         ZStack {
-            if let image = cache.cached(id, key: key) {
+            if let image = cache.cached(id, key: key)
+                ?? (visibleID == id && visibleKey == key ? visibleImage : nil) {
                 Image(decorative: image, scale: max(1, scale))
                     .resizable()
                     .frame(width: m.size.width + 2 * m.margin, height: m.size.height + 2 * m.margin)
@@ -214,8 +230,10 @@ struct NoteThumbnailView: View {
         }
         .frame(width: m.size.width, height: m.size.height)
         .task(id: key) {
-            guard cache.cached(id, key: key) == nil else { return }
-            cache.image(id, key: key)
+            let image = cache.cached(id, key: key) ?? cache.image(id, key: key)
+            visibleID = id
+            visibleKey = key
+            visibleImage = image
             drawn = key
         }
         .accessibilityHidden(true)

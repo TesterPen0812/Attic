@@ -135,8 +135,10 @@ struct SettingsAdaptiveScroll<Content: View>: View {
         let needsScroll = SettingsWindowLayout.needsContentScroll(size)
         ScrollView([.horizontal, .vertical]) {
             content()
-                .frame(minWidth: max(SettingsWindowLayout.minimumContentSize.width, size.width),
-                       minHeight: max(SettingsWindowLayout.minimumContentSize.height, size.height))
+                // A minimum alone lets the unbounded horizontal scroll axis
+                // size the content past the window even when scrolling is off.
+                .frame(width: max(SettingsWindowLayout.minimumContentSize.width, size.width),
+                       height: max(SettingsWindowLayout.minimumContentSize.height, size.height))
         }
         .scrollDisabled(!needsScroll)
         .scrollIndicators(needsScroll ? .visible : .hidden)

@@ -11,6 +11,16 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
+        let renderer = NoteObjectRenderer(design: NoteTextStyle().design)
+        let recent = renderer.dateChip("day 0")
+        XCTAssertTrue(renderer.dateChip("day 0") === recent)
+        for index in 1...72 { _ = renderer.dateChip("day \(index)") }
+        XCTAssertLessThanOrEqual(renderer.cachedDateChipCount, 64)
+        let last = renderer.dateChip("day 72")
+        XCTAssertTrue(renderer.dateChip("day 72") === last)
+    }
+
     func testNativeSelectionRestorationDefersBodyChromePublication() async throws {
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false

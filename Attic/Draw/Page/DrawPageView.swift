@@ -89,19 +89,16 @@ struct DrawPageHost: View {
         .overlay(alignment: .top) {
             // D4: the title capsule owns the filter. Its menu contains only
             // canvases and actions, below the unchanged top-row controls.
-            if !model.isSearching {
+            if !model.isSearching && model.isFiltering {
                 DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
                     boardHeight: model.boardSize.height,
                     chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
                     chromeBottom: model.clearInsets.left), isActive: model.isFiltering)
                     .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
-                    // Retain the menu's native hierarchy between openings.
-                    // Opening only reveals it; focus, hit testing and AX stay off while closed.
-                    .opacity(model.isFiltering ? 1 : 0)
-                    .scaleEffect(model.isFiltering ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion), anchor: .bottom)
-                    .offset(y: model.isFiltering || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
-                    .allowsHitTesting(model.isFiltering)
-                    .accessibilityHidden(!model.isFiltering)
+                    // A hidden AppKit-backed field can remain in the native
+                    // accessibility tree despite SwiftUI's hidden modifier.
+                    // Remove the closed menu's subtree entirely.
+                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
         .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
