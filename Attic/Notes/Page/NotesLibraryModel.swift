@@ -189,6 +189,14 @@ final class NotesLibraryModel: ObservableObject {
             guard let self, revision != self.taskRevision else { return }
             self.taskRevision = revision
             guard let store = self.observedStore else { return }
+            let owners = Set(store.notes.compactMap(\.taskID))
+            if let changed = self.taskStore?.revisionChangedTaskIDs,
+               changed.isDisjoint(with: owners), self.taskMetadataKey?.owners == owners {
+                // The published change cannot affect a displayed task note.
+                // Advance the cache key so subsequent view passes stay cheap.
+                self.taskMetadataKey = (revision, owners)
+                return
+            }
             let previous = self.taskMetadata
             self.taskMetadata = self.readTaskMetadata(store)
             guard self.taskMetadata != previous else { return }
