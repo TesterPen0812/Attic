@@ -653,12 +653,12 @@ struct ComposerCard: View {
         let can = model.canCreate
         return Button { model.submit() } label: {
             AtticText(verbatim: String(localized: "Create"), style: .composerCreate, ink: .body)
-                .colour(AtticRGBA(red: 1, green: 1, blue: 1, alpha: 1))
+                .colour(can ? design.tokens.ink(.onInverse) : AtticRGBA(red: 1, green: 1, blue: 1, alpha: 1))
                 .padding(.horizontal, ComposerMetrics.createPadding)
                 .frame(height: ComposerMetrics.createHeight)
                 .background(
                     Squircle(cornerRadius: ComposerMetrics.createHeight / 2, exponent: AtticShape.controlExponent)
-                        .fill(can ? design.tokens.ink(.heading).color
+                        .fill(can ? design.tokens.ink(.inverseFill).color
                               : Color(.sRGB, red: 176 / 255, green: 178 / 255, blue: 182 / 255, opacity: 1))
                 )
                 .contentShape(Rectangle())

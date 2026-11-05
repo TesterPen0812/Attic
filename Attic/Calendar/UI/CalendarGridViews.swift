@@ -71,12 +71,12 @@ struct CalendarKey: View {
 
     @Environment(\.atticDesign) private var design
 
-    static func numberColour(_ number: CalendarKeyNumber, tokens: AtticColorTokens) -> AtticRGBA {
+    static func numberColour(_ number: CalendarKeyNumber, style: CalendarKeyStyle = .selected, tokens: AtticColorTokens) -> AtticRGBA {
         switch number {
         case .red: TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
         case .grey: TasksPanelDesign.toneInk(.meta, tokens: tokens)
         case .ink: tokens.ink(.heading)
-        case .white: AtticRGBA(red: 1, green: 1, blue: 1)
+        case .white: style == .selectedToday ? AtticRGBA(red: 1, green: 1, blue: 1) : tokens.ink(.onInverse)
         }
     }
 
@@ -87,7 +87,7 @@ struct CalendarKey: View {
                 Text(verbatim: String(day.day.day))
                     .font(.system(size: CalendarDesign.dayFont, weight: day.isSelected || day.isToday ? .semibold : .regular)
                         .monospacedDigit())
-                    .foregroundStyle(Self.numberColour(day.number, tokens: tokens).color)
+                    .foregroundStyle(Self.numberColour(day.number, style: day.style, tokens: tokens).color)
                     .frame(height: CalendarDesign.dayLine)
                 CalendarDayMarksView(marks: day.marks, isPast: day.isPast)
             }
@@ -152,7 +152,7 @@ struct CalendarKeyButtonStyle: ButtonStyle {
     /// The key's fill: the selected ink or red, the press grey, or none.
     static func fill(style: CalendarKeyStyle, isPressed: Bool, tokens: AtticColorTokens) -> AtticRGBA? {
         switch style {
-        case .selected: tokens.ink(.heading)
+        case .selected: tokens.ink(.inverseFill)
         case .selectedToday: CalendarDesign.red
         case .plain: isPressed ? tokens.pressed : nil
         }
