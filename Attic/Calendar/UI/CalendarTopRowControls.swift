@@ -30,6 +30,7 @@ struct CalendarMonthTitle: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: AtticRadius.header, height: AtticControlSize.headerControl))
         .help(isWeekView ? String(localized: "Show month") : String(localized: "Show week only"))
         .accessibilityLabel("\(title.month) \(title.year)")
         .accessibilityValue(isWeekView ? String(localized: "Week") : String(localized: "Month"))
@@ -72,6 +73,7 @@ struct CalendarMonthArrows: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
+                .atticOwnFocusRing(.rounded(radius: AtticShape.controlRadius(height: AtticPageButtonMetrics.segment), height: AtticPageButtonMetrics.segment))
                 .help(String(localized: "Go to today (⌘T)"))
                 .accessibilityIdentifier("calendar-today")
                 .transition(.opacity)
@@ -123,6 +125,7 @@ private struct CalendarArrowCell: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: side))
         .onHover { hovered = $0 }
         .help(label)
         .accessibilityLabel(label)
