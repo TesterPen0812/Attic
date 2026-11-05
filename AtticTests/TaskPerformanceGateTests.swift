@@ -196,6 +196,9 @@ final class TaskPerformanceGateTests: XCTestCase {
     }
 }
 
+// The pinned integration reference predates these candidate-only PF fixtures.
+// Its integration measurements above remain compiled and unchanged.
+#if !ATTIC_COST_REFERENCE_HOST
 // Each open uses the same clean loop baseline, so retained allocations raise
 // later samples. Absolute peaks remain visible in the non-blocking diagnostic.
 private final class PFFootprintSampler: @unchecked Sendable {
@@ -665,3 +668,4 @@ extension TaskPerformanceGateTests {
 
 }
 // END PAIRED PHASE 2 PERF PROBE
+#endif

@@ -115,6 +115,7 @@ final class DoneSearchCostTests: XCTestCase {
         }
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
     func testExplicitNSStringIndexMatchingPreservesLocalizedSemanticsWithoutWrites() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
@@ -146,6 +147,7 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertEqual(store.revision, revision)
     }
 
+    #endif
     func testSearchStaysLiveThroughEditsDeleteRestoreUndoAndRefresh() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedScale(in: container)
@@ -330,6 +332,7 @@ final class DoneSearchCostTests: XCTestCase {
 
     /// Keep the input boundary structural: timings are reported by the cost
     /// test, while this guard is independent of the machine's frame time.
+    #if !ATTIC_COST_REFERENCE_HOST
     func testFirstNativeCharacterLeavesDoneResultsAndTheTaskPageAloneUntilFlush() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
@@ -373,6 +376,7 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertEqual(host.model.doneSearchCount()?.matches, host.store.indexedDoneLogCount(matching: "F"))
     }
 
+    #endif
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
@@ -418,6 +422,7 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertEqual(host.model.doneSearchInput.text, "earlyx")
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
     func testNativeQueryEditorKeepsCompositionUndoAndFocusBehavior() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
@@ -591,6 +596,7 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertNil(editor)
     }
 
+    #endif
     func testCoalescingNeverAppliesAnOldQueryAfterEscapeAndFlushesBeforeNavigation() async throws {
         let store = try makeTestStore()
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
