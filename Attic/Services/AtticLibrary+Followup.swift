@@ -104,6 +104,7 @@ extension AtticLibrary {
             progress.lifecycle = lifecycle
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
+                lifecycle: .restore,
                 items: { Set(restoredItems + restoredAttachments.map(\.owner)) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }

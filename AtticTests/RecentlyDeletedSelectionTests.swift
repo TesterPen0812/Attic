@@ -131,6 +131,13 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
     // MARK: - Restore Selected
 
+    func testUnrelatedStepNamedRestoreDoesNotEnableRecentlyDeletedUndo() throws {
+        let fixture = try makeFixture()
+        let model = model(fixture)
+        fixture.library.undo.record(UndoStep(name: "Restore Appearance", undo: { true }, redo: { true }), in: .library)
+        XCTAssertFalse(model.canUndo, "only a typed restore operation may be reversed on Recently Deleted")
+    }
+
     /// Several kinds at once come back, and one ⌘Z sends them all back.
     func testRestoreSelectedIsOneUndoStep() throws {
         let fixture = try makeFixture()

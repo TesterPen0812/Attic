@@ -35,10 +35,13 @@ enum UndoOutcome: Equatable, Error {
 
 /// One undoable step: how to reverse it and how to apply it again.
 struct UndoStep {
+    /// An item lifecycle command, independent of its translated display name.
+    enum Lifecycle: Equatable { case delete, restore }
     /// Which step this is, so something bound to it (the Undo toast) can
     /// tell whether it is still the one an undo would reverse.
     let id: UUID
     let name: String
+    let lifecycle: Lifecycle?
     let affectedItems: @MainActor () -> Set<AtticItemRef>
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
@@ -49,9 +52,10 @@ struct UndoStep {
 
     /// A step whose closures only report whether the store confirmed its
     /// save; a refusal keeps the step.
-    init(id: UUID = UUID(), name: String, items: @escaping @MainActor () -> Set<AtticItemRef> = { [] }, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+    init(id: UUID = UUID(), name: String, lifecycle: Lifecycle? = nil, items: @escaping @MainActor () -> Set<AtticItemRef> = { [] }, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
         self.id = id
         self.name = name
+        self.lifecycle = lifecycle
         self.affectedItems = items
         self.undo = { undo() ? .applied : .failed }
         self.redo = { redo() ? .applied : .failed }
@@ -62,12 +66,14 @@ struct UndoStep {
     init(
         id: UUID = UUID(),
         name: String,
+        lifecycle: Lifecycle? = nil,
         items: @escaping @MainActor () -> Set<AtticItemRef> = { [] },
         undoOutcome: @escaping @MainActor () -> UndoOutcome,
         redoOutcome: @escaping @MainActor () -> UndoOutcome
     ) {
         self.id = id
         self.name = name
+        self.lifecycle = lifecycle
         self.affectedItems = items
         self.undo = undoOutcome
         self.redo = redoOutcome
@@ -253,6 +259,10 @@ final class UndoRoute: ObservableObject {
     func undoName(in history: UndoHistoryID) -> String? {
         let history = resolved(history)
         return histories[history]?.undo.last.map { $0.workspacePayload?.payloads.last?.name ?? $0.name }
+    }
+
+    func undoLifecycle(in history: UndoHistoryID) -> UndoStep.Lifecycle? {
+        histories[resolved(history)]?.undo.last?.lifecycle
     }
 
     func redoName(in history: UndoHistoryID) -> String? {

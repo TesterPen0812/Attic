@@ -363,8 +363,7 @@ final class RecentlyDeletedModel: ObservableObject {
     /// ⌘Z on the page undoes only a restore made here (the library history
     /// also holds other steps, such as an agent's settings change).
     var canUndo: Bool {
-        guard let name = library?.undo.undoName(in: .library) else { return false }
-        return name.hasPrefix("Restore")
+        library?.undo.undoLifecycle(in: .library) == .restore
     }
 
     /// Starts following the stores (the page appeared).

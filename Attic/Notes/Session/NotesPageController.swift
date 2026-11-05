@@ -1816,7 +1816,7 @@ final class NotesPageController: ObservableObject {
         engine.permitsReadOnlyLifecycleReplay = { [weak session] redo in
             guard let session, session.isItemDeleted, let history = session.engine.history.workspace,
                   let step = history.route.steps(in: history.historyID, redo: redo).last,
-                  step.name.hasPrefix(redo ? "Restore" : "Delete") else { return false }
+                  step.lifecycle == (redo ? .restore : .delete) else { return false }
             let ref: AtticItemRef
             if let page = session.workspacePage, case let .task(id) = page.key.workspace { ref = .init(.task, id) }
             else { ref = .init(.note, session.noteID) }
@@ -3979,6 +3979,7 @@ extension NotesPageController {
         let separate = store.lastRestoreWasSeparate
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),
+            lifecycle: .restore,
             items: { owned.itemRefs.union([.init(.note, noteID)]) },
             undoOutcome: { [weak self] in
                 self?.deleteHistoryNote(noteID, owned: owned, legacyOwner: separate ? nil : owner,
@@ -4226,6 +4227,7 @@ extension NotesPageController {
         let owned = noteHistoryOwnership(noteID, deleted: true)
         return UndoStep(
             name: String(localized: "Delete Note"),
+            lifecycle: .delete,
             items: { owned.itemRefs.union([.init(.note, noteID)]) },
             undoOutcome: { [weak self] in self?.restoreHistoryNote(noteID, owned: owned, reopen: reopen) ?? .obsolete },
             redoOutcome: { [weak self] in self?.deleteHistoryNote(noteID, owned: owned) ?? .obsolete }

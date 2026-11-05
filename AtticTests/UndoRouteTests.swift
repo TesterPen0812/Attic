@@ -4,6 +4,17 @@ import XCTest
 
 @MainActor
 final class UndoRouteTests: XCTestCase {
+    func testLifecycleCapabilitySurvivesUndoAndRedoWithoutEnglishName() {
+        let route = UndoRoute()
+        route.record(UndoStep(name: "Wiederherstellen", lifecycle: .restore,
+                              undo: { true }, redo: { true }), in: .library)
+        XCTAssertEqual(route.undoLifecycle(in: .library), .restore)
+        XCTAssertTrue(route.undo(in: .library))
+        XCTAssertNil(route.undoLifecycle(in: .library))
+        XCTAssertTrue(route.redo(in: .library))
+        XCTAssertEqual(route.undoLifecycle(in: .library), .restore)
+    }
+
     func testAnAwaitingCalendarUndoCannotBeEvictedByAnotherHistory() async {
         let route = UndoRoute(historyLimit: 1)
         var event = UndoStep(name: "Event", undoOutcome: { .failed }, redoOutcome: { .failed })

@@ -84,6 +84,7 @@ extension AtticLibrary {
             let owned = itemOwnership(recordedMembers(of: ids), deleted: true)
             return UndoStep(
                 name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
+                lifecycle: .delete,
                 items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }

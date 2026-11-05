@@ -418,6 +418,7 @@ final class AtticLibrary {
             let owned = itemOwnership(recordedMembers(of: ids), deleted: true)
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
+                lifecycle: .delete,
                 items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -460,6 +461,7 @@ final class AtticLibrary {
             let store = self.tasks
             return UndoStep(
                 name: ids.count == 1 ? "Restore Task" : "Restore \(ids.count) Tasks",
+                lifecycle: .restore,
                 items: { Set(before.map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: {
                     store.undoReturnFromDoneLog(from: after, to: before, logging: logging)
@@ -595,6 +597,7 @@ final class AtticLibrary {
         let owned = itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil)
         return UndoStep(
             name: "Delete \(Self.noun(for: ref.kind))",
+            lifecycle: .delete,
             items: { owned.itemRefs.union([ref]) },
             undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
             redoOutcome: { [weak self] in
@@ -615,6 +618,7 @@ final class AtticLibrary {
             refreshItemStores()
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
+                lifecycle: .restore,
                 items: { owned.itemRefs.union([ref]) },
                 undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
@@ -639,6 +643,7 @@ final class AtticLibrary {
             guard performRestoreAttachment(summary) else { return nil }
             return UndoStep(
                 name: "Restore Attachment",
+                lifecycle: .restore,
                 items: { [summary.owner] },
                 undoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete },
                 redoOutcome: { [weak self] in self?.restoreAttachmentOutcome(summary) ?? .obsolete }
