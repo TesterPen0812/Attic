@@ -82,8 +82,10 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(box.height, 60, accuracy: 2, "60 px tall")
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
             let tokens = AtticColorTokens.resolve(context)
-            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.heading),
-                           "the selected key is ink")
+            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens), tokens.ink(.inverseFill),
+                           "the selected key uses its paired inverse fill")
+            XCTAssertEqual(CalendarKey.numberColour(.white, style: .selected, tokens: tokens), tokens.ink(.onInverse),
+                           "the selected number remains legible in both appearances")
             XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selectedToday, isPressed: false, tokens: tokens), CalendarDesign.red,
                            "red on today")
             XCTAssertNil(CalendarKeyButtonStyle.fill(style: .plain, isPressed: false, tokens: tokens), "other days: no key")
