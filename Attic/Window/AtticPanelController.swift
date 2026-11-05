@@ -1953,6 +1953,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard !uiState.isPageContentLoaded else { return }
         IdleLatencyTrace.span("page_build") { uiState.loadPageContent() }
         IdleLatencyTrace.span("page_layout") { hostingView.layoutSubtreeIfNeeded() }
+        // A snapshot from before a hidden page was restored depicts the
+        // released shell, even if its size and surface did not change.
+        contentContainer?.noteContentMayChange()
     }
 
     /// After launch, once the main thread is idle: build the Tasks page
@@ -2009,6 +2012,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             if preparingHiddenReveal {
                 self.buildPagesIfNeeded()
+                // The guarded approach has finished mounting the real page.
+                // Prepare it now when a timed reveal is pending; the reveal's
+                // input path can then use a current snapshot without capture.
+                let mode = self.settings.hideAnimation
+                if let expected = self.expectedChange, !expected.hiding,
+                   expected.due > CACurrentMediaTime(), self.expectedChangeWork?.isCancelled == false,
+                   mode.usesGenieMesh, !AtticMotionPreference.reducesMotion,
+                   let container = self.contentContainer {
+                    container.placeIslandStandIn(corner: self.currentCorner, spot: self.islandSpot)
+                    container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), hoverFresh: true)
+                }
                 self.schedulePageRelease()
                 return
             }
@@ -2129,6 +2143,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             // the pages kept behind it go.
             uiState.releaseBackgroundPages()
         }
+        contentContainer?.noteContentMayChange()
     }
 
     /// Performance probe (`--extra`): types `text` one key at a time into

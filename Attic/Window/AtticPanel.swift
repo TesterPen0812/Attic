@@ -1635,7 +1635,9 @@ final class AtticPanelContentContainer: NSView {
         if hasPreparedSnapshot(mode, surface: surface, hoverFresh: hoverFresh), let current = prepared {
             prepared?.expires = max(current.expires, now + lifetime)
         } else {
+            prepared = nil
             captureGenie(mode, surface: surface)
+            guard genieView.hasSnapshot else { return }
             prepared = (snapshotKey(mode, surface: surface), now, now + lifetime, hoverGeneration)
         }
         let time = prepared?.time
