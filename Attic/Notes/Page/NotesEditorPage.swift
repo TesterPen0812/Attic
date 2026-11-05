@@ -829,10 +829,10 @@ struct NotesEditorPage: View {
             return
         }
         if let taskID = noteStore.note(withID: id)?.taskID {
-            controller.libraryQueryAcrossTaskPage = query.isEmpty ? nil : query
             if controller.openTaskPage?(taskID) == true {
+                controller.libraryQueryAcrossTaskPage = query.isEmpty ? nil : query
+                controller.pendingLibraryTaskRoute = taskID
                 TaskNotePresenter.open(for: taskID)?.revealSearchResult(query)
-                if library.query == query { library.clearSearch() }
                 return
             }
         }

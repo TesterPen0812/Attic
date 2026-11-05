@@ -209,6 +209,7 @@ final class NotesLibraryModel: ObservableObject {
                     self.reconcileFilter(store: store, selected: controller?.librarySelectionID)
                 }
             }
+            controller.liveLibraryModel = self
         }
     }
 

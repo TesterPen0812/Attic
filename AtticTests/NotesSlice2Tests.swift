@@ -648,6 +648,27 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(library.query, "", "Only the query the completed open owns may be cleared")
     }
 
+    func testR10TaskNoteSearchClearsOnAcceptanceButSurvivesRefusal() throws {
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        let taskID = UUID()
+        library.query = "find this task"
+        controller.libraryQueryAcrossTaskPage = library.query
+        controller.pendingLibraryTaskRoute = taskID
+
+        controller.finishLibraryTaskRoute(taskID, accepted: false)
+        XCTAssertEqual(library.query, "find this task", "Refused routes cannot clear the search")
+        XCTAssertNil(controller.pendingLibraryTaskRoute)
+
+        controller.libraryQueryAcrossTaskPage = library.query
+        controller.pendingLibraryTaskRoute = taskID
+        controller.finishLibraryTaskRoute(UUID(), accepted: true)
+        XCTAssertEqual(library.query, "find this task", "A stale route cannot consume the query")
+        controller.finishLibraryTaskRoute(taskID, accepted: true)
+        XCTAssertEqual(library.query, "", "Only an accepted route clears the hidden search")
+        XCTAssertEqual(controller.libraryQueryAcrossTaskPage, "find this task", "Back restores the search")
+    }
+
     func testWarmedTagInventoryDoesNotRereadTheLibraryWhileTypingOrSavingText() throws {
         for index in 0..<1_000 {
             let note = NoteItem(title: "Unrelated \(index)")

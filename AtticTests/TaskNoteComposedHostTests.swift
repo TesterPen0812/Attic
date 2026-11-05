@@ -207,6 +207,10 @@ final class TaskNoteComposedHostTests: XCTestCase {
         returned.model.beginEditingTitle()
         returned.model.titleEdit.text = "Conflicting draft"
         XCTAssertTrue(library.updateTask(a, title: "Newer title").isApplied)
+        // R-10: All notes initiated B with this query, but A's unresolved
+        // title edit can still refuse the route after the request is sent.
+        notes.libraryQueryAcrossTaskPage = "refused search"
+        notes.pendingLibraryTaskRoute = b
         uiState.openTaskNoteID = b
         for _ in 0..<100 {
             if uiState.openTaskNoteID == a { break }
@@ -214,6 +218,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         }
         XCTAssertEqual(uiState.openTaskNoteID, a, "a refused navigation restores the requested route")
         XCTAssertTrue(notes.taskNotePresenter === returned)
+        XCTAssertNil(notes.pendingLibraryTaskRoute, "The refused request releases search ownership")
+        XCTAssertEqual(notes.libraryQueryAcrossTaskPage, "refused search", "The unmounted library restores on Back")
         XCTAssertNotNil(returned.host.scrollView.window, "the recoverable field remains on its surface")
         XCTAssertEqual(returned.model.titleEdit.text, "Conflicting draft")
         returned.model.cancelTitle()
@@ -224,6 +230,11 @@ final class TaskNoteComposedHostTests: XCTestCase {
         }
         XCTAssertNil(notes.taskNotePresenter)
         XCTAssertNil(returned.lease)
+        for _ in 0..<100 {
+            if notes.liveLibraryModel?.query == "refused search" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(notes.liveLibraryModel?.query, "refused search", "Back reopens All notes with the refused search")
     }
 
     func testOrdinaryNoteNavigationChecksTheActiveCompositionWhileATaskNoteIsBound() async throws {
