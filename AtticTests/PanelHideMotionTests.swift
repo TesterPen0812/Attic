@@ -541,6 +541,47 @@ final class PanelHideMotionShipTests: XCTestCase {
                        "intermediate swipe updates must not cancel the live panel takeover")
     }
 
+    /// A completed timed flight must have committed its actual target mesh
+    /// before the owner releases its snapshot or swaps the live host back.
+    func testTimedGenieCompletionWaitsForFinalGPUFrame() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        PanelGenieRenderer.shared.prewarm()
+        let warmDeadline = Date().addingTimeInterval(5)
+        while PanelGenieRenderer.shared.state() == nil, Date() < warmDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let size = CGSize(width: 200, height: 300)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: CGRect(origin: .zero, size: size))
+        let content = NSView(frame: root.bounds)
+        content.wantsLayer = true
+        content.addSubview(NSTextField(labelWithString: "Attic"))
+        let genie = PanelGenieView(frame: root.bounds)
+        root.addSubview(content)
+        root.addSubview(genie)
+        window.contentView = root
+        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: root.bounds.insetBy(dx: 20, dy: 20),
+                              cornerRadius: 30, dark: false)
+        genie.beginFlight(progress: 0, corner: .topRight) {}
+        let finalSlide = PanelGenieRenderer.uniforms(progress: 1, corner: .topRight).slide
+        var finalFrameCommitted = false
+        genie.frameObserver = { uniforms in
+            if uniforms.slide >= finalSlide { finalFrameCommitted = true }
+        }
+        var completed = false
+        genie.animate(to: 1, curve: .timed(duration: 0.03, timing: PanelHideMotionTuning.hideTiming),
+                      corner: .topRight) {
+            XCTAssertTrue(finalFrameCommitted, "the completion must wait for the target frame's GPU callback")
+            completed = true
+        }
+        let deadline = Date().addingTimeInterval(3)
+        while !completed, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(completed, "the flight must finish after the last frame")
+    }
+
     /// A flight's first completed GPU frame and the live panel stepping
     /// aside land in one Core Animation transaction, without waiting on the
     /// main thread. Drafts drew into a

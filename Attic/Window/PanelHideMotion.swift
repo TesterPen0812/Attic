@@ -653,11 +653,16 @@ final class PanelGenieView: NSView {
     private var frameInFlight = false
     private var framePending = false
     private var takeOverOnFirstFrame: (() -> Void)?
+    /// The owner may release its snapshot only after the final target frame
+    /// has finished on the GPU and been committed to the mesh layers.
+    private var finalFrameCompletion: (generation: Int, id: Int, callback: () -> Void)?
+    private var finalFrameID = 0
 
     private func invalidatePendingFrames() {
         frameGeneration &+= 1
         framePending = false
         takeOverOnFirstFrame = nil
+        finalFrameCompletion = nil
     }
 
     override init(frame: CGRect) {
@@ -1312,6 +1317,7 @@ final class PanelGenieView: NSView {
         displayLink = nil
         run = nil
         completion = nil
+        finalFrameCompletion = nil
         if invalidateFrames { invalidatePendingFrames() }
     }
 
@@ -1325,7 +1331,6 @@ final class PanelGenieView: NSView {
     private func finish(at target: Double) {
         guard run != nil else { return }
         progress = target
-        render()
         let done = completion
         watchdog?.cancel()
         watchdog = nil
@@ -1333,7 +1338,20 @@ final class PanelGenieView: NSView {
         displayLink = nil
         run = nil
         completion = nil
-        done?()
+        if let done {
+            finalFrameID &+= 1
+            finalFrameCompletion = (frameGeneration, finalFrameID, done)
+        }
+        // render() coalesces a target request behind an in-flight frame. The
+        // completion belongs to the new target buffer, not the older buffer.
+        if !render() { completeFinalFrame() }
+    }
+
+    private func completeFinalFrame(id: Int? = nil) {
+        guard let pending = finalFrameCompletion, pending.generation == frameGeneration,
+              id == nil || id == pending.id else { return }
+        finalFrameCompletion = nil
+        pending.callback()
     }
 
     @discardableResult
@@ -1373,6 +1391,7 @@ final class PanelGenieView: NSView {
         draw(texture, into: frame.target)
         if let controlsFrame { draw(controlsTexture, into: controlsFrame.target) }
         let generation = frameGeneration
+        let finalID = finalFrameCompletion?.generation == generation ? finalFrameCompletion?.id : nil
         framePending = false
         frameInFlight = true
         buffer.addCompletedHandler { [weak self] completed in
@@ -1405,12 +1424,18 @@ final class PanelGenieView: NSView {
                         self.takeOverOnFirstFrame = nil
                         takeOver?()
                     }
+                    if let finalID, !self.framePending { self.completeFinalFrame(id: finalID) }
                 }
                 if self.framePending {
                     self.framePending = false
-                    if !self.render(), let takeOver = self.takeOverOnFirstFrame {
-                        self.takeOverOnFirstFrame = nil
-                        takeOver()
+                    if !self.render() {
+                        if let takeOver = self.takeOverOnFirstFrame {
+                            self.takeOverOnFirstFrame = nil
+                            takeOver()
+                        }
+                        // Metal has no target: fall back rather than leave an
+                        // interrupted panel waiting forever for a GPU callback.
+                        self.completeFinalFrame()
                     }
                 }
             }
