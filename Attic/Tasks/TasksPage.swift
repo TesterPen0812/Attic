@@ -712,6 +712,7 @@ struct TasksPage: View {
     /// A drag in progress and a row's pickers end when the panel hides or
     /// the page changes (review 1); nothing stays lifted.
     private func cancelTransientState() {
+        tabTarget.cancel()
         TasksDragCancellation.cancel(in: pointer.view?.window)
         cancelDrag()
         if metaPopover != nil { metaPopover = nil }
@@ -1035,7 +1036,7 @@ struct TasksPage: View {
 
     private func moveKeyboard(to stop: TasksTabStop, from current: TasksTabStop?, in stops: [TasksTabStop]) {
         let tab = model.tab
-        tabTarget.stop = stop
+        tabTarget.request(stop)
         switch stop {
         case .find:
             focusedRow = nil
@@ -1090,9 +1091,9 @@ struct TasksPage: View {
     /// A later Tab, or another page, ends it.
     private func settleKeyboard(on stop: TasksTabStop, in tab: TasksTab, attempts: Int, landed: @escaping () -> Bool,
                                 revealing row: UUID?, focus: @escaping () -> Void) {
-        tabTarget.stop = stop
+        let generation = tabTarget.generation
         func attempt(_ left: Int) {
-            guard tabTarget.stop == stop, model.tab == tab, model.isPageShown else { return }
+            guard tabTarget.isCurrent(stop, generation: generation), model.tab == tab, model.isPageShown else { return }
             if !landed() { focus() }
             var scrolled = false
             if let row, let proxy = listProxies.lists[tab] { scrolled = revealRow(row, in: tab, proxy: proxy, glides: false) }
@@ -2567,6 +2568,7 @@ struct TasksPage: View {
             pointer.endInvocation()
             return
         }
+        tabTarget.cancel()
         dragSession.newPress()
         // A plain click in the list that no row takes (the space under the
         // rows, a day heading, Done's search) clears the selection and the
@@ -5185,7 +5187,22 @@ enum TasksScrollerRule {
 /// The stop Tab last sent the keyboard to (`TasksPage.settleKeyboard`).
 @MainActor
 final class TasksTabTarget {
-    var stop: TasksTabStop?
+    private(set) var stop: TasksTabStop?
+    private(set) var generation: UInt64 = 0
+
+    func request(_ stop: TasksTabStop) {
+        generation &+= 1
+        self.stop = stop
+    }
+
+    func cancel() {
+        generation &+= 1
+        stop = nil
+    }
+
+    func isCurrent(_ stop: TasksTabStop, generation: UInt64) -> Bool {
+        self.generation == generation && self.stop == stop
+    }
 }
 
 /// One stop of the Tasks page's own Tab order.
