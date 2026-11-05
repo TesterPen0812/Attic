@@ -517,6 +517,30 @@ final class PanelHideMotionTests: XCTestCase {
 final class PanelHideMotionShipTests: XCTestCase {
     // MARK: The first frame
 
+    /// Finger updates queued before Metal completes must retain the original
+    /// first-frame callback, which transfers the live host behind the mesh.
+    func testSwipeProgressBeforeFirstGPUFrameKeepsLivePanelTakeover() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        PanelGenieRenderer.shared.prewarm()
+        let warmDeadline = Date().addingTimeInterval(5)
+        while PanelGenieRenderer.shared.state() == nil, Date() < warmDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        let surface = PanelGenieSurface(live: nil, translucent: false)
+        let layer = try XCTUnwrap(rig.content.overlayLayer.layer)
+        rig.content.setAlternateProgress(.genieLiveGlass, 0, corner: .topRight, surface: surface)
+        rig.content.setAlternateProgress(.genieLiveGlass, 0.2, corner: .topRight, surface: surface)
+        rig.content.setAlternateProgress(.genieLiveGlass, 0.4, corner: .topRight, surface: surface)
+        let deadline = Date().addingTimeInterval(2)
+        while layer.opacity != AtticPanelContentContainer.genieBackdropKeepAliveOpacity, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertEqual(layer.opacity, AtticPanelContentContainer.genieBackdropKeepAliveOpacity,
+                       "intermediate swipe updates must not cancel the live panel takeover")
+    }
+
     /// A flight's first completed GPU frame and the live panel stepping
     /// aside land in one Core Animation transaction, without waiting on the
     /// main thread. Drafts drew into a

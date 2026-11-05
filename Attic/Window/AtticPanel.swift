@@ -1549,7 +1549,9 @@ final class AtticPanelContentContainer: NSView {
         alternateToken += 1
         switch mode {
         case .genieLiveGlass:
-            genieView.stop()
+            // This is still the same swipe; the first GPU completion owns
+            // the one-time handoff from the live host to its Genie mesh.
+            genieView.stop(invalidateFrames: false)
             genieView.anchorInset = genieAnchorInset(corner: corner)
             genieView.show(progress: progress, corner: corner)
         case .swoop:
@@ -1838,7 +1840,9 @@ final class AtticPanelContentContainer: NSView {
         alternateToken += 1
         switch alternateMode {
         case .genieLiveGlass?:
-            genieView.stop()
+            // An interruption can reverse the flight before its first frame.
+            // Actual teardown in clearAlternateMotion invalidates callbacks.
+            genieView.stop(invalidateFrames: false)
         case .swoop?:
             guard let layer = motionView.layer else { return }
             let progress = alternateProgress
