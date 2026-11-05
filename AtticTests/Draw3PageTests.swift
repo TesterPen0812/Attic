@@ -562,6 +562,13 @@ final class Draw3PageTests: XCTestCase {
 
     // MARK: Export… and Copy as Image
 
+    func testPNGExportRejectsOversizedFiniteCanvasBeforeBitmapAllocation() {
+        for width in [CGFloat(Int.max), 50_000, 20_000] {
+            let bounds = CGRect(x: 0, y: 0, width: width, height: width == 20_000 ? 20_000 : 100)
+            XCTAssertNil(DrawExport.pngPixelSize(for: bounds))
+        }
+    }
+
     private func exportBoard() {
         put(DrawObject(frame: DrawFrame(x: 20, y: 30, width: 100, height: 50), content: .shape(.rectangle)))
         put(DrawObject(frame: DrawFrame(x: 200, y: 300, width: 60, height: 20), zIndex: 2, content: .shape(.ellipse)))
@@ -645,6 +652,25 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(model.pasteboard.data(forType: NSPasteboard.PasteboardType(UTType.jpeg.identifier)), jpeg,
                        "One image: the original data too")
         XCTAssertNotNil(model.pasteboard.data(forType: .png))
+    }
+
+    func testOlderCopyRenderCannotOverwriteNewerClipboardCopy() async throws {
+        let gate = Draw3Gate()
+        let first = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 20, height: 20), content: .shape(.rectangle))
+        let second = DrawObject(frame: DrawFrame(x: 100, y: 0, width: 20, height: 20), content: .shape(.ellipse))
+        model.images.copyRenderer = { objects, dark in
+            if objects.count == 1 { await gate.wait() }
+            return DrawExport.render(objects, format: .png, dark: dark)
+        }
+        model.images.copyAsImage([first])
+        let older = model.images.lastTask
+        await Task.yield()
+        model.images.copyAsImage([first, second])
+        await model.images.lastTask?.value
+        let newest = try XCTUnwrap(model.pasteboard.data(forType: .png))
+        gate.open()
+        await older?.value
+        XCTAssertEqual(model.pasteboard.data(forType: .png), newest)
     }
 
     func testCopyAsImageForOneImageIsOneItemWithTheOriginalByteForByte() async throws {

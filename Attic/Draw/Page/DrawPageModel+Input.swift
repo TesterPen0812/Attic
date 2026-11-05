@@ -215,6 +215,7 @@ extension DrawPageModel {
         }
         if isDrawingLive { isDrawingLive = false }
         board?.drawLiveChanged()
+        syncExternalChanges()
     }
 
     private func begin(_ next: DrawLive) {
@@ -241,11 +242,23 @@ extension DrawPageModel {
         let tolerance = 5 / viewport.zoom
         let steps = max(1, Int((hypot(world.x - last.x, world.y - last.y) * viewport.zoom / 4).rounded(.up)))
         let before = gone.count
+        // Compute each stroke's actual sample bounds once per pointer event.
+        // Imported strokes need not have a frame that matches their samples.
+        let travel = CGRect(x: min(last.x, world.x), y: min(last.y, world.y),
+                            width: abs(world.x - last.x), height: abs(world.y - last.y))
+            .insetBy(dx: -1, dy: -1) // Horizontal and vertical travel must still have an area.
+        let candidates = objects.compactMap { object -> (DrawObject, CGRect)? in
+            guard !gone.contains(object.id), case .stroke(let samples) = object.content, !samples.isEmpty else { return nil }
+            let reach = tolerance + DrawGeometry.strokeWidth(object)
+            let bounds = DrawGeometry.frame(DrawGeometry.strokeFrame(samples)).insetBy(dx: -reach, dy: -reach)
+            guard bounds.intersects(travel) || bounds.contains(last) || bounds.contains(world) else { return nil }
+            return (object, bounds)
+        }
         for step in 1...steps {
             let t = CGFloat(step) / CGFloat(steps)
             let point = CGPoint(x: last.x + (world.x - last.x) * t, y: last.y + (world.y - last.y) * t)
-            for object in objects where !gone.contains(object.id) {
-                if case .stroke = object.content, DrawGeometry.hits(object, point, tolerance: tolerance) { gone.insert(object.id) }
+            for (object, bounds) in candidates where !gone.contains(object.id) && bounds.contains(point) {
+                if DrawGeometry.hits(object, point, tolerance: tolerance) { gone.insert(object.id) }
             }
         }
         live = .erase(gone: gone, last: world)

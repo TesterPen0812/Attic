@@ -43,6 +43,18 @@ final class DrawPageModelTests: XCTestCase {
         drag([CGPoint(x: 60, y: y), CGPoint(x: 90, y: y + 10), CGPoint(x: 130, y: y)])
     }
 
+    func testExternalCanvasRenameDeferredDuringPanAppliesOnPointerUp() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.rename("Before pan"), on: id).isSaved)
+        model.syncExternalChanges()
+        model.pointerDown(at: CGPoint(x: 100, y: 100), panButton: true)
+        XCTAssertTrue(store.perform(.rename("During pan"), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.canvasName, "Before pan")
+        model.pointerUp()
+        XCTAssertEqual(model.canvasName, "During pan")
+    }
+
     private func key(_ characters: String, code: UInt16 = 0, command: Bool = false, shift: Bool = false) -> Bool {
         model.handleKey(DrawKey(characters: characters, keyCode: code, command: command, shift: shift))
     }
@@ -102,6 +114,22 @@ final class DrawPageModelTests: XCTestCase {
         drag([CGPoint(x: 90, y: 80), CGPoint(x: 90, y: 130), CGPoint(x: 100, y: 230)])
         XCTAssertEqual(stored.count, 1)
         XCTAssertEqual(stored[0].content, .shape(.rectangle), "The eraser leaves shapes alone")
+    }
+
+    func testEraserUsesStrokeSamplesEvenWhenStoredFrameIsStale() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let samples = [DrawPoint(x: 90, y: 100), DrawPoint(x: 110, y: 100)]
+        let stroke = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 1, height: 1),
+                                content: .stroke(samples))
+        XCTAssertTrue(store.perform(.put([stroke]), on: id).isSaved)
+        model.syncExternalChanges()
+        model.setTool(.eraser)
+        drag([CGPoint(x: 100, y: 92), CGPoint(x: 100, y: 108)])
+        XCTAssertTrue(stored.isEmpty, "The broad-phase must preserve hit-testing against actual samples")
+        XCTAssertTrue(store.perform(.put([stroke]), on: id).isSaved)
+        model.syncExternalChanges()
+        drag([CGPoint(x: 40, y: 100), CGPoint(x: 160, y: 100)])
+        XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
     func testTextPlacesABoxAndTypesStraightAway() {

@@ -10,6 +10,21 @@ enum DrawExportFormat: Sendable { case png, pdf }
 enum DrawExport {
     static let margin: CGFloat = 16
     static let pngScale: CGFloat = 2
+    private static let maxPNGSide = 16_384
+    private static let maxPNGPixelCount = 16_777_216
+
+    /// Validate before floating-point to integer conversion or bitmap allocation.
+    static func pngPixelSize(for bounds: CGRect) -> CGSize? {
+        guard [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY,
+               bounds.width, bounds.height].allSatisfy(\.isFinite),
+              bounds.width > 0, bounds.height > 0 else { return nil }
+        let width = (bounds.width * pngScale).rounded(.up)
+        let height = (bounds.height * pngScale).rounded(.up)
+        guard width.isFinite, height.isFinite, width >= 1, height >= 1,
+              width <= CGFloat(maxPNGSide), height <= CGFloat(maxPNGSide),
+              width * height <= CGFloat(maxPNGPixelCount) else { return nil }
+        return CGSize(width: Int(width), height: Int(height))
+    }
 
     /// What an export covers: the content's bounds plus the margin.
     static func bounds(_ objects: [DrawObject]) -> CGRect? {
@@ -20,8 +35,8 @@ enum DrawExport {
         guard let bounds = bounds(objects) else { return nil }
         switch format {
         case .png:
-            let width = Int((bounds.width * pngScale).rounded(.up)), height = Int((bounds.height * pngScale).rounded(.up))
-            guard let image = DrawBitmap.render(objects, pixels: CGSize(width: width, height: height), dark: dark,
+            guard let pixels = pngPixelSize(for: bounds),
+                  let image = DrawBitmap.render(objects, pixels: pixels, dark: dark,
                                                 place: { context in
                 context.scaleBy(x: pngScale, y: pngScale)
                 context.translateBy(x: -bounds.minX, y: -bounds.minY)

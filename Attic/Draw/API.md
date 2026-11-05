@@ -3,6 +3,10 @@
 All calls are on the main actor. Keep one `DrawStoreProtocol` instance alive above
 page, canvas and panel switches; it owns per-canvas session Undo/Redo. The store
 has no selection, tool or viewport state. Geometry is in points.
+Call `activate(_:)` when the page opens a canvas. The active canvas, unsaved
+drafts and unsettled edits remain cached; inactive persisted canvases may be
+reloaded after the eight-state cache limit. Each canvas keeps at most 100 saved
+Undo steps, evicting the oldest step first. Pending edits are never trimmed.
 
 ```swift
 let store: any DrawStoreProtocol = DrawInMemoryStore()

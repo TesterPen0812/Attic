@@ -177,6 +177,10 @@ final class DrawImageActions: DrawImageSeam {
     #endif
     /// The latest file or pasteboard write, for tests to wait on.
     private(set) var lastTask: Task<Void, Never>?
+    private var copyGeneration: UInt64 = 0
+    var copyRenderer: @MainActor ([DrawObject], Bool) async -> Data? = { objects, dark in
+        await Task.detached(priority: .userInitiated) { DrawExport.render(objects, format: .png, dark: dark) }.value
+    }
 
     init(model: DrawPageModel?) { self.model = model }
 
@@ -234,10 +238,12 @@ final class DrawImageActions: DrawImageSeam {
     }
 
     private func copyOriginal(_ image: DrawImage) {
+        copyGeneration &+= 1
+        let generation = copyGeneration
         let original = image.original, type = NSPasteboard.PasteboardType(image.contentType)
         lastTask = Task { @MainActor [weak self] in
             let png = type == .png ? nil : await Task.detached(priority: .userInitiated) { Self.png(of: original) }.value
-            guard let pasteboard = self?.model?.pasteboard else { return }
+            guard let self, self.copyGeneration == generation, let pasteboard = self.model?.pasteboard else { return }
             pasteboard.clearContents()
             let item = NSPasteboardItem()
             item.setData(original, forType: type)
@@ -282,10 +288,13 @@ final class DrawImageActions: DrawImageSeam {
     }
 
     private func copy(_ objects: [DrawObject]) {
+        copyGeneration &+= 1
+        let generation = copyGeneration
         let dark = Self.isDark
         lastTask = Task { @MainActor [weak self] in
-            let png = await Task.detached(priority: .userInitiated) { DrawExport.render(objects, format: .png, dark: dark) }.value
-            guard let png, let pasteboard = self?.model?.pasteboard else { return }
+            guard let self else { return }
+            let png = await self.copyRenderer(objects, dark)
+            guard self.copyGeneration == generation, let png, let pasteboard = self.model?.pasteboard else { return }
             pasteboard.clearContents()
             pasteboard.setData(png, forType: .png)
         }

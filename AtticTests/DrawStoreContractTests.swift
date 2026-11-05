@@ -7,6 +7,60 @@ import XCTest
 final class DrawStoreContractTests: XCTestCase {
     func testMemoryContract() throws { try contract(DrawInMemoryStore()) }
 
+    func testUndoHistoryHasABoundedCapacity() throws {
+        let store = DrawInMemoryStore()
+        let canvas = store.create(name: "History")
+        for index in 0..<110 {
+            XCTAssertTrue(store.perform(.rename("Version \(index)"), on: canvas.id).isSaved)
+        }
+        for _ in 0..<100 { XCTAssertTrue(store.undo(on: canvas.id).isSaved) }
+        XCTAssertFalse(store.canUndo(on: canvas.id), "Oldest saved steps should leave the bounded history")
+        XCTAssertTrue(store.canRedo(on: canvas.id))
+    }
+
+    func testCachedCanvasesKeepActiveSessionAndUnsavedDraft() throws {
+        let store = DrawInMemoryStore()
+        let active = store.create(name: "Active")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Keep"))]), on: active.id).isSaved)
+        store.activate(active.id)
+        let draft = store.create(name: "Unsaved draft")
+        var firstInactive: UUID?
+        for index in 0..<14 {
+            let canvas = store.create(name: "Saved \(index)")
+            if firstInactive == nil { firstInactive = canvas.id }
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Durable \(index)"))]), on: canvas.id).isSaved)
+        }
+        XCTAssertLessThanOrEqual(store.cachedCanvasIDs.count, DrawStore.maxCachedStates)
+        XCTAssertTrue(store.cachedCanvasIDs.contains(active.id))
+        XCTAssertTrue(store.cachedCanvasIDs.contains(draft.id))
+        let evicted = try XCTUnwrap(firstInactive)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(evicted))
+        XCTAssertEqual(try store.open(evicted).objects.first?.text, "Durable 0", "Eviction must reload the saved data")
+    }
+
+    func testCachedCanvasesNeverEvictUnsettledEdits() throws {
+        final class Gate { var fail = false }
+        let gate = Gate()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = DrawPersistentStore(container: container, save: { context in
+            if gate.fail { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        })
+        let pending = store.create(name: "Pending")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Original"))]), on: pending.id).isSaved)
+        gate.fail = true
+        XCTAssertFalse(store.perform(.rename("Unsettled"), on: pending.id).isSaved)
+        gate.fail = false
+        for index in 0..<14 {
+            let canvas = store.create(name: "Other \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Saved"))]), on: canvas.id).isSaved)
+        }
+        XCTAssertTrue(store.cachedCanvasIDs.contains(pending.id))
+        XCTAssertEqual(try store.open(pending.id).canvas.name, "Unsettled")
+        XCTAssertTrue(store.retry(on: pending.id).isSaved)
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(pending.id).canvas.name, "Unsettled")
+    }
+
     func testTagsUseAtticsSharedRules() throws {
         try tagContract(DrawInMemoryStore())
     }

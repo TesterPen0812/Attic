@@ -4,6 +4,8 @@ import Observation
 /// Shared command/history engine; the two backends expose exactly the same API.
 @MainActor @Observable
 class DrawStore: DrawStoreProtocol {
+    static let maxHistorySteps = 100
+    static let maxCachedStates = 8
     private(set) var revision: UInt64 = 0
     private(set) var lastDelta: DrawDelta?
     private(set) var pendingEdits: [UUID: DrawPendingEdit] = [:]
@@ -13,6 +15,10 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var states: [UUID: State] = [:]
     @ObservationIgnored private var histories: [UUID: History] = [:]
+    @ObservationIgnored private var activeCanvasID: UUID?
+    @ObservationIgnored private var stateAccess: [UUID: UInt64] = [:]
+    @ObservationIgnored private var accessSequence: UInt64 = 0
+    var cachedCanvasIDs: Set<UUID> { Set(states.keys) }
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
     @ObservationIgnored private var pending: [UUID: [Pending]] = [:]
@@ -86,7 +92,34 @@ class DrawStore: DrawStoreProtocol {
         } else { resolved = explicit }
         let canvas = DrawCanvas(name: resolved, createdAt: date, updatedAt: date)
         states[canvas.id] = State(canvas: canvas)
+        touch(canvas.id)
+        trimCachedStates(protecting: canvas.id)
         return canvas
+    }
+
+    func activate(_ id: UUID) {
+        activeCanvasID = id
+        touch(id)
+        trimCachedStates(protecting: id)
+    }
+
+    private func touch(_ id: UUID) {
+        accessSequence &+= 1
+        stateAccess[id] = accessSequence
+    }
+
+    /// Only durably persisted, inactive canvases may be reloaded later.
+    /// Pending edits and drafts stay in memory until they are safely settled.
+    private func trimCachedStates(protecting id: UUID? = nil) {
+        guard states.count > Self.maxCachedStates else { return }
+        let candidates = states.keys.filter { key in
+            key != id && key != activeCanvasID && pending[key] == nil && states[key]?.persisted == true
+        }.sorted { (stateAccess[$0] ?? 0) < (stateAccess[$1] ?? 0) }
+        for key in candidates.prefix(states.count - Self.maxCachedStates) {
+            states[key] = nil
+            histories[key] = nil
+            stateAccess[key] = nil
+        }
     }
 
     func open(_ id: UUID) throws -> DrawSnapshot {
@@ -121,6 +154,7 @@ class DrawStore: DrawStoreProtocol {
         for id in result.removedCanvases {
             states[id] = nil
             histories[id] = nil
+            stateAccess[id] = nil
         }
         for objectID in result.removedImages {
             guard let canvasID = images[objectID]?.canvas else { continue }
@@ -279,14 +313,18 @@ class DrawStore: DrawStoreProtocol {
         guard let snapshot = try repository.load(id) else { throw DrawStoreError.missingCanvas }
         states[id] = State(canvas: snapshot.canvas, objects: Dictionary(uniqueKeysWithValues: snapshot.objects.map { ($0.id, $0) }), persisted: true)
         histories[id] = nil
+        touch(id)
+        trimCachedStates(protecting: id)
         revision &+= 1
     }
 
     private func state(_ id: UUID) throws -> State {
-        if let state = states[id] { return state }
+        if let state = states[id] { touch(id); return state }
         guard let snapshot = try repository.load(id) else { throw DrawStoreError.missingCanvas }
         let state = State(canvas: snapshot.canvas, objects: Dictionary(uniqueKeysWithValues: snapshot.objects.map { ($0.id, $0) }), persisted: true)
         states[id] = state
+        touch(id)
+        trimCachedStates(protecting: id)
         return state
     }
     /// A thumbnail is not an edit: no Undo step, no new date (so no move in
@@ -415,12 +453,12 @@ class DrawStore: DrawStoreProtocol {
     private func commit(_ step: Step, action: Action) -> DrawDelta {
         let id = step.change.canvasID
         switch action {
-        case .edit: histories[id, default: History()].undo.append(step); histories[id]?.redo = []
+        case .edit: appendUndo(step, on: id); histories[id]?.redo = []
         case .undo:
             if let original = histories[id]?.undo.popLast() { histories[id, default: History()].redo.append(original) }
         case .redo:
             _ = histories[id]?.redo.popLast()
-            histories[id, default: History()].undo.append(step)
+            appendUndo(step, on: id)
         }
         revision &+= 1
         let delta = DrawDelta(canvas: step.after,
@@ -428,7 +466,15 @@ class DrawStore: DrawStoreProtocol {
                               removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
                               revision: revision)
         lastDelta = delta
+        trimCachedStates(protecting: id)
         return delta
+    }
+
+    private func appendUndo(_ step: Step, on id: UUID) {
+        histories[id, default: History()].undo.append(step)
+        if let excess = histories[id]?.undo.count, excess > Self.maxHistorySteps {
+            histories[id]?.undo.removeFirst(excess - Self.maxHistorySteps)
+        }
     }
 
     @discardableResult
