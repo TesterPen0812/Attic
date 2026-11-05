@@ -23,20 +23,60 @@ final class DrawSearchModel: ObservableObject {
     let actions: DrawLibraryActions
 
     @Published var query = "" {
-        didSet { if query != oldValue { highlightedID = nil } }
+        didSet {
+            if query != oldValue {
+                highlightedID = nil
+                openError = nil
+            }
+        }
     }
     @Published private(set) var highlightedID: UUID?
+    @Published private(set) var openError: String?
+
+    private struct SearchKey: Equatable {
+        let query: String
+        let revision: UInt64
+        let enabled: Bool
+    }
+
+    private struct SearchSnapshot {
+        let results: [Result]
+        let error: String?
+    }
+
+    private var cache: (key: SearchKey, snapshot: SearchSnapshot)?
 
     init(store: any DrawStoreProtocol, actions: DrawLibraryActions) {
         self.store = store
         self.actions = actions
     }
 
-    var results: [Result] {
+    var results: [Result] { snapshot.results }
+    var searchError: String? { snapshot.error }
+
+    /// Highlights only read this snapshot; a query or store revision is the
+    /// only reason to run another repository search (including after failure).
+    private var snapshot: SearchSnapshot {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard AtticDraw.isEnabled, !query.isEmpty else { return [] }
+        let key = SearchKey(query: query, revision: store.revision, enabled: AtticDraw.isEnabled)
+        if let cache, cache.key == key { return cache.snapshot }
+        let refreshed: SearchSnapshot
+        if !key.enabled || query.isEmpty {
+            refreshed = SearchSnapshot(results: [], error: nil)
+        } else {
+            do {
+                refreshed = SearchSnapshot(results: Self.present(try store.search(query), query: query), error: nil)
+            } catch {
+                refreshed = SearchSnapshot(results: [], error: String(localized: "Could not search canvases: \(error.localizedDescription)"))
+            }
+        }
+        cache = (key, refreshed)
+        return refreshed
+    }
+
+    private static func present(_ matches: [DrawSearchMatch], query: String) -> [Result] {
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init).filter { !$0.hasPrefix("#") }
-        return ((try? store.search(query)) ?? []).map { match in
+        return matches.map { match in
             let canvas = match.canvas
             let nameMatches = !words.isEmpty && words.allSatisfy { canvas.name.localizedStandardContains($0) }
             let line = nameMatches ? nil : canvas.textIndex.split(separator: "\n").first { line in
@@ -69,14 +109,26 @@ final class DrawSearchModel: ObservableObject {
 
     /// A text match opens the canvas on its first matching box (in the
     /// board's order); any other match just opens the canvas.
-    func open(_ result: Result) {
-        highlightedID = nil
+    @discardableResult
+    func open(_ result: Result) -> Bool {
         let ids = Set(result.textBoxIDs)
-        if !ids.isEmpty, let box = ((try? store.open(result.canvas.id).objects) ?? []).first(where: { ids.contains($0.id) }) {
-            actions.reveal(result.canvas.id, box.id)
+        if !ids.isEmpty {
+            do {
+                if let box = try store.open(result.canvas.id).objects.first(where: { ids.contains($0.id) }) {
+                    actions.reveal(result.canvas.id, box.id)
+                } else {
+                    actions.open(result.canvas.id)
+                }
+            } catch {
+                openError = String(localized: "Could not open canvas: \(error.localizedDescription)")
+                return false
+            }
         } else {
             actions.open(result.canvas.id)
         }
+        highlightedID = nil
+        openError = nil
+        return true
     }
 
     /// ↑ ↓ in the search field, stopping at the ends.
@@ -91,10 +143,11 @@ final class DrawSearchModel: ObservableObject {
     }
 
     /// Return in the search field: the highlighted result, else the first.
-    func openHighlighted() {
+    @discardableResult
+    func openHighlighted() -> Bool {
         let results = results
-        guard let result = results.first(where: { $0.id == highlightedID }) ?? results.first else { return }
-        open(result)
+        guard let result = results.first(where: { $0.id == highlightedID }) ?? results.first else { return false }
+        return open(result)
     }
 
     /// The row drawn highlighted: the keyboard's or the pointer's, else the
@@ -127,9 +180,10 @@ struct DrawSearchResults: View {
         let query = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             let lit = model.litID(in: results)
-            let rows: [DrawLibraryMenuModel.Row] = results.isEmpty
-                ? [DrawLibraryMenuModel.Row(kind: .noMatch, title: String(localized: "No canvases match “\(query)”"), isEnabled: false)]
-                : results.map { DrawLibraryMenuModel.Row(kind: .canvas($0.canvas), title: $0.title, detail: $0.detail) }
+            let message: String? = model.searchError ?? model.openError ??
+                (results.isEmpty ? String(localized: "No canvases match “\(query)”") : nil)
+            let rows = results.map { DrawLibraryMenuModel.Row(kind: .canvas($0.canvas), title: $0.title, detail: $0.detail) }
+                + (message.map { [DrawLibraryMenuModel.Row(kind: .noMatch, title: $0, isEnabled: false)] } ?? [])
             DrawLibraryCard(width: nil) {
                 DrawLibraryRows(rows: rows, litID: lit.map { "canvas-\($0.uuidString)" },
                                 scrollTarget: model.highlightedID.map { "canvas-\($0.uuidString)" },
@@ -138,8 +192,7 @@ struct DrawSearchResults: View {
                                 },
                                 choose: { row in
                                     guard let result = results.first(where: { $0.canvas.id == row.canvas?.id }) else { return }
-                                    model.open(result)
-                                    topRow?.endSearch(on: .canvas)
+                                    if model.open(result) { topRow?.endSearch(on: .canvas) }
                                 },
                                 thumbnailsShown: { [actions = model.actions] in actions.thumbnailsShown($0) })
             }

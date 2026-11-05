@@ -213,8 +213,7 @@ struct DrawSearchField: View {
             .onKeyPress(.downArrow) { search.moveHighlight(by: 1); return .handled }
             .onKeyPress(.return) {
                 guard !search.results.isEmpty else { return .ignored }
-                search.openHighlighted()
-                model.closeSearch()
+                if search.openHighlighted() { model.closeSearch() }
                 return .handled
             }
     }
