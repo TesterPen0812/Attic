@@ -104,6 +104,50 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertEqual(f.backend.events.values.first?.draft, f.made.draft)
     }
 
+    func testQuitPreparationSavesEveryRegisteredCalendarDraft() async throws {
+        let docked = try Fixture(); defer { docked.finish() }
+        let detached = try Fixture(); defer { detached.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(docked.rows)
+        registry.register(detached.rows)
+        await docked.rows.toggle(docked.event)
+        await detached.rows.toggle(detached.event)
+        docked.rows.title = "Docked edit"
+        detached.rows.title = "Detached edit"
+
+        await XCTAssertTrueAsync(await registry.prepareForTerminationDurably())
+        XCTAssertEqual(docked.backend.events.values.first?.draft.title, "Docked edit")
+        XCTAssertEqual(detached.backend.events.values.first?.draft.title, "Detached edit")
+        XCTAssertNil(docked.rows.rowID)
+        XCTAssertNil(detached.rows.rowID)
+    }
+
+    func testQuitPreparationRefusesFailedSaveAndPreservesNewerTyping() async throws {
+        let f = try Fixture(); defer { f.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(f.rows)
+        await f.rows.toggle(f.event)
+        f.rows.title = "First edit"
+        f.backend.commitError = .saveFailed("Full disk")
+        await XCTAssertFalseAsync(await registry.prepareForTerminationDurably())
+        XCTAssertEqual(f.rows.title, "First edit")
+        XCTAssertNotNil(f.rows.rowID)
+
+        f.backend.commitError = nil
+        f.writer.hold = true
+        let prepare = Task { await registry.prepareForTerminationDurably() }
+        for _ in 0..<100 where f.writer.gate == nil { await Task.yield() }
+        guard let gate = f.writer.gate else { prepare.cancel(); return XCTFail("save reached the held writer") }
+        f.rows.title = "Newer typing"
+        gate.resume()
+        await XCTAssertFalseAsync(await prepare.value)
+        XCTAssertEqual(f.rows.title, "Newer typing")
+        XCTAssertNotNil(f.rows.rowID)
+        f.writer.hold = false
+        await XCTAssertTrueAsync(await registry.prepareForTerminationDurably())
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, "Newer typing")
+    }
+
     func testFailedEditRollsBackKeepsTheTextAndShowsFailure() async throws {
         let f = try Fixture(); defer { f.finish() }
         await f.rows.toggle(f.event)

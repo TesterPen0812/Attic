@@ -1,5 +1,37 @@
 import SwiftUI
 
+/// Tracks drafts in every mounted Calendar page, including pulled-out panels.
+/// Weak ownership lets closing a panel release its model normally.
+@MainActor
+final class CalendarDraftTerminationRegistry {
+    static let shared = CalendarDraftTerminationRegistry()
+
+    private final class Entry {
+        weak var rows: CalendarEventRowState?
+        init(_ rows: CalendarEventRowState) { self.rows = rows }
+    }
+
+    private var entries: [Entry] = []
+
+    func register(_ rows: CalendarEventRowState) {
+        entries.removeAll { $0.rows == nil }
+        guard !entries.contains(where: { $0.rows === rows }) else { return }
+        entries.append(Entry(rows))
+    }
+
+    func prepareForTerminationDurably() async -> Bool {
+        entries.removeAll { $0.rows == nil }
+        let owners = entries.compactMap(\.rows)
+        var allSaved = true
+        for rows in owners {
+            if !(await rows.close()) { allSaved = false }
+        }
+        // An await can admit a newly mounted panel or newer typing. Never
+        // approve quit while any owner still holds an open draft.
+        return allSaved && !entries.contains { $0.rows?.rowID != nil }
+    }
+}
+
 /// What the Calendar page keeps while another page shows: its model (the
 /// selected day, the month, the search), made the first time the page
 /// appears.
@@ -17,6 +49,7 @@ final class CalendarPageState: ObservableObject {
             return try CalendarEventWriters.makeDefault(undoRoute: undo)
         }, resumeDefaults: resumeDefaults)
         model = made
+        CalendarDraftTerminationRegistry.shared.register(made.eventRows)
         return made
     }
 }

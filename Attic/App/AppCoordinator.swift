@@ -1102,6 +1102,12 @@ final class AppCoordinator: ObservableObject {
     }
 
     func prepareForTerminationDurably() async -> Bool {
+        guard await CalendarDraftTerminationRegistry.shared.prepareForTerminationDurably() else {
+            if !panelController.pullOut.bringForward(.calendar, switchesDocked: false) {
+                hoverMonitor.revealProgrammatically(section: .calendar)
+            }
+            return false
+        }
         guard await noteDraft.prepareToLeaveDurably(.quit) else {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false
