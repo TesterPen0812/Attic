@@ -246,6 +246,7 @@ extension DrawPageModel {
         // Imported strokes need not have a frame that matches their samples.
         let travel = CGRect(x: min(last.x, world.x), y: min(last.y, world.y),
                             width: abs(world.x - last.x), height: abs(world.y - last.y))
+            .insetBy(dx: -1, dy: -1) // Horizontal and vertical travel must still have an area.
         let candidates = objects.compactMap { object -> (DrawObject, CGRect)? in
             guard !gone.contains(object.id), case .stroke(let samples) = object.content, !samples.isEmpty else { return nil }
             let reach = tolerance + DrawGeometry.strokeWidth(object)

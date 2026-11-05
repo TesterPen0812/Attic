@@ -126,6 +126,10 @@ final class DrawPageModelTests: XCTestCase {
         model.setTool(.eraser)
         drag([CGPoint(x: 100, y: 92), CGPoint(x: 100, y: 108)])
         XCTAssertTrue(stored.isEmpty, "The broad-phase must preserve hit-testing against actual samples")
+        XCTAssertTrue(store.perform(.put([stroke]), on: id).isSaved)
+        model.syncExternalChanges()
+        drag([CGPoint(x: 40, y: 100), CGPoint(x: 160, y: 100)])
+        XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
     func testTextPlacesABoxAndTypesStraightAway() {
