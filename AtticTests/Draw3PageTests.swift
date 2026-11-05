@@ -562,6 +562,13 @@ final class Draw3PageTests: XCTestCase {
 
     // MARK: Export… and Copy as Image
 
+    func testPNGExportRejectsOversizedFiniteCanvasBeforeBitmapAllocation() {
+        for width in [CGFloat(Int.max), 50_000, 20_000] {
+            let bounds = CGRect(x: 0, y: 0, width: width, height: width == 20_000 ? 20_000 : 100)
+            XCTAssertNil(DrawExport.pngPixelSize(for: bounds))
+        }
+    }
+
     private func exportBoard() {
         put(DrawObject(frame: DrawFrame(x: 20, y: 30, width: 100, height: 50), content: .shape(.rectangle)))
         put(DrawObject(frame: DrawFrame(x: 200, y: 300, width: 60, height: 20), zIndex: 2, content: .shape(.ellipse)))
