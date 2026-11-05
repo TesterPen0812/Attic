@@ -208,12 +208,15 @@ private struct TasksImageTile: View {
     }
 }
 
-/// Now · Backlog · Done in words, the Tasks page's own switch on the top row
-/// (Accepted 2026-10-29/30, "Top row and bottom bar"): the top row's 27 pt
-/// glass capsule, 3 pt inset, 42 × 21 pt cells 1 pt apart, the current
-/// tab on the flat grey marker (one selection marker), its word in the
-/// primary ink and the others grey. ←/→ move between them; VoiceOver reads
-/// each by name.
+/// Now · Backlog · Done, the Tasks page's own switch on the top row
+/// (Accepted 2026-10-29/30, "Top row and bottom bar"; 2026-11-05, "Compact
+/// tab switch"): the top row's 27 pt glass capsule, 3 pt inset, 21 pt cells
+/// 1 pt apart. Each tab shows its icon; the current tab opens to its name
+/// too, on the flat grey marker (one selection marker), in the primary ink
+/// and the others grey. The capsule keeps its right edge beside ••• and
+/// opens to the left on the marker's spring, in a slot of its widest size,
+/// so the row itself never lays out again. ←/→ move between them; VoiceOver
+/// and the tooltips read each by name.
 struct TasksTopTabs: View {
     @Binding var selection: TasksTab
 
@@ -233,22 +236,30 @@ struct TasksTopTabs: View {
         HStack(spacing: M.gap) {
             ForEach(tabs) { tab in
                 let on = tab == selection
+                let ink = on || hovered == tab ? tokens.ink(.heading) : TasksPanelDesign.toneInk(.meta, tokens: tokens)
                 Button { selection = tab } label: {
-                    Text(verbatim: tab.title)
-                        .font(.system(size: M.fontSize, weight: .medium))
-                        .tracking(M.tracking)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .foregroundStyle(on || hovered == tab ? tokens.ink(.heading).color
-                                         : TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
-                        .frame(width: M.cell.width, height: M.cell.height)
-                        .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
+                    HStack(spacing: 0) {
+                        AtticIcon(systemName: tab.systemName, size: M.iconSize, weight: .medium, ink: .heading, colour: ink)
+                            .frame(width: M.cell.width, height: M.cell.height)
+                        Text(verbatim: tab.title)
+                            .font(.system(size: M.fontSize, weight: .medium))
+                            .tracking(M.tracking)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .foregroundStyle(ink.color)
+                            .opacity(on ? 1 : 0)
+                    }
+                    // The name always keeps its size; the cell opens over it.
+                    .frame(width: M.cellWidth(tab, selection: selection), height: M.cell.height, alignment: .leading)
+                    .clipped()
+                    .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
                 .onHover { inside in
                     if inside { hovered = tab } else if hovered == tab { hovered = nil }
                 }
+                .help(tab.title)
                 .accessibilityLabel(tab.title)
                 .accessibilityIdentifier("tasks-page-\(tab.identifier)")
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
@@ -257,13 +268,12 @@ struct TasksTopTabs: View {
         // One marker and one hover chip under the cells, travelling
         // between them (Accepted 2026-11-05, "Animated selection").
         .background(alignment: .topLeading) {
-            let current = M.cellFrame(selected)
+            let current = M.cellFrame(selected, selection: selection)
             ZStack(alignment: .topLeading) {
                 AtticSelectionMarker(cornerRadius: chipRadius)
                     .frame(width: current.width, height: current.height)
                     .offset(x: current.minX, y: current.minY)
-                    .animation(AtticSelectionMarker.travel(reduceMotion: design.reduceMotion), value: selection)
-                AtticHoverChip(frame: hovered.flatMap(tabs.firstIndex(of:)).map { M.cellFrame($0) },
+                AtticHoverChip(frame: hovered.flatMap(tabs.firstIndex(of:)).map { M.cellFrame($0, selection: selection) },
                                shown: hovered != selection, cornerRadius: chipRadius)
             }
         }
@@ -271,7 +281,8 @@ struct TasksTopTabs: View {
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
-        .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: selection)
+        // Marker, cells, name and capsule on the one spring.
+        .animation(AtticSelectionMarker.travel(reduceMotion: design.reduceMotion), value: selection)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
@@ -284,29 +295,49 @@ struct TasksTopTabs: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier("tasks-page-tabs")
+        .frame(width: M.slotWidth, alignment: .trailing)
     }
 }
 
-/// The words switch's sizes (the design's 84 px cells; 3 pt inset and 21 pt
-/// chips as every top-row control).
+/// The switch's sizes (3 pt inset and 21 pt chips as every top-row control).
 enum TasksTopTabsMetrics {
     static let inset: CGFloat = AtticPageButtonMetrics.inset
-    static let cell = CGSize(width: 42, height: AtticPageButtonMetrics.segment)
+    /// A tab showing only its icon.
+    static let cell = CGSize(width: AtticPageButtonMetrics.segment, height: AtticPageButtonMetrics.segment)
     static let gap: CGFloat = 1
+    static let iconSize: CGFloat = AtticPageButtonMetrics.iconSize
     /// 21 px, weight 500, −0.1 px.
     static let fontSize: CGFloat = 10.5
     static let tracking: CGFloat = -0.05
+    /// After the current tab's name, to the marker's end.
+    static let nameTrailing: CGFloat = 7
+
+    /// `tab`'s name as drawn, known before any layout: the cells' widths
+    /// animate from these, never from a measurement.
+    static func nameWidth(_ tab: TasksTab) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        return ceil(NSAttributedString(string: tab.title, attributes: [.font: font, .kern: tracking]).size().width)
+    }
+
+    static func cellWidth(_ tab: TasksTab, selection: TasksTab) -> CGFloat {
+        tab == selection ? cell.width + nameWidth(tab) + nameTrailing : cell.width
+    }
 
     /// A cell in the row of cells (the capsule's inset not counted).
-    static func cellFrame(_ index: Int) -> CGRect {
-        CGRect(x: CGFloat(index) * (cell.width + gap), y: 0, width: cell.width, height: cell.height)
+    static func cellFrame(_ index: Int, selection: TasksTab) -> CGRect {
+        let tabs = TasksTab.allCases
+        let x = tabs.prefix(index).reduce(0) { $0 + cellWidth($1, selection: selection) + gap }
+        return CGRect(x: x, y: 0, width: cellWidth(tabs[index], selection: selection), height: cell.height)
     }
 
-    /// The whole switch's width.
-    static var width: CGFloat {
-        let count = CGFloat(TasksTab.allCases.count)
-        return inset * 2 + count * cell.width + (count - 1) * gap
+    /// The capsule's width with `selection` current.
+    static func width(selection: TasksTab) -> CGFloat {
+        let tabs = TasksTab.allCases
+        return inset * 2 + tabs.reduce(0) { $0 + cellWidth($1, selection: selection) } + CGFloat(tabs.count - 1) * gap
     }
+
+    /// The room the switch keeps on the row: the capsule at its widest.
+    static var slotWidth: CGFloat { TasksTab.allCases.map { width(selection: $0) }.max() ?? 0 }
 }
 
 
@@ -421,7 +452,7 @@ struct TasksEmptyState: View {
     var clear: (() -> Void)? = nil
     var action: (title: String, run: () -> Void)? = nil
     /// T3 with no results on this tab (Accepted 2026-11-01): the other
-    /// tabs' matches on the title's line, "No results · 2 in Later", each a
+    /// tabs' matches on the title's line, "No results · 2 in Backlog", each a
     /// link (the count line's look, keys and VoiceOver).
     var elsewhere: [TasksElsewhereCount] = []
     var follow: (TasksTab) -> Void = { _ in }
@@ -641,7 +672,7 @@ struct TasksFoldClip: Shape {
 }
 
 /// Find's quiet count line (owner item 17), and since T3 (Accepted
-/// 2026-11-01) "· 2 in Later · 5 in Done": each part a link to that tab
+/// 2026-11-01) "· 2 in Backlog · 5 in Done": each part a link to that tab
 /// that keeps the query, a tab with no matches left out. The switch is
 /// folded away while you search, so this is its route.
 struct TasksFindCountLine: View {
@@ -663,7 +694,7 @@ struct TasksFindCountLine: View {
     }
 }
 
-/// "· 2 in Later · 5 in Done" (T3): each part a link to that tab; the
+/// "· 2 in Backlog · 5 in Done" (T3): each part a link to that tab; the
 /// count line and the No results line draw the same parts.
 struct TasksElsewhereLinks: View {
     let elsewhere: [TasksElsewhereCount]
@@ -678,7 +709,7 @@ struct TasksElsewhereLinks: View {
     }
 }
 
-/// "2 in Later": the heading ink, underlined (the drafts' link), a little
+/// "2 in Backlog": the heading ink, underlined (the drafts' link), a little
 /// lighter under the pointer.
 private struct TasksFindCountLink: View {
     let title: String

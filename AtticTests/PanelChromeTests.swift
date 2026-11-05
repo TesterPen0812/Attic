@@ -52,7 +52,7 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(NotesBarMetrics.pillHeight, 21, "21 pt tags")
         XCTAssertEqual(NotesBarMetrics.tagBarPadding, 3)
         XCTAssertEqual(TasksTopTabsMetrics.cell.height, 21)
-        XCTAssertEqual(TasksTopTabsMetrics.width, 134, "3 + 3 × 42 + 2 × 1 + 3")
+        XCTAssertEqual(TasksTopTabsMetrics.cell.width, 21, "an unselected tab: the icon's square")
         XCTAssertEqual(CalendarMonthArrows.width, 49, "3 + 21 + 1 + 21 + 3")
     }
 
@@ -114,7 +114,7 @@ final class PanelChromeTests: XCTestCase {
         let more = PanelTopRowLayout.moreButtonFrame(layout)
         XCTAssertEqual(search.maxX, 340 - chrome.trailing, accuracy: 0.001, "Search at the far right")
         XCTAssertEqual(search.minX - more.maxX, 5, accuracy: 0.001, "••• one gap before it")
-        let tabs = PanelTopRowLayout.switchFrame(layout, width: TasksTopTabsMetrics.width)
+        let tabs = PanelTopRowLayout.switchFrame(layout, width: TasksTopTabsMetrics.width(selection: .now))
         XCTAssertEqual(more.minX - tabs.maxX, 10, accuracy: 0.001)
         let field = PanelTopRowLayout.fieldFrame(layout)
         XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)
@@ -373,11 +373,12 @@ final class PanelChromeTests: XCTestCase {
             let top = try assertRow(["panel-pin-button", "tasks-page-tabs", "panel-more-button", "tasks-find-button"], in: host)
             XCTAssertEqual(top[0].minX, insets.leading, accuracy: 0.5, "Pin alone on the left")
             XCTAssertEqual(top[3].maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "Search at the far right")
-            XCTAssertEqual(top[1].width, TasksTopTabsMetrics.width, accuracy: 0.5)
+            XCTAssertEqual(top[1].width, TasksTopTabsMetrics.width(selection: .now), accuracy: 0.5)
             XCTAssertGreaterThan(top[1].minX - top[0].maxX, 20, "the switch sits on the right, Pin alone on the left")
             XCTAssertNil(element("tasks-view-options", in: host), "no filter button")
             // AppKit's drag lane keeps clear of the right-hand controls.
-            XCTAssertEqual(chrome.modeDockWidth, host.bounds.width - insets.trailing - top[1].minX, accuracy: 1)
+            let slot = top[1].maxX - TasksTopTabsMetrics.slotWidth
+            XCTAssertEqual(chrome.modeDockWidth, host.bounds.width - insets.trailing - slot, accuracy: 1)
             // Bottom bar: the tag bar on the left, then "+" (Accepted
             // 2026-10-31 "Tall island": the page switch left the bar).
             XCTAssertNil(element("panel-section-picker", in: host), "no page switch in the bar")

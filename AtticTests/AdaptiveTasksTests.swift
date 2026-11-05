@@ -23,6 +23,18 @@ final class AdaptiveTasksTests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// Accepted 2026-11-05, "Compact tab switch": a tab showing only its
+    /// icon keeps its name for VoiceOver and the tooltip.
+    func testEveryTabKeepsItsNameOutOfSight() throws {
+        try withPanel(seed: []) { host, _, _, _, _ in
+            for tab in TasksTab.allCases {
+                let cell = try XCTUnwrap(element("tasks-page-\(tab.identifier)", in: host))
+                XCTAssertEqual(cell.accessibilityLabel?(), tab.title)
+                XCTAssertEqual(cell.accessibilityHelp?(), tab.title)
+            }
+        }
+    }
+
     // MARK: T2
 
     func testTheSelectionBarTakesTheTagBarsPlaceAndGivesItBackWithItsFilter() throws {

@@ -21,6 +21,17 @@ enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
         }
     }
 
+    /// The tab's icon on the top row's switch: Move to Now's and Move to
+    /// Backlog's, and a bare check beside them (a circled one would read
+    /// as the clock's twin and repeat the island's Tasks).
+    var systemName: String {
+        switch self {
+        case .now: "sun.max"
+        case .backlog: "clock"
+        case .done: "checkmark"
+        }
+    }
+
     /// For UI tests and automation.
     var identifier: String {
         switch self {

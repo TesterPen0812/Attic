@@ -1173,7 +1173,7 @@ struct AtticTaskPicker: View {
         let title: String
         /// A quiet trailing detail.
         var detail: String? = nil
-        /// Where the task is listed ("Now", "Later"): the header it sits
+        /// Where the task is listed ("Now", "Backlog"): the header it sits
         /// under. Choices come grouped.
         var group: String? = nil
     }

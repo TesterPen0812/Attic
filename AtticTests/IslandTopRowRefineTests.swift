@@ -78,7 +78,7 @@ final class IslandTopRowRefineTests: XCTestCase {
         @ObservedObject var holder: TabHolder
 
         var body: some View {
-            TasksTopTabs(selection: $holder.tab).frame(maxWidth: .infinity, alignment: .leading)
+            TasksTopTabs(selection: $holder.tab).padding(.leading, 10).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -94,6 +94,78 @@ final class IslandTopRowRefineTests: XCTestCase {
         XCTAssertGreaterThan(moved.settled, 40)
         XCTAssertTrue(moved.frames.contains { $0 > 8 && $0 < moved.settled - 8 },
                       "a frame draws the marker between the two tabs: \(moved.frames), settled \(moved.settled)")
+    }
+
+    // MARK: Compact tab switch
+
+    func testOnlyTheCurrentTabOpensToItsName() {
+        typealias M = TasksTopTabsMetrics
+        for selection in TasksTab.allCases {
+            for tab in TasksTab.allCases where tab != selection {
+                XCTAssertEqual(M.cellWidth(tab, selection: selection), 21, "\(tab) shows only its icon")
+            }
+            XCTAssertEqual(M.cellWidth(selection, selection: selection), 21 + M.nameWidth(selection) + 7)
+            XCTAssertLessThanOrEqual(M.width(selection: selection), M.slotWidth)
+        }
+        XCTAssertEqual(M.slotWidth, M.width(selection: .backlog), "the longest name sets the slot")
+        XCTAssertLessThan(M.slotWidth, 134, "narrower than three words")
+        let icons = TasksTab.allCases.map(\.systemName)
+        XCTAssertEqual(Set(icons).count, icons.count)
+        XCTAssertFalse(icons.contains(PanelPage.tasks.systemName), "no tab repeats the island's Tasks")
+    }
+
+    /// Where the capsule starts and ends on a row through its middle.
+    private func capsuleEdges(_ row: [AtticRGBA]) throws -> (start: Int, end: Int) {
+        let drawn = row.indices.filter { differs(row[$0], row[0]) }
+        return (try XCTUnwrap(drawn.first), try XCTUnwrap(drawn.last))
+    }
+
+    /// Runs `change`, and returns the capsule's edges before it, in each
+    /// frame of the change, and once it has settled.
+    private func capsuleEdges(_ view: Offscreen, change: () -> Void) throws
+        -> (rest: (start: Int, end: Int), frames: [(start: Int, end: Int)], settled: (start: Int, end: Int)) {
+        let y = AtticControlSize.headerControl / 2
+        let rest = try capsuleEdges(view.row(y: y))
+        change()
+        var frames: [(start: Int, end: Int)] = []
+        for _ in 0..<20 {
+            spin(0.012)
+            frames.append(try capsuleEdges(view.row(y: y)))
+        }
+        spin(0.5)
+        return (rest, frames, try capsuleEdges(view.row(y: y)))
+    }
+
+    /// Now → Backlog: the capsule opens by its left edge a step at a time,
+    /// and its right edge, beside •••, never moves.
+    func testTheCapsuleOpensLeftwardsWithNoJump() throws {
+        let holder = TabHolder()
+        let view = Offscreen(TabsHost(holder: holder), size: CGSize(width: 200, height: 27), context: solid)
+        defer { view.close() }
+        spin(0.3)
+        let change = try capsuleEdges(view) { holder.tab = .backlog }
+        let travel = change.rest.start - change.settled.start
+        let expected = TasksTopTabsMetrics.width(selection: .backlog) - TasksTopTabsMetrics.width(selection: .now)
+        XCTAssertEqual(CGFloat(travel), expected, accuracy: 1.5)
+        XCTAssertTrue(change.frames.contains { $0.start > change.settled.start + 1 && $0.start < change.rest.start - 1 },
+                      "a frame draws the capsule part way: \(change.frames.map(\.start))")
+        let starts = [change.rest.start] + change.frames.map(\.start)
+        let steps = zip(starts, starts.dropFirst()).map { abs($0 - $1) }
+        XCTAssertLessThan(steps.max() ?? 0, travel, "never the whole way in a frame: \(starts)")
+        for frame in change.frames { XCTAssertEqual(frame.end, change.rest.end, accuracy: 1, "the right edge stays") }
+    }
+
+    func testTheCapsuleResizesAtOnceUnderReduceMotion() throws {
+        var reduced = solid
+        reduced.reduceMotion = true
+        let holder = TabHolder()
+        let view = Offscreen(TabsHost(holder: holder), size: CGSize(width: 200, height: 27), context: reduced)
+        defer { view.close() }
+        spin(0.3)
+        let change = try capsuleEdges(view) { holder.tab = .backlog }
+        XCTAssertLessThan(change.settled.start, change.rest.start)
+        XCTAssertFalse(change.frames.contains { $0.start > change.settled.start + 1 && $0.start < change.rest.start - 1 },
+                       "\(change.frames.map(\.start))")
     }
 
     private final class TagHolder: ObservableObject { @Published var tag: String? }

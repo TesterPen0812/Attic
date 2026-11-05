@@ -533,7 +533,7 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.priorityMark.spec.weight, .bold)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: false), 0.8)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: true), 2, "Increase Contrast keeps its ring")
-        XCTAssertEqual(TasksTopTabsMetrics.width, 134, "Now · Backlog · Done: 3 + 3 × 42 + 2 + 3")
+        XCTAssertEqual(TasksTopTabsMetrics.cell.height, 21, "Now · Backlog · Done: the top row's chips")
         XCTAssertEqual(TasksPanelDesign.tileLabel("Last invoice.pdf"), "PDF")
     }
 
