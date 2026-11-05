@@ -4,6 +4,38 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+@MainActor
+private final class CalendarVisibilityProbe: ObservableObject {
+    @Published var onScreen = false
+}
+
+@MainActor
+private final class CalendarAccessProbe: CalendarEventSource {
+    var accessState: CalendarAccessState = .notDetermined
+    var onChange: (@MainActor () -> Void)?
+    private(set) var requests = 0
+    func requestAccess() async -> CalendarAccessState {
+        requests += 1
+        accessState = .denied
+        return .denied
+    }
+    func events(in interval: DateInterval) -> [CalendarEvent] { [] }
+    func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { [] }
+}
+
+private struct CalendarVisibilityProbeView: View {
+    @ObservedObject var probe: CalendarVisibilityProbe
+    let model: CalendarPageModel
+
+    var body: some View {
+        CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 320, height: 460)),
+                     taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in },
+                     panelIsVisible: probe.onScreen)
+            .atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: 320, height: 460)
+    }
+}
+
 /// The Calendar page mounted in an off-screen window (Accepted 2026-10-30,
 /// "Calendar page"): what the page itself shows and does, not only its
 /// helpers. Today in the bottom bar comes and goes with the selection,
@@ -14,6 +46,31 @@ import XCTest
 @MainActor
 final class CalendarPageHostedTests: XCTestCase {
     private let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: "Europe/London")!)
+
+    func testR15PrewarmedCalendarRequestsPermissionOnlyWhenPanelAppears() throws {
+        let store = try makeTestStore()
+        let source = CalendarAccessProbe()
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let visible = CalendarVisibilityProbe()
+        let size = CGSize(width: 320, height: 460)
+        let host = NSHostingView(rootView: CalendarVisibilityProbeView(probe: visible, model: model))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(source.requests, 0, "prewarming a selected Calendar behind a hidden panel does not prompt")
+        visible.onScreen = true
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(source.requests, 1, "an actual panel reveal requests permission once")
+        visible.onScreen = false
+        visible.onScreen = true
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(source.requests, 1, "another reveal does not re-request permission")
+    }
 
     private func day(_ y: Int, _ m: Int, _ d: Int) -> DueDay { DueDay(year: y, month: m, day: d)! }
 
