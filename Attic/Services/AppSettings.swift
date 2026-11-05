@@ -20,6 +20,20 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
 
 }
 
+enum PanelDismissMode: String, CaseIterable, Identifiable {
+    case moveCursorAway
+    case clickAway
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .moveCursorAway: String(localized: "Move cursor away")
+        case .clickAway: String(localized: "Click away")
+        }
+    }
+}
+
 /// User-adjustable corner radius of the panel squircle, in points.
 enum PanelCornerSize: Double, CaseIterable, Identifiable {
     case small = 10
@@ -61,6 +75,7 @@ final class AppSettings: ObservableObject {
         static let corner = "selectedCorner"
         static let revealDelay = "revealDelay"
         static let hideDelay = "hideDelay"
+        static let panelDismissMode = "panelDismissMode"
         static let hasAdoptedFasterReveal = "hasAdoptedFasterReveal"
         static let hasAdoptedQuickerReveal = "hasAdoptedQuickerRevealV2"
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
@@ -332,6 +347,10 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var panelDismissMode: PanelDismissMode {
+        didSet { defaults.set(panelDismissMode.rawValue, forKey: Key.panelDismissMode) }
+    }
+
     private let defaults: UserDefaults
     /// The defaults these settings live in (the "+" card keeps its draft beside them).
     var userDefaults: UserDefaults { defaults }
@@ -367,6 +386,7 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
+        panelDismissMode = PanelDismissMode(rawValue: defaults.string(forKey: Key.panelDismissMode) ?? "") ?? .moveCursorAway
         // Before any appearance key is read: the retired translucency /
         // glass-style / gradient preferences become Surface and Tint
         // exactly once, and a fresh install receives the new defaults.

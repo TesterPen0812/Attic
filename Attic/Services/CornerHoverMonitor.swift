@@ -88,6 +88,7 @@ final class CornerHoverMonitor {
     private var screenChangeToken: NSObjectProtocol?
     private var spaceChangeToken: NSObjectProtocol?
     private var cornerObservation: AnyCancellable?
+    private var dismissModeObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
     private var isRunning = false
@@ -131,6 +132,7 @@ final class CornerHoverMonitor {
             stateMachine.forceHidden(untilHotspotExit: true)
             refreshSamplingCadence(at: NSEvent.mouseLocation)
         }
+        panelController.onOutsidePress = { [weak self] location in self?.outsidePress(at: location) }
     }
 
     func start() {
@@ -181,6 +183,14 @@ final class CornerHoverMonitor {
             samplingState = CornerHoverSamplingState()
             samplePointer()
         }
+        dismissModeObservation = settings.$panelDismissMode.dropFirst().removeDuplicates()
+            // @Published sends before the assignment. Read the new choice
+            // after it has landed and cancel any old cursor-hide deadline.
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isRunning else { return }
+                self.samplePointer()
+            }
         // Locks and the pin are the other inputs to the auto-hide decision.
         // With no timer while visible, a change to either re-samples once on
         // the next turn (coalesced across a burst of publications).
@@ -218,6 +228,7 @@ final class CornerHoverMonitor {
         if let spaceChangeToken { NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeToken) }
         spaceChangeToken = nil
         cornerObservation = nil
+        dismissModeObservation = nil
         lockObservation = nil
         hideObservation = nil
         trailingSampleWork?.cancel()
@@ -383,7 +394,8 @@ final class CornerHoverMonitor {
             isInteractionLocked: isInteractionLocked,
             isPinned: uiState.isPanelPinned,
             revealDelay: settings.revealDelay,
-            hideDelay: settings.hideDelay
+            hideDelay: settings.hideDelay,
+            dismissMode: settings.panelDismissMode
         )
         scheduleFollowUp(
             at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
@@ -414,6 +426,35 @@ final class CornerHoverMonitor {
                 stateMachine.resolveHideCompletion(didOrderOut: false)
             }
         }
+    }
+
+    private func outsidePress(at location: CGPoint) {
+        guard isRunning else { return }
+        let isInside = panelController.containsScreenPoint(location)
+        let locked = MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: uiState.interactionLockReasons.union(panelController.floatingInteractionLockReasons),
+            pointerInside: isInside,
+            secondsSinceKeyboardInput: ProcessInfo.processInfo.systemUptime - lastKeyboardInputAt
+        )
+        guard MainPanelAutoHidePolicy.shouldDismissPress(
+            isVisible: panelController.isPanelVisible,
+            isPinned: uiState.isPanelPinned,
+            mode: settings.panelDismissMode,
+            isWithinPanelFamily: isInside,
+            isInteractionLocked: locked,
+            hasOpenMenu: AtticGlassMenu.current?.isOpen == true
+        ) else { return }
+
+        followUpWork?.cancel()
+        followUpWork = nil
+        stateMachine.beginOutsidePressHide()
+        let result = panelController.requestHide { [weak self] outcome in
+            guard let self else { return }
+            self.stateMachine.resolveHideCompletion(didOrderOut: outcome == .hidden)
+            if outcome == .hidden { self.stateMachine.forceHidden(untilHotspotExit: true) }
+            self.refreshSamplingCadence(at: NSEvent.mouseLocation)
+        }
+        if !result.isAccepted { stateMachine.resolveHideCompletion(didOrderOut: false) }
     }
 
     private func pointerActivityObserved(at location: CGPoint, eventTimestamp: TimeInterval? = nil) {
@@ -492,17 +533,19 @@ final class CornerHoverMonitor {
               !isMouseButtonPressed, !isPinned else { onVisibilityChangeExpected?(nil); return }
         let stateDeadline = stateMachine.nextTimedDecision(
             at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
-            isInteractionLocked: isInteractionLocked, isPinned: isPinned, hideDelay: settings.hideDelay
+            isInteractionLocked: isInteractionLocked, isPinned: isPinned, hideDelay: settings.hideDelay,
+            dismissMode: settings.panelDismissMode
         )
         // Away from the panel and the corner, nothing holding it open: the
         // panel hides at that deadline unless the pointer comes back.
         onVisibilityChangeExpected?(stateDeadline.map { (hiding: true, delay: $0 - uptime) })
-        let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
-            reasons: uiState.interactionLockReasons,
-            pointerInside: isInPanel,
-            lastKeyboardInputAt: lastKeyboardInputAt,
-            timestamp: uptime
-        )
+        let focusDeadline = (settings.panelDismissMode == .moveCursorAway || stateMachine.canHideOnCursorExitInClickAwayMode)
+            ? MainPanelAutoHidePolicy.focusExpirationDeadline(
+                reasons: uiState.interactionLockReasons,
+                pointerInside: isInPanel,
+                lastKeyboardInputAt: lastKeyboardInputAt,
+                timestamp: uptime
+            ) : nil
         guard let deadline = [stateDeadline, focusDeadline].compactMap({ $0 }).min() else { return }
         scheduleFollowUp(after: deadline - uptime)
     }

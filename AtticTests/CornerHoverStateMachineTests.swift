@@ -3,6 +3,69 @@ import XCTest
 @testable import Attic
 
 final class CornerHoverStateMachineTests: XCTestCase {
+    func testClickAwayOnlyDismissesAnAbandonedProximityReveal() {
+        var explicit = CornerHoverStateMachine()
+        explicit.forceVisible(at: 0, grace: 0)
+        XCTAssertEqual(explicit.update(at: 20, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, hideDelay: 0.1,
+            dismissMode: .clickAway), .none)
+        XCTAssertNil(explicit.nextTimedDecision(at: 20, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, isPinned: false, hideDelay: 0.1, dismissMode: .clickAway))
+
+        var entered = CornerHoverStateMachine()
+        XCTAssertEqual(entered.update(at: 0, isInHotspot: true, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .none)
+        XCTAssertEqual(entered.update(at: 0.3, isInHotspot: true, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .reveal)
+        XCTAssertEqual(entered.update(at: 0.4, isInHotspot: false, isInPanel: true,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .none)
+        XCTAssertEqual(entered.update(at: 30, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .none)
+        XCTAssertNil(entered.nextTimedDecision(at: 30, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, isPinned: false, hideDelay: 0.1, dismissMode: .clickAway))
+
+        var abandoned = CornerHoverStateMachine()
+        _ = abandoned.update(at: 0, isInHotspot: true, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway)
+        XCTAssertEqual(abandoned.update(at: 0.3, isInHotspot: true, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .reveal)
+        XCTAssertEqual(abandoned.update(at: 0.5, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, dismissMode: .clickAway), .none)
+        XCTAssertEqual(abandoned.nextTimedDecision(at: 0.5, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, isPinned: false, hideDelay: 1.9, dismissMode: .clickAway), 1.1)
+        XCTAssertEqual(abandoned.update(at: 1.12, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, hideDelay: 1.9,
+            dismissMode: .clickAway), .none)
+        XCTAssertEqual(abandoned.update(at: 1.44, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, hideDelay: 1.9,
+            dismissMode: .clickAway), .requestHide)
+        XCTAssertTrue(abandoned.isHidePending)
+    }
+
+    func testClickAwayPressPolicyProtectsAllSurfacesAndHolds() {
+        XCTAssertFalse(MainPanelAutoHidePolicy.monitorsOutsidePress(
+            isVisible: false, isPinned: false, mode: .clickAway))
+        XCTAssertFalse(MainPanelAutoHidePolicy.monitorsOutsidePress(
+            isVisible: true, isPinned: true, mode: .clickAway))
+        XCTAssertFalse(MainPanelAutoHidePolicy.monitorsOutsidePress(
+            isVisible: true, isPinned: false, mode: .moveCursorAway))
+        XCTAssertTrue(MainPanelAutoHidePolicy.monitorsOutsidePress(
+            isVisible: true, isPinned: false, mode: .clickAway))
+        for inside in [true, false] {
+            XCTAssertEqual(MainPanelAutoHidePolicy.shouldDismissPress(
+                isVisible: true, isPinned: false, mode: .clickAway,
+                isWithinPanelFamily: inside, isInteractionLocked: false,
+                hasOpenMenu: false), !inside)
+        }
+        XCTAssertFalse(MainPanelAutoHidePolicy.shouldDismissPress(
+            isVisible: true, isPinned: false, mode: .clickAway,
+            isWithinPanelFamily: false, isInteractionLocked: true,
+            hasOpenMenu: false))
+        XCTAssertFalse(MainPanelAutoHidePolicy.shouldDismissPress(
+            isVisible: true, isPinned: false, mode: .clickAway,
+            isWithinPanelFamily: false, isInteractionLocked: false,
+            hasOpenMenu: true))
+    }
     func testIdleMainEditorFocusDoesNotPinButDraftAndSubpanelLocksStillProtect() {
         XCTAssertFalse(MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: [.quickEntryFocus], pointerInside: false, secondsSinceKeyboardInput: 2))
