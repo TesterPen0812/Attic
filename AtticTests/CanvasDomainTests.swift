@@ -130,6 +130,19 @@ private final class RenderedCommandsMenuDelegate: NSObject, NSMenuDelegate {
 }
 
 final class CanvasAccessibilityTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // Draw 3 replaced the old Canvas by default. These tests exercise
+        // the legacy Canvas Edit-menu route, whose items only exist when
+        // the old Canvas is selected through the supported escape hatch.
+        AtticDraw.enabledOverride = false
+    }
+
+    override func tearDown() {
+        AtticDraw.enabledOverride = nil
+        super.tearDown()
+    }
+
     func testAccessibilityNumberTextKeepsIntegralAndFractionalFormatting() {
         XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 12), "12")
         XCTAssertEqual(CanvasAccessibilityNumberText.string(for: -3), "-3")
