@@ -454,13 +454,15 @@ extension View {
     }
 }
 
-/// `accessibilityHidden` while a fold manages it; nothing at all otherwise.
+/// Hide a folded row. An explicit `accessibilityHidden(false)` on the
+/// unfolded parent overrides hidden children, including a tag bar behind
+/// the selection bar or Notes' Back row.
 private struct PanelFoldAccessibility: ViewModifier {
     let hidden: Bool?
 
     func body(content: Content) -> some View {
-        if let hidden {
-            content.accessibilityHidden(hidden)
+        if hidden == true {
+            content.accessibilityHidden(true)
         } else {
             content
         }
