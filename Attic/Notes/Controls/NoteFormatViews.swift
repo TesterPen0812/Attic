@@ -809,6 +809,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @ViewBuilder let row: Row
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlGone) private var rowGone
     @State private var phase = NoteFormatRowPhase.closed
     @State private var channels = NoteFormatRowChannels.closed
     @State private var shownModel: NoteFormatModel?
@@ -856,7 +857,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
                                                                    leading: channels.leading, trailing: channels.trailing,
                                                                    sourceSymbol: NoteFormatRowSource.symbol),
                                       controlsOpacity: channels.controls) { state.close() }
-                        .environment(\.atticControlGone, dormant)
+                        .environment(\.atticControlGone, dormant || rowGone)
                         .allowsHitTesting(!dormant && state.isOpen)
                         .accessibilityHidden(dormant || !state.isOpen)
                         .onAppear { surfaceMounted = true }
@@ -1136,6 +1137,9 @@ enum NoteFormatRowNeighbour {
 private struct NoteFormatRowLeaving: ViewModifier {
     let neighbour: NoteFormatRowNeighbour
     @Environment(\.noteFormatRowStage) private var stage
+    /// The whole row folding away (the "+" card taking it): the format
+    /// row's own say never brings a control's glass back over that.
+    @Environment(\.atticControlGone) private var rowGone
 
     func body(content: Content) -> some View {
         let progress = neighbour == .allNotes ? stage.allNotes : stage.newNoteAndStatus
@@ -1144,8 +1148,7 @@ private struct NoteFormatRowLeaving: ViewModifier {
             content.opacity(stage.statusHidden ? 0 : 1)
         } else {
             content
-                .environment(\.atticControlAway, false)
-                .environment(\.atticControlGone, gone)
+                .environment(\.atticControlGone, gone || rowGone)
                 .modifier(NoteFormatRowSlide(neighbour: neighbour, progress: progress))
         }
     }
@@ -1184,11 +1187,13 @@ struct NoteFormatRowSource: ViewModifier {
 
     @Environment(\.noteFormatRowStage) private var stage
     @Environment(\.noteFormatRowGeometry) private var geometry
+    @Environment(\.atticControlAway) private var rowAway
+    @Environment(\.atticControlGone) private var rowGone
 
     func body(content: Content) -> some View {
         content
-            .environment(\.atticControlAway, stage.sourceHidden)
-            .environment(\.atticControlGone, stage.sourceHidden)
+            .environment(\.atticControlAway, stage.sourceHidden || rowAway)
+            .environment(\.atticControlGone, stage.sourceHidden || rowGone)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(NoteFormatMotion.rowSpace)) } action: { frame in
                 geometry?.source = frame
             }

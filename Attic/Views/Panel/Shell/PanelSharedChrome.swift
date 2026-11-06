@@ -416,6 +416,43 @@ private struct PanelSharedTopControlsObserver: View {
     }
 }
 
+/// A bottom row a page draws itself (an open note's, a task page's, the
+/// selection bar) gives way to the "+" card as the shared bar does: the
+/// card is translucent, so whatever stays in its row shows through at its
+/// corners. Outside the panel there is no card and the row stays as it is.
+private struct PanelRowGivesWayToCard: ViewModifier {
+    @Environment(\.panelSharedChrome) private var chrome
+
+    func body(content: Content) -> some View {
+        if let chrome {
+            Fold(chrome: chrome) { content }
+        } else {
+            content
+        }
+    }
+
+    private struct Fold<Row: View>: View {
+        @ObservedObject var chrome: PanelSharedChrome
+        @ViewBuilder var row: () -> Row
+
+        @Environment(\.atticDesign) private var design
+
+        var body: some View {
+            PanelControlFold(folded: chrome.plusHandedOver,
+                             animation: { PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                             content: row)
+        }
+    }
+}
+
+extension View {
+    /// This row sits where the "+" card opens; it folds away under the card
+    /// and comes back as the card folds (`PanelSharedChrome.plusHandedOver`).
+    func panelRowGivesWayToCard() -> some View {
+        modifier(PanelRowGivesWayToCard())
+    }
+}
+
 /// A control in a glass group folding away and back in the search's motion:
 /// the group ignores an opacity set on its members, so the glass fades
 /// through `atticControlAway` and then goes (`atticControlGone`), as the

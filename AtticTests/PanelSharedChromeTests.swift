@@ -49,6 +49,68 @@ final class PanelSharedChromeTests: XCTestCase {
         XCTAssertEqual(AtticMaterialProbe.states["task-cover-bottom"], .init(away: false, gone: false))
     }
 
+    /// The owner's crops, 2026-11-05: with a note open, Back and the note's
+    /// "+" showed through the "+" card's corners. They are the page's own
+    /// row, not the shared bar, and Back, "+" and Aa each set the fold's
+    /// flags for the format row, so a fold around the row must still reach
+    /// their glass.
+    func testPageDrawnRowGivesItsGlassAwayUnderTheCard() throws {
+        let chrome = PanelSharedChrome()
+        let root = HStack {
+            AtticRaisedButton(systemName: "chevron.left", label: "Back", action: {})
+                .noteFormatRowLeaving(.allNotes)
+                .atticMaterialProbe("row-back")
+            AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", action: {})
+                .noteFormatRowSource()
+                .atticMaterialProbe("row-format")
+            AtticRaisedButton(systemName: "plus", label: "New note", action: {})
+                .noteFormatRowLeaving(.newNote)
+                .atticMaterialProbe("row-plus")
+            AtticRaisedButton(systemName: "checkmark", label: "Done", action: {})
+                .atticMaterialProbe("row-plain")
+        }
+        .panelRowGivesWayToCard()
+        .environment(\.panelSharedChrome, chrome)
+        .atticDesign(.default)
+        AtticMaterialProbe.reset()
+        let host = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 120),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        spin(0.3)
+        let ids = ["row-back", "row-format", "row-plus", "row-plain"]
+        for id in ids { XCTAssertEqual(AtticMaterialProbe.states[id], .init(away: false, gone: false), id) }
+        chrome.plusHandedOver = true
+        spin(1)
+        for id in ids {
+            XCTAssertEqual(AtticMaterialProbe.states[id]?.gone, true, "\(id): native glass ignores the row's outer opacity")
+        }
+        chrome.plusHandedOver = false
+        spin(1)
+        for id in ids { XCTAssertEqual(AtticMaterialProbe.states[id], .init(away: false, gone: false), id) }
+    }
+
+    /// Outside the panel there is no card: a row keeps its glass.
+    func testRowOutsideThePanelStaysAsItIs() throws {
+        let root = AtticRaisedButton(systemName: "plus", label: "New note", action: {})
+            .atticMaterialProbe("row-window")
+            .panelRowGivesWayToCard()
+            .atticDesign(.default)
+        AtticMaterialProbe.reset()
+        let host = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 120, height: 120),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        spin(0.3)
+        XCTAssertEqual(AtticMaterialProbe.states["row-window"], .init(away: false, gone: false))
+    }
+
     /// An element's frame in the host's top-left space.
     private func frame(of identifier: String, in host: NSView) -> CGRect? {
         host.layoutSubtreeIfNeeded()

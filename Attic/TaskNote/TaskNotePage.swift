@@ -595,6 +595,7 @@ struct TaskNotePage: View {
             .frame(height: buttonHeight)
             }
         }
+        .panelRowGivesWayToCard()
     }
 
     /// A task command that changed nothing (§ 5.6), quietly in the slot.
@@ -1245,6 +1246,7 @@ struct TaskNotePageContainer: View {
                 }
                 .frame(height: AtticControlSize.panelButton.height)
             }
+            .panelRowGivesWayToCard()
             .padding(.horizontal, layout.chromeInsets.leading)
             .padding(.bottom, layout.chromeInsets.bottom)
         }
