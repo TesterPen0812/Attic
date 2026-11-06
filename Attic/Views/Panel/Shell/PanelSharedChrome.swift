@@ -473,7 +473,9 @@ struct PanelControlFold<Content: View>: View {
             .environment(\.atticControlGone, gone)
             .opacity(folded ? 0 : 1)
             .allowsHitTesting(!folded)
-            .accessibilityHidden(folded)
+            // Says nothing while unfolded: an outer `false` would overrule
+            // what the row hides itself (the format row's neighbours).
+            .accessibilityHidden(true, isEnabled: folded)
             .animation(animation(folded), value: folded)
             .onChange(of: folded, initial: true) { _, now in fold(now) }
     }
