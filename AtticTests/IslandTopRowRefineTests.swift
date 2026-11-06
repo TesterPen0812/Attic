@@ -183,10 +183,35 @@ final class IslandTopRowRefineTests: XCTestCase {
         let view = Offscreen(TagsHost(holder: holder), size: CGSize(width: 320, height: 27), context: solid)
         defer { view.close() }
         spin(0.3)
-        let moved = try reaches(view, y: 5) { holder.tag = "dddd" }
-        XCTAssertGreaterThan(moved.settled, 60)
-        XCTAssertTrue(moved.frames.contains { $0 > 20 && $0 < moved.settled - 15 },
-                      "a frame draws the marker between the pills: \(moved.frames), settled \(moved.settled)")
+        let rest = try view.row(y: 5)
+        let layer = try XCTUnwrap(view.host.layer)
+        let start = layer.convertTime(CACurrentMediaTime(), from: nil)
+        layer.speed = 0
+        layer.timeOffset = start
+        defer { layer.speed = 1; layer.timeOffset = 0 }
+        view.host._renderForTest(interval: 0)
+        holder.tag = "dddd"
+        var frames: [[AtticRGBA]] = []
+        for step in 0...24 {
+            // SwiftUI's 200 ms travel spring is sampled on a fixed clock;
+            // bitmap capture on a slow CI runner cannot skip the middle.
+            view.host._renderForTest(interval: step == 0 ? 0 : 1.0 / 60)
+            layer.timeOffset = start + Double(step) / 60
+            CATransaction.flush()
+            frames.append(try view.row(y: 5))
+        }
+        layer.speed = 1
+        layer.timeOffset = 0
+        spin(0.5)
+        let settled = try view.row(y: 5)
+        XCTAssertGreaterThan(reach(settled, from: rest), 60)
+        // The chosen tag also changes font weight at the far right. Counting
+        // the last changed pixel would always report that text, including
+        // while the marker crosses the unchanged middle pills.
+        let middle = 60..<160
+        XCTAssertTrue(frames.contains { frame in
+            middle.contains { x in differs(frame[x], rest[x]) && !differs(settled[x], rest[x]) }
+        }, "a frame draws the marker between All and dddd, away from text that changes permanently")
     }
 
     func testTheMarkerMovesAtOnceUnderReduceMotion() throws {
