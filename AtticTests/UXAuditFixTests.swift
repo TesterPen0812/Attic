@@ -203,10 +203,11 @@ final class UXAuditFixTests: XCTestCase {
             func fields(_ view: NSView) -> [NSTextField] {
                 (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
             }
-            XCTAssertTrue(model.library.toasts === toasts, "the closed menu has mounted and prepared its hierarchy")
-            XCTAssertNil(find("draw-library-menu", in: host), "the prepared menu is absent from VoiceOver until opened")
+            XCTAssertNil(model.library.toasts, "the closed menu is unmounted, including its AppKit subtree")
+            XCTAssertNil(find("draw-library-menu", in: host), "the closed menu is absent from VoiceOver")
             model.openFilter()
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            XCTAssertTrue(model.library.toasts === toasts, "opening prepares the menu's toast dependency")
             XCTAssertTrue(fields(host).first { $0.accessibilityIdentifier() == "draw-title-filter" }?.isEnabled == true)
             XCTAssertNotNil(find("draw-library-menu", in: host))
         }
