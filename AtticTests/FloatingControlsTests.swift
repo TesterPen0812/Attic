@@ -97,10 +97,10 @@ final class FloatingControlsTests: XCTestCase {
         let tabsTop: CGFloat = 80
         let top = TasksViewport.topEdges(tabsTop: tabsTop)
         XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: tabsTop))
-        // The owner's panel design: no tabs line; a resting row is 2 under
-        // the top controls.
+        // Accepted 2026-11-05 header spacing: the resting row is 6 under
+        // the top controls, with no tabs line.
         XCTAssertGreaterThanOrEqual(top.top, tabsTop)
-        XCTAssertEqual(TasksViewport.listTop(tabsTop: tabsTop), tabsTop + 2, "a resting row is clear of the controls")
+        XCTAssertEqual(TasksViewport.listTop(tabsTop: tabsTop), tabsTop + 6, "a resting row is clear of the controls")
 
         let inset: CGFloat = 12
         let idle = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack - AtticPickerMetrics.stripHeight, bottomInset: inset)

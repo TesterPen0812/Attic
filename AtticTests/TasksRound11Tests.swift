@@ -181,8 +181,8 @@ final class TasksRound11Tests: XCTestCase {
         let top = TasksViewport.topEdges(tabsTop: 80)
         XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: 80), "the blur covers the tabs line")
         // The owner's panel design: no tabs line; `tabsTop` is the bottom
-        // of the header (and the chips), and the first row rests 2 below it.
-        XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 82, "the first row rests below the header's controls")
+        // of the header (and the chips); the 2026-11-05 spacing increases the gap to 6.
+        XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 86, "the first row rests below the header's controls")
     }
 
     /// Files over the page land on the row under them, never on another.
