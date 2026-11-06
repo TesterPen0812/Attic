@@ -456,6 +456,9 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         let backend = HeldCalendarSearchSource()
         defer { backend.finish() }
         let model = CalendarPageModel(store: try makeTestStore(), source: backend, now: { self.date(2026, 10, 29) })
+        // S-2 defers publishing search batches on hidden pages. This checks
+        // the live search cancellation and restart of a visible Calendar.
+        model.setVisible(true)
         model.setQuery("audit"); model.commitSearch()
         await XCTAssertTrueAsync(await waitUntil { backend.streams.count == 1 })
         let event = source(FakeCalendarEventStore()).event(from: occurrence("a", "Audit", date(2026, 10, 29), date(2026, 10, 30)))
