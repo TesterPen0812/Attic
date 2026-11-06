@@ -845,6 +845,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(menuItem("Pick a Date…").exists)
         menuItem("Tomorrow").click()
         waitFor(label("Call the plumber").contains("due Tomorrow"), "the date is set")
+        // Setting a date moves the task to another group. Wait for the row's
+        // motion to finish before sending a second press to its new position.
+        waitForRest("Call the plumber")
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
         menuItem("Tags").hover()
