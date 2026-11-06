@@ -533,6 +533,7 @@ struct NotesEditorPage: View {
                 bottomButtons
             }
         }
+        .panelRowGivesWayToCard()
         .panelBottomBar(.notes,
                         look: PanelBottomBarLook(middle: .tags(tags: library.recentTags(store: noteStore),
                                                                selection: library.tagFilter, idPrefix: "notes-tag-bar",

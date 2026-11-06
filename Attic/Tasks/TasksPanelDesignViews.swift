@@ -397,6 +397,7 @@ struct TasksBottomBar<AddBar: View>: View {
                 // while that fades out.
                 if let selectionBar {
                     selectionBar
+                        .panelRowGivesWayToCard()
                         .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
                 }
             }

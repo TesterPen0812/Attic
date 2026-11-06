@@ -416,6 +416,57 @@ private struct PanelSharedTopControlsObserver: View {
     }
 }
 
+/// A bottom row a page draws itself (an open note's, a task page's, the
+/// selection bar) gives way to the "+" card as the shared bar does: the
+/// card is translucent, so whatever stays in its row shows through at its
+/// corners. Outside the panel there is no card and the row stays as it is.
+private struct PanelRowGivesWayToCard: ViewModifier {
+    @Environment(\.panelSharedChrome) private var chrome
+
+    func body(content: Content) -> some View {
+        if let chrome {
+            Fold(chrome: chrome) { content }
+        } else {
+            content
+        }
+    }
+
+    private struct Fold<Row: View>: View {
+        @ObservedObject var chrome: PanelSharedChrome
+        @ViewBuilder var row: () -> Row
+
+        @Environment(\.atticDesign) private var design
+
+        var body: some View {
+            PanelControlFold(folded: chrome.plusHandedOver,
+                             animation: { PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                             hidesFromAccessibility: false,
+                             content: row)
+        }
+    }
+}
+
+extension View {
+    /// This row sits where the "+" card opens; it folds away under the card
+    /// and comes back as the card folds (`PanelSharedChrome.plusHandedOver`).
+    func panelRowGivesWayToCard() -> some View {
+        modifier(PanelRowGivesWayToCard())
+    }
+}
+
+/// `accessibilityHidden` while a fold manages it; nothing at all otherwise.
+private struct PanelFoldAccessibility: ViewModifier {
+    let hidden: Bool?
+
+    func body(content: Content) -> some View {
+        if let hidden {
+            content.accessibilityHidden(hidden)
+        } else {
+            content
+        }
+    }
+}
+
 /// A control in a glass group folding away and back in the search's motion:
 /// the group ignores an opacity set on its members, so the glass fades
 /// through `atticControlAway` and then goes (`atticControlGone`), as the
@@ -424,6 +475,9 @@ struct PanelControlFold<Content: View>: View {
     let folded: Bool
     /// The fold's motion, by `folded`: the search's unless given.
     var animation: ((Bool) -> Animation?)? = nil
+    /// Off for a row that keeps its own accessibility state: any modifier
+    /// around the format row changes the frames it reports.
+    var hidesFromAccessibility = true
     @ViewBuilder var content: () -> Content
 
     @Environment(\.atticDesign) private var design
@@ -436,7 +490,7 @@ struct PanelControlFold<Content: View>: View {
             .environment(\.atticControlGone, gone)
             .opacity(folded ? 0 : 1)
             .allowsHitTesting(!folded)
-            .accessibilityHidden(folded)
+            .modifier(PanelFoldAccessibility(hidden: hidesFromAccessibility ? folded : nil))
             .animation(animation(folded), value: folded)
             .onChange(of: folded, initial: true) { _, now in fold(now) }
     }
