@@ -268,6 +268,11 @@ final class PanelSharedChromeTests: XCTestCase {
                 state.switchPage(to: to, motion: PanelPageMotion.current(reduceMotion: false))
                 for frame in 0...42 {
                     let elapsed = Double(frame) / 60
+                    // The page switch publishes into SwiftUI on the next
+                    // main-queue turn. Without that turn an offscreen CI
+                    // host can sample only the unchanged backing layers,
+                    // reporting zero travel for every direction.
+                    RunLoop.main.run(until: Date())
                     host._renderForTest(interval: frame == 0 ? 0 : 1.0 / 60)
                     layer.timeOffset = start + elapsed
                     CATransaction.flush()
