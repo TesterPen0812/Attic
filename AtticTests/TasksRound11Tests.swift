@@ -90,7 +90,7 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertEqual(pageLists(hosted).filter { !$0.isHidden }.count, 1, "only Now draws")
     }
 
-    func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsUntilHide() throws {
+    func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsAcrossHide() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -104,23 +104,23 @@ final class TasksRound11Tests: XCTestCase {
         hosted.go(to: .backlog)
         XCTAssertEqual(Set(pageLists(hosted).map(ObjectIdentifier.init)), before)
         hosted.model.pageDidHide()
-        XCTAssertNil(hosted.model.pagerSwipe.span.warm, "hidden panels still release the background tabs")
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "the lightweight tab hosts remain ready across a hide (R-29)")
     }
 
-    /// Hiding the panel lets the kept pages go; the next reveal builds them
-    /// again once idle.
-    func testHidingLetsTheKeptPagesGo() throws {
+    /// Hiding the panel retains the built tab hosts under the lightweight
+    /// retention budget; a reveal reuses them without a cold warm-up.
+    func testHidingRetainsTheKeptPagesForTheNextReveal() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
         XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2)
         hosted.model.pageDidHide()
-        XCTAssertNil(hosted.model.pagerSwipe.span.warm, "let go on hide")
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "keep warmed hosts on hide")
         hosted.spin(1)
-        XCTAssertNil(hosted.model.pagerSwipe.span.warm, "not built while hidden")
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "hidden tab hosts remain available")
         hosted.model.resetForReveal()
         hosted.spin(1.5)
-        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "built again once revealed and idle")
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "already built when revealed")
     }
 
     /// A swipe's neighbour is the page kept built: the swipe builds nothing.
