@@ -178,7 +178,11 @@ final class TasksPanelUITests: XCTestCase {
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Add subtask")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 3))
         add.click()
-        let field = app.textFields.matching(NSPredicate(format: "identifier != %@", "AtticTokenField")).firstMatch
+        // The wrapping AppKit subtask editor can be exposed as a text area
+        // while its field editor owns focus; identify the actual entry.
+        let field = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND identifier != %@", "New subtask of Ship appearance PR", "AtticTokenField"
+        )).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "Add subtask opens its field")
         waitFor((field.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field has the keyboard")
         app.typeText("Pack the charger\r")
