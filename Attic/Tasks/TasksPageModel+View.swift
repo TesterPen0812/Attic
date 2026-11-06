@@ -398,3 +398,17 @@ struct TasksElsewhereKey: Equatable {
     let tag: String?
     let from: TasksTab
 }
+
+extension TasksPageModel {
+    /// The rows on show on the current tab, top to bottom, in the window's
+    /// coordinates: `ids` only, or every row. Rows out of view are left out.
+    func agentRowFrames(_ ids: Set<UUID>?) -> [(id: UUID, frame: CGRect)] {
+        guard let pointer = rowPointer, let view = pointer.view, view.window != nil else { return [] }
+        let listed = TasksMarqueeSelection.rowIDs(in: self, tab: tab)
+        return listed.compactMap { id -> (id: UUID, frame: CGRect)? in
+            guard ids?.contains(id) ?? true, let frame = pointer.frames[TasksRowID(tab: tab, id: id)],
+                  frame.intersects(view.bounds) else { return nil }
+            return (id, view.convert(frame, to: nil))
+        }
+    }
+}

@@ -268,6 +268,7 @@ struct TasksPage: View {
     }
 
     private func pageAppeared() {
+        model.rowPointer = pointer
         #if DEBUG
         pointer.keyboardControl = { [focusRequests] in focusRequests.current }
         pointer.keyboardControlRequests = focusRequests

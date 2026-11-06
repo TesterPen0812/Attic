@@ -244,6 +244,8 @@ struct PanelSharedBottomBar: View {
     @ObservedObject var chrome: PanelSharedChrome
     let page: PanelPage
     let layout: PanelPageLayout
+    /// The floating agent chat, where one is connected: its ✦ sits beside "+".
+    var agentChat: AgentChatModel? = nil
 
     @Environment(\.atticDesign) private var design
 
@@ -290,6 +292,15 @@ struct PanelSharedBottomBar: View {
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
             .allowsHitTesting(!folded && !taken)
+            if look.plus != nil, !folded, let agentChat, agentChat.isConnected {
+                PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                    AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
+                }
+                .allowsHitTesting(!taken)
+                .accessibilityHidden(!look.shown || taken)
+                .padding(.trailing, gap)
+                .transition(.opacity)
+            }
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {

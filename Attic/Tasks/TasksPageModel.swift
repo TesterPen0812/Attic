@@ -1234,6 +1234,10 @@ final class TasksPageModel: ObservableObject {
     /// Whether the shell shows the Tasks page (not kept built behind Notes
     /// or Canvas): only then does it answer page shortcuts such as ⌘F
     /// (round 7, R2).
+    /// Where the page's rows are, for the agent chat's motion. It reads the
+    /// frames the list already measures, so a row's body does no more work.
+    weak var rowPointer: TasksPointer?
+
     @Published var isPageShown = true {
         didSet {
             guard isPageShown != oldValue else { return }

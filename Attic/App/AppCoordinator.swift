@@ -603,6 +603,12 @@ final class AppCoordinator: ObservableObject {
         )
         // Slice 2: the workspace tools run through the app's task-note pages.
         agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
+        // The chat's run. The real runner replaces this one line.
+        let agentChat = uiState.agentChat
+        agentChat.connect(ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst }))
+        agentChat.weekDays = { [weak store] day in
+            AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [])
+        }
         let agentHandler = MCPRequestHandler(tools: agentTools, shellTools: shellTools)
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {

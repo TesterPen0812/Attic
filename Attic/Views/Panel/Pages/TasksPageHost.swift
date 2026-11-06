@@ -7,6 +7,8 @@ import SwiftUI
 @MainActor
 final class TasksPageState: ObservableObject {
     private var model: TasksPageModel?
+    /// The page's model, once made.
+    var builtModel: TasksPageModel? { model }
     /// The last Search request the page acted on (`PanelUIState.searchRequest`).
     var handledSearchRequest: UInt64 = 0
     /// A request can precede the page's mount. Keep consumption with the

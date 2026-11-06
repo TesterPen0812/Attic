@@ -8,6 +8,7 @@ import Foundation
 enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
+    case agentComposer
     case taskEditing
     case taskConfirmation
     case notesEditorFocus
@@ -51,6 +52,9 @@ final class PanelUIState: ObservableObject {
 
     init(resumeDefaults: UserDefaults? = nil) {
         self.resumeDefaults = resumeDefaults
+        agentChat.currentPage = { [weak self] in self.flatMap { AgentPage(PanelPage($0.selectedSection)) } }
+        agentChat.onDotsChanged = { [weak island] in island?.agentDots = $0 }
+        agentChat.reducesMotion = { AtticMotionPreference.reducesMotion }
         if let raw = resumeDefaults?.string(forKey: "AtticPanel.lastPage"),
            let section = PanelSection(rawValue: raw) {
             selectedSection = section
@@ -80,6 +84,9 @@ final class PanelUIState: ObservableObject {
     /// The Tall island's state (Accepted 2026-10-31): the page it marks,
     /// the item under the pointer, and its clicks' page requests.
     let island = PanelIslandModel()
+    /// The floating agent chat. Here so a run outlives every view; only the
+    /// docked panel's is ever connected to a runner.
+    let agentChat = AgentChatModel()
     /// The pages another panel hosts (Accepted "Tall island", "Pull a page
     /// out, snap it back in"): on the docked panel, the pages that are out;
     /// on a floating panel, every page but its own. A page lives in one
@@ -308,6 +315,7 @@ final class PanelUIState: ObservableObject {
     func panelDidReveal() { revealCount &+= 1 }
     func panelDidHide() {
         hideCount &+= 1
+        agentChat.panelDidHide()
         // SwiftUI may stop completing animations after the window orders out.
         // No page is visibly travelling now; discard the old completion so
         // it cannot end a new slide if the panel reopens immediately.
