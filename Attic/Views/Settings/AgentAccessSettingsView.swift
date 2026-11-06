@@ -7,9 +7,36 @@ struct AgentAccessSettingsView: View {
 
     @State private var didCopyAgentSetupPrompt = false
     @State private var didCopyEndpoint = false
+    @State private var claudeKeyDraft = ""
+    @State private var hasClaudeKey = false
+    @State private var claudeKeyError = false
+    private let claudeKeys = AgentAPIKeyStore()
 
     var body: some View {
         SettingsPage(section: .agentAccess) {
+            SettingsGroup(title: String(localized: "Claude")) {
+                HStack(spacing: 12) {
+                    AtticText(verbatim: String(localized: "API key"), style: .groupLabel, ink: .label)
+                    Spacer(minLength: 8)
+                    SecureField("", text: $claudeKeyDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                        .accessibilityLabel("Claude API key")
+                        .accessibilityIdentifier("settings-claude-api-key")
+                    Button(String(localized: "Save")) { saveClaudeKey() }
+                        .disabled(claudeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if hasClaudeKey {
+                        Button(String(localized: "Remove")) { removeClaudeKey() }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                if claudeKeyError {
+                    AtticGroupMessage(text: String(localized: "Could not update the API key."), tone: .error)
+                }
+            }
+            .onAppear(perform: refreshClaudeKey)
+
             SettingsGroup(
                 title: String(localized: "Access"),
                 footnote: String(localized: "Local agents can read, create and update tasks and notes. Their deletes go to Recently Deleted, never permanently.")
@@ -76,6 +103,28 @@ struct AgentAccessSettingsView: View {
 
     private var endpoint: String {
         "http://127.0.0.1:\(settings.agentServerPort)/mcp"
+    }
+
+    private func refreshClaudeKey() {
+        hasClaudeKey = (try? claudeKeys.load()) != nil
+    }
+
+    private func saveClaudeKey() {
+        do {
+            try claudeKeys.save(claudeKeyDraft)
+            claudeKeyDraft = ""
+            claudeKeyError = false
+            refreshClaudeKey()
+        } catch { claudeKeyError = true }
+    }
+
+    private func removeClaudeKey() {
+        do {
+            try claudeKeys.remove()
+            claudeKeyDraft = ""
+            claudeKeyError = false
+            refreshClaudeKey()
+        } catch { claudeKeyError = true }
     }
 
     @ViewBuilder
