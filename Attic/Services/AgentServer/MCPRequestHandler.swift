@@ -20,16 +20,62 @@ final class MCPRequestHandler {
     /// The shell's tools (`show`), when the app has a panel to show things in.
     private let shellTools: AgentShellTools?
     private let serverVersion: String
+    /// Below the HTTP socket's 30-second deadline; tests can use zero.
+    private let approvalWait: TimeInterval
+    /// Absent for existing external-only integrations and their tests.
+    let runActions: AgentActionsMCP?
 
-    init(tools: AgentTaskTools, shellTools: AgentShellTools? = nil, serverVersion: String = MCPRequestHandler.appVersion) {
+    init(tools: AgentTaskTools, shellTools: AgentShellTools? = nil,
+         actions: AgentActions? = nil, serverVersion: String = MCPRequestHandler.appVersion,
+         approvalWait: TimeInterval = 20) {
         self.tools = tools
         self.shellTools = shellTools
+        self.runActions = actions.map(AgentActionsMCP.init(actions:))
         self.serverVersion = serverVersion
+        self.approvalWait = approvalWait
+    }
+
+    func beginAgentRun(title: String, watching: Bool) throws -> String {
+        guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
+        return runActions.beginRun(title: title, watching: watching)
+    }
+
+    func setWatching(_ watching: Bool, runToken: String) throws {
+        try runActions?.setWatching(watching, token: runToken)
+    }
+
+    func finishAgentRun(token: String) { runActions?.finishRun(token: token) }
+
+    func finishAllAgentRuns() { runActions?.finishAllRuns() }
+
+    var hasActiveAgentRuns: Bool { runActions?.hasRuns == true }
+
+    func runApprovals(token: String) -> [AgentApproval] { runActions?.pendingApprovals(token: token) ?? [] }
+
+    func runChangeSet(token: String) -> AgentChangeSet? { runActions?.changeSet(token: token) }
+
+    func resolveRunApproval(id: UUID, allow: Bool, token: String) async throws {
+        guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
+        try await runActions.resolve(approval: id, allow: allow, token: token)
+    }
+
+    func undoRunChangeSet(id: UUID, token: String) async throws -> AgentUndoReport {
+        guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
+        return try await runActions.undo(changeSet: id, token: token)
+    }
+
+    func undoFinishedAgentChangeSet(id: UUID) async throws -> AgentUndoReport {
+        guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
+        return await runActions.undoFinishedChangeSet(id)
     }
 
     /// The server's entry point: workspace tools that run a coordinator
     /// operation (slice 2) are awaited here; everything else is `handle`.
-    func handleAsync(body: Data, protocolVersion: String? = nil) async -> MCPHTTPResult {
+    func handleAsync(body: Data, protocolVersion: String? = nil,
+                     runToken: String? = nil) async -> MCPHTTPResult {
+        if let runToken {
+            return await handleRun(body: body, protocolVersion: protocolVersion, token: runToken)
+        }
         if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
            json["jsonrpc"] as? String == "2.0", json["method"] as? String == "tools/call",
            json.keys.contains("id"), let params = json["params"] as? [String: Any],
@@ -56,6 +102,53 @@ final class MCPRequestHandler {
             }
         }
         return handle(body: body, protocolVersion: protocolVersion)
+    }
+
+    /// Run-bound calls use the same tool schemas and action result as the app.
+    /// Unknown/expired tokens never fall back to the external client's tools.
+    private func handleRun(body: Data, protocolVersion: String?, token: String) async -> MCPHTTPResult {
+        guard let runActions, runActions.contains(token: token) else {
+            return badRequest("Unknown or expired agent run.")
+        }
+        guard let message = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              message["jsonrpc"] as? String == "2.0",
+              let method = message["method"] as? String,
+              ["tools/list", "tools/call"].contains(method) else {
+            return handle(body: body, protocolVersion: protocolVersion)
+        }
+        let version = protocolVersion ?? "2025-03-26"
+        guard Self.supportedProtocolVersions.contains(version) else {
+            return badRequest("Unsupported MCP protocol version: \(version)")
+        }
+        guard message.keys.contains("id") else { return .accepted }
+        let id = message["id"] ?? NSNull()
+        guard Self.isValidRequestID(id) else {
+            return errorResponse(id: NSNull(), code: -32600, message: "Invalid request id")
+        }
+        if method == "tools/list" {
+            return resultResponse(id: id, result: ["tools": runActions.definitions])
+        }
+        guard let params = message["params"] as? [String: Any],
+              let name = params["name"] as? String else {
+            return errorResponse(id: id, code: -32602, message: "Missing tool name")
+        }
+        let arguments: [String: Any]
+        if let raw = params["arguments"], !(raw is NSNull) {
+            guard let object = raw as? [String: Any] else {
+                return errorResponse(id: id, code: -32602, message: "Tool arguments must be an object")
+            }
+            arguments = object
+        } else { arguments = [:] }
+        do {
+            var payload = try await runActions.call(name: name, arguments: arguments, token: token)
+            if name != "agent_approval_status", payload["status"] as? String == "waiting",
+               let raw = payload["approval_id"] as? String, let approvalID = UUID(uuidString: raw) {
+                payload = try await runActions.awaitApproval(approvalID, token: token, maximumWait: approvalWait)
+            }
+            return toolResponse(id: id, text: try AgentActions.json(payload), isError: false)
+        } catch {
+            return toolResponse(id: id, text: error.localizedDescription, isError: true)
+        }
     }
 
     func handle(body: Data, protocolVersion: String? = nil) -> MCPHTTPResult {

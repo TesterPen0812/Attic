@@ -9,8 +9,12 @@ enum AgentPage: String, Sendable, Equatable, CaseIterable {
 /// One thing a step touches, so the chat can animate the real row, note or event.
 struct AgentTarget: Sendable, Equatable {
     var page: AgentPage
-    var itemID: UUID?
-    var title: String?
+    var itemID: UUID? = nil
+    var title: String? = nil
+    /// EventKit occurrence identifiers are strings, not app UUIDs.
+    var externalID: String? = nil
+    /// The canvas containing a Draw object (itemID is the actual object).
+    var containerID: UUID? = nil
 }
 
 enum AgentStepState: Sendable, Equatable {

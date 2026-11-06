@@ -27,6 +27,7 @@ final class AgentServer: ObservableObject {
 
     private let port: UInt16
     private let tokenProvider: (@Sendable () throws -> String)?
+    private let configuredBearerToken: String?
     private let handler: MCPRequestHandler
     /// Overridden only by tests, which cannot wait out the real deadline.
     private let requestDeadline: TimeInterval
@@ -40,16 +41,122 @@ final class AgentServer: ObservableObject {
     private var credentialTask: Task<Void, Never>?
     private var pendingCredentialLoad: Task<String, Error>?
     private var generation = UUID()
+    /// Existing Settings opt-in remains independent of a temporary chat run.
+    private var externalAccessEnabled = false
+    private var usingRunCredential = false
 
     var boundPort: UInt16? { listener?.port?.rawValue }
 
     /// Accepted sockets still open for the current listener.
     var openConnectionCount: Int { connections?.count ?? 0 }
 
+    /// The installed Claude Code/Codex client uses this run-specific bearer
+    /// instead of the external Settings credential. The listener is started
+    /// only once the trusted run coordinator explicitly begins a run.
+    func beginAgentRun(title: String, watching: Bool) throws -> String {
+        let token = try handler.beginAgentRun(title: title, watching: watching)
+        // A chat-only run must not open Keychain or request a persistent
+        // external-agent credential. Its own bearer authenticates every call.
+        if !externalAccessEnabled && listener == nil {
+            do {
+                credentialTask?.cancel()
+                credentialTask = nil
+                generation = UUID()
+                startListener(bearerToken: try AgentAccessTokenStore.generateToken())
+                guard listener != nil else {
+                    throw AgentActionsError.invalid("Could not start the agent listener.")
+                }
+                usingRunCredential = true
+            } catch {
+                handler.finishAgentRun(token: token)
+                throw error
+            }
+        } else { start() }
+        return token
+    }
+
+    func setRunWatching(_ watching: Bool, token: String) throws {
+        try handler.setWatching(watching, runToken: token)
+    }
+
+    func pendingRunApprovals(token: String) -> [AgentApproval] {
+        handler.runApprovals(token: token)
+    }
+
+    func runChangeSet(token: String) -> AgentChangeSet? {
+        handler.runChangeSet(token: token)
+    }
+
+    func resolveRunApproval(id: UUID, allow: Bool, token: String) async throws {
+        try await handler.resolveRunApproval(id: id, allow: allow, token: token)
+    }
+
+    func undoRunChangeSet(id: UUID, token: String) async throws -> AgentUndoReport {
+        try await handler.undoRunChangeSet(id: id, token: token)
+    }
+
+    func undoFinishedAgentChangeSet(id: UUID) async throws -> AgentUndoReport {
+        try await handler.undoFinishedAgentChangeSet(id: id)
+    }
+
+    func finishAgentRun(token: String) {
+        handler.finishAgentRun(token: token)
+        if !handler.hasActiveAgentRuns && !externalAccessEnabled { stop() }
+    }
+
+    func setExternalAccessEnabled(_ enabled: Bool) {
+        externalAccessEnabled = enabled
+        if enabled {
+            if listener != nil && usingRunCredential { loadExternalCredentialForRunningListener() }
+            else { start() }
+        } else {
+            // Cancel any external-credential upgrade without ending a chat run.
+            if usingRunCredential {
+                credentialTask?.cancel()
+                credentialTask = nil
+            }
+            if !handler.hasActiveAgentRuns { stop() }
+        }
+    }
+
+    /// Enabling Settings access during a run upgrades the legacy bearer in
+    /// place. Restarting the listener here would invalidate the run's socket.
+    private func loadExternalCredentialForRunningListener() {
+        guard credentialTask == nil else { return }
+        guard let tokenProvider else {
+            if let configuredBearerToken, AgentAccessTokenStore.isValid(configuredBearerToken) {
+                setupToken = configuredBearerToken
+                usingRunCredential = false
+            }
+            return
+        }
+        let requestedGeneration = generation
+        let load = pendingCredentialLoad ?? Task.detached(operation: tokenProvider)
+        pendingCredentialLoad = load
+        credentialTask = Task { [weak self] in
+            let result = await load.result
+            guard let self, !Task.isCancelled, generation == requestedGeneration else { return }
+            credentialTask = nil
+            pendingCredentialLoad = nil
+            guard externalAccessEnabled else { return }
+            switch result {
+            case let .success(token) where AgentAccessTokenStore.isValid(token):
+                setupToken = token
+                usingRunCredential = false
+            default:
+                // The private run still works. Failed Keychain access must
+                // never make its temporary bearer an external credential.
+                externalAccessEnabled = false
+                logger.error("External agent credential could not be loaded during a run")
+            }
+        }
+    }
+
     init(port: UInt16, bearerToken: String, handler: MCPRequestHandler,
          requestDeadline: TimeInterval = defaultRequestDeadline) {
         self.port = port
         self.setupToken = bearerToken
+        self.configuredBearerToken = bearerToken
         self.tokenProvider = nil
         self.handler = handler
         self.requestDeadline = requestDeadline
@@ -61,6 +168,7 @@ final class AgentServer: ObservableObject {
         self.port = port
         self.handler = handler
         self.tokenProvider = tokenProvider
+        self.configuredBearerToken = nil
         self.requestDeadline = requestDeadline
     }
 
@@ -154,7 +262,7 @@ final class AgentServer: ObservableObject {
                 return
             }
             connection.start(queue: queue)
-            self.receive(on: connection, buffer: Data(), bearerToken: bearerToken, generation: listenerGeneration)
+            self.receive(on: connection, buffer: Data(), generation: listenerGeneration)
         }
 
         listener.start(queue: queue)
@@ -169,7 +277,10 @@ final class AgentServer: ObservableObject {
     func stop() {
         credentialTask?.cancel()
         credentialTask = nil
+        handler.finishAllAgentRuns()
         releaseListenerGeneration()
+        usingRunCredential = false
+        setupToken = configuredBearerToken ?? ""
         state = .stopped
     }
 
@@ -200,7 +311,7 @@ final class AgentServer: ObservableObject {
     }
 
     nonisolated private func receive(on connection: NWConnection, buffer: Data, searchedBytes: Int = 0,
-                                    bearerToken: String, generation: UUID) {
+                                    generation: UUID) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
@@ -216,20 +327,20 @@ final class AgentServer: ObservableObject {
             }
             switch AgentHTTPRequest.parse(buffer, searchedBytes: searchedBytes) {
             case let .request(request):
-                self.route(request, on: connection, bearerToken: bearerToken, generation: generation)
+                self.route(request, on: connection, generation: generation)
             case .invalid:
                 self.send(status: 400, reason: "Bad Request", body: nil, on: connection)
             case let .incomplete(searchedBytes):
                 if isComplete || error != nil {
                     connection.cancel()
                 } else {
-                    self.receive(on: connection, buffer: buffer, searchedBytes: searchedBytes, bearerToken: bearerToken, generation: generation)
+                    self.receive(on: connection, buffer: buffer, searchedBytes: searchedBytes, generation: generation)
                 }
             }
         }
     }
 
-    nonisolated private func route(_ request: AgentHTTPRequest, on connection: NWConnection, bearerToken: String, generation: UUID) {
+    nonisolated private func route(_ request: AgentHTTPRequest, on connection: NWConnection, generation: UUID) {
         // Native agents never send an Origin header; a browser reaching this
         // endpoint through DNS rebinding would, so refuse any that appears.
         guard request.headers["origin"] == nil else {
@@ -244,28 +355,31 @@ final class AgentServer: ObservableObject {
             send(status: 405, reason: "Method Not Allowed", body: nil, on: connection, extraHeaders: "Allow: POST\r\n")
             return
         }
-        guard AgentRequestSecurity.isAuthorized(
-            headers: request.headers,
-            bearerToken: bearerToken
-        ) else {
-            send(
-                status: 401,
-                reason: "Unauthorized",
-                body: nil,
-                on: connection,
-                extraHeaders: "WWW-Authenticate: Bearer\r\n"
-            )
-            return
-        }
         Task { @MainActor [weak self] in
             guard let self, self.listener != nil, self.generation == generation else {
                 connection.cancel()
                 return
             }
+            let runToken = self.handler.runActions?.authorizedRunToken(headers: request.headers)
+            // Starting a chat run makes MCP reachable for that run. It does
+            // not silently opt external clients back into Settings access.
+            guard runToken != nil || (self.externalAccessEnabled || !self.handler.hasActiveAgentRuns) &&
+                AgentRequestSecurity.isAuthorized(
+                    headers: request.headers, bearerToken: self.setupToken
+            ) else {
+                self.send(status: 401, reason: "Unauthorized", body: nil, on: connection,
+                          extraHeaders: "WWW-Authenticate: Bearer\r\n")
+                return
+            }
             let result = await self.handler.handleAsync(
                 body: request.body,
-                protocolVersion: request.headers["mcp-protocol-version"]
+                protocolVersion: request.headers["mcp-protocol-version"],
+                runToken: runToken
             )
+            guard self.listener != nil, self.generation == generation else {
+                connection.cancel()
+                return
+            }
             self.send(status: result.status, reason: result.reason, body: result.body, on: connection)
         }
     }
