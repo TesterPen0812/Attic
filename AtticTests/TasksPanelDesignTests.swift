@@ -122,13 +122,14 @@ final class TasksPanelDesignTests: XCTestCase {
         let tomorrow = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Next" })
         XCTAssertNil(tomorrow.model.trailingDue, "under a day header a row shows no date (Attic's tasks have no time)")
         XCTAssertEqual(model.rows(for: .now).first?.model.due?.tone, .overdue)
-        // Later is the backlog (Accepted 2026-10-29): one list, no date
-        // groups; a dated task goes to Now under its day.
-        try add("Idea", due: 5, tab: .backlog)
+        // Backlog displays retained dates, with undated rows under No date.
+        let idea = try add("Idea", due: 5)
+        XCTAssertTrue(model.moveToBacklog([idea]).isApplied)
         try add("Someday", due: nil, tab: .backlog)
-        XCTAssertEqual(model.sections(for: .backlog).groups.map(\.kind), [.backlog])
-        XCTAssertEqual(titles(.backlog), ["Someday"])
-        XCTAssertTrue(titles(.now).contains("Idea"))
+        XCTAssertEqual(model.sections(for: .backlog).groups.map(\.kind), [.backlog, .noDate])
+        XCTAssertEqual(titles(.backlog), ["Idea", "Someday"])
+        XCTAssertFalse(titles(.now).contains("Idea"))
+        XCTAssertNotNil(model.rows(for: .backlog).first { $0.model.title == "Idea" }?.model.trailingDue)
     }
 
     func testAHeaderFoldsItsGroupAndTheFoldIsPerPage() throws {

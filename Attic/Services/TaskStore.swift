@@ -1090,28 +1090,21 @@ final class TaskStore: ObservableObject {
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
-        // A task starts from where it lists: a stored Later task that still
-        // has a date lists in Now, and this write stores it there.
         var destinationStatus = status ?? task.listedStatus
         let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
         var destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
-        // Later is the backlog (Accepted 2026-10-29): a put-off task has no
-        // date. Giving one a date moves it to Now; moving one to Later
-        // clears its date, on every copy whatever the shown one holds. One
-        // edit, so one undo step.
+        // Dating a Backlog task moves it to Now. Merely moving it to Backlog
+        // preserves its existing schedule (Accepted 2026-11-05).
         if destinationStatus == .backlog {
             if case .some(.some) = dueDay {
                 destinationStatus = .todo
-            } else {
-                destinationDueDayRaw = nil
             }
         }
-        let movesToLater = destinationStatus == .backlog && status == .backlog
         if let requested = dueTimeMinutes, let minutes = requested,
-           !movesToLater && (destinationDueDayRaw == nil || !(0..<1440).contains(minutes)) {
+           destinationDueDayRaw == nil || !(0..<1440).contains(minutes) {
             throw TaskEditRefusal("A task time needs a date and a valid time of day.")
         }
-        if let requested = dueTimeMinutes, requested != nil, dueDay == nil, !movesToLater,
+        if let requested = dueTimeMinutes, requested != nil, dueDay == nil,
            replicas.contains(where: { $0.dueDay == nil }) {
             throw TaskEditRefusal("Set a date on every copy before adding a task time.")
         }
@@ -1150,8 +1143,8 @@ final class TaskStore: ObservableObject {
         let statusChanged = destinationStatus != task.status
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
-            || ((dueDay != nil || movesToLater) && replicas.contains { $0.dueDayRaw != destinationDueDayRaw })
-        let clearsDate = destinationDueDayRaw == nil && (dueDay != nil || movesToLater)
+            || (dueDay != nil && replicas.contains { $0.dueDayRaw != destinationDueDayRaw })
+        let clearsDate = destinationDueDayRaw == nil && dueDay != nil
         let timeChanged = destinationTime != task.dueTimeMinutes
             || ((dueTimeMinutes != nil || clearsDate) && replicas.contains { $0.dueTimeMinutesRaw != destinationTime })
         guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged || timeChanged else {
@@ -1161,8 +1154,6 @@ final class TaskStore: ObservableObject {
         let timestamp = fixedTimestamp ?? now()
         // A state change moves the task to the top of its new group (a done
         // task lands at the top of the done group); nothing else moves it.
-        // A dated Later task stored as Now keeps its place: it already lists
-        // there.
         var destinationManualOrder: Int64?
         if destinationStatus != task.listedStatus {
             destinationManualOrder = try nextManualOrder(
@@ -1202,7 +1193,7 @@ final class TaskStore: ObservableObject {
                 replica.listOrderVersion = TaskItem.currentListOrderVersion
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
-            if dueChanged || movesToLater { replica.dueDay = destinationDueDayRaw.flatMap(DueDay.init(rawValue:)) }
+            if dueChanged { replica.dueDay = destinationDueDayRaw.flatMap(DueDay.init(rawValue:)) }
             if timeChanged || dueTimeMinutes != nil { replica.dueTimeMinutes = destinationTime }
             if destinationDueDayRaw == nil && dueDay != nil { replica.dueDay = nil }
             if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
@@ -3658,19 +3649,12 @@ final class TaskStore: ObservableObject {
             // of the replicas, so reading `task.status` inside the loop would
             // change its answer for the copies after it.
             let changesStatus = status != task.status
-            // Made a Later task, every copy loses its whole schedule,
-            // including an imported orphan clock on an undated copy.
-            let clearsDateForLater = newParentID == nil && status == .backlog
             // Parent and placement only: a copy's own state (completion,
             // title, tags…) is never written by a move. A field that already
             // holds its value is left alone.
             for replica in replicas {
                 if replica.parentID != newParentID { replica.parentID = newParentID }
                 if changesStatus, replica.status != status { replica.status = status }
-                if clearsDateForLater {
-                    replica.dueDay = nil
-                    replica.dueTimeMinutes = nil
-                }
                 if replica.manualOrder != order { replica.manualOrder = order }
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion

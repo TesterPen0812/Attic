@@ -72,7 +72,7 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertEqual(reopened.dueDay, today)
     }
 
-    func testClearingDateAndMovingToLaterClearTimeAndUndoRestoresBoth() throws {
+    func testExplicitDateClearRemovesTimeButBacklogMoveRetainsIt() throws {
         let store = try makeTestStore()
         let library = AtticLibrary(tasks: store)
         let task = try XCTUnwrap(store.commit([TaskDraft(title: "Call", dueDay: today, dueTimeMinutes: 990)])?.first)
@@ -81,7 +81,7 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         XCTAssertEqual(task.dueDay, today); XCTAssertEqual(task.dueTimeMinutes, 990)
         XCTAssertTrue(library.updateTask(task.id, status: .backlog).isApplied)
-        XCTAssertNil(task.dueDay); XCTAssertNil(task.dueTimeMinutes)
+        XCTAssertEqual(task.dueDay, today); XCTAssertEqual(task.dueTimeMinutes, 990)
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         XCTAssertEqual(task.dueDay, today); XCTAssertEqual(task.dueTimeMinutes, 990)
         task.dueDay = nil
@@ -90,7 +90,7 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertNil(task.dueTimeMinutes, "a time cannot exist without a date")
     }
 
-    func testDatingLaterMovesToNowAndMovingBackClearsTheWholeScheduleWithUndo() throws {
+    func testDatingBacklogMovesToNowAndMovingBackRetainsScheduleWithUndo() throws {
         let store = try makeTestStore()
         let library = AtticLibrary(tasks: store)
         let task = try XCTUnwrap(store.create(title: "Later call", status: .backlog))
@@ -105,21 +105,20 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertTrue(library.redo(in: .tasks).isApplied)
         XCTAssertTrue(library.updateTask(task.id, status: .backlog).isApplied)
         XCTAssertEqual(task.status, .backlog)
-        XCTAssertNil(task.dueDay)
-        XCTAssertNil(task.dueTimeMinutesRaw)
+        XCTAssertEqual(task.dueDay, today)
+        XCTAssertEqual(task.dueTimeMinutes, 990)
         let reopened = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).first)
         XCTAssertEqual(reopened.status, .backlog)
-        XCTAssertNil(reopened.dueDay)
-        XCTAssertNil(reopened.dueTimeMinutesRaw)
+        XCTAssertEqual(reopened.dueDay, today)
+        XCTAssertEqual(reopened.dueTimeMinutes, 990)
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         XCTAssertEqual(task.status, .todo)
         XCTAssertEqual(task.dueDay, today)
         XCTAssertEqual(task.dueTimeMinutes, 990)
     }
 
-    /// Physical copies deliberately disagree, including an orphan raw clock
-    /// from an import. Later must clear the entire schedule on all of them.
-    func testMovingToLaterClearsEveryReplicaScheduleWhateverTheShownCopyHolds() throws {
+    /// Status-only edits preserve each replica's schedule, including imports.
+    func testMovingToBacklogPreservesEveryReplicaSchedule() throws {
         for shownDated in [false, true] {
             for initialStatus in [TaskStatus.todo, .backlog] {
                 let store = try makeTestStore()
@@ -129,7 +128,9 @@ final class TaskTimeTests: XCTestCase {
                 XCTAssertTrue(library.updateTask(id, status: .backlog).isApplied)
                 let copies = try scheduleCopies(id, in: store)
                 XCTAssertEqual(copies.count, 3)
-                XCTAssertTrue(copies.allSatisfy { $0.status == .backlog && $0.dueDayRaw == nil && $0.dueTimeMinutesRaw == nil })
+                XCTAssertTrue(copies.allSatisfy { $0.status == .backlog })
+                XCTAssertEqual(copies.compactMap(\.dueDayRaw).count, 1)
+                XCTAssertEqual(copies.compactMap(\.dueTimeMinutesRaw).count, 2)
             }
         }
     }
@@ -154,19 +155,19 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertEqual(task.dueTimeMinutes, 990)
     }
 
-    func testEditingATimedImportedLaterTaskStoresItInNowWithoutChangingItsScheduleOrOrder() throws {
+    func testEditingATimedBacklogTaskKeepsPlacementScheduleAndOrder() throws {
         let store = try makeTestStore()
         let id = try insertScheduleCopies(in: store, shownDated: true, status: .backlog, count: 1)
         let task = try XCTUnwrap(store.task(withID: id))
         let order = task.manualOrder
         XCTAssertTrue(AtticLibrary(tasks: store).updateTask(id, title: "Renamed").isApplied)
-        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(task.status, .backlog)
         XCTAssertEqual(task.dueDay, today)
         XCTAssertEqual(task.dueTimeMinutes, 990)
         XCTAssertEqual(task.manualOrder, order)
     }
 
-    func testStandaloneIntoLaterClearsEveryReplicaDateAndTimeAndUndoRestoresParent() throws {
+    func testStandaloneIntoBacklogPreservesEveryReplicaScheduleAndUndoRestoresParent() throws {
         let store = try makeTestStore()
         let parent = try XCTUnwrap(store.create(title: "Later parent", status: .backlog))
         let id = try insertScheduleCopies(in: store, shownDated: false, status: .todo, parentID: parent.id)
@@ -175,14 +176,15 @@ final class TaskTimeTests: XCTestCase {
         let copies = try scheduleCopies(id, in: store)
         XCTAssertEqual(copies.count, 3)
         XCTAssertTrue(copies.allSatisfy {
-            $0.parentID == nil && $0.status == .backlog && $0.dueDayRaw == nil && $0.dueTimeMinutesRaw == nil
+            $0.parentID == nil && $0.status == .backlog
         })
+        XCTAssertEqual(copies.compactMap(\.dueDayRaw).count, 1)
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         XCTAssertTrue(try scheduleCopies(id, in: store).allSatisfy { $0.parentID == parent.id && $0.status == .todo })
         XCTAssertFalse(library.undo(in: .tasks).isApplied, "promotion is one Undo step")
         XCTAssertTrue(library.redo(in: .tasks).isApplied)
         XCTAssertTrue(try scheduleCopies(id, in: store).allSatisfy {
-            $0.parentID == nil && $0.status == .backlog && $0.dueDayRaw == nil && $0.dueTimeMinutesRaw == nil
+            $0.parentID == nil && $0.status == .backlog
         })
     }
 
@@ -196,7 +198,7 @@ final class TaskTimeTests: XCTestCase {
         context.insert(copy); try context.save(); store.refresh()
         let library = AtticLibrary(tasks: store)
         XCTAssertTrue(library.updateTask(id, status: .backlog).isApplied)
-        XCTAssertTrue(try scheduleCopies(id, in: store).allSatisfy { $0.dueDayRaw == nil && $0.dueTimeMinutesRaw == nil })
+        XCTAssertTrue(try scheduleCopies(id, in: store).allSatisfy { $0.dueDay == today && $0.dueTimeMinutes == 990 })
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         XCTAssertTrue(try scheduleCopies(id, in: store).allSatisfy { $0.status == .todo && $0.dueDay == today && $0.dueTimeMinutes == 990 })
         XCTAssertFalse(library.undo(in: .tasks).isApplied, "date, time and status restore together")

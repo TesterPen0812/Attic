@@ -364,12 +364,12 @@ final class IslandTopRowRefineTests: XCTestCase {
 
     func testTheBacklogListSitsUnderOneNoDateHeading() throws {
         let ids = [UUID(), UUID()]
-        let group = try XCTUnwrap(TasksPanelDesign.backlogGroups(ids).first)
+        let group = try XCTUnwrap(TasksPanelDesign.backlogGroups(ids.map { (id: $0, due: Optional<DueDay>.none) }).first)
         XCTAssertEqual(group.title, "No date")
         XCTAssertTrue(group.showsHeader)
         XCTAssertTrue(group.rowsShowDate, "a row with a date would still show it")
         XCTAssertEqual(group.ids, ids, "the list's order")
-        XCTAssertTrue(TasksPanelDesign.backlogGroups([]).isEmpty, "no heading over an empty list")
+        XCTAssertTrue(TasksPanelDesign.backlogGroups([(id: UUID, due: DueDay?)]()).isEmpty, "no heading over an empty list")
     }
 
     func testDrawOffersWhatTheBoardAndCanvasDo() {

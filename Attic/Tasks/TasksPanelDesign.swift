@@ -21,10 +21,7 @@ enum TasksPanelDesign {
         case noDate
         /// A Done page day (the day the tasks were finished).
         case finished(Date)
-        /// Backlog's one list (Accepted 2026-10-29): every put-off task, in
-        /// the list's own order, no date groups. A put-off task has no date
-        /// (giving it one moves it to Now), so the list's one heading says
-        /// so (Accepted 2026-11-05, "Later becomes Backlog").
+        /// Backlog rows with a retained date show their own date.
         case backlog
     }
 
@@ -100,10 +97,19 @@ enum TasksPanelDesign {
         return groups
     }
 
-    /// Backlog's list: one group under "No date", the list's order kept;
-    /// nothing when Backlog is empty.
-    static func backlogGroups(_ ids: [UUID]) -> [Group] {
-        ids.isEmpty ? [] : [Group(kind: .backlog, title: String(localized: "No date"), isOverdue: false, ids: ids)]
+    /// Backlog retains dated rows. Those display their dates individually;
+    /// undated rows remain under the existing "No date" heading.
+    static func backlogGroups(_ rows: [(id: UUID, due: DueDay?)]) -> [Group] {
+        let dated = rows.filter { $0.due != nil }.map(\.id)
+        let undated = rows.filter { $0.due == nil }.map(\.id)
+        if dated.isEmpty {
+            return undated.isEmpty ? [] : [Group(kind: .backlog, title: String(localized: "No date"), isOverdue: false, ids: undated)]
+        }
+        var groups = [Group(kind: .backlog, title: "", isOverdue: false, ids: dated)]
+        if !undated.isEmpty {
+            groups.append(Group(kind: .noDate, title: String(localized: "No date"), isOverdue: false, ids: undated))
+        }
+        return groups
     }
 
     /// Now's groups with the next event (Accepted 2026-10-29, "the next

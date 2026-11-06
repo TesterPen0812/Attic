@@ -226,14 +226,16 @@ final class TasksGoingInTests: XCTestCase {
         XCTAssertNil(store.task(withID: id)?.dueDay)
     }
 
-    func testMovingATaskToLaterClearsItsDate() throws {
+    func testMovingATaskToBacklogKeepsItsDateAndUndoRestoresPlacement() throws {
         let id = try add("Dated", due: 3)
         XCTAssertTrue(model.moveToBacklog([id]).isApplied)
         let task = try XCTUnwrap(store.task(withID: id))
         XCTAssertEqual(task.status, .backlog)
-        XCTAssertNil(task.dueDay, "a put-off task has no date")
+        XCTAssertEqual(task.dueDay, day(3), "Backlog retains the schedule")
+        XCTAssertTrue(model.rows(for: .backlog).contains { $0.id == id })
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
-        XCTAssertEqual(store.task(withID: id)?.dueDay, day(3), "Undo brings the date back with the move")
+        XCTAssertEqual(store.task(withID: id)?.dueDay, day(3), "Undo preserves the date")
+        XCTAssertEqual(store.task(withID: id)?.status, .todo)
     }
 
     // MARK: - Later's rule on every copy (fix round 1)
@@ -258,9 +260,8 @@ final class TasksGoingInTests: XCTestCase {
         try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
     }
 
-    /// Review 1: whichever copy is shown, moving to Later clears the date
-    /// on every copy (a divergent dated copy too).
-    func testMovingToLaterClearsTheDateOnEveryCopyWhateverTheShownOneHolds() throws {
+    /// A status-only edit keeps every replica's own date, even for divergent copies.
+    func testMovingToBacklogKeepsDatesOnEveryCopy() throws {
         for dated in 0..<2 {
             let store = try makeTestStore(now: { [clock] in clock.value })
             let id = UUID()
@@ -269,7 +270,7 @@ final class TasksGoingInTests: XCTestCase {
             let all = try copies(id, in: store)
             XCTAssertEqual(all.count, 2)
             XCTAssertEqual(all.map(\.status), [.backlog, .backlog], "copy \(dated) dated")
-            XCTAssertEqual(all.map(\.dueDayRaw), [nil, nil], "no copy keeps a date in Later (copy \(dated) was dated)")
+            XCTAssertEqual(all.compactMap(\.dueDayRaw).count, 1, "the dated copy stays dated")
         }
     }
 
@@ -289,33 +290,30 @@ final class TasksGoingInTests: XCTestCase {
         XCTAssertEqual(store.task(withID: id)?.status, .todo)
     }
 
-    /// Review 2: a Later task stored with a date (from before the rule)
-    /// lists in Now under its day; reading rewrites nothing; its next edit
-    /// stores it as Now, keeping the date.
-    func testADatedLaterTaskListsInNowAndItsNextEditStoresItThere() throws {
+    /// A dated Backlog task remains there through unrelated edits.
+    func testADatedBacklogTaskRemainsInBacklogThroughTitleEdit() throws {
         let id = UUID()
         try insertCopies(id, into: store, count: 1, dated: 0, status: .backlog)
-        XCTAssertFalse(model.rows(for: .backlog).contains { $0.id == id }, "not in Later")
-        XCTAssertEqual(model.backlogCount, 0)
-        XCTAssertTrue(model.sections(for: .now).groups.contains { $0.kind == .day(day(2)) && $0.ids.contains(id) }, "in Now, under its day")
-        XCTAssertEqual(model.rows(for: .now).first { $0.id == id }?.status, .todo, "drawn as a Now task")
+        XCTAssertTrue(model.rows(for: .backlog).contains { $0.id == id }, "in Backlog")
+        XCTAssertEqual(model.backlogCount, 1)
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == id })
         XCTAssertEqual(try copies(id, in: store).map(\.status), [.backlog], "nothing rewritten by reading it")
         XCTAssertTrue(library.updateTask(id, title: "Renamed").isApplied)
         let task = try XCTUnwrap(store.task(withID: id))
-        XCTAssertEqual(task.status, .todo, "the next write stores it as Now")
+        XCTAssertEqual(task.status, .backlog, "title edits preserve placement")
         XCTAssertEqual(task.dueDay, day(2), "with its date")
-        XCTAssertTrue(model.sections(for: .now).groups.contains { $0.kind == .day(day(2)) && $0.ids.contains(id) })
+        XCTAssertTrue(model.rows(for: .backlog).contains { $0.id == id })
     }
 
-    /// ⌘B on such a task (it lists in Now) moves it to Later without its date.
-    func testMovingADatedLaterTaskToLaterClearsItsDate() throws {
+    /// Moving an already-backlogged dated task is a no-op.
+    func testMovingADatedBacklogTaskToBacklogKeepsItsDate() throws {
         let id = UUID()
         try insertCopies(id, into: store, count: 1, dated: 0, status: .backlog)
         model.select(tab: .now)
         XCTAssertTrue(model.moveToBacklog([id]).isApplied)
         let task = try XCTUnwrap(store.task(withID: id))
         XCTAssertEqual(task.status, .backlog)
-        XCTAssertNil(task.dueDay, "Later has no date")
+        XCTAssertEqual(task.dueDay, day(2))
         XCTAssertTrue(model.rows(for: .backlog).contains { $0.id == id })
     }
 
@@ -336,9 +334,9 @@ final class TasksGoingInTests: XCTestCase {
             XCTAssertTrue(store.reparentSubtask(child, to: nil), "copy \(dated) dated")
             let all = try copies(child, in: store)
             XCTAssertTrue(all.allSatisfy { $0.parentID == nil })
-            XCTAssertFalse(all.contains { $0.status == .backlog && $0.dueDayRaw != nil }, "no Later copy keeps a date (copy \(dated))")
+            XCTAssertEqual(all.compactMap(\.dueDayRaw).count, 1, "the dated copy survives (copy \(dated))")
             let shown = try XCTUnwrap(store.task(withID: child))
-            XCTAssertEqual(shown.listedStatus, shownDated ? .todo : .backlog, "dated: Now; undated: Later (copy \(dated))")
+            XCTAssertEqual(shown.listedStatus, shownDated ? .todo : .backlog, "standalone state follows the child (copy \(dated))")
         }
         // One dated subtask alone: Now, keeping its date.
         let context = ModelContext(store.container)

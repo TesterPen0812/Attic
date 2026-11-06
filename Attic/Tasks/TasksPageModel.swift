@@ -742,10 +742,10 @@ final class TasksPageModel: ObservableObject {
         // in the key). A folded group's rows are left out of the list.
         let times = Dictionary(store.tasks.compactMap { task in task.dueTimeMinutes.map { (task.id, $0) } },
                                uniquingKeysWith: { first, _ in first })
-        // Backlog (Accepted 2026-10-29): one list, no date groups. Now's
+        // Backlog rows retain their dates (Accepted 2026-11-05). Now's
         // Today also shows for the next event alone.
         var groups = tab == .backlog
-            ? TasksPanelDesign.backlogGroups(open.map(\.id))
+            ? TasksPanelDesign.backlogGroups(open.map { (id: $0.id, due: $0.due) })
             : TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, times: times, today: key.today,
                                       calendar: services.calendar(), locale: services.locale)
         if key.nextEvent != nil { groups = TasksPanelDesign.withTodayForNextEvent(groups) }
