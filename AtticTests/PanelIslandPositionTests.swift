@@ -387,16 +387,22 @@ final class PanelIslandPositionTests: XCTestCase {
     /// is placed at the new spot before the reveal prepares its snapshot.
     func testAGenieRevealAfterASpotChangeSnapshotsTheIslandAtTheNewSpot() throws {
         for warm in [false, true] {
-            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel, settings in
+            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, state, panel, settings in
                 let screen = try XCTUnwrap(controller.currentScreen)
                 let container = try content(panel)
                 let genie = container.genieForTesting
                 spin(until: { !container.isIslandStandInShown })
-                // A reveal shows the island at rest (D4): its dots' capsule.
+                // A reveal shows the island at rest (D4). Sample the selected
+                // dot itself: the centre of the 43 pt capsule falls in the
+                // empty gap between dots, whose glass alpha can be just 41.
                 @MainActor func items() -> [CGPoint] {
                     let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: .topRight, spot: settings.islandSpot)
                     let rest = local(L.restFrame(island: island, corner: .topRight, spot: settings.islandSpot), in: panel)
-                    return [CGPoint(x: rest.midX, y: rest.midY)]
+                    let selected = L.pages.firstIndex(of: PanelPage(state.selectedSection)) ?? 0
+                    let along = L.restDots(current: selected)[selected].along
+                    return [settings.islandSpot.isFlat
+                        ? CGPoint(x: rest.minX + along, y: rest.midY)
+                        : CGPoint(x: rest.midX, y: rest.maxY - along)]
                 }
                 for spot in [PanelIslandSpot.openSideMiddle, .acrossOpenEnd, .screenSideCornerEnd] {
                     let note = "\(warm ? "warm" : "cold"), to \(spot)"
