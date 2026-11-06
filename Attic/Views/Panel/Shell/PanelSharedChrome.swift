@@ -440,6 +440,7 @@ private struct PanelRowGivesWayToCard: ViewModifier {
         var body: some View {
             PanelControlFold(folded: chrome.plusHandedOver,
                              animation: { PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                             hidesFromAccessibility: false,
                              content: row)
         }
     }
@@ -453,6 +454,19 @@ extension View {
     }
 }
 
+/// `accessibilityHidden` while a fold manages it; nothing at all otherwise.
+private struct PanelFoldAccessibility: ViewModifier {
+    let hidden: Bool?
+
+    func body(content: Content) -> some View {
+        if let hidden {
+            content.accessibilityHidden(hidden)
+        } else {
+            content
+        }
+    }
+}
+
 /// A control in a glass group folding away and back in the search's motion:
 /// the group ignores an opacity set on its members, so the glass fades
 /// through `atticControlAway` and then goes (`atticControlGone`), as the
@@ -461,6 +475,9 @@ struct PanelControlFold<Content: View>: View {
     let folded: Bool
     /// The fold's motion, by `folded`: the search's unless given.
     var animation: ((Bool) -> Animation?)? = nil
+    /// Off for a row that keeps its own accessibility state: any modifier
+    /// around the format row changes the frames it reports.
+    var hidesFromAccessibility = true
     @ViewBuilder var content: () -> Content
 
     @Environment(\.atticDesign) private var design
@@ -473,9 +490,7 @@ struct PanelControlFold<Content: View>: View {
             .environment(\.atticControlGone, gone)
             .opacity(folded ? 0 : 1)
             .allowsHitTesting(!folded)
-            // Says nothing while unfolded: an outer `false` would overrule
-            // what the row hides itself (the format row's neighbours).
-            .accessibilityHidden(true, isEnabled: folded)
+            .modifier(PanelFoldAccessibility(hidden: hidesFromAccessibility ? folded : nil))
             .animation(animation(folded), value: folded)
             .onChange(of: folded, initial: true) { _, now in fold(now) }
     }
