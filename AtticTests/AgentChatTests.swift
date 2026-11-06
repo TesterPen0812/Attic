@@ -1,4 +1,6 @@
+import AppKit
 import Combine
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -212,10 +214,12 @@ final class AgentChatTests: XCTestCase {
         XCTAssertEqual(reply?.marksStart, .distantPast)
     }
 
-    func testFirstShowingIsOncePerEntry() {
+    func testAnEntryIsNewUntilItHasBeenShown() {
         let id = UUID()
-        XCTAssertTrue(model.firstShowing(of: id))
-        XCTAssertFalse(model.firstShowing(of: id))
+        XCTAssertFalse(model.wasShown(id))
+        XCTAssertFalse(model.wasShown(id), "Asking changes nothing: a body can run twice")
+        model.noteShown(id)
+        XCTAssertTrue(model.wasShown(id))
     }
 
     func testTextAcrossDeltasIsOneReplyAndAStepStartsANewOne() async {
@@ -541,5 +545,183 @@ final class ScriptedAgentRunnerTests: XCTestCase {
         }
         XCTAssertFalse(finished)
         XCTAssertTrue(store.tasks.contains { $0.title == "New Reminder" })
+    }
+}
+
+/// The chat on the real bar: what a closed chat costs, and how it comes and goes.
+@MainActor
+final class AgentChatHostedTests: XCTestCase {
+    private var model: AgentChatModel!
+    private var runner: FakeRunner!
+    private var chrome: PanelSharedChrome!
+    private var window: NSWindow!
+
+    private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    override func setUp() async throws {
+        model = AgentChatModel()
+        model.pacing = .instant
+        runner = FakeRunner()
+        model.connect(runner)
+        chrome = PanelSharedChrome()
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let root = ZStack(alignment: .bottom) {
+            PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout, agentChat: model)
+            AgentChatHost(bar: model.bar, room: PanelComposerRoom(), model: model, layout: layout, page: .tasks, chrome: chrome,
+                          rows: { _ in [] }, selectPage: { _ in }, setTyping: { _ in })
+        }
+        .frame(width: 340, height: 560)
+        .environment(\.panelSharedChrome, chrome)
+        .atticDesign(.default)
+        window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: root)
+        window.orderFront(nil)
+        AgentChatStage.bodyEvaluations = 0
+        spin(0.2)
+    }
+
+    override func tearDown() async throws {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+        spin(0.05)
+    }
+
+    func testTheBarDrawsTheStarOnlyWhenConnected() {
+        XCTAssertTrue(PanelSharedBottomBar.drawsAgentChat)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let plain = NSHostingView(rootView: PanelSharedBottomBar(chrome: PanelSharedChrome(), page: .tasks, layout: layout,
+                                                                 agentChat: AgentChatModel()).atticDesign(.default))
+        plain.frame = CGRect(x: 0, y: 0, width: 340, height: 60)
+        plain.layoutSubtreeIfNeeded()
+        spin(0.05)
+        XCTAssertFalse(PanelSharedBottomBar.drawsAgentChat)
+    }
+
+    func testARunWhileClosedTouchesNeitherTheBarsBodyNorTheStage() {
+        let before = PanelSharedBottomBar.bodyEvaluations
+        model.draft = "tidy"
+        model.send()
+        spin(0.05)
+        for index in 0..<30 {
+            runner.continuation?.yield(.progress(done: index, total: 30))
+            runner.continuation?.yield(.textDelta("word "))
+            spin(0.005)
+        }
+        runner.continuation?.yield(.finished)
+        spin(0.1)
+        XCTAssertEqual(model.bar.state, .done)
+        XCTAssertEqual(PanelSharedBottomBar.bodyEvaluations, before, "The ✦ redraws alone")
+        XCTAssertEqual(AgentChatStage.bodyEvaluations, 0, "A closed chat builds nothing")
+        XCTAssertFalse(AgentChatStage.isMounted)
+    }
+
+    func testOpeningTakesTheBarsRowAndClosingGivesItBack() {
+        model.open()
+        spin(0.15)
+        XCTAssertTrue(AgentChatStage.isMounted)
+        XCTAssertTrue(chrome.plusHandedOver, "The bar folds away: the composer takes its row")
+        model.close()
+        XCTAssertTrue(AgentChatStage.isMounted, "Still there for its closing motion")
+        spin(0.7)
+        XCTAssertFalse(AgentChatStage.isMounted)
+        XCTAssertFalse(chrome.plusHandedOver)
+    }
+
+    func testPanelHidingRemovesTheStageAtOnce() {
+        model.open()
+        spin(0.15)
+        model.panelDidHide()
+        spin(0.05)
+        XCTAssertFalse(AgentChatStage.isMounted)
+        XCTAssertFalse(chrome.plusHandedOver)
+    }
+
+    func testFullThreadRendersWithOneRunThrough() {
+        model.open()
+        spin(0.1)
+        model.draft = "tidy"
+        model.send()
+        spin(0.05)
+        let day = Date()
+        var move = AgentStep(id: UUID(), title: "Moving", kind: .move(toDay: day),
+                             targets: [AgentTarget(page: .tasks, itemID: UUID(), title: "Call")], state: .running)
+        runner.continuation?.yield(.stepStarted(move))
+        spin(0.05)
+        move.state = .done
+        runner.continuation?.yield(.stepFinished(move))
+        runner.continuation?.yield(.textDelta("All on **Friday**."))
+        runner.continuation?.yield(.changes(AgentChangeSet(id: UUID(), title: "Changes", pages: [.tasks], count: 1)))
+        runner.continuation?.yield(.finished)
+        spin(1.2)
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertEqual(model.entries.count, 5, "Sent, step, week, reply, changes")
+        // Bounded: a thread at rest stops updating (no layout feedback loop).
+        let rest = AgentChatStage.bodyEvaluations
+        spin(0.5)
+        XCTAssertEqual(AgentChatStage.bodyEvaluations, rest)
+    }
+}
+
+/// The alive layer stops asking for frames once nothing moves.
+@MainActor
+final class AgentChatFXTests: XCTestCase {
+    private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    private func run(_ fx: AgentChatFX, seconds: Double) {
+        var date = Date()
+        for _ in 0..<Int(seconds * 60) {
+            date += 1 / 60
+            fx.advance(to: date)
+        }
+        spin(0.01)
+    }
+
+    func testAnOpenChatAtRestGoesIdleAndAnEffectWakesIt() {
+        let fx = AgentChatFX()
+        fx.emptyThread = false
+        run(fx, seconds: 4)
+        XCTAssertTrue(fx.isIdle, "Nothing moving: the timelines pause")
+        fx.burst(10, 10)
+        XCTAssertFalse(fx.isIdle)
+        XCTAssertGreaterThan(fx.liveCount, 0)
+        run(fx, seconds: 4)
+        XCTAssertEqual(fx.liveCount, 0)
+        XCTAssertTrue(fx.isIdle)
+    }
+
+    func testWorkingKeepsItAwake() {
+        let fx = AgentChatFX()
+        fx.emptyThread = false
+        fx.acting = true
+        run(fx, seconds: 3)
+        XCTAssertFalse(fx.isIdle)
+    }
+
+    func testAChipLandsThenUndoFliesItHomeAndSettlesDust() {
+        let fx = AgentChatFX()
+        fx.emptyThread = false
+        let step = UUID()
+        var landed = 0
+        fx.fly(step: step, [(title: "Call", row: CGRect(x: 10, y: 100, width: 200, height: 28),
+                             to: CGPoint(x: 50, y: 20), onLand: { landed += 1 })])
+        fx.turnToDust(step: step, [CGRect(x: 10, y: 140, width: 200, height: 28)])
+        run(fx, seconds: 2.5)
+        XCTAssertEqual(landed, 1)
+        XCTAssertEqual(fx.liveCount, 0)
+        fx.undo(steps: [step])
+        XCTAssertGreaterThan(fx.liveCount, 100, "A chip and the dust coming back")
+        run(fx, seconds: 2.5)
+        XCTAssertEqual(fx.liveCount, 0)
+        XCTAssertEqual(landed, 1, "Going home lands nothing on the week")
+    }
+
+    func testClearLiveDropsLeftovers() {
+        let fx = AgentChatFX()
+        fx.dust(CGRect(x: 0, y: 0, width: 100, height: 20))
+        fx.clearLive()
+        XCTAssertEqual(fx.liveCount, 0)
     }
 }

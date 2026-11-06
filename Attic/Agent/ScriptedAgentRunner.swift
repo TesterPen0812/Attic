@@ -157,7 +157,9 @@ final class ScriptedAgentRunner: AgentRunning {
 
         var deleted = 0
         if !readOnly, !toDelete.isEmpty {
-            if mode() == .auto || (try await asks("Delete \(toDelete.count) \(toDelete.count == 1 ? "task" : "tasks")?", toDelete)) {
+            var allowed = mode() == .auto
+            if !allowed { allowed = try await asks("Delete \(toDelete.count) \(toDelete.count == 1 ? "task" : "tasks")?", toDelete) }
+            if allowed {
                 deleted = try await delete(toDelete)
             } else {
                 try await step("Kept \(toDelete.count) \(toDelete.count == 1 ? "task" : "tasks")",

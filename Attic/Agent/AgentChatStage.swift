@@ -66,11 +66,13 @@ struct AgentChatHost: View {
     let setTyping: (Bool) -> Void
 
     @State private var mounted = false
+    /// Held here so Undo can still run a step's motion after a close and reopen.
+    @StateObject private var fx = AgentChatFX()
 
     var body: some View {
         ZStack {
             if mounted {
-                AgentChatStage(model: model, shown: bar.isChatOpen, layout: layout, rows: rows, setTyping: setTyping,
+                AgentChatStage(model: model, fx: fx, shown: bar.isChatOpen, layout: layout, rows: rows, setTyping: setTyping,
                                didClose: { if !bar.isChatOpen { mounted = false } })
             }
         }
@@ -95,14 +97,20 @@ struct AgentChatStage: View {
     static let space = "AgentChatStage"
 
     @ObservedObject var model: AgentChatModel
+    let fx: AgentChatFX
     let shown: Bool
     let layout: PanelPageLayout
     let rows: (Set<UUID>?) -> [(id: UUID, frame: CGRect)]
     let setTyping: (Bool) -> Void
     let didClose: () -> Void
 
+    #if DEBUG
+    /// Test seams: how often the stage's body ran, and whether it is on screen.
+    static var bodyEvaluations = 0
+    static var isMounted = false
+    #endif
+
     @Environment(\.atticDesign) private var design
-    @StateObject private var fx = AgentChatFX()
     @State private var backdropView: AgentChatBackdropView?
 
     private var alive: Bool { !design.reduceMotion }
@@ -123,6 +131,9 @@ struct AgentChatStage: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         ZStack(alignment: .topTrailing) {
             AgentChatBackdrop(shown: shown, origin: star, tint: tint, fades: !alive, solid: solid,
                               onEscape: { model.close() }, didMake: { view in DispatchQueue.main.async { backdropView = view } })
@@ -151,12 +162,16 @@ struct AgentChatStage: View {
         }
         .coordinateSpace(.named(Self.space))
         .onAppear(perform: appeared)
+        #if DEBUG
+        .onAppear { Self.isMounted = true }
+        .onDisappear { Self.isMounted = false }
+        #endif
         .onChange(of: model.phase, initial: true) { _, phase in
             fx.acting = phase == .acting
             fx.needsYou = phase == .needsYou
         }
         .onChange(of: model.entries.isEmpty, initial: true) { _, empty in fx.emptyThread = empty && shown }
-        .onChange(of: shown) { _, now in if !now { fx.emptyThread = false } }
+        .onChange(of: shown) { _, now in fx.emptyThread = now && model.entries.isEmpty }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
         .onReceive(model.effects) { effect in if alive { play(effect) } else { settle(effect) } }
     }
@@ -174,6 +189,7 @@ struct AgentChatStage: View {
     }
 
     private func appeared() {
+        fx.clearLive()
         guard alive else { return }
         fx.addFlash(0.9)
         fx.ring(star.x, star.y, radius: 85, duration: 0.7)
@@ -193,7 +209,7 @@ struct AgentChatStage: View {
         case .sent:
             fx.addFlash(0.7)
             // After the row has laid out: the trail ends on the message.
-            DispatchQueue.main.async {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
                 guard let composer = fx.composerFrame, let asked = fx.askedFrame else { return }
                 fx.comet(from: CGPoint(x: composer.minX + composer.width * 0.7, y: composer.minY),
                          to: CGPoint(x: asked.maxX - 15, y: asked.minY + 8))
@@ -208,7 +224,7 @@ struct AgentChatStage: View {
             let ids = Set(step.targets.compactMap(\.itemID))
             fx.turnToDust(step: step.id, rowsOnStage(ids).map(\.frame))
         case .approvalAllowed:
-            if let card = fx.approvalFrame { fx.dust(card, count: 130) }
+            if let card = fx.composerFrame { fx.dust(card, count: 130) }
             let at = fx.sparkPoint
             fx.ring(at.x, at.y, radius: 45, duration: 0.5)
         case .approvalDenied:
@@ -230,9 +246,9 @@ struct AgentChatStage: View {
     private func moveChips(_ step: AgentStep, week: UUID?) {
         let found = Dictionary(rowsOnStage(Set(step.targets.compactMap(\.itemID))).map { ($0.id, $0.frame) },
                                uniquingKeysWith: { first, _ in first })
-        // A frame later: the week strip's slot has only just been laid out.
-        DispatchQueue.main.async {
-            guard let slot = fx.weekSlot else {
+        // The week strip's slot appears with this step: give it a few frames.
+        whenWeekSlotIsReady { slot in
+            guard let slot else {
                 if let week { step.targets.forEach { _ in model.dotLanded(week: week) } }
                 return
             }
@@ -246,6 +262,12 @@ struct AgentChatStage: View {
             }
             fx.fly(step: step.id, moves)
         }
+    }
+
+    private func whenWeekSlotIsReady(tries: Int = 8, _ body: @escaping (CGRect?) -> Void) {
+        if let slot = fx.weekSlot { return body(slot) }
+        guard tries > 0 else { return body(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { whenWeekSlotIsReady(tries: tries - 1, body) }
     }
 }
 
@@ -339,7 +361,6 @@ struct AgentChatComposer: View {
         .offset(x: shake)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { frame in
             fx.composerFrame = frame
-            if model.approval != nil { fx.approvalFrame = frame }
         }
         .frame(height: height, alignment: .bottomTrailing)
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -365,7 +386,7 @@ struct AgentChatComposer: View {
         } else {
             focused = false
             setTyping(false)
-            withAnimation(animation, completionCriteria: .logicallyComplete) { grown = false }
+            withAnimation(animation) { grown = false }
             // The blur's wipe is the longest part of the close.
             DispatchQueue.main.asyncAfter(deadline: .now() + AgentChatBackdropView.closing.duration + 0.02) { didClose() }
         }

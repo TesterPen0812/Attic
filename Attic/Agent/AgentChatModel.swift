@@ -266,8 +266,9 @@ final class AgentChatModel: ObservableObject {
         closedAtOnce = false
     }
 
-    /// True once per entry, the first time it is drawn.
-    func firstShowing(of id: UUID) -> Bool { presented.insert(id).inserted }
+    /// Whether an entry has been on screen: a reopened thread never replays.
+    func wasShown(_ id: UUID) -> Bool { presented.contains(id) }
+    func noteShown(_ id: UUID) { presented.insert(id) }
 
     /// The panel is on `page`: its dot goes, and a page the person went to
     /// (never one the agent opened) closes the chat.
@@ -458,7 +459,8 @@ final class AgentChatModel: ObservableObject {
     /// The reply is complete: its underlines may start.
     private func closeReply() {
         guard let last = entries.last, case var .reply(reply) = last.content, reply.marksStart == nil else { return }
-        reply.marksStart = isOpen && !reducesMotion() ? (replyEnds ?? now()) : .distantPast
+        reply.marksStart = isOpen && !reducesMotion()
+            ? (replyEnds?.addingTimeInterval(-pacing.settle) ?? now()) : .distantPast
         update(last.id) { $0 = .reply(reply) }
     }
 

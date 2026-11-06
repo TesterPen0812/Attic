@@ -183,18 +183,27 @@ struct AgentChatThread: View {
     @ViewBuilder
     private func row(_ entry: AgentChatEntry, viewport: CGFloat) -> some View {
         let dark = design.tokens.context.mode == .dark
+        let first = !model.wasShown(entry.id)
+        Group {
+            content(entry, first: first, viewport: viewport, dark: dark)
+        }
+        .onAppear { model.noteShown(entry.id) }
+    }
+
+    @ViewBuilder
+    private func content(_ entry: AgentChatEntry, first: Bool, viewport: CGFloat, dark: Bool) -> some View {
         switch entry.content {
         case let .asked(text):
-            AgentAskedRow(text: text, first: model.firstShowing(of: entry.id), alive: alive, viewport: viewport, fx: fx)
+            AgentAskedRow(text: text, first: first, alive: alive, viewport: viewport, fx: fx)
                 .modifier(AgentChatGlow(dark: dark))
         case let .step(step):
             AgentStepRow(step: step, alive: alive, fx: fx).modifier(AgentChatGlow(dark: dark))
         case let .week(week):
-            AgentWeekStrip(week: week, first: model.firstShowing(of: entry.id), alive: alive, running: model.phase != .idle, fx: fx)
+            AgentWeekStrip(week: week, first: first, alive: alive, running: model.phase != .idle, fx: fx)
         case let .reply(reply):
             AgentReplyView(reply: reply, fx: fx).modifier(AgentChatGlow(dark: dark))
         case let .changes(changes):
-            AgentChangesRow(changes: changes, first: model.firstShowing(of: entry.id), alive: alive, fx: fx,
+            AgentChangesRow(changes: changes, first: first, alive: alive, fx: fx,
                             toggle: { model.toggleChanges(entry.id) }, undo: { model.undo(entry.id) })
         case let .note(text):
             Text(text)
@@ -215,7 +224,16 @@ private struct AgentAskedRow: View {
     let fx: AgentChatFX
 
     @Environment(\.atticDesign) private var design
-    @State private var rise: CGFloat = 0
+    @State private var rise: CGFloat
+
+    init(text: String, first: Bool, alive: Bool, viewport: CGFloat, fx: AgentChatFX) {
+        self.text = text
+        self.first = first
+        self.alive = alive
+        self.viewport = viewport
+        self.fx = fx
+        _rise = State(initialValue: first ? 1 : 0)
+    }
 
     var body: some View {
         HStack {
@@ -233,8 +251,7 @@ private struct AgentAskedRow: View {
         .blur(radius: 1.25 * rise)
         .opacity(1 - 0.5 * rise)
         .onAppear {
-            guard first else { return }
-            rise = 1
+            guard rise > 0 else { return }
             withAnimation(alive ? .spring(duration: 0.56, bounce: 0.25) : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.42)) { rise = 0 }
         }
     }
@@ -388,9 +405,20 @@ private struct AgentWeekStrip: View {
     let fx: AgentChatFX
 
     @Environment(\.atticDesign) private var design
-    @State private var filled = false
-    @State private var arrived = false
+    @State private var filled: Bool
+    @State private var arrived: Bool
     @State private var glow = false
+
+    init(week: AgentChatWeek, first: Bool, alive: Bool, running: Bool, fx: AgentChatFX) {
+        self.week = week
+        self.first = first
+        self.alive = alive
+        self.running = running
+        self.fx = fx
+        // A strip seen before is whole from its first frame.
+        _filled = State(initialValue: !(first && alive))
+        _arrived = State(initialValue: !(first && alive))
+    }
 
     private static let target = Color(red: 84 / 255, green: 92 / 255, blue: 210 / 255)
 
@@ -423,12 +451,7 @@ private struct AgentWeekStrip: View {
     }
 
     private func appear() {
-        guard first, alive else {
-            arrived = true
-            filled = true
-            glow = true
-            return
-        }
+        guard !arrived else { return }
         withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.52)) { arrived = true }
         filled = true
     }
@@ -471,6 +494,7 @@ private struct AgentWeekStrip: View {
                 .shadow(color: (glow ? AgentIris.pink : AgentIris.blue).opacity(0.4), radius: glow ? 5 : 3)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { fx.weekSlot = $0 }
+        .onDisappear { fx.weekSlot = nil }
         .onChange(of: running, initial: true) { _, now in
             guard alive else { return }
             if now {
@@ -493,8 +517,18 @@ private struct AgentChangesRow: View {
 
     @Environment(\.atticDesign) private var design
     @State private var shown: Int?
-    @State private var arrived = false
+    @State private var arrived: Bool
     @State private var pop = false
+
+    init(changes: AgentChatChanges, first: Bool, alive: Bool, fx: AgentChatFX, toggle: @escaping () -> Void, undo: @escaping () -> Void) {
+        self.changes = changes
+        self.first = first
+        self.alive = alive
+        self.fx = fx
+        self.toggle = toggle
+        self.undo = undo
+        _arrived = State(initialValue: !(first && alive))
+    }
 
     private var undone: Bool { changes.state == .undone }
 
@@ -572,10 +606,7 @@ private struct AgentChangesRow: View {
     }
 
     private func appear() async {
-        guard first, alive else {
-            arrived = true
-            return
-        }
+        guard !arrived else { return }
         withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.52)) { arrived = true }
         shown = 0
         try? await Task.sleep(for: .seconds(0.18))

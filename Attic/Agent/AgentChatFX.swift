@@ -71,7 +71,6 @@ final class AgentChatFX: ObservableObject {
     var emptyThread = true { didSet { if emptyThread != oldValue { wake() } } }
     var dark = false
     var toolSlot: CGRect?
-    var approvalFrame: CGRect?
     var changesStar: CGRect?
     var weekSlot: CGRect?
     var composerFrame: CGRect?
@@ -139,6 +138,22 @@ final class AgentChatFX: ObservableObject {
         if isIdle { isIdle = false }
         last = nil
     }
+
+    /// The stage has just opened: nothing left over from last time moves.
+    func clearLive() {
+        particles = []
+        rings = []
+        flights = []
+        scans = []
+        spark = Spark()
+        landing = false
+        wake()
+    }
+
+    #if DEBUG
+    /// Test seam: how much is alive.
+    var liveCount: Int { particles.count + rings.count + flights.count + scans.count }
+    #endif
 
     // MARK: Spawning (design px halved)
 
@@ -278,7 +293,7 @@ final class AgentChatFX: ObservableObject {
             landing = false
         }
         guard acting || needsYou else { return nil }
-        if needsYou, let frame = approvalFrame {
+        if needsYou, let frame = composerFrame {
             return Goal(x: frame.maxX - 23, y: frame.minY + 22 + sin(time * 3.2) * 2, scale: 0.68,
                         pinch: 0.55 + 0.2 * sin(time * 3.2), kind: .need)
         }
