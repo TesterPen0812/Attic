@@ -603,7 +603,7 @@ struct NotesEditorPage: View {
             .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
             .accessibilityIdentifier("notes-all-notes")
             .accessibilitySortPriority(1)
-            .modifier(NotesComposerChromeAccessibility())
+            .modifier(NotesComposerChromeAccessibility(size: NotesBarMetrics.size))
             Spacer(minLength: AtticNoteMetrics.pillMinGap)
             if let session = controller.active {
                 NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
@@ -647,7 +647,7 @@ struct NotesEditorPage: View {
         .atticDesignCorners()
         .noteFormatRowLeaving(.newNote)
         .accessibilityIdentifier(plus.identifier)
-        .modifier(NotesComposerChromeAccessibility())
+        .modifier(NotesComposerChromeAccessibility(size: CGSize(width: side, height: side)))
     }
 
     /// Aa shows on an editable note with text under its title (owner,
@@ -1965,11 +1965,13 @@ struct NotesPageSwipeMonitor: NSViewRepresentable {
 /// the composer takes their row. The surrounding format row must not gain an
 /// accessibility modifier: doing so changes the frames it reports to AX.
 private struct NotesComposerChromeAccessibility: ViewModifier {
+    let size: CGSize
     @Environment(\.panelSharedChrome) private var chrome
+    @Environment(\.atticControlGone) private var rowGone
 
     func body(content: Content) -> some View {
         if let chrome {
-            Observing(chrome: chrome) { content }
+            Observing(chrome: chrome, size: size, rowGone: rowGone) { content }
         } else {
             content
         }
@@ -1977,13 +1979,19 @@ private struct NotesComposerChromeAccessibility: ViewModifier {
 
     private struct Observing<Row: View>: View {
         @ObservedObject var chrome: PanelSharedChrome
+        let size: CGSize
+        let rowGone: Bool
         @ViewBuilder var row: () -> Row
 
         var body: some View {
-            if chrome.plusHandedOver {
-                row().accessibilityHidden(true)
+            if chrome.plusHandedOver && rowGone {
+                // Hidden AX modifiers on a native glass button still leave
+                // its button node exposed inside the row's control group.
+                // After the existing fade completes, retire the button view
+                // itself while retaining its footprint for Aa's layout.
+                Color.clear.frame(width: size.width, height: size.height)
             } else {
-                row()
+                row().accessibilityHidden(chrome.plusHandedOver)
             }
         }
     }
