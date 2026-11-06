@@ -198,7 +198,11 @@ final class PanelSharedChromeTests: XCTestCase {
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
-                                     noteDraft: draft, chromeInteractionState: chrome, uiState: state, settings: settings),
+                                     noteDraft: draft, chromeInteractionState: chrome, uiState: state, settings: settings)
+                // The panel's pageMotion reads SwiftUI's environment directly.
+                // The design-token seam above alone does not override CI's
+                // system Reduce Motion setting for the page transition.
+                .environment(\.accessibilityReduceMotion, false),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
         let panel = NSPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
