@@ -11,13 +11,17 @@ import XCTest
 final class DoneSearchCostTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
+        #if DEBUG
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false
+        #endif
     }
 
     override func tearDown() async throws {
+        #if DEBUG
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
+        #endif
         try await super.tearDown()
     }
 
