@@ -199,7 +199,8 @@ struct AgentChatThread: View {
         case let .step(step):
             AgentStepRow(step: step, alive: alive, fx: fx).modifier(AgentChatGlow(dark: dark))
         case let .week(week):
-            AgentWeekStrip(week: week, first: first, alive: alive, running: model.phase != .idle, fx: fx)
+            AgentWeekStrip(id: entry.id, week: week, first: first, alive: alive,
+                           running: model.phase != .idle && model.runWeek == entry.id, fx: fx)
         case let .reply(reply):
             AgentReplyView(reply: reply, fx: fx).modifier(AgentChatGlow(dark: dark))
         case let .changes(changes):
@@ -389,7 +390,7 @@ private struct AgentReplyView: View {
     private func text(_ words: [AgentChatWords.Word], first: Int) -> Text {
         var text = Text("")
         for (index, word) in words.enumerated() {
-            if index > 0 { text = text + Text(verbatim: " ") }
+            if index > 0, !word.joinsPrevious { text = text + Text(verbatim: " ") }
             text = text + Text(verbatim: word.text).customAttribute(AgentWordAttribute(index: first + index, key: word.key))
         }
         return text
@@ -398,6 +399,7 @@ private struct AgentReplyView: View {
 
 /// The week filling in, and the day moved tasks land on.
 private struct AgentWeekStrip: View {
+    let id: UUID
     let week: AgentChatWeek
     let first: Bool
     let alive: Bool
@@ -409,7 +411,8 @@ private struct AgentWeekStrip: View {
     @State private var arrived: Bool
     @State private var glow = false
 
-    init(week: AgentChatWeek, first: Bool, alive: Bool, running: Bool, fx: AgentChatFX) {
+    init(id: UUID, week: AgentChatWeek, first: Bool, alive: Bool, running: Bool, fx: AgentChatFX) {
+        self.id = id
         self.week = week
         self.first = first
         self.alive = alive
@@ -478,6 +481,8 @@ private struct AgentWeekStrip: View {
         .background { RoundedRectangle(cornerRadius: 4.5, style: .continuous).fill(tint.opacity(0.045)) }
     }
 
+    private var slotKey: AgentChatFX.WeekSlot? { week.target.map { AgentChatFX.WeekSlot(week: id, day: $0) } }
+
     private var slot: some View {
         VStack(spacing: 1.5) {
             ForEach(0..<min(4, week.dots), id: \.self) { index in
@@ -493,8 +498,10 @@ private struct AgentWeekStrip: View {
             shape.strokeBorder(glow ? AgentIris.pink.opacity(0.85) : AgentIris.blue.opacity(0.8), lineWidth: 1)
                 .shadow(color: (glow ? AgentIris.pink : AgentIris.blue).opacity(0.4), radius: glow ? 5 : 3)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { fx.weekSlot = $0 }
-        .onDisappear { fx.weekSlot = nil }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { frame in
+            if let slotKey { fx.weekSlots[slotKey] = frame }
+        }
+        .onDisappear { if let slotKey { fx.weekSlots[slotKey] = nil } }
         .onChange(of: running, initial: true) { _, now in
             guard alive else { return }
             if now {

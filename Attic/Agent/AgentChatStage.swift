@@ -105,9 +105,11 @@ struct AgentChatStage: View {
     let didClose: () -> Void
 
     #if DEBUG
-    /// Test seams: how often the stage's body ran, and whether it is on screen.
+    /// Test seams: how often the stage's body ran, whether it is on screen, and
+    /// the strip each move's chips flew to.
     static var bodyEvaluations = 0
     static var isMounted = false
+    static var chipFlights: [UUID] = []
     #endif
 
     @Environment(\.atticDesign) private var design
@@ -247,11 +249,16 @@ struct AgentChatStage: View {
         let found = Dictionary(rowsOnStage(Set(step.targets.compactMap(\.itemID))).map { ($0.id, $0.frame) },
                                uniquingKeysWith: { first, _ in first })
         // The week strip's slot appears with this step: give it a few frames.
-        whenWeekSlotIsReady { slot in
+        var key: AgentChatFX.WeekSlot?
+        if let week, case let .move(day?) = step.kind { key = AgentChatFX.WeekSlot(week: week, day: day) }
+        whenWeekSlotIsReady(key) { slot in
             guard let slot else {
                 if let week { step.targets.forEach { _ in model.dotLanded(week: week) } }
                 return
             }
+            #if DEBUG
+            if let week { Self.chipFlights.append(week) }
+            #endif
             let shownDots = min(4, step.targets.count)
             let moves = step.targets.enumerated().map { index, target in
                 let dot = min(index, shownDots - 1)
@@ -264,10 +271,11 @@ struct AgentChatStage: View {
         }
     }
 
-    private func whenWeekSlotIsReady(tries: Int = 8, _ body: @escaping (CGRect?) -> Void) {
-        if let slot = fx.weekSlot { return body(slot) }
+    private func whenWeekSlotIsReady(_ key: AgentChatFX.WeekSlot?, tries: Int = 8, _ body: @escaping (CGRect?) -> Void) {
+        guard let key else { return body(nil) }
+        if let slot = fx.weekSlots[key] { return body(slot) }
         guard tries > 0 else { return body(nil) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { whenWeekSlotIsReady(tries: tries - 1, body) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { whenWeekSlotIsReady(key, tries: tries - 1, body) }
     }
 }
 

@@ -60,6 +60,13 @@ final class AgentWordProbe: @unchecked Sendable {
 /// stage is on screen, and stops asking for frames once nothing moves.
 @MainActor
 final class AgentChatFX: ObservableObject {
+    /// Where one day's chips land: every run has its own strip, and a strip's
+    /// day can change within a run.
+    struct WeekSlot: Hashable {
+        var week: UUID
+        var day: Date
+    }
+
     /// Nothing is moving: the timelines pause until `wake()`.
     @Published private(set) var isIdle = false
     /// The spark reached the changes row: its ✦ answers.
@@ -72,7 +79,7 @@ final class AgentChatFX: ObservableObject {
     var dark = false
     var toolSlot: CGRect?
     var changesStar: CGRect?
-    var weekSlot: CGRect?
+    var weekSlots: [WeekSlot: CGRect] = [:]
     var composerFrame: CGRect?
     var askedFrame: CGRect?
     var paragraphFrames: [Int: CGRect] = [:]

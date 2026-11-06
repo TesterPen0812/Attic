@@ -81,6 +81,43 @@ final class AgentChatTests: XCTestCase {
         model.entries.compactMap { if case let .changes(changes) = $0.content { changes } else { nil } }.last
     }
 
+    private var weeks: [AgentChatWeek] {
+        model.entries.compactMap { if case let .week(week) = $0.content { week } else { nil } }
+    }
+
+    private var weekIDs: [UUID] {
+        model.entries.compactMap { if case .week = $0.content { $0.id } else { nil } }
+    }
+
+    private func november(_ day: Int) -> Date {
+        Calendar.autoupdatingCurrent.date(from: DateComponents(year: 2026, month: 11, day: day, hour: 12))!
+    }
+
+    private func midnight(_ date: Date) -> Date { Calendar.autoupdatingCurrent.startOfDay(for: date) }
+
+    private func tasks(_ titles: [String]) -> [AgentTarget] {
+        titles.map { AgentTarget(page: .tasks, itemID: UUID(), title: $0) }
+    }
+
+    private func readTheCalendar() async {
+        var read = step(.read, targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)])
+        await emit(.stepStarted(read))
+        read.state = .done
+        await emit(.stepFinished(read))
+    }
+
+    /// One whole run: reads the calendar, moves `titles`, and their dots land.
+    private func runMoving(_ titles: [String], to day: Date) async {
+        await start()
+        await readTheCalendar()
+        var moved = step(.move(toDay: day), targets: tasks(titles))
+        await emit(.stepStarted(moved))
+        titles.forEach { _ in model.dotLanded(week: weekIDs.last!) }
+        moved.state = .done
+        await emit(.stepFinished(moved),
+                   .changes(AgentChangeSet(id: UUID(), title: "Changes", pages: [.tasks], count: titles.count)), .finished)
+    }
+
     // MARK: Open and close
 
     func testOpeningWatchesAndClosingStopsWatchingWithoutStoppingTheRun() async {
@@ -274,6 +311,52 @@ final class AgentChatTests: XCTestCase {
         XCTAssertEqual(AgentChatWords.paragraphs("An **open").first?.map(\.key), [nil, 1], "A stream can stop mid-mark")
     }
 
+    /// The reply as the renderer writes it.
+    private func written(_ raw: String) -> String {
+        AgentChatWords.paragraphs(raw).flatMap { $0 }.reduce(into: "") { text, word in
+            if !text.isEmpty, !word.joinsPrevious { text += " " }
+            text += word.text
+        }
+    }
+
+    func testPunctuationStaysOnTheHighlightedWordItTouches() {
+        let words = AgentChatWords.paragraphs("Now on **Friday**, your first. In **two places**: soon")[0]
+        XCTAssertEqual(words.map(\.text), ["Now", "on", "Friday", ",", "your", "first.", "In", "two", "places", ":", "soon"])
+        XCTAssertEqual(words.filter(\.joinsPrevious).map(\.text), [",", ":"])
+        XCTAssertEqual(words.map(\.key), [nil, nil, 1, nil, nil, nil, nil, 2, 2, nil, nil], "The underline stops at the word")
+        XCTAssertEqual(written("Now on **Friday**, your first."), "Now on Friday, your first.")
+        XCTAssertEqual(written("Done in **two places**: Friday"), "Done in two places: Friday")
+        XCTAssertEqual(written("(**Friday**)"), "(Friday)")
+        XCTAssertEqual(written("Re**do**ing it"), "Redoing it")
+        XCTAssertEqual(written("**a****b** c"), "ab c")
+    }
+
+    func testSpacesAroundAMarkStaySpaces() {
+        XCTAssertEqual(written("On **Friday** at **noon** today"), "On Friday at noon today")
+        XCTAssertEqual(written("On ** Friday ** today"), "On Friday today")
+        XCTAssertEqual(written("**Friday** first"), "Friday first")
+    }
+
+    func testAParagraphStartsOnItsOwn() {
+        let paragraphs = AgentChatWords.paragraphs("One **key**\n\n**Two** words")
+        XCTAssertEqual(paragraphs.flatMap { $0 }.filter(\.joinsPrevious), [])
+    }
+
+    func testDeltasCutAnywhereWriteTheSameWords() async {
+        let raw = "2 tasks now on **Friday**, your first free afternoon."
+        let whole = AgentChatWords.paragraphs(raw)
+        XCTAssertEqual(whole[0].filter(\.joinsPrevious).map(\.text), [","])
+        for cut in 1..<raw.count {
+            model.newChat()
+            await start()
+            let index = raw.index(raw.startIndex, offsetBy: cut)
+            await emit(.textDelta(String(raw[..<index])), .textDelta(String(raw[index...])), .finished)
+            XCTAssertEqual(replies.count, 1)
+            XCTAssertEqual(AgentChatWords.paragraphs(replies[0].raw), whole)
+            XCTAssertEqual(replies[0].wordTimes.count, whole[0].count, "Cut at \(cut)")
+        }
+    }
+
     func testStoppingMarksRunningStepsAndClearsTheApproval() async {
         model.open()
         await start()
@@ -339,6 +422,107 @@ final class AgentChatTests: XCTestCase {
         let id = try? XCTUnwrap(model.entries.first { if case .week = $0.content { true } else { false } }?.id)
         model.dotLanded(week: id!)
         XCTAssertEqual(week?.landed, 1)
+    }
+
+    func testAMoveToAnotherWeekShowsTheWeekThatHoldsTheDay() async {
+        let friday = november(6)
+        model.now = { friday }
+        model.open()
+        await start()
+        await readTheCalendar()
+        XCTAssertEqual(week?.days.first?.day, midnight(november(2)), "A calendar read shows this week")
+
+        await emit(.stepStarted(step(.move(toDay: november(13)), targets: tasks(["A", "B"]))))
+        XCTAssertEqual(weeks.count, 1, "The run keeps one strip")
+        XCTAssertEqual(week?.days.first?.day, midnight(november(9)), "The strip follows the destination")
+        XCTAssertEqual(week?.days.last?.day, midnight(november(15)))
+        XCTAssertEqual(week?.target, november(13))
+
+        await readTheCalendar()
+        XCTAssertEqual(week?.days.first?.day, midnight(november(9)), "A later read leaves the destination on show")
+        XCTAssertEqual(week?.target, november(13))
+    }
+
+    func testAMoveInsideTheShownWeekKeepsItsDays() async {
+        let wednesday = november(4)
+        var asked = 0
+        model.now = { wednesday }
+        model.weekDays = {
+            asked += 1
+            return AgentChatModel.emptyWeek(holding: $0)
+        }
+        model.open()
+        await start()
+        await readTheCalendar()
+        await emit(.stepStarted(step(.move(toDay: november(6)), targets: tasks(["A"]))))
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(week?.target, november(6))
+    }
+
+    func testEachRunGetsItsOwnWeek() async {
+        let friday = november(6)
+        model.now = { friday }
+        model.open()
+        await runMoving(["A", "B"], to: november(13))
+        await runMoving(["C"], to: november(13))
+        XCTAssertEqual(weeks.count, 2)
+        XCTAssertEqual(weeks.map(\.dots), [2, 1])
+        XCTAssertEqual(weeks.map(\.landed), [2, 1])
+        let order = model.entries.compactMap { entry -> String? in
+            switch entry.content {
+            case .asked: "asked"
+            case .week: "week"
+            default: nil
+            }
+        }
+        XCTAssertEqual(order, ["asked", "week", "asked", "week"], "A run's strip sits in its own exchange")
+    }
+
+    func testUndoTakesTheDotsOffItsOwnRunsStrip() async {
+        let friday = november(6)
+        model.now = { friday }
+        model.open()
+        await runMoving(["A", "B"], to: november(13))
+        await runMoving(["C"], to: november(13))
+        let first = model.entries.first { if case .changes = $0.content { true } else { false } }!.id
+        model.undo(first)
+        await settle()
+        XCTAssertEqual(weeks.map(\.landed), [0, 1])
+    }
+
+    func testMovesToOneDayAddUpAndANewDayStartsOver() async {
+        let friday = november(6)
+        model.now = { friday }
+        model.open()
+        await start()
+        await emit(.stepStarted(step(.move(toDay: november(13)), targets: tasks(["A"]))))
+        model.dotLanded(week: weekIDs[0])
+        await emit(.stepStarted(step(.move(toDay: november(13)), targets: tasks(["B"]))))
+        XCTAssertEqual(week?.dots, 2, "One task at a time still fills the day")
+        XCTAssertEqual(week?.landed, 1)
+        await emit(.stepStarted(step(.move(toDay: november(23)), targets: tasks(["C"]))))
+        XCTAssertEqual(weeks.count, 1)
+        XCTAssertEqual(week?.days.first?.day, midnight(november(23)))
+        XCTAssertEqual(week?.dots, 1)
+        XCTAssertEqual(week?.landed, 0)
+    }
+
+    func testAStoppedRunsWorkStaysOutOfTheNextRunsList() async {
+        model.open()
+        await start()
+        var stopped = step(.move(toDay: Date()), targets: tasks(["Stopped"]))
+        await emit(.stepStarted(stopped))
+        stopped.state = .done
+        await emit(.stepFinished(stopped))
+        model.stop()
+        await settle()
+        await start()
+        var moved = step(.move(toDay: Date()), targets: tasks(["Kept"]))
+        await emit(.stepStarted(moved))
+        moved.state = .done
+        await emit(.stepFinished(moved), .changes(AgentChangeSet(id: UUID(), title: "Changes", pages: [.tasks], count: 1)), .finished)
+        XCTAssertEqual(changes?.items.map(\.title), ["Kept"])
+        XCTAssertEqual(changes?.steps, [moved.id])
     }
 
     func testAMoveWhileClosedLandsWithNoMotionAndNoEffects() async {
@@ -525,6 +709,41 @@ final class ScriptedAgentRunnerTests: XCTestCase {
         XCTAssertEqual(due("One"), "2026-09-25")
     }
 
+    private func reply(_ events: [AgentEvent]) -> String {
+        events.compactMap { if case let .textDelta(text) = $0 { text } else { nil } }.joined()
+    }
+
+    func testATaskAlreadyOnTheDayIsNotAChange() async throws {
+        for (title, day) in [("Dentist", "2026-09-25"), ("One", "2026-09-28"), ("Two", "2026-09-29")] { try addTask(title, due: day) }
+        let runner = runner()
+        let events = await collect(runner, "tidy", allow: false)
+        let move = events.compactMap { event -> AgentStep? in
+            if case let .stepFinished(step) = event, case .move = step.kind { step } else { nil }
+        }.first
+        XCTAssertEqual(Set(move?.targets.compactMap(\.title) ?? []), ["One", "Two"])
+        XCTAssertEqual(move?.title, "Moved 2 tasks to Friday")
+        XCTAssertTrue(reply(events).contains("2 tasks now on"))
+        let set = events.compactMap { if case let .changes(set) = $0 { set } else { nil } }.first
+        XCTAssertEqual(set?.count, 2)
+        XCTAssertEqual(due("One"), "2026-09-25")
+        try await runner.undo(changeSet: XCTUnwrap(set?.id))
+        XCTAssertEqual(due("One"), "2026-09-28")
+        XCTAssertEqual(due("Two"), "2026-09-29")
+        XCTAssertEqual(due("Dentist"), "2026-09-25")
+    }
+
+    func testWithEveryTaskAlreadyOnTheDayNothingMoves() async throws {
+        try addTask("Dentist", due: "2026-09-25")
+        let kept = await collect(runner(), "tidy", allow: false)
+        XCTAssertFalse(kept.contains { if case .changes = $0 { true } else { false } })
+        XCTAssertFalse(kept.contains { if case let .stepStarted(step) = $0, case .move = step.kind { true } else { false } })
+        XCTAssertTrue(reply(kept).contains("Nothing has been changed."))
+
+        let gone = await collect(runner(), "tidy", allow: true)
+        XCTAssertFalse(reply(gone).contains("Nothing has been changed."), "A delete is a change")
+        XCTAssertTrue(reply(gone).contains("One task is gone."))
+    }
+
     func testRepliesCarryKeyWordsAndAStepPerTool() async throws {
         try addTask("One", due: "2026-09-10")
         let events = await collect(runner(), "tidy")
@@ -581,6 +800,7 @@ final class AgentChatHostedTests: XCTestCase {
         window.contentView = NSHostingView(rootView: root)
         window.orderFront(nil)
         AgentChatStage.bodyEvaluations = 0
+        AgentChatStage.chipFlights = []
         spin(0.2)
     }
 
@@ -639,6 +859,47 @@ final class AgentChatHostedTests: XCTestCase {
         spin(0.05)
         XCTAssertFalse(AgentChatStage.isMounted)
         XCTAssertFalse(chrome.plusHandedOver)
+    }
+
+    private var weekIDs: [UUID] {
+        model.entries.compactMap { if case .week = $0.content { $0.id } else { nil } }
+    }
+
+    /// One run in the open chat: reads the calendar, moves a task to `day`.
+    private func runMoving(to day: Date) {
+        model.draft = "tidy"
+        model.send()
+        spin(0.05)
+        var read = AgentStep(id: UUID(), title: "Checking", kind: .read,
+                             targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)], state: .running)
+        runner.continuation?.yield(.stepStarted(read))
+        spin(0.1)
+        read.state = .done
+        runner.continuation?.yield(.stepFinished(read))
+        spin(0.1)
+        runner.continuation?.yield(.stepStarted(AgentStep(id: UUID(), title: "Moving", kind: .move(toDay: day),
+                                                          targets: [AgentTarget(page: .tasks, itemID: UUID(), title: "Call")],
+                                                          state: .running)))
+        spin(0.5)
+    }
+
+    func testChipsHaveASlotWhenTheDestinationIsAnotherWeek() {
+        model.open()
+        spin(0.1)
+        runMoving(to: Calendar.autoupdatingCurrent.date(byAdding: .day, value: 14, to: Date())!)
+        XCTAssertEqual(AgentChatStage.chipFlights, weekIDs)
+    }
+
+    func testALaterRunsChipsFlyToItsOwnStrip() {
+        let day = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 14, to: Date())!
+        model.open()
+        spin(0.1)
+        runMoving(to: day)
+        runner.continuation?.yield(.finished)
+        spin(0.2)
+        runMoving(to: day)
+        XCTAssertEqual(weekIDs.count, 2)
+        XCTAssertEqual(AgentChatStage.chipFlights, weekIDs)
     }
 
     func testFullThreadRendersWithOneRunThrough() {

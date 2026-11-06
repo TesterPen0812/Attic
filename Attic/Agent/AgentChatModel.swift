@@ -93,6 +93,8 @@ struct AgentChatChanges: Equatable {
     var items: [AgentChatChange]
     /// The steps behind it, so Undo can run their motion backwards.
     var steps: [UUID]
+    /// The run's week strip, whose dots Undo takes back.
+    var week: UUID?
     var state: State = .ready
     var isExpanded = false
 }
@@ -149,6 +151,9 @@ enum AgentChatWords {
         var text: String
         /// Words of one `**key phrase**` share a key; nil for the rest.
         var key: Int?
+        /// Written straight after the word before, with no space: the comma in
+        /// `**Friday**,` is a word of its own so the underline stops at Friday.
+        var joinsPrevious = false
     }
 
     /// Paragraphs of words, in order. `**` marks a key phrase and never
@@ -158,13 +163,20 @@ enum AgentChatWords {
         var inKey = false
         return raw.components(separatedBy: "\n\n").compactMap { paragraph in
             var words: [Word] = []
+            // Whether the text so far runs right up to this `**`, with no space.
+            var touching = false
             for (index, part) in paragraph.components(separatedBy: "**").enumerated() {
                 if index > 0 {
                     inKey.toggle()
                     if inKey { key += 1 }
                 }
+                guard let first = part.first, let last = part.last else { continue }
                 let pieces = part.split(whereSeparator: \.isWhitespace).map(String.init)
-                words += pieces.map { Word(text: $0, key: inKey ? key : nil) }
+                for (position, piece) in pieces.enumerated() {
+                    words.append(Word(text: piece, key: inKey ? key : nil,
+                                      joinsPrevious: position == 0 && touching && !first.isWhitespace))
+                }
+                touching = !last.isWhitespace
             }
             return words.isEmpty ? nil : words
         }
@@ -221,6 +233,8 @@ final class AgentChatModel: ObservableObject {
     private var runChangeCount = 0
     private var pendingItems: [AgentChatChange] = []
     private var pendingSteps: [UUID] = []
+    /// This run's week strip. Each run has its own, so an earlier one stays as it was.
+    private(set) var runWeek: UUID?
     /// The page the agent itself is going to: arriving there keeps the chat open.
     private var agentGoingTo: AgentPage?
     /// Entries already drawn once: a reopened thread does not replay them.
@@ -291,6 +305,9 @@ final class AgentChatModel: ObservableObject {
         unread = false
         runChangeCount = 0
         progress = nil
+        pendingItems = []
+        pendingSteps = []
+        runWeek = nil
         nextWordTime = nil
         replyEnds = nil
         phase = .waiting
@@ -335,6 +352,7 @@ final class AgentChatModel: ObservableObject {
         presented = []
         pendingItems = []
         pendingSteps = []
+        runWeek = nil
         refreshBar()
     }
 
@@ -350,7 +368,7 @@ final class AgentChatModel: ObservableObject {
         update(id) { $0 = .changes(changes) }
         if isOpen { effects.send(.undoing(changes)) }
         dots = []
-        retreatDots()
+        retreatDots(on: changes.week)
         Task { [weak self] in
             do {
                 try await runner.undo(changeSet: changes.set.id)
@@ -379,10 +397,10 @@ final class AgentChatModel: ObservableObject {
         }
     }
 
-    private func retreatDots() {
-        guard let index = entries.lastIndex(where: { if case .week = $0.content { true } else { false } }),
-              case let .week(week) = entries[index].content, week.landed > 0 else { return }
-        let id = entries[index].id
+    private func retreatDots(on id: UUID?) {
+        guard let entry = entries.first(where: { $0.id == id }),
+              case let .week(week) = entry.content, week.landed > 0 else { return }
+        let id = entry.id
         let gap = reducesMotion() || !isOpen ? 0 : pacing.dotRetreat
         Task { [weak self] in
             for _ in 0..<week.landed {
@@ -511,7 +529,7 @@ final class AgentChatModel: ObservableObject {
 
     private func changesArrived(_ set: AgentChangeSet) {
         runChangeCount += set.count
-        let entry = AgentChatEntry(.changes(AgentChatChanges(set: set, items: pendingItems, steps: pendingSteps)))
+        let entry = AgentChatEntry(.changes(AgentChatChanges(set: set, items: pendingItems, steps: pendingSteps, week: runWeek)))
         pendingItems = []
         pendingSteps = []
         entries.append(entry)
@@ -550,24 +568,36 @@ final class AgentChatModel: ObservableObject {
 
     // MARK: The week strip
 
+    /// The run's strip, made on first use. A move's day is always on show:
+    /// the strip takes that day's week, so chips have a slot to land on and the
+    /// strip says where the tasks went, whatever day the runner picks.
     private func showWeek(holding day: Date, target: Date?, dots: Int) -> UUID {
-        if let entry = entries.last(where: { if case .week = $0.content { true } else { false } }) {
-            update(entry.id) {
-                guard case var .week(week) = $0 else { return }
-                week.target = target ?? week.target
-                week.dots = max(week.dots, dots)
-                $0 = .week(week)
-            }
+        guard let runWeek else {
+            let entry = AgentChatEntry(.week(AgentChatWeek(days: weekDays(day), target: target, dots: dots)))
+            entries.append(entry)
+            runWeek = entry.id
             return entry.id
         }
-        let entry = AgentChatEntry(.week(AgentChatWeek(days: weekDays(day), target: target, dots: dots)))
-        entries.append(entry)
-        return entry.id
+        guard let target else { return runWeek }
+        let calendar = Calendar.autoupdatingCurrent
+        update(runWeek) {
+            guard case var .week(week) = $0 else { return }
+            if !week.days.contains(where: { calendar.isDate($0.day, inSameDayAs: target) }) { week.days = weekDays(target) }
+            if let shown = week.target, calendar.isDate(shown, inSameDayAs: target) {
+                week.dots += dots
+            } else {
+                week.target = target
+                week.dots = dots
+                week.landed = 0
+            }
+            $0 = .week(week)
+        }
+        return runWeek
     }
 
     private func updateWeek(_ change: (inout AgentChatWeek) -> Void) {
-        guard let entry = entries.last(where: { if case .week = $0.content { true } else { false } }) else { return }
-        update(entry.id) {
+        guard let runWeek else { return }
+        update(runWeek) {
             guard case var .week(week) = $0 else { return }
             change(&week)
             $0 = .week(week)

@@ -150,7 +150,8 @@ final class ScriptedAgentRunner: AgentRunning {
 
         let friday = nextFriday()
         let toRemove = Array(pool.filter { $0.title == "New Reminder" }.prefix(2))
-        let moved = Array(pool.filter { task in !toRemove.contains { $0.id == task.id } }.prefix(3))
+        // A task already on the day has nothing to move, so it is no change.
+        let moved = Array(pool.filter { task in task.due != iso(friday) && !toRemove.contains { $0.id == task.id } }.prefix(3))
         let toDelete = toRemove.isEmpty ? Array(pool.filter { task in !moved.contains { $0.id == task.id } }.prefix(2)) : toRemove
         if !readOnly, !moved.isEmpty { try await move(moved, to: friday) }
         emit(.progress(done: 3, total: 3))
@@ -169,9 +170,13 @@ final class ScriptedAgentRunner: AgentRunning {
         }
         try await wait(0.65)
 
-        var first = moved.isEmpty || readOnly ? "Nothing has been changed." : "\(count(moved.count)) now on **Friday**, your first free afternoon."
-        if deleted > 0 { first += " The \(deleted == 1 ? "other one is" : "other \(deleted) are") gone." }
-        var answer = first
+        var answer: String
+        if moved.isEmpty || readOnly {
+            answer = deleted == 0 ? "Nothing has been changed." : "\(count(deleted)) \(deleted == 1 ? "is" : "are") gone."
+        } else {
+            answer = "\(count(moved.count)) now on **Friday**, your first free afternoon."
+            if deleted > 0 { answer += " The \(deleted == 1 ? "other one is" : "other \(deleted) are") gone." }
+        }
         if let next = pool.first(where: { task in !moved.contains { $0.id == task.id } && !toDelete.contains { $0.id == task.id } }) {
             answer += "\n\n**\(next.title)** is the one I’d do today."
         }
