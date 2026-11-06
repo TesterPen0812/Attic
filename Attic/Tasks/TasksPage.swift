@@ -1593,6 +1593,35 @@ struct TasksPage: View {
                 let id = focus.id
                 revealRow(id, in: tab, proxy: proxy, glides: travel != nil)
             }
+            .onChange(of: model.expanded) { previous, current in
+                // A quick look can grow below the floating bottom bar. The
+                // action still exists in accessibility there, but a mouse
+                // click hits the bar instead of "Add subtask". Reveal the
+                // expanded height in the unobstructed list viewport.
+                guard tab == model.tab, let id = current.subtracting(previous).first,
+                      let row = rows.first(where: { $0.id == id }) else { return }
+                DispatchQueue.main.async {
+                    guard model.expanded.contains(id),
+                          let frame = pointer.frames[TasksRowID(tab: tab, id: id)] else { return }
+                    let expanded = CGRect(origin: frame.origin,
+                                          size: CGSize(width: frame.width, height: max(frame.height, estimatedHeight(row))))
+                    let reveal = TasksViewport.reveal(frame: expanded, height: expanded.height,
+                                                      viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
+                                                      listTop: listTop, bottomMargin: bottomMargin,
+                                                      bottomClearance: bottomClearance)
+                    guard let delta = TasksViewport.revealDelta(reveal, frame: expanded,
+                                                                 viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
+                                                                 listTop: listTop, bottomClearance: bottomClearance),
+                          delta > 0 else { return }
+                    if let scroll = listProxies.scrollViews[tab] {
+                        listProxies.glide(for: tab).run(by: delta, in: scroll,
+                            spring: Spring(duration: AtticMotionPreset.settle.spring(in: .current).response,
+                                           bounce: AtticMotionPreset.settle.spring(in: .current).bounce))
+                    } else {
+                        scroll(proxy, to: id, in: tab, anchor: .top)
+                    }
+                }
+            }
             // An agent's `show`, or a task just added: the row comes into view.
             // The list registers where it can be scrolled; the page takes
             // a `show`'s request to it (below), also one made before this
