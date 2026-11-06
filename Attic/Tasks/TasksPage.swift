@@ -1452,9 +1452,8 @@ struct TasksPage: View {
 
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
-        let rows = model.rows(for: tab)
+        let (rows, sections, entries) = model.listSnapshot(for: tab)
         let selectionRuns = TasksSelectionRuns.make(ids: rows.map(\.id), selected: model.selection, expanded: model.expanded)
-        let sections = model.sections(for: tab)
         let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
@@ -1462,7 +1461,6 @@ struct TasksPage: View {
         // A group's fold turn (fix round 2), read here as a value: the
         // list's content is redrawn only when what it captures changes.
         let turn = model.foldTurn.flatMap { $0.tab == tab ? $0 : nil }
-        let entries = TasksDateListEntry.entries(sections)
         let turningPlaces = turn.map { foldPlaces(sections.groupRows[$0.key] ?? [], in: tab) } ?? [:]
         // The list's top, read here as a value for the same reason: it
         // grows while the tag chip row is open (owner, 2026-10-28: read

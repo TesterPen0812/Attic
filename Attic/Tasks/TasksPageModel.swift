@@ -121,7 +121,14 @@ struct TasksDateListEntry: Identifiable {
     let group: TasksPanelDesign.Group
     let row: TasksListRow?
     var reorderIDs: [UUID] = []
-    var id: String { row.map { "task:" + $0.id.uuidString } ?? "group:" + group.key }
+    let id: String
+
+    init(group: TasksPanelDesign.Group, row: TasksListRow?, reorderIDs: [UUID] = []) {
+        self.group = group
+        self.row = row
+        self.reorderIDs = reorderIDs
+        id = row.map { "task:" + $0.id.uuidString } ?? "group:" + group.key
+    }
 
     static func entries(_ sections: TasksSections) -> [Self] {
         sections.groups.flatMap { group in
@@ -701,7 +708,7 @@ final class TasksPageModel: ObservableObject {
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
     /// for them many times per change.
-    private var rowsCache: [TasksTab: (key: RowsKey, sections: TasksSections, rows: [TasksListRow])] = [:]
+    private var rowsCache: [TasksTab: (key: RowsKey, sections: TasksSections, rows: [TasksListRow], entries: [TasksDateListEntry])] = [:]
 
     /// The rows a list shows, in order (the keyboard walks them): Now's
     /// open rows (in progress, then to do), then today's done rows when
@@ -717,7 +724,15 @@ final class TasksPageModel: ObservableObject {
         cached(tab).sections
     }
 
-    private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
+    /// The flattened list's sibling entries change with its rows, folds and
+    /// date groups, not with the selected row. Reuse their identities and
+    /// reorder groups when a selection redraws the page.
+    func listSnapshot(for tab: TasksTab) -> (rows: [TasksListRow], sections: TasksSections, entries: [TasksDateListEntry]) {
+        let snapshot = cached(tab)
+        return (snapshot.rows, snapshot.sections, snapshot.entries)
+    }
+
+    private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow], entries: [TasksDateListEntry]) {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
@@ -768,7 +783,7 @@ final class TasksPageModel: ObservableObject {
         }
         sections.groups = groups
         let rows = key.completedExpanded ? sections.open + sections.done : sections.open
-        let entry = (key, sections, rows)
+        let entry = (key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections))
         rowsCache[tab] = entry
         return entry
     }
