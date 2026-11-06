@@ -183,7 +183,13 @@ final class TasksPanelUITests: XCTestCase {
         let field = app.descendants(matching: .any).matching(NSPredicate(
             format: "label == %@ AND identifier != %@", "New subtask of Ship appearance PR", "AtticTokenField"
         )).firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 3), "Add subtask opens its field")
+        let opened = field.waitForExistence(timeout: 3)
+        if !opened {
+            let tree = app.debugDescription.split(separator: "\n")
+                .filter { $0.localizedCaseInsensitiveContains("subtask") || $0.contains("Focused") || $0.contains("TextField") || $0.contains("TextView") }
+            print("QUICKLOOK-TREE-BEGIN\n\(tree.joined(separator: "\n"))\nQUICKLOOK-TREE-END")
+        }
+        XCTAssertTrue(opened, "Add subtask opens its field")
         waitFor((field.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field has the keyboard")
         app.typeText("Pack the charger\r")
         let added = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Pack the charger")).firstMatch
