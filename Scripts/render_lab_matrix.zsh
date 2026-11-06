@@ -41,13 +41,23 @@ case "${1:-}" in
         run_pair notes-plus ATTIC_LAB_NO_COMPOSER_CLIP notes-new-note notes-new-note 4 panel-section-notes toggle
         run_pair calendar-search ATTIC_LAB_NO_CONTROL_SHADOW calendar-search-button calendar-search-button 4 panel-section-calendar toggle
         run_pair calendar-plus ATTIC_LAB_NO_COMPOSER_CLIP calendar-new-task calendar-new-task 4 panel-section-calendar toggle
-        run_pair tasks-scroll ATTIC_LAB_NO_PANEL_CLIP tasks-group-today tasks-group-today 4 panel-section-tasks scroll
+        run_pair tasks-scroll ATTIC_LAB_NO_PANEL_CLIP tasks-scroll-viewport tasks-scroll-viewport 4 panel-section-tasks scroll
         run_pair menu-mask ATTIC_LAB_NO_MENU_MASK panel-more-button panel-more-button 4 panel-section-tasks toggle
         ;;
     extras)
-        run_pair notes-layout ATTIC_LAB_NO_NOTES_LAYOUT_MOTION notes-layout-board notes-layout-list 4 panel-section-notes
+        run_pair task-row ATTIC_LAB_NO_PANEL_CLIP task-row-first task-row-first 4 panel-section-tasks cold-only
+        ATTIC_LAB_SEED=tasknote run_pair notes-layout ATTIC_LAB_NO_NOTES_LAYOUT_MOTION notes-layout-board notes-layout-list 4 panel-section-notes
         run_pair composer-layout ATTIC_LAB_NO_COMPOSER_GROW_LAYOUT tasks-new-task tasks-new-task 4 panel-section-tasks toggle
         run_pair all-v2 ATTIC_LAB_ALL_OFF panel-section-notes panel-section-tasks 4
+        ATTIC_LAB_PAIR_REVERSE=1 run_pair tag-layout-reverse ATTIC_LAB_NO_TAG_LAYOUT tasks-tag-bar-design-team tasks-tag-bar-all 4 panel-section-tasks
+        ATTIC_LAB_SETTINGS=1 run_pair settings-mask-scroll ATTIC_LAB_NO_SETTINGS_MASK settings-page-panel settings-page-panel 4 settings-nav-panel scroll
+        ATTIC_LAB_SETTINGS=1 run_pair settings-preview-shadow ATTIC_LAB_NO_SETTINGS_PREVIEW_SHADOW setting-appearance-light setting-appearance-system 4 settings-nav-appearance
         ;;
-    *) print -u2 'usage: render_lab_matrix.zsh core|more|paths|extras'; exit 2 ;;
+    dropdowns)
+        run_pair dropdown-insertion-chip ATTIC_LAB_NO_DROPDOWN_INSERTION_MASK composer-chip-tags composer-chip-tags 4 'panel-section-tasks>tasks-new-task' toggle
+        run_pair dropdown-content-chip ATTIC_LAB_NO_DROPDOWN_CONTENT_MASK composer-chip-tags composer-chip-tags 4 'panel-section-tasks>tasks-new-task' toggle
+        run_pair dropdown-viewport-chip ATTIC_LAB_NO_DROPDOWN_VIEWPORT_MASK composer-chip-tags composer-chip-tags 4 'panel-section-tasks>tasks-new-task' toggle
+        run_pair dropdown-reveal-chip ATTIC_LAB_NO_DROPDOWN_REVEAL composer-chip-tags composer-chip-tags 4 'panel-section-tasks>tasks-new-task' toggle
+        ;;
+    *) print -u2 'usage: render_lab_matrix.zsh core|more|paths|extras|dropdowns'; exit 2 ;;
 esac

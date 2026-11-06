@@ -1,7 +1,7 @@
 import AppKit
 import QuartzCore
 
-#if DEBUG
+#if DEBUG || ATTIC_RENDER_LAB
 /// Preview builds only (round 11): with `ATTIC_FRAME_MONITOR=1` a display
 /// link on the main screen logs every frame the main thread saw to
 /// standard output (`ATTIC_FRAME <uptime> <gap ms>`), so an on-screen run

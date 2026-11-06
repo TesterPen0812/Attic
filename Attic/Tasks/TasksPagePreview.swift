@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || ATTIC_RENDER_LAB
 import AppKit
 import SwiftData
 import SwiftUI

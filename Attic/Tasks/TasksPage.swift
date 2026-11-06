@@ -3642,7 +3642,7 @@ private struct TasksAddBar: View {
             // its insertion point was (review 14).
             if !open { editor.focus() }
         }
-        #if DEBUG
+        #if DEBUG || ATTIC_RENDER_LAB
         // Capture seam (`ATTIC_UI_TEST_POPOVER=tag|priority|task-date`,
         // preview identities only): a draft, then the strip's picker opens
         // by itself.

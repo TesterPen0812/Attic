@@ -21,7 +21,11 @@ def read(path):
         return None
     with path.open(newline="") as stream:
         data = list(csv.DictReader(stream))
-    if len(data) != 2 or {row["kind"] for row in data} != {"cold", "repeat"}:
+    # A row selection can dismiss its floating panel; that experiment is
+    # deliberately one cold click per launch, without a fabricated repeat.
+    kinds = {row["kind"] for row in data}
+    if (len(data) == 2 and kinds != {"cold", "repeat"}) or \
+       (len(data) == 1 and kinds != {"cold"}) or len(data) not in (1, 2):
         return None
     try:
         result = {}
@@ -56,16 +60,20 @@ for folder in sorted(ROOT.iterdir()):
         continue
     print(f"{folder.name}: {len(pairs)} valid A/B pairs")
     for kind in ("cold", "repeat"):
-        base = [p[0][kind]["first_display_ms"] for p in pairs]
-        off = [p[1][kind]["first_display_ms"] for p in pairs]
+        matched_pairs = [p for p in pairs if kind in p[0] and kind in p[1]]
+        if not matched_pairs:
+            print(f"  {kind}: not measured")
+            continue
+        base = [p[0][kind]["first_display_ms"] for p in matched_pairs]
+        off = [p[1][kind]["first_display_ms"] for p in matched_pairs]
         delta = [x - y for x, y in zip(base, off)]
-        bias = [p[c][kind]["capture_bias_ms"] for p in pairs for c in (0, 1)]
-        gap = [p[c][kind]["frame_gap_p90_ms"] for p in pairs for c in (0, 1)]
+        bias = [p[c][kind]["capture_bias_ms"] for p in matched_pairs for c in (0, 1)]
+        gap = [p[c][kind]["frame_gap_p90_ms"] for p in matched_pairs for c in (0, 1)]
         print(f"  {kind}: base {fmt(base)} ms; off {fmt(off)} ms; "
               f"paired base-minus-off {fmt(delta)} ms; "
               f"capture bias {fmt(bias)} ms; frame-update p90 {fmt(gap)} ms")
         for metric in ("top_row_ms", "bottom_row_ms", "any_4_ms", "any_8_ms", "top_settled_ms", "bottom_settled_ms"):
-            matched = [(a[kind][metric], b[kind][metric]) for a, b in pairs
+            matched = [(a[kind][metric], b[kind][metric]) for a, b in matched_pairs
                        if metric in a[kind] and metric in b[kind]]
             if matched:
                 before, after = zip(*matched)

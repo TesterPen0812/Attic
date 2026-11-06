@@ -403,7 +403,7 @@ final class AppCoordinator: ObservableObject {
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
     private var performanceSignalSource: (any DispatchSourceSignal)?
-    #if DEBUG
+    #if DEBUG || ATTIC_RENDER_LAB
     private var hideMotionBench: PanelHideMotionBench?
     private var pageSwitchBench: (any DispatchSourceSignal)?
     private var benchSources: [any DispatchSourceSignal] = []
@@ -518,7 +518,7 @@ final class AppCoordinator: ObservableObject {
         // While Draw has Canvas's place, the old Canvas rows in this store
         // are left untouched and unread for the whole run.
         if AtticDraw.isEnabled { AtticLegacyCanvas.markDormant(container) }
-        #if DEBUG
+        #if DEBUG || ATTIC_RENDER_LAB
         // Capture seam: the in-memory UI-test store holds the design mockup's
         // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
@@ -940,7 +940,7 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
-            #if DEBUG
+            #if DEBUG || ATTIC_RENDER_LAB
             // The hide-animation bench (debug builds of preview identities
             // only): signal-driven hides, reveals and swipes.
             if let mode = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_MODE"].flatMap(PanelHideAnimation.init(storedValue:)) {

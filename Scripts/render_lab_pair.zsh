@@ -11,13 +11,13 @@ readonly bundle=com.taha.Attic.preview.renderlab
 readonly lock=/tmp/attic-air-screen.lockdir/owner
 
 if [[ $# -lt 5 || $# -gt 7 ]]; then
-    print -u2 'usage: render_lab_pair.zsh NAME FLAG TARGET_ID WARM_ID CYCLES [SETUP_PAGE_ID] [run|scroll|toggle|dismiss]'
+    print -u2 'usage: render_lab_pair.zsh NAME FLAG TARGET_ID WARM_ID CYCLES [SETUP_PAGE_ID] [run|scroll|toggle|dismiss|cold-only]'
     exit 2
 fi
 readonly name="$1" flag="$2" target="$3" warm="$4" cycles="$5" setup="${6:-}" mode="${7:-run}"
 [[ -f "$lock" && "$(/bin/cat "$lock")" == renderlab ]] || { print -u2 'Render lab does not own screen lock'; exit 3; }
 [[ "$cycles" == <-> && "$cycles" -ge 2 && "$cycles" -le 12 ]] || exit 2
-[[ "$mode" == run || "$mode" == scroll || "$mode" == toggle || "$mode" == dismiss ]] || exit 2
+[[ "$mode" == run || "$mode" == scroll || "$mode" == toggle || "$mode" == dismiss || "$mode" == cold-only ]] || exit 2
 [[ -x "$capture" && -x "$quit" && -d "$app" ]] || exit 3
 readonly out="/tmp/render-lab/$name"
 /bin/mkdir -p "$out"
@@ -29,14 +29,29 @@ for index in $(/usr/bin/seq 1 $((cycles * 2))); do
         if [[ "$condition" == base ]]; then condition=off; else condition=base; fi
     fi
     print "RUN name=$name index=$index condition=$condition load=$(/usr/bin/uptime)" | /usr/bin/tee -a "$out/sequence.log"
-    "$quit" >> "$out/sequence.log" 2>&1
-    launch_args=(--env ATTIC_UI_TESTING=1 --env ATTIC_UI_TEST_SEED=long
+    "$quit" >> "$out/sequence.log" 2>&1 || {
+        print -u2 'Unable to quit isolated lab; refusing another launch'
+        exit 4
+    }
+    launch_args=(--env ATTIC_UI_TESTING=1 --env "ATTIC_UI_TEST_SEED=${ATTIC_LAB_SEED:-long}"
              --env ATTIC_PAGE_BENCH=1 --env ATTIC_FRAME_MONITOR=1 --env ATTIC_MOTION_BENCH=1)
+    if [[ "${ATTIC_LAB_SETTINGS:-0}" == 1 ]]; then
+        launch_args+=(--env ATTIC_UI_TEST_OPEN_SETTINGS=1)
+    fi
+    if [[ -n "${ATTIC_LAB_POPOVER:-}" ]]; then
+        launch_args+=(--env "ATTIC_UI_TEST_POPOVER=${ATTIC_LAB_POPOVER}")
+    fi
     # FLAG is the complete environment variable; the combined trial uses
     # ATTIC_LAB_ALL_OFF while single-site trials use ATTIC_LAB_NO_... .
     if [[ "$condition" == off ]]; then launch_args+=(--env "$flag=1"); fi
-    /usr/bin/open -n "${launch_args[@]}" "$app"
-    /bin/sleep 3
+    # The optimized lab also enables the existing frame/page/motion benches;
+    # preserve its own stdout so their real frame ticks can be compared with
+    # ScreenCaptureKit display timestamps without capturing another window.
+    /usr/bin/open -n --stdout "$out/${index}-${condition}.app.stdout.log" \
+        --stderr "$out/${index}-${condition}.app.stderr.log" "${launch_args[@]}" "$app"
+    # Give AX controls time to appear after a cold launch. A 3-second wait
+    # intermittently failed to find Tasks' own composer under Air load.
+    /bin/sleep 5
     result="$out/${index}-${condition}.csv"
     args=("--$mode" "$target" "$warm" 30 1 "$result")
     if [[ -n "$setup" ]]; then args+=("$setup"); fi

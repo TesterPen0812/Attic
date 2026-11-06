@@ -108,18 +108,23 @@ private final class WindowFrames: NSObject, SCStreamOutput, SCStreamDelegate, @u
 @MainActor
 private func run() async throws {
     let a = CommandLine.arguments
-    guard (a.count == 6 || a.count == 7 || a.count == 8), ["--run", "--scroll", "--toggle", "--dismiss"].contains(a[1]),
+    guard (a.count == 6 || a.count == 7 || a.count == 8), ["--run", "--scroll", "--toggle", "--dismiss", "--cold-only"].contains(a[1]),
           let idle = Double(a[4]), idle >= 0 && idle <= 60,
           let rounds = Int(a[5]), rounds >= 1 && rounds <= 12,
           AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
-        fail("usage: --run|--scroll|--toggle|--dismiss target-id warm-id idle-s rounds [out.csv] [setup-page-id]; needs prior AX and recording permission")
+        fail("usage: --run|--scroll|--toggle|--dismiss|--cold-only target-id warm-id idle-s rounds [out.csv] [setup-page-id]; needs prior AX and recording permission")
     }
     let scrollMode = a[1] == "--scroll"
     let toggleMode = a[1] == "--toggle"
     let dismissMode = a[1] == "--dismiss"
+    let coldOnlyMode = a[1] == "--cold-only"
     let targetID = a[2], warmID = a[3]
     let output = a.count >= 7 ? a[6] : "/tmp/render-lab-pixels.csv"
     let setupPage = a.count == 8 ? a[7] : nil
+    // Setup can cross pages: the preview remembers its last selected page
+    // between launches even when its task data is in memory. Navigate to
+    // Tasks before opening the composer or the target may have no AX node.
+    let setupIDs = setupPage?.split(separator: ">").map(String.init) ?? []
     let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
     guard session["CGSSessionScreenIsLocked"] as? Bool != true else { fail("screen locked") }
     let mods: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
@@ -157,8 +162,43 @@ private func run() async throws {
               AXValueGetValue(s as! AXValue, .cgSize, &size) else { return nil }
         return CGRect(origin: pos, size: size)
     }
+    // A row's accessibility element can disappear once selection opens its
+    // detail. The same physical row coordinate remains valid on the repeat
+    // click and is still checked for foreign-window occlusion before use.
+    var pinnedRowPoint: CGPoint?
     func point(_ id: String) -> CGPoint {
         let nodes = descendants()
+        // The task list has no stable scroll-area AX identifier. Locate its
+        // viewport from the fixed tab and composer controls instead of a
+        // date group header that disappears after the first wheel action.
+        if id == "tasks-scroll-viewport" {
+            let tab = nodes.first { string($0, "AXIdentifier") == "tasks-page-now" }.flatMap(rectangle)
+            let composer = nodes.first { string($0, "AXIdentifier") == "tasks-new-task" }.flatMap(rectangle)
+            guard let tab, let composer, composer.minY > tab.maxY + 100 else {
+                fail("visible tasks scroll viewport unavailable")
+            }
+            return CGPoint(x: tab.midX, y: (tab.maxY + composer.minY) / 2)
+        }
+        // The task-row button intentionally has no public AX identifier.
+        // Locate the first fully visible row below the fixed tab and above
+        // the composer; the Today header may have scrolled out of the tree.
+        if id == "task-row-first" {
+            if let pinnedRowPoint { return pinnedRowPoint }
+            let tab = nodes.first { string($0, "AXIdentifier") == "tasks-page-now" }.flatMap(rectangle)
+            let footer = nodes.first { string($0, "AXIdentifier") == "tasks-new-task" }.flatMap(rectangle)
+            guard let tab, let footer,
+                  let row = nodes.compactMap({ node -> CGRect? in
+                      guard string(node, "AXRole") == "AXButton",
+                            string(node, "AXIdentifier").isEmpty,
+                            let r = rectangle(node), r.width > 200,
+                            r.height >= 29, r.height <= 60,
+                            r.minY >= tab.maxY, r.maxY <= footer.minY else { return nil }
+                      return r
+                  }).min(by: { $0.minY < $1.minY }) else { fail("visible task row unavailable") }
+            let result = CGPoint(x: row.midX, y: row.midY)
+            pinnedRowPoint = result
+            return result
+        }
         let node = id.hasPrefix("label:")
             ? nodes.first(where: { string($0, "AXLabel") == String(id.dropFirst(6)) })
             : nodes.first(where: { string($0, "AXIdentifier") == id })
@@ -175,10 +215,17 @@ private func run() async throws {
         return CGRect(x: x, y: y, width: width, height: height)
     }
     func check(_ p: CGPoint) {
-        guard let window = windows().first(where: {
+        guard windows().contains(where: {
             ($0[kCGWindowOwnerPID as String] as? Int32) == pid &&
-            (bounds($0)?.width ?? 0) > 200 && (bounds($0)?.height ?? 0) > 200
-        }), bounds(window)?.contains(p) == true else { fail("point outside own panel") }
+            (bounds($0)?.width ?? 0) > 200 && (bounds($0)?.height ?? 0) > 200 &&
+            bounds($0)?.contains(p) == true
+        }) else {
+            // Only emit the isolated app's own windows when diagnosing a
+            // changing Settings/preview location; never other app windows.
+            let own = windows().filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }
+                .compactMap(bounds).map(String.init(describing:)).joined(separator: " ")
+            fail("point outside own window: point=\(p), own=\(own)")
+        }
         for w in windows() {
             let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
             let layer = w[kCGWindowLayer as String] as? Int ?? 0
@@ -254,8 +301,8 @@ private func run() async throws {
     }
 
     if targetID == "--dump" || targetID == "--dump-all" {
-        if let setupPage {
-            _ = await click(point(setupPage))
+        for setupID in setupIDs {
+            _ = await click(point(setupID))
             try await Task.sleep(for: .milliseconds(800))
         }
         for n in descendants() {
@@ -270,10 +317,19 @@ private func run() async throws {
         }
         return
     }
-    guard let window = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        .windows.filter({ $0.owningApplication?.processID == pid && $0.frame.width > 200 && $0.frame.height > 200 })
-        .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-        else { fail("own window unavailable for capture") }
+    // Target the specific window receiving the action. Settings can overlap
+    // the panel, and the largest/first window is not necessarily the target.
+    // Use the setup control as the anchor when navigation changes the page.
+    let anchor = point(setupIDs.first ?? targetID)
+    check(anchor)
+    guard let cgWindow = windows().first(where: {
+        ($0[kCGWindowOwnerPID as String] as? Int32) == pid &&
+        bounds($0)?.contains(anchor) == true &&
+        (bounds($0)?.width ?? 0) > 200 && (bounds($0)?.height ?? 0) > 200
+    }), let rawWindowID = cgWindow[kCGWindowNumber as String] as? Int,
+          let window = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            .windows.first(where: { $0.owningApplication?.processID == pid && $0.windowID == CGWindowID(rawWindowID) })
+        else { fail("target's own window unavailable for capture") }
     let screen = NSScreen.screens.first(where: { $0.frame.intersects(window.frame) })
     let scale = screen?.backingScaleFactor ?? 2
     let config = SCStreamConfiguration()
@@ -295,13 +351,15 @@ private func run() async throws {
 
     let outURL = URL(fileURLWithPath: output)
     var csv = "trial,kind,click_down_s,release_s,first_display_ms,first_callback_ms,capture_bias_ms,changed_cells,frames,frame_gap_p90_ms,frame_gap_max_ms,top_row_ms,bottom_row_ms,any_4_ms,any_8_ms,top_settled_ms,bottom_settled_ms\n"
-    if let setupPage {
-        _ = await click(point(setupPage))
+    for setupID in setupIDs {
+        _ = await click(point(setupID))
         try await Task.sleep(for: .milliseconds(800))
     }
     for trial in 1...rounds {
         if let error = watcher.error() { fail(error) }
-        if !scrollMode && !toggleMode && !dismissMode { _ = await click(point(warmID)) } // reset selection before tab/action trials
+        if !scrollMode && !toggleMode && !dismissMode && !coldOnlyMode {
+            _ = await click(point(warmID)) // reset selection before tab/action trials
+        }
         try await Task.sleep(for: .milliseconds(600))
         let target = point(targetID)
         if dismissMode {
@@ -311,7 +369,10 @@ private func run() async throws {
         move(target)
         try await Task.sleep(for: .milliseconds(300))
         try await Task.sleep(for: .seconds(idle))
-        for kind in ["cold", "repeat"] {
+        // An unpinned task-row selection can dismiss the floating panel.
+        // Measure its real first click without inventing a subsequent repeat
+        // against a window that is no longer visible.
+        for kind in (coldOnlyMode ? ["cold"] : ["cold", "repeat"]) {
             if kind == "repeat" {
                 if dismissMode {
                     _ = await click(point(targetID))
@@ -341,14 +402,17 @@ private func run() async throws {
             let after = watcher.snapshot()
             guard let original = before.last(where: { $0.arrival < down }) else { fail("no baseline frame") }
             let visible = after.filter { $0.arrival >= release - 0.03 && $0.arrival < release + 0.9 }
-            let first = visible.first { $0.display >= down && WindowFrames.changed(original.rgb, $0.rgb) >= 16 }
-            let first4 = visible.first { $0.display >= down && WindowFrames.changed(original.rgb, $0.rgb) >= 4 }
-            let first8 = visible.first { $0.display >= down && WindowFrames.changed(original.rgb, $0.rgb) >= 8 }
+            // A frame rendered during the 35-ms mouse-down interval can have
+            // a negative release-to-display time. Require a post-release
+            // frame; this is the observable output the report measures.
+            let first = visible.first { $0.display >= release && WindowFrames.changed(original.rgb, $0.rgb) >= 16 }
+            let first4 = visible.first { $0.display >= release && WindowFrames.changed(original.rgb, $0.rgb) >= 4 }
+            let first8 = visible.first { $0.display >= release && WindowFrames.changed(original.rgb, $0.rgb) >= 8 }
             // The top row and bottom controls occupy narrow strips of the
             // panel. These are auxiliary timings, not substitutes for the
             // first material change across the whole captured window.
-            let top = visible.first { $0.display >= down && WindowFrames.changed(original.rgb, $0.rgb, rows: 4...12) >= 4 }
-            let bottom = visible.first { $0.display >= down && WindowFrames.changed(original.rgb, $0.rgb, rows: 50...58) >= 4 }
+            let top = visible.first { $0.display >= release && WindowFrames.changed(original.rgb, $0.rgb, rows: 4...12) >= 4 }
+            let bottom = visible.first { $0.display >= release && WindowFrames.changed(original.rgb, $0.rgb, rows: 50...58) >= 4 }
             // Approximate visual settling against the last captured frame.
             // This measures a distinct question from first visible movement;
             // report only where the measured strip genuinely reaches a stable
@@ -359,7 +423,7 @@ private func run() async throws {
                 guard total >= 4 else { return nil }
                 let tolerance = max(2, Int(Double(total) * 0.1))
                 return visible.first {
-                    $0.display >= down && WindowFrames.changed($0.rgb, final.rgb, rows: rows) <= tolerance
+                    $0.display >= release && WindowFrames.changed($0.rgb, final.rgb, rows: rows) <= tolerance
                 }
             }
             let topSettled = settled(in: 4...12)
