@@ -597,12 +597,13 @@ struct NotesEditorPage: View {
             AtticRaisedButton(systemName: "chevron.left", label: "All notes", size: NotesBarMetrics.size,
                               help: String(localized: "All notes (⇧⌘L)"),
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
-                toggleLibrary()
+                if sharedChrome?.plusHandedOver != true { toggleLibrary() }
             }
             .noteFormatRowLeaving(.allNotes)
             .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
             .accessibilityIdentifier("notes-all-notes")
             .accessibilitySortPriority(1)
+            .modifier(NotesComposerChromeAccessibility())
             Spacer(minLength: AtticNoteMetrics.pillMinGap)
             if let session = controller.active {
                 NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
@@ -641,11 +642,12 @@ struct NotesEditorPage: View {
         return AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: String.LocalizationValue(stringLiteral: plus.label),
                                  size: CGSize(width: side, height: side), help: plus.help, emphasisedGlyph: true,
                                  flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
-            newNoteFromPlus()
+            if sharedChrome?.plusHandedOver != true { newNoteFromPlus() }
         }
         .atticDesignCorners()
         .noteFormatRowLeaving(.newNote)
         .accessibilityIdentifier(plus.identifier)
+        .modifier(NotesComposerChromeAccessibility())
     }
 
     /// Aa shows on an editable note with text under its title (owner,
@@ -1956,6 +1958,34 @@ struct NotesPageSwipeMonitor: NSViewRepresentable {
     func updateNSView(_ view: NotesPageSwipeView, context: Context) {
         view.onSwipe = onSwipe
         view.isNotesLibraryPresented = isLibraryPresented
+    }
+}
+
+/// Only the two page navigation/creation buttons leave accessibility when
+/// the composer takes their row. The surrounding format row must not gain an
+/// accessibility modifier: doing so changes the frames it reports to AX.
+private struct NotesComposerChromeAccessibility: ViewModifier {
+    @Environment(\.panelSharedChrome) private var chrome
+
+    func body(content: Content) -> some View {
+        if let chrome {
+            Observing(chrome: chrome) { content }
+        } else {
+            content
+        }
+    }
+
+    private struct Observing<Row: View>: View {
+        @ObservedObject var chrome: PanelSharedChrome
+        @ViewBuilder var row: () -> Row
+
+        var body: some View {
+            if chrome.plusHandedOver {
+                row().accessibilityHidden(true)
+            } else {
+                row()
+            }
+        }
     }
 }
 

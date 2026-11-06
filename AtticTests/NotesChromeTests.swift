@@ -118,6 +118,25 @@ final class NotesChromeTests: XCTestCase {
         elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier }
     }
 
+    func testOpenNoteComposerHidesBackAndPlusFromAccessibility() throws {
+        try withPanel { host, state, _, _, draft, _ in
+            state.selectSection(.notes)
+            spin(1)
+            draft.pages.dismissLibrary()
+            spin(1)
+            let back = try XCTUnwrap(element("notes-all-notes", in: host), "Back before composer")
+            let plus = try XCTUnwrap(element("notes-new-note", in: host), "+ before composer")
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false, "open the real composer")
+            spin(1)
+            XCTAssertNotNil(element("composer-title", in: host), "the composer is actually open")
+            XCTAssertNil(element("notes-all-notes", in: host), "Back must leave AX with its folded row")
+            XCTAssertNil(element("notes-new-note", in: host), "+ must leave AX with its folded row")
+            _ = back.accessibilityPerformPress?() // A stale AX reference must not navigate behind the card.
+            spin(0.2)
+            XCTAssertNotNil(element("composer-title", in: host), "stale Back cannot dismiss the composer")
+        }
+    }
+
     func testNotesSharesTheTopRowAndTheBarsAndTasksKeepsItsState() throws {
         try withPanel { host, state, tasksState, store, draft, library in
             // Tasks: the search button in the shared row's place.
