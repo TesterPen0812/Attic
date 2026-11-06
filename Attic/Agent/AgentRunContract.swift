@@ -1,0 +1,67 @@
+import Foundation
+
+/// The seam between the agent's run and the chat view. The view reads events and
+/// calls these methods; it never reaches into tools or the model connection.
+enum AgentPage: String, Sendable, Equatable, CaseIterable {
+    case tasks, notes, calendar, draw
+}
+
+/// One thing a step touches, so the chat can animate the real row, note or event.
+struct AgentTarget: Sendable, Equatable {
+    var page: AgentPage
+    var itemID: UUID?
+    var title: String?
+}
+
+enum AgentStepState: Sendable, Equatable {
+    case running, done, failed(String)
+}
+
+/// How a step changes what's on screen, so the view can pick its motion.
+enum AgentStepKind: Sendable, Equatable {
+    case read, create, update, move(toDay: Date?), delete, openPage
+}
+
+struct AgentStep: Identifiable, Sendable, Equatable {
+    let id: UUID
+    var title: String
+    var kind: AgentStepKind
+    var targets: [AgentTarget]
+    var state: AgentStepState
+}
+
+struct AgentApproval: Identifiable, Sendable, Equatable {
+    let id: UUID
+    var title: String
+    var targets: [AgentTarget]
+}
+
+/// Everything one request changed, undone as a whole.
+struct AgentChangeSet: Identifiable, Sendable, Equatable {
+    let id: UUID
+    var title: String
+    var pages: Set<AgentPage>
+    var count: Int
+}
+
+enum AgentEvent: Sendable, Equatable {
+    case textDelta(String)
+    case stepStarted(AgentStep)
+    case stepFinished(AgentStep)
+    case progress(done: Int, total: Int)
+    case approvalNeeded(AgentApproval)
+    case changes(AgentChangeSet)
+    case finished
+    case failed(String)
+}
+
+/// `watching` is true while the chat is open. When false, the run must not move
+/// the owner's page or take focus; it works in the background.
+@MainActor
+protocol AgentRunning: AnyObject {
+    func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent>
+    func setWatching(_ watching: Bool)
+    func resolve(approval id: UUID, allow: Bool)
+    func undo(changeSet id: UUID) async throws
+    func cancel()
+}
