@@ -148,8 +148,8 @@ final class NoteUndoHistory {
         self.limit = limit
     }
 
-    var canUndo: Bool { (workspace?.canUndo ?? !undoOps.isEmpty) && (canReplay?() ?? true) }
-    var canRedo: Bool { (workspace?.canRedo ?? !redoOps.isEmpty) && (canReplay?() ?? true) }
+    var canUndo: Bool { (workspace?.canRequestReplay(redo: false) ?? !undoOps.isEmpty) && (canReplay?() ?? true) }
+    var canRedo: Bool { (workspace?.canRequestReplay(redo: true) ?? !redoOps.isEmpty) && (canReplay?() ?? true) }
     var undoActionName: String { workspace?.undoName ?? undoOps.last?.name ?? "" }
     var redoActionName: String { workspace?.redoName ?? redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
@@ -846,9 +846,10 @@ final class NoteUndoHistory {
     }
 
     /// Native menus and the undo-manager shim use the same workspace route.
-    func requestReplay(redo: Bool) {
-        if let workspace { Task { _ = await workspace.replay(redo: redo) } }
-        else if redo { _ = self.redo() } else { _ = undo() }
+    @discardableResult
+    func requestReplay(redo: Bool) -> Bool {
+        if let workspace { return workspace.requestReplay(redo: redo) }
+        return redo ? self.redo() : undo()
     }
 
     @discardableResult

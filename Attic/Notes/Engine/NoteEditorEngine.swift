@@ -135,7 +135,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     @discardableResult func undoCommand() -> Bool {
         guard !isReadOnly || permitsReadOnlyLifecycleReplay?(false) == true else { return false }
-        if history.workspace != nil, history.canUndo { history.requestReplay(redo: false); return true }
+        if history.workspace != nil, history.canUndo { return history.requestReplay(redo: false) }
         if history.canUndo { return history.undo() }
         guard canUndoVersionRestore?() == true else { return history.undo() }
         undoVersionRestore?()
@@ -143,7 +143,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
     @discardableResult func redoCommand() -> Bool {
         guard !isReadOnly || permitsReadOnlyLifecycleReplay?(true) == true else { return false }
-        if history.workspace != nil, history.canRedo { history.requestReplay(redo: true); return true }
+        if history.workspace != nil, history.canRedo { return history.requestReplay(redo: true) }
         if canRedoVersionRestore?() == true { redoVersionRestore?(); return true }
         return history.redo()
     }

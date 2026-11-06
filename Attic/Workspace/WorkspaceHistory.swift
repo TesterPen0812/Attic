@@ -95,6 +95,36 @@ final class WorkspaceHistory {
     deinit { retryTask?.cancel() }
     var canUndo: Bool { !completingPublication && pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canUndo(in: historyID) }
     var canRedo: Bool { !completingPublication && pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canRedo(in: historyID) }
+    private var requestedReplay: Task<Void, Never>?
+    private var requestedReplayID: UUID?
+    private var requestedRedo: Bool?
+
+    /// A second shortcut may arrive after Undo has changed the document but
+    /// before its asynchronous publication has finished. Serialize that
+    /// opposite request; each actual replay still checks the durable cursor.
+    func canRequestReplay(redo: Bool) -> Bool {
+        (redo ? canRedo : canUndo) || (requestedReplay != nil && requestedRedo == !redo && !hasPendingPublication)
+    }
+
+    @discardableResult
+    func requestReplay(redo: Bool) -> Bool {
+        guard canRequestReplay(redo: redo) else { return false }
+        let previous = requestedReplay
+        let requestID = UUID()
+        requestedReplayID = requestID
+        requestedRedo = redo
+        requestedReplay = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            _ = await replay(redo: redo)
+            if requestedReplayID == requestID {
+                requestedReplay = nil
+                requestedReplayID = nil
+                requestedRedo = nil
+            }
+        }
+        return true
+    }
     var undoName: String { route.undoName(in: historyID) ?? "" }
     var redoName: String { route.redoName(in: historyID) ?? "" }
 
