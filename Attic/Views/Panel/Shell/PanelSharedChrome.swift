@@ -275,7 +275,8 @@ struct PanelSharedBottomBar: View {
             // bar's start as they fade (the design's 12 px). Their glass
             // goes too (a glass group ignores an opacity), so nothing
             // peeks out under the card's corners (Accepted 2026-11-04).
-            PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+            PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                             preservesUnfoldedAccessibility: page == .canvas) {
                 HStack(spacing: gap) {
                     // Accessibility state goes on each control, never on this
                     // stack (which would make it an element wearing the
@@ -292,7 +293,8 @@ struct PanelSharedBottomBar: View {
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
-                        PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                        PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                                         preservesUnfoldedAccessibility: page == .canvas) {
                             AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
                                               help: plus.help, emphasisedGlyph: true,
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
@@ -404,10 +406,12 @@ private struct PanelSharedTopControlsObserver: View {
         let searching = state.isSearching(page)
         let covered = chrome.covered.contains(page)
         HStack(spacing: PanelTopRowLayout.gap) {
-            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
+            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
+                             preservesUnfoldedAccessibility: page == .canvas) {
                 PanelTopRowMoreButton(shared: true, page: page) { chrome.more(on: page) }
             }
-            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil) {
+            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
+                             preservesUnfoldedAccessibility: page == .canvas) {
                 PanelTopRowSearchButton(label: look.searchLabel, identifier: look.searchIdentifier, shared: true) {
                     chrome.search(on: page)
                 }
@@ -459,10 +463,11 @@ extension View {
 /// the selection bar or Notes' Back row.
 private struct PanelFoldAccessibility: ViewModifier {
     let hidden: Bool?
+    let preservesUnfoldedAccessibility: Bool
 
     func body(content: Content) -> some View {
-        if hidden == true {
-            content.accessibilityHidden(true)
+        if hidden == true || (hidden == false && preservesUnfoldedAccessibility) {
+            content.accessibilityHidden(hidden == true)
         } else {
             content
         }
@@ -480,6 +485,9 @@ struct PanelControlFold<Content: View>: View {
     /// Off for a row that keeps its own accessibility state: any modifier
     /// around the format row changes the frames it reports.
     var hidesFromAccessibility = true
+    /// Draw's native hit-testing depends on its unchanged unfolded wrapper.
+    /// Draw has no folded tag bar with independently hidden children.
+    var preservesUnfoldedAccessibility = false
     @ViewBuilder var content: () -> Content
 
     @Environment(\.atticDesign) private var design
@@ -492,7 +500,8 @@ struct PanelControlFold<Content: View>: View {
             .environment(\.atticControlGone, gone)
             .opacity(folded ? 0 : 1)
             .allowsHitTesting(!folded)
-            .modifier(PanelFoldAccessibility(hidden: hidesFromAccessibility ? folded : nil))
+            .modifier(PanelFoldAccessibility(hidden: hidesFromAccessibility ? folded : nil,
+                                             preservesUnfoldedAccessibility: preservesUnfoldedAccessibility))
             .animation(animation(folded), value: folded)
             .onChange(of: folded, initial: true) { _, now in fold(now) }
     }
