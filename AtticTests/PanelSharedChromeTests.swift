@@ -148,6 +148,21 @@ final class PanelSharedChromeTests: XCTestCase {
         CGRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)
     }
 
+    /// `cacheDisplay` paints the model tree, which can already be at its
+    /// destination even while an offscreen layer's presentation is travelling.
+    /// Record stable model-layer identities and their stepped presentation X.
+    private func presentationOriginX(in root: CALayer) -> [ObjectIdentifier: CGFloat] {
+        var positions: [ObjectIdentifier: CGFloat] = [:]
+        func visit(_ layer: CALayer) {
+            if let presented = layer.presentation() {
+                positions[ObjectIdentifier(layer)] = presented.frame.minX
+            }
+            for child in layer.sublayers ?? [] { visit(child) }
+        }
+        visit(root)
+        return positions
+    }
+
     /// Through a page switch (the pages travelling sideways), the pin, •••,
     /// Search, the page switch, the tag bar card and "+" stay put and keep
     /// their look on every frame: they are drawn once, above the pages, so
@@ -239,6 +254,7 @@ final class PanelSharedChromeTests: XCTestCase {
             boxes.append(content)
             let before = try levels(host, boxes)
             var samples: [(ms: Int, levels: [CGFloat])] = []
+            var presentationTracks: [ObjectIdentifier: [CGFloat]] = [:]
             do {
                 // As in the island motion tests, pause presentation and step
                 // its clock. Bitmap capture cost must never skip a frame:
@@ -255,6 +271,9 @@ final class PanelSharedChromeTests: XCTestCase {
                     host._renderForTest(interval: frame == 0 ? 0 : 1.0 / 60)
                     layer.timeOffset = start + elapsed
                     CATransaction.flush()
+                    for (id, x) in presentationOriginX(in: layer) {
+                        presentationTracks[id, default: []].append(x)
+                    }
                     samples.append((Int(elapsed * 1000), try levels(host, boxes)))
                 }
             }
@@ -266,8 +285,11 @@ final class PanelSharedChromeTests: XCTestCase {
             // Staying still means no frame leaves the span between the level
             // before and the level after: no replayed opening, no jump.
             let after = try levels(host, boxes)
-            let travelled = samples.dropFirst().map { abs($0.levels[names.count] - after[names.count]) }.max() ?? 0
-            XCTAssertGreaterThan(travelled, 0.002, "\(from) → \(to): the pages travel through frames of their own (the switch is animated)")
+            let travelled = presentationTracks.values.filter { $0.count > 10 }.map {
+                ($0.max() ?? 0) - ($0.min() ?? 0)
+            }.max() ?? 0
+            XCTAssertGreaterThan(travelled, size.width / 5,
+                                 "\(from) → \(to): a page layer travels during stepped presentation (max \(travelled) pt)")
             for (index, name) in names.enumerated() {
                 // Known limit: Notes is never kept built, so it comes in by
                 // the shell's insertion transition, which its top row cannot
