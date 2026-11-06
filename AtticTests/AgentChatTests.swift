@@ -99,8 +99,10 @@ final class AgentChatTests: XCTestCase {
         await start()
         model.panelDidHide()
         XCTAssertFalse(model.bar.isChatOpen)
-        XCTAssertFalse(model.closedAtOnce)
+        XCTAssertTrue(model.closedAtOnce, "Still set when the views read it a tick later")
         XCTAssertEqual(runner.cancels, 0)
+        model.open()
+        XCTAssertFalse(model.closedAtOnce, "The next close animates again")
     }
 
     func testThePersonChangingPageClosesTheChatButTheAgentDoesNot() async {

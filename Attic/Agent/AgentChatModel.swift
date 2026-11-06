@@ -241,6 +241,7 @@ final class AgentChatModel: ObservableObject {
     // MARK: Open and close
 
     func open() {
+        closedAtOnce = false
         guard !isOpen else { return }
         bar.isChatOpen = true
         unread = false
@@ -261,9 +262,9 @@ final class AgentChatModel: ObservableObject {
     /// The panel has gone: the chat goes with no motion, and the run carries on.
     func panelDidHide() {
         guard isOpen else { return }
+        // Stays set until the next open: the views read it a tick later.
         closedAtOnce = true
         close()
-        closedAtOnce = false
     }
 
     /// Whether an entry has been on screen: a reopened thread never replays.
