@@ -145,13 +145,13 @@ final class SettingsPresentationTests: XCTestCase {
             ]
         )
         // Spec § Settings: App (General, Panel, Appearance, and Recently
-        // Deleted from Phase 1), Connections (Agent Access, with its hint),
+        // Deleted from Phase 1), Connections (Agent Access),
         // About alone at the bottom.
         XCTAssertEqual(SettingsSection.Group.app.sections, [.general, .panel, .appearance, .recentlyDeleted])
         XCTAssertEqual(SettingsSection.Group.connections.sections, [.agentAccess])
         XCTAssertNil(SettingsSection.about.group)
         XCTAssertNil(SettingsSection.Group.app.hint)
-        XCTAssertEqual(SettingsSection.Group.connections.hint, "Let agents read and add tasks")
+        XCTAssertNil(SettingsSection.Group.connections.hint)
         // Sentence case, and no label that could wrap in the 232 pt sidebar.
         for section in SettingsSection.allCases {
             let width = AtticTextStyle.sidebarRow.measuredWidth(section.title)

@@ -8,10 +8,7 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         SettingsPage(section: .general) {
-            SettingsGroup(
-                title: String(localized: "Startup"),
-                footnote: String(localized: "Attic lives in the corner of your screen and in the menu bar. It has no Dock icon.")
-            ) {
+            SettingsGroup(title: String(localized: "Startup")) {
                 AtticSwitchRow(
                     title: String(localized: "Launch at login"),
                     isOn: loginBinding,
@@ -89,10 +86,7 @@ struct GeneralSettingsView: View {
             // Round 10 (the capability audit): the global quick capture
             // shortcut can be recorded, reset, turned off, and tried again
             // after a refusal.
-            SettingsGroup(
-                title: String(localized: "Quick Capture"),
-                footnote: String(localized: "From any app, the shortcut opens Attic on Tasks with the add bar ready.")
-            ) {
+            SettingsGroup(title: String(localized: "Quick Capture")) {
                 AtticSwitchRow(
                     title: String(localized: "Quick capture shortcut"),
                     isOn: $settings.quickCaptureEnabled,

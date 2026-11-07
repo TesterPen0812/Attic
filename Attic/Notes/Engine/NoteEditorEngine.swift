@@ -156,7 +156,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Checkpoint/save/Find continue to use writing only.
     var exportProjection: ((NoteDocument) throws -> NoteDocument)?
     /// A task's page whose note is in Recently Deleted invites a new one
-    /// ("Write a new note", § 2.7.2); nil keeps "Write, or drop a file".
+    /// ("Write a new note", § 2.7.2); nil leaves the task-note body blank.
     var bodyPlaceholder: String?
     private var compatibilityTitleBlock: NoteBlock?
     private(set) var style: NoteTextStyle

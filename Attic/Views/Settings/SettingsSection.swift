@@ -10,8 +10,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case agentAccess
     case about
 
-    /// The sidebar's groups (spec § Settings): App, then Connections with
-    /// its quiet hint; About sits alone at the bottom, apart by space.
+    /// The sidebar's groups: App, then Connections; About sits at the bottom.
     enum Group: CaseIterable {
         case app
         case connections
@@ -23,13 +22,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
             }
         }
 
-        /// The quiet italic hint under the group, when it has one.
-        var hint: String? {
-            switch self {
-            case .app: nil
-            case .connections: String(localized: "Let agents read and add tasks")
-            }
-        }
+        var hint: String? { nil }
 
         var sections: [SettingsSection] {
             SettingsSection.allCases.filter { $0.group == self }
