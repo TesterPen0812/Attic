@@ -59,6 +59,19 @@ enum AgentEvent: Sendable, Equatable {
     case failed(String)
 }
 
+/// Read-only conversation history, including messages sent before the panel reopened.
+struct AgentThreadEntry: Identifiable, Sendable, Equatable, Codable {
+    let id: UUID
+    let role: String
+    var text: String
+}
+
+struct AgentThreadSnapshot: Sendable, Equatable {
+    let entries: [AgentThreadEntry]
+    let events: [AgentEvent]
+    let isRunning: Bool
+}
+
 /// `watching` is true while the chat is open. When false, the run must not move
 /// the owner's page or take focus; it works in the background.
 @MainActor
@@ -68,4 +81,7 @@ protocol AgentRunning: AnyObject {
     func resolve(approval id: UUID, allow: Bool)
     func undo(changeSet id: UUID) async throws
     func cancel()
+    /// Reattach to a running agent without starting a new request.
+    func observe() -> AsyncStream<AgentEvent>
+    func threadSnapshot() -> AgentThreadSnapshot
 }
