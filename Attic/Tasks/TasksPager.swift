@@ -637,7 +637,11 @@ struct TasksPagerPages<Page: View>: View {
             // drawn where the last swipe had it); only its content comes
             // and goes.
             ForEach(0..<count, id: \.self) { index in
-                let drawn = index == shown || (span.pages.contains(index) && span.skipped != index)
+                // The task-note route covers the Tasks shell but keeps its
+                // pages built. Hide their native scroll views from AppKit AX
+                // until Back reveals the shell again.
+                let drawn = model.isPageShown &&
+                    (index == shown || (span.pages.contains(index) && span.skipped != index))
                 Group {
                     if drawn || span.warm?.contains(index) == true {
                         TasksKeptPage(frozen: drawn ? nil : token(index)) { page(index, drawn) }

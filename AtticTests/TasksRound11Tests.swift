@@ -107,6 +107,19 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "the lightweight tab hosts remain ready across a hide (R-29)")
     }
 
+    func testCoveredTaskPageHidesNativeListFromAccessibilityAndRestoresOnBack() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        let list = try XCTUnwrap(pageLists(hosted).first { !$0.isHidden }, "Now list is visible before opening a task page")
+        hosted.model.isPageShown = false
+        hosted.spin(0.1)
+        XCTAssertTrue(list.isHidden, "the covered page's native scroll view must leave AppKit accessibility")
+        hosted.model.isPageShown = true
+        hosted.spin(0.1)
+        XCTAssertFalse(list.isHidden, "Back restores the same native scroll view")
+    }
+
     /// Hiding the panel retains the built tab hosts under the lightweight
     /// retention budget; a reveal reuses them without a cold warm-up.
     func testHidingRetainsTheKeptPagesForTheNextReveal() throws {
