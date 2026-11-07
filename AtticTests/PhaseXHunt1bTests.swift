@@ -608,7 +608,21 @@ final class PhaseXHunt1bTests: XCTestCase {
             for row in shown {
                 let wanted = try XCTUnwrap(expected[row.id])
                 XCTAssertEqual(row.title, wanted.title)
-                XCTAssertEqual(row.preview, wanted.body)
+                // Accepted Notes search behaviour: show the matching title or
+                // tag first, otherwise a body excerpt. These small fixtures fit
+                // within the excerpt's context, including the title line.
+                let preview: String
+                if !query.isEmpty && wanted.title.localizedCaseInsensitiveContains(query) {
+                    preview = "Title: \(wanted.title)"
+                } else if !query.isEmpty, let tag = wanted.tags.first(where: { $0.localizedCaseInsensitiveContains(query) }) {
+                    preview = "#\(tag)"
+                } else if !query.isEmpty && wanted.body.localizedCaseInsensitiveContains(query) {
+                    preview = "\(wanted.title) \(wanted.body)"
+                } else {
+                    preview = wanted.body
+                }
+                XCTAssertEqual(row.preview, preview, "seeded step \(step), query \(query)")
+                XCTAssertEqual(row.searchMatch, query.isEmpty ? nil : query, "seeded step \(step) highlight")
             }
         }
         print("ATTIC-H1B-ORGANIZE reference steps=240 seed=0x48554E543142")
