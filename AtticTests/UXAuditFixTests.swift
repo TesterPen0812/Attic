@@ -309,6 +309,31 @@ final class UXAuditFixTests: XCTestCase {
         }
     }
 
+    func testDrawSearchEscapeReachesItsNativeFieldDelegate() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let size = CGSize(width: 320, height: 460)
+        try withHost(DrawPageHost(model: model, uiState: PanelUIState(),
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
+            model.openSearch()
+            model.search.query = "missing"
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            func findSearch(_ view: NSView) -> NSTextField? {
+                if let field = view as? NSTextField,
+                   field.accessibilityIdentifier() == "draw-search-native-input" { return field }
+                for child in view.subviews {
+                    if let result = findSearch(child) { return result }
+                }
+                return nil
+            }
+            let field = try XCTUnwrap(findSearch(host), "Draw Search needs an AppKit Escape handler while typing")
+            let delegate = try XCTUnwrap(field.delegate)
+            XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.cancelOperation(_:))) == true)
+            XCTAssertFalse(model.isSearching)
+            XCTAssertEqual(model.search.query, "")
+        }
+    }
+
     func testAcceptedShapesReviewTrackUsesItsSeventeenPointOuterCorner() {
         let control = NoteHistoryVersionSwitch(choices: [(false, "Current"), (true, "Proposed")], selection: .constant(false),
             trackHeight: AtticRadius.reviewBar * 2, trackInset: 7)

@@ -204,7 +204,8 @@ struct DrawSearchField: View {
 
     var body: some View {
         AtticTabsSearchField(placeholder: String(localized: "Search canvases"), text: $search.query,
-                             isFocused: $searchFocused, floating: true, onEscape: model.closeSearch, header: true)
+                             isFocused: $searchFocused, nativeInputIdentifier: "draw-search-native-input",
+                             floating: true, onEscape: model.closeSearch, header: true)
             .atticDesignCorners()
             .onKeyPress(.upArrow) { search.moveHighlight(by: -1); return .handled }
             .onKeyPress(.downArrow) { search.moveHighlight(by: 1); return .handled }
