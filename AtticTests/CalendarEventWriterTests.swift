@@ -122,8 +122,9 @@ final class CalendarEventWriterTests: XCTestCase {
         store.commitError = nil
         let key = try XCTUnwrap(store.events.keys.first)
         store.events[key]?.draft.title = "Changed outside Attic"
-        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .obsolete)
-        XCTAssertEqual(undo.undoCount(in: .calendar), 0)
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .failed,
+                                  "an unresolved commit cannot discard its durable proof")
+        XCTAssertEqual(undo.undoCount(in: .calendar), 1)
         XCTAssertEqual(store.events[key]?.draft.title, "Changed outside Attic")
     }
 
@@ -252,8 +253,13 @@ final class CalendarEventWriterTests: XCTestCase {
             store.stageError = staging ? error : nil
             store.commitError = staging ? nil : error
             assertError(error) { try writer.create(draft("Fail")) }
-            assertError(error) { try writer.edit(made.id, draft: draft("Fail")) }
-            assertError(error) { try writer.delete(made.id) }
+            if staging {
+                assertError(error) { try writer.edit(made.id, draft: draft("Fail")) }
+                assertError(error) { try writer.delete(made.id) }
+            } else {
+                XCTAssertThrowsError(try writer.edit(made.id, draft: draft("Fail")))
+                XCTAssertThrowsError(try writer.delete(made.id))
+            }
             XCTAssertEqual(store.events, before)
             XCTAssertEqual(try writer.ownedEvent(matching: made.occurrenceID), made)
             XCTAssertEqual(undo.revision, revision)
@@ -366,8 +372,8 @@ final class CalendarEventWriterTests: XCTestCase {
         XCTAssertEqual(undo.undoStep(in: .calendar), .failed)
         XCTAssertEqual(store.events.count, 1)
         store.commitError = nil
-        XCTAssertTrue(undo.undo(in: .calendar))
-        XCTAssertEqual(store.events.count, 2)
+        XCTAssertFalse(undo.undo(in: .calendar), "a missing prior create stays held until its commit is proven")
+        XCTAssertEqual(store.events.count, 1)
     }
 
     func testWritesAndUndoInvalidateCalendarPageReadAndSearchCaches() async throws {
@@ -546,6 +552,55 @@ final class CalendarEventWriterTests: XCTestCase {
         store.landsThenThrowsOnCommit = false
         try relaunched.delete(owned.id)
         XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testD01AmbiguousCommittedCreateKeepsDurableProofAcrossReaderMismatchAndRelaunch() throws {
+        let root = ownedTemporaryDirectory(prefix: "CalendarAmbiguousCommit")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("ownership.json")
+        func pendingOnDisk() throws -> Bool {
+            let state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+            return state["pending"] is [String: Any]
+        }
+        store.withholdReadsAfterCommit = true
+        let initial = try writer(record: CalendarOwnershipRecord(fileURL: url))
+        XCTAssertThrowsError(try initial.create(draft("Held")))
+        let committed = try XCTUnwrap(store.events.values.first)
+        XCTAssertEqual(store.events.count, 1)
+        XCTAssertTrue(try pendingOnDisk())
+
+        let relaunched = try writer(record: CalendarOwnershipRecord(fileURL: url))
+        XCTAssertNil(try relaunched.ownedEvent(matching: committed.occurrenceID))
+        XCTAssertTrue(try pendingOnDisk())
+        XCTAssertEqual(undo.undoCount(in: .calendar), 0)
+
+        store.readsWithheld = false
+        XCTAssertEqual(try relaunched.ownedEvent(matching: committed.occurrenceID)?.draft.title, "Held")
+        XCTAssertFalse(try pendingOnDisk())
+        XCTAssertEqual(undo.undoCount(in: .calendar), 1, "Undo publishes only after ownership is verified")
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testD01AmbiguousCommittedEditKeepsPriorProofThenPublishesRecoveredUndo() throws {
+        let root = ownedTemporaryDirectory(prefix: "CalendarAmbiguousEdit")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("ownership.json")
+        let initial = try writer(record: CalendarOwnershipRecord(fileURL: url))
+        let made = try initial.create(draft("Before"))
+        store.withholdReadsAfterCommit = true
+        XCTAssertThrowsError(try initial.edit(made.id, draft: draft("After")))
+        let committed = try XCTUnwrap(store.events.values.first)
+        XCTAssertEqual(committed.draft.title, "After")
+        XCTAssertEqual(try CalendarOwnershipRecord(fileURL: url).entries[made.id]?.draft.title, "Before")
+        let relaunched = try writer(record: CalendarOwnershipRecord(fileURL: url))
+        XCTAssertNil(try relaunched.ownedEvent(matching: committed.occurrenceID))
+        store.readsWithheld = false
+        XCTAssertEqual(try relaunched.ownedEvent(matching: committed.occurrenceID)?.id, made.id)
+        XCTAssertEqual(undo.undoCount(in: .calendar), 2)
+        store.withholdReadsAfterCommit = false
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertEqual(store.events.values.first?.draft.title, "Before")
     }
 
     func testAllDayOwnershipSurvivesFloatingTimeZoneChange() throws {
