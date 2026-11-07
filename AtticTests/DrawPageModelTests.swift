@@ -55,6 +55,44 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.canvasName, "During pan")
     }
 
+    func testExternalCanvasDeleteDuringPanSwitchesAfterPointerUp() throws {
+        stroke()
+        let deletedID = try XCTUnwrap(model.canvasID)
+        model.pointerDown(at: CGPoint(x: 100, y: 100), panButton: true)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: deletedID).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.canvasID, deletedID, "live input retains its original canvas")
+        model.pointerUp()
+        XCTAssertNotEqual(model.canvasID, deletedID, "deletion is reconciled once the pan ends")
+        XCTAssertFalse(try store.library().contains { $0.id == deletedID })
+    }
+
+    func testExternalCanvasRestoreDuringPanKeepsTheCompletedViewport() throws {
+        stroke()
+        let id = try XCTUnwrap(model.canvasID)
+        model.pointerDown(at: CGPoint(x: 100, y: 100), panButton: true)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: id).isSaved)
+        model.syncExternalChanges()
+        model.pointerDragged(to: CGPoint(x: 140, y: 120))
+        let completedView = model.viewport
+        model.pointerUp()
+        XCTAssertEqual(model.canvasID, id)
+        XCTAssertEqual(model.viewport, completedView, "restore must not reset a live pan")
+    }
+
+    func testExternalRenameDuringInkKeepsTheFinishedStrokeAndNewName() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120))
+        XCTAssertTrue(store.perform(.rename("Renamed during ink"), on: id).isSaved)
+        model.syncExternalChanges()
+        model.pointerUp()
+        XCTAssertEqual(model.canvasName, "Renamed during ink")
+        XCTAssertEqual(try store.open(id).objects.count, 1, "input must settle before external revision merges")
+    }
+
     private func key(_ characters: String, code: UInt16 = 0, command: Bool = false, shift: Bool = false) -> Bool {
         model.handleKey(DrawKey(characters: characters, keyCode: code, command: command, shift: shift))
     }
