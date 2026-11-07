@@ -312,12 +312,16 @@ enum TasksTopTabsMetrics {
     /// After the current tab's name, to the marker's end.
     static let nameTrailing: CGFloat = 7
 
-    /// `tab`'s name as drawn, known before any layout: the cells' widths
-    /// animate from these, never from a measurement.
-    static func nameWidth(_ tab: TasksTab) -> CGFloat {
+    /// The labels and font are fixed. Measure each once rather than laying
+    /// out attributed text again whenever selection redraws the top row.
+    private static let measuredNameWidths: [TasksTab: CGFloat] = {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
-        return ceil(NSAttributedString(string: tab.title, attributes: [.font: font, .kern: tracking]).size().width)
-    }
+        return Dictionary(uniqueKeysWithValues: TasksTab.allCases.map { tab in
+            (tab, ceil(NSAttributedString(string: tab.title, attributes: [.font: font, .kern: tracking]).size().width))
+        })
+    }()
+
+    static func nameWidth(_ tab: TasksTab) -> CGFloat { measuredNameWidths[tab] ?? 0 }
 
     static func cellWidth(_ tab: TasksTab, selection: TasksTab) -> CGFloat {
         tab == selection ? cell.width + nameWidth(tab) + nameTrailing : cell.width
@@ -337,7 +341,7 @@ enum TasksTopTabsMetrics {
     }
 
     /// The room the switch keeps on the row: the capsule at its widest.
-    static var slotWidth: CGFloat { TasksTab.allCases.map { width(selection: $0) }.max() ?? 0 }
+    static let slotWidth: CGFloat = TasksTab.allCases.map { width(selection: $0) }.max() ?? 0
 }
 
 
