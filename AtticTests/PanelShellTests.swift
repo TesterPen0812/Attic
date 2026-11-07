@@ -173,7 +173,9 @@ final class PanelShellTests: XCTestCase {
         XCTAssertNil(motion.pageOpacityAnimation(incoming: true), "the new page is drawn whole at once")
         XCTAssertEqual(motion.pageOpacityAnimation(incoming: false),
                        .linear(duration: 0.001).delay(motion.settleDuration), "the old page stays whole until it is out")
-        XCTAssertNotNil(motion.inPlaceOpacityAnimation(incoming: true))
+        XCTAssertEqual(PanelPageMotion.fadeInDelay, 0)
+        XCTAssertEqual(motion.inPlaceOpacityAnimation(incoming: true), .easeOut(duration: 0.16),
+                       "the arriving header starts at the click, with no 90 ms wait")
         XCTAssertNotEqual(motion.inPlaceOpacityAnimation(incoming: true), motion.inPlaceOpacityAnimation(incoming: false))
         let instant = PanelPageMotion.current(reduceMotion: true)
         XCTAssertFalse(instant.travels)
