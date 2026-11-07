@@ -75,6 +75,7 @@ struct ComposerCard: View {
     /// keyboard only as the card opens (`focusRequest`), never on mount.
     @State private var titleFocused = false
     @FocusState private var writingFocused: Bool
+    @FocusState private var keyboardStop: KeyboardStop?
     /// The title field's wrapped height (one line: `titleHeight`).
     @State private var titleFieldHeight = ComposerMetrics.titleHeight
     @State private var open: Chip?
@@ -84,6 +85,16 @@ struct ComposerCard: View {
     @State private var priorityPickGeneration = 0
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
+    private enum KeyboardStop: Hashable { case chip(Chip), create }
+
+    private var keyboardStops: [KeyboardStop] {
+        switch model.kind {
+        case .task: [.chip(.date), .chip(.priority), .chip(.tags), .create]
+        case .note: [.chip(.pin), .chip(.tags), .create]
+        case .event:
+            [.chip(.date)] + (model.values.time == nil ? [] : [.chip(.length)]) + [.chip(.calendar), .create]
+        }
+    }
 
     /// False inside the panel's grow (`ComposerOverlay`), which draws the
     /// material itself so size and radius move together.
@@ -128,8 +139,9 @@ struct ComposerCard: View {
             pickedPriority = nil
             titleFocused = false
             writingFocused = false
+            keyboardStop = nil
         }
-        .onChange(of: model.kind) { _, _ in open = nil }
+        .onChange(of: model.kind) { _, _ in open = nil; keyboardStop = nil }
         .onChange(of: open) { _, newPicker in
             priorityPickGeneration &+= 1
             if newPicker != .priority { pickedPriority = nil }
@@ -145,6 +157,11 @@ struct ComposerCard: View {
             model.close()
             return .handled
         }
+        // Native text-field Tabbing can skip plain SwiftUI buttons when the
+        // Mac has text-fields-only keyboard navigation. Give each card action
+        // an explicit keyboard stop; Tab after Create leaves for the panel.
+        .background(ComposerTabTrap(active: model.isOpen && (writingFocused || keyboardStop != nil),
+                                    onTab: advanceKeyboard))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "New \(kind.title)"))
         .accessibilityIdentifier("composer-card")
@@ -187,6 +204,7 @@ struct ComposerCard: View {
     /// Tab and ⇧Tab stay inside the card (A4): the title and the writing
     /// line take turns.
     private func moveKeyboard(toWriting: Bool) {
+        keyboardStop = nil
         if toWriting {
             titleFocused = false
             writingFocused = true
@@ -197,6 +215,30 @@ struct ComposerCard: View {
                 window.makeFirstResponder(field)
             }
         }
+    }
+
+    /// Returns false after the final button so AppKit can move focus out
+    /// through the panel's normal next-key-view chain.
+    @discardableResult
+    private func advanceKeyboard(backward: Bool) -> Bool {
+        if writingFocused {
+            if backward { moveKeyboard(toWriting: false) }
+            else {
+                writingFocused = false
+                titleFocused = false
+                keyboardStop = keyboardStops.first
+            }
+            return true
+        }
+        guard let keyboardStop, let index = keyboardStops.firstIndex(of: keyboardStop) else { return false }
+        let next = index + (backward ? -1 : 1)
+        if next < 0 { moveKeyboard(toWriting: true); return true }
+        guard keyboardStops.indices.contains(next) else {
+            self.keyboardStop = nil
+            return false
+        }
+        self.keyboardStop = keyboardStops[next]
+        return true
     }
 
     // MARK: Kind switch
@@ -389,10 +431,8 @@ struct ComposerCard: View {
             .lineLimit(1...ComposerMetrics.writingMaxLines)
             .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
             .focused($writingFocused)
-            // Tab and ⇧Tab go back to the title, never out of the card. The
-            // field editor moves to the next key view before `onKeyPress`
-            // hears Tab, so the card catches it first (A4).
-            .background(ComposerTabTrap(active: writingFocused && model.isOpen) { moveKeyboard(toWriting: false) })
+            // The card's native Tab monitor moves forward through the actions
+            // or backwards to Title before AppKit visits the panel underneath.
             .onKeyPress(.return, phases: .down) { press in
                 if press.modifiers.contains(.shift) && !press.modifiers.contains(.command) { return .ignored }
                 model.submit(openingPage: press.modifiers.contains(.command))
@@ -601,6 +641,15 @@ struct ComposerCard: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .focusable(true)
+        .focused($keyboardStop, equals: .chip(id))
+        .overlay {
+            if keyboardStop == .chip(id) {
+                Squircle(cornerRadius: ComposerMetrics.chipHeight / 2, exponent: AtticShape.controlExponent)
+                    .strokeBorder(design.tokens.ink(.heading).color.opacity(0.55), lineWidth: 1.2)
+                    .allowsHitTesting(false)
+            }
+        }
         .help(label)
         .accessibilityLabel(label)
         .accessibilityIdentifier("composer-chip-\(id)")
@@ -665,6 +714,15 @@ struct ComposerCard: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .focusable(true)
+        .focused($keyboardStop, equals: .create)
+        .overlay {
+            if keyboardStop == .create {
+                Squircle(cornerRadius: ComposerMetrics.createHeight / 2, exponent: AtticShape.controlExponent)
+                    .strokeBorder(design.tokens.ink(.heading).color.opacity(0.65), lineWidth: 1.2)
+                    .allowsHitTesting(false)
+            }
+        }
         .disabled(!can)
         .fixedSize()
         .accessibilityIdentifier("composer-create")
@@ -757,7 +815,7 @@ extension TaskPriority {
 /// of the card.
 private struct ComposerTabTrap: NSViewRepresentable {
     let active: Bool
-    let onTab: () -> Void
+    let onTab: (Bool) -> Bool
 
     func makeNSView(context: Context) -> TrapView { TrapView() }
 
@@ -767,7 +825,7 @@ private struct ComposerTabTrap: NSViewRepresentable {
     }
 
     final class TrapView: NSView {
-        var onTab: () -> Void = {}
+        var onTab: (Bool) -> Bool = { _ in false }
         private var monitor: Any?
         var active = false {
             didSet {
@@ -776,8 +834,7 @@ private struct ComposerTabTrap: NSViewRepresentable {
                     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                         guard let self, event.keyCode == 48, event.window === self.window,
                               event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
-                        self.onTab()
-                        return nil
+                        return self.onTab(event.modifierFlags.contains(.shift)) ? nil : event
                     }
                 } else if let monitor {
                     NSEvent.removeMonitor(monitor)
