@@ -49,6 +49,7 @@ project.add_build_configuration('Local', :debug)
 app = project.new_target(:application, 'Attic', :osx, '26.0')
 unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '26.0')
 crash_helper = project.new_target(:command_line_tool, 'AtticOperationCrashHelper', :osx, '26.0')
+agent_helper = project.new_target(:application, 'AtticAgentHelper', :osx, '26.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
 round_trip_tests = project.new_target(:unit_test_bundle, 'AtticRoundTripTests', :osx, '26.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
@@ -79,6 +80,8 @@ end
 unit_tests.add_dependency(unit_host)
 round_trip_tests.add_dependency(unit_host)
 unit_host.add_dependency(crash_helper)
+app.add_dependency(agent_helper)
+unit_host.add_dependency(agent_helper)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
@@ -146,11 +149,19 @@ app_group.files.each do |reference|
 end
 unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
 add_swift_sources(project, crash_helper, 'AtticOperationCrashHelper', 'AtticOperationCrashHelper')
+add_swift_sources(project, agent_helper, 'AtticAgentHelper', 'AtticAgentHelper')
 embed_helper = unit_host.new_copy_files_build_phase('Embed operation crash helper')
 embed_helper.dst_subfolder_spec = '6' # Contents/MacOS
 embed_helper.dst_path = ''
 embedded_helper = embed_helper.add_file_reference(crash_helper.product_reference)
 embedded_helper.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy'] }
+[app, unit_host].each do |host|
+  embed_agent = host.new_copy_files_build_phase('Embed unsandboxed agent helper')
+  embed_agent.dst_subfolder_spec = '1' # The app wrapper, at Contents/Helpers.
+  embed_agent.dst_path = 'Contents/Helpers'
+  nested = embed_agent.add_file_reference(agent_helper.product_reference)
+  nested.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy'] }
+end
 add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
 observer_loader = project.main_group['AtticTests'].new_file('InvisibleHostObserverLoader.m')
 unit_tests.source_build_phase.add_file_reference(observer_loader)
@@ -342,6 +353,26 @@ crash_helper.build_configurations.each do |config|
   settings['SKIP_INSTALL'] = 'YES'
 end
 
+# Launch Services starts this nested background application independently of
+# Attic's sandbox. It has no entitlements and never links the Attic data model.
+agent_helper.build_configurations.each do |config|
+  settings = config.build_settings
+  settings['PRODUCT_NAME'] = 'AtticAgentHelper'
+  settings['ATTIC_MACOS_BUNDLE_IDENTIFIER'] = 'com.taha.Attic'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_BUNDLE_IDENTIFIER).AgentHelper'
+  settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+  settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
+  settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Attic Agent Helper'
+  settings['SWIFT_VERSION'] = '5.0'
+  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  settings['CODE_SIGN_STYLE'] = 'Manual'
+  settings['CODE_SIGN_INJECT_BASE_ENTITLEMENTS'] = 'NO'
+  settings['ENABLE_APP_SANDBOX'] = 'NO'
+  settings['ENABLE_HARDENED_RUNTIME'] = 'NO'
+  settings['SKIP_INSTALL'] = 'YES'
+end
+
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
   # TEST_HOST is evaluated in the unit-test target's build-setting scope, so
@@ -529,6 +560,7 @@ stable_target_uuids = {
   app => 'A7714C2169D9DBD5A01DC94837E1C051',
   unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
   crash_helper => 'B5A52D9C81724173A8AB94CDF81D800A',
+  agent_helper => 'A6E1A6E1A6E1A6E1A6E1A6E1A6E1A6E1',
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
   round_trip_tests => 'F3330000000000000000000000000001',
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',

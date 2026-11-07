@@ -7,35 +7,19 @@ struct AgentAccessSettingsView: View {
 
     @State private var didCopyAgentSetupPrompt = false
     @State private var didCopyEndpoint = false
-    @State private var claudeKeyDraft = ""
-    @State private var hasClaudeKey = false
-    @State private var claudeKeyError = false
-    private let claudeKeys = AgentAPIKeyStore()
+    @State private var installedBackends: Set<AgentBackend>?
+    @State private var didCheckBackends = false
 
     var body: some View {
         SettingsPage(section: .agentAccess) {
-            SettingsGroup(title: String(localized: "Claude")) {
-                HStack(spacing: 12) {
-                    AtticText(verbatim: String(localized: "API key"), style: .groupLabel, ink: .label)
-                    Spacer(minLength: 8)
-                    SecureField("", text: $claudeKeyDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 180)
-                        .accessibilityLabel("Claude API key")
-                        .accessibilityIdentifier("settings-claude-api-key")
-                    Button(String(localized: "Save")) { saveClaudeKey() }
-                        .disabled(claudeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if hasClaudeKey {
-                        Button(String(localized: "Remove")) { removeClaudeKey() }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                if claudeKeyError {
-                    AtticGroupMessage(text: String(localized: "Could not update the API key."), tone: .error)
-                }
+            SettingsGroup(title: String(localized: "In-app agent")) {
+                AtticPopUpRow(
+                    label: String(localized: "Agent"),
+                    choices: AgentBackend.allCases.map { ($0, backendLabel($0)) },
+                    selection: $settings.inAppAgentBackend,
+                    identifier: "setting-in-app-agent-backend"
+                )
             }
-            .onAppear(perform: refreshClaudeKey)
 
             SettingsGroup(
                 title: String(localized: "Access"),
@@ -99,32 +83,20 @@ struct AgentAccessSettingsView: View {
                 }
             }
         }
+        .task {
+            installedBackends = await AgentBackendDiscovery.installed()
+            didCheckBackends = true
+        }
+    }
+
+    private func backendLabel(_ backend: AgentBackend) -> String {
+        guard didCheckBackends else { return backend.title }
+        guard let installedBackends else { return "\(backend.title) · Unavailable" }
+        return "\(backend.title) · \(installedBackends.contains(backend) ? "Installed" : "Not installed")"
     }
 
     private var endpoint: String {
         "http://127.0.0.1:\(settings.agentServerPort)/mcp"
-    }
-
-    private func refreshClaudeKey() {
-        hasClaudeKey = (try? claudeKeys.load()) != nil
-    }
-
-    private func saveClaudeKey() {
-        do {
-            try claudeKeys.save(claudeKeyDraft)
-            claudeKeyDraft = ""
-            claudeKeyError = false
-            refreshClaudeKey()
-        } catch { claudeKeyError = true }
-    }
-
-    private func removeClaudeKey() {
-        do {
-            try claudeKeys.remove()
-            claudeKeyDraft = ""
-            claudeKeyError = false
-            refreshClaudeKey()
-        } catch { claudeKeyError = true }
     }
 
     @ViewBuilder

@@ -11,6 +11,10 @@ struct AgentTarget: Sendable, Equatable {
     var page: AgentPage
     var itemID: UUID?
     var title: String?
+    /// Calendar events use an EventKit occurrence ID rather than an app UUID.
+    var externalID: String? = nil
+    /// The Draw canvas containing the targeted element.
+    var containerID: UUID? = nil
 }
 
 enum AgentStepState: Sendable, Equatable {
