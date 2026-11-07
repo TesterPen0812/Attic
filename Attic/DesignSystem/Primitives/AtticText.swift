@@ -1,4 +1,11 @@
+import AppKit
 import SwiftUI
+
+/// Shared text representation for clipboard and drag interoperability.
+/// A wire type's identifier must remain stable across Tasks and Notes.
+enum AtticPasteboardTypes {
+    static let markdown = NSPasteboard.PasteboardType("net.daringfireball.markdown")
+}
 
 /// Every piece of design-system text goes through this view, so each run
 /// has a role (`AtticInk`) and a style, never wraps (labels truncate; only

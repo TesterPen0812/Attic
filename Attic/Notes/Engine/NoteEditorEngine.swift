@@ -2774,7 +2774,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if let data = try? NoteContentCodec.encode(fragment, context: .fragment) { wrote = pasteboard.setData(data, forType: type) || wrote }
             case .string:
                 wrote = pasteboard.setString(NoteTextExport.plainText(fragment), forType: .string) || wrote
-            case TasksTextExport.markdownType:
+            case AtticPasteboardTypes.markdown:
                 // A fragment's first paragraph is body text, not a title.
                 let body = NoteDocument(blocks: [.text("")] + fragment.blocks)
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote

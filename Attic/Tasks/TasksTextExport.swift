@@ -39,7 +39,7 @@ struct TasksTextExport: Equatable {
 
     let items: [Item]
 
-    static let markdownType = NSPasteboard.PasteboardType("net.daringfireball.markdown")
+    static let markdownType = AtticPasteboardTypes.markdown
 
     /// The titles alone, one per line (⌘C's plain text).
     var titles: String { items.map(\.title).joined(separator: "\n") }

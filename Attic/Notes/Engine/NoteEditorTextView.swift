@@ -1428,7 +1428,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Pasteboard
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .rtfd, .rtf, .string, TasksTextExport.markdownType]
+        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .rtfd, .rtf, .string, AtticPasteboardTypes.markdown]
     }
 
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
