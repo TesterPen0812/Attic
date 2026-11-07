@@ -65,13 +65,13 @@ struct TaskDateChoices {
     func detail(for day: DueDay) -> String {
         guard let date = day.startDate(in: calendar), let offset = offset(to: day) else { return day.rawValue }
         let template = (0...1).contains(offset) ? "EEE" : (day.year == today.year ? "EEEdMMM" : "EEEdMMMy")
-        return TaskRowPresentation.format(date, template: template, calendar: calendar, locale: parser.locale)
+        return AtticDateFormatting.template(date, template: template, calendar: calendar, locale: parser.locale)
     }
 
     /// The resolved day in full, for a suggestion ("Thu 1 Oct").
     func longDetail(for day: DueDay) -> String {
         guard let date = day.startDate(in: calendar) else { return day.rawValue }
-        return TaskRowPresentation.format(date, template: day.year == today.year ? "EEEdMMM" : "EEEdMMMy",
+        return AtticDateFormatting.template(date, template: day.year == today.year ? "EEEdMMM" : "EEEdMMMy",
                                           calendar: calendar, locale: parser.locale)
     }
 

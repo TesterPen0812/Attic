@@ -359,6 +359,30 @@ final class TasksPageModelTests: XCTestCase {
 
     // MARK: - How rows read
 
+    func testSharedDateTemplatesKeepDistinctLocaleAndTimeZoneCacheEntries() {
+        let instant = Date(timeIntervalSince1970: 1_798_766_100)
+        for zone in ["UTC", "Pacific/Auckland", "America/Los_Angeles"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: zone)!
+            for language in ["en_GB", "fr_FR", "ja_JP"] {
+                let locale = Locale(identifier: language)
+                for template in ["jmm", "EEEEdMMM", "LLLL"] {
+                    let expected = DateFormatter()
+                    expected.calendar = calendar
+                    expected.timeZone = calendar.timeZone
+                    expected.locale = locale
+                    expected.setLocalizedDateFormatFromTemplate(template)
+                    let label = "\(zone) / \(language) / \(template)"
+                    XCTAssertEqual(AtticDateFormatting.template(instant, template: template, calendar: calendar, locale: locale),
+                                   expected.string(from: instant), label)
+                    // Repeat in another access order to exercise the shared cache.
+                    XCTAssertEqual(AtticDateFormatting.template(instant, template: template, calendar: calendar, locale: locale),
+                                   expected.string(from: instant), label)
+                }
+            }
+        }
+    }
+
     func testDueDatesReadAsTheSpecSays() {
         let today = DueDay(year: 2026, month: 9, day: 21)!
         let locale = Locale(identifier: "en_GB")

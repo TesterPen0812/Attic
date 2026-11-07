@@ -211,8 +211,8 @@ struct CalendarDateTile: View {
         case .yesterday: String(localized: "Yesterday")
         case nil: nil
         }
-        return (TaskRowPresentation.format(date, template: "dMMM", calendar: calendar, locale: locale), relative,
-                TaskRowPresentation.format(date, template: "EEEE", calendar: calendar, locale: locale))
+        return (AtticDateFormatting.template(date, template: "dMMM", calendar: calendar, locale: locale), relative,
+                AtticDateFormatting.template(date, template: "EEEE", calendar: calendar, locale: locale))
     }
 }
 
@@ -450,8 +450,8 @@ struct CalendarEventRow: View {
     static func timeText(_ event: CalendarEvent, locale: Locale = .current) -> String {
         if event.isAllDay { return String(localized: "All day") }
         let calendar = CalendarMonthMath.calendar()
-        let start = TaskRowPresentation.format(event.start, template: "jmm", calendar: calendar, locale: locale)
-        let end = TaskRowPresentation.format(event.end, template: "jmm", calendar: calendar, locale: locale)
+        let start = AtticDateFormatting.template(event.start, template: "jmm", calendar: calendar, locale: locale)
+        let end = AtticDateFormatting.template(event.end, template: "jmm", calendar: calendar, locale: locale)
         return "\(start)–\(end)"
     }
 }
@@ -468,7 +468,7 @@ struct CalendarNowLine: View {
             HStack(spacing: 5) {
                 Circle().fill(red).frame(width: CalendarDesign.nowDot, height: CalendarDesign.nowDot)
                 Capsule().fill(red).frame(height: CalendarDesign.nowLine)
-                Text(verbatim: TaskRowPresentation.format(context.date, template: "jmm", calendar: CalendarMonthMath.calendar(),
+                Text(verbatim: AtticDateFormatting.template(context.date, template: "jmm", calendar: CalendarMonthMath.calendar(),
                                                           locale: .current))
                     .font(.system(size: CalendarDesign.nowFont, weight: .semibold).monospacedDigit())
                     .foregroundStyle(red)

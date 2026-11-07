@@ -106,7 +106,7 @@ struct CalendarKey: View {
     static func accessibilityName(_ day: DueDay, locale: Locale = .current) -> String {
         let calendar = CalendarMonthMath.calendar()
         guard let date = day.startDate(in: calendar) else { return day.rawValue }
-        return TaskRowPresentation.format(date, template: "EEEEdMMMM", calendar: calendar, locale: locale)
+        return AtticDateFormatting.template(date, template: "EEEEdMMMM", calendar: calendar, locale: locale)
     }
 }
 

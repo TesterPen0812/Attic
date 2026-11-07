@@ -41,30 +41,15 @@ enum TaskRowPresentation {
         case 1:
             return AtticTaskRowModel.Due(text: String(localized: "Tomorrow"))
         case 2...6:
-            return AtticTaskRowModel.Due(text: format(start, template: "EEE", calendar: gregorian, locale: locale))
+            return AtticTaskRowModel.Due(text: AtticDateFormatting.template(start, template: "EEE", calendar: gregorian, locale: locale))
         default:
             return AtticTaskRowModel.Due(text: shortDate(start, sameYear: day.year == today.year, calendar: gregorian, locale: locale))
         }
     }
 
     static func shortDate(_ date: Date, sameYear: Bool, calendar: Calendar, locale: Locale) -> String {
-        format(date, template: sameYear ? "dMMM" : "dMMMy", calendar: calendar, locale: locale)
+        AtticDateFormatting.template(date, template: sameYear ? "dMMM" : "dMMMy", calendar: calendar, locale: locale)
     }
-
-    static func format(_ date: Date, template: String, calendar: Calendar, locale: Locale) -> String {
-        let key = "\(template)|\(locale.identifier)|\(calendar.timeZone.identifier)|\(calendar.identifier)" as NSString
-        if let cached = formatters.object(forKey: key) { return cached.string(from: date) }
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = locale
-        formatter.setLocalizedDateFormatFromTemplate(template)
-        formatters.setObject(formatter, forKey: key)
-        return formatter.string(from: date)
-    }
-
-    /// Formatters are costly to make and a list formats hundreds of dates.
-    private nonisolated(unsafe) static let formatters = NSCache<NSString, DateFormatter>()
 
     /// The row model for a main task. `subtasks` are its children in
     /// display order (the "1/3" checklist count), or empty.
@@ -96,6 +81,6 @@ enum TaskRowPresentation {
         if offset == 0 { return String(localized: "Today") }
         if offset == 1 { return String(localized: "Yesterday") }
         let sameYear = calendar.component(.year, from: start) == calendar.component(.year, from: todayStart)
-        return format(start, template: sameYear ? "EEEdMMM" : "EEEdMMMy", calendar: calendar, locale: locale)
+        return AtticDateFormatting.template(start, template: sameYear ? "EEEdMMM" : "EEEdMMMy", calendar: calendar, locale: locale)
     }
 }

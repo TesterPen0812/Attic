@@ -26,7 +26,7 @@ struct TasksNextEvent: Equatable, Sendable {
     init(_ event: CalendarEvent, calendar: Calendar, locale: Locale) {
         id = event.id
         day = DueDay(date: event.start, calendar: calendar)
-        time = TaskRowPresentation.format(event.start, template: "jmm", calendar: calendar, locale: locale)
+        time = AtticDateFormatting.template(event.start, template: "jmm", calendar: calendar, locale: locale)
         title = event.title
         colour = event.colour
     }

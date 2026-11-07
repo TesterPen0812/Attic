@@ -6,7 +6,7 @@ import Foundation
 enum TasksPanelDesign {
     /// A day header ("Wed 29 Oct", with the year when it isn't this year).
     static func dayTitle(_ date: Date, sameYear: Bool, calendar: Calendar, locale: Locale) -> String {
-        TaskRowPresentation.format(date, template: sameYear ? "EEEdMMM" : "EEEdMMMy", calendar: calendar, locale: locale)
+        AtticDateFormatting.template(date, template: sameYear ? "EEEdMMM" : "EEEdMMMy", calendar: calendar, locale: locale)
             .replacingOccurrences(of: ",", with: "")
     }
 
