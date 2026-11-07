@@ -25,6 +25,8 @@ final class CalendarEventRowState: ObservableObject {
 
     private var idleWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var idleTimeouts: [UUID: Task<Void, Never>] = [:]
+    private var selectionGeneration: UInt64 = 0
+    private var externalOpenGeneration: UInt64 = 0
     var terminationIdleTimeout: Duration = .seconds(2)
 
     /// A prior close, delete or toggle can already own an asynchronous writer.
@@ -73,6 +75,7 @@ final class CalendarEventRowState: ObservableObject {
         let day = day ?? DueDay(date: event.start, calendar: CalendarMonthMath.calendar())
         if rowID == event.id, rowDay == day { _ = await close(); return }
         guard await close() else { return }
+        selectionGeneration &+= 1
         rowID = event.id
         rowDay = day
         title = event.title
@@ -207,6 +210,7 @@ final class CalendarEventRowState: ObservableObject {
     }
 
     private func clear() {
+        selectionGeneration &+= 1
         rowID = nil
         rowDay = nil
         owned = nil
@@ -215,12 +219,19 @@ final class CalendarEventRowState: ObservableObject {
     }
 
     func openInCalendar(_ event: CalendarEvent, on day: DueDay? = nil) async {
+        externalOpenGeneration &+= 1
+        let request = externalOpenGeneration
+        let selection = selectionGeneration
+        let initialRow = rowID
         do {
             if writer == nil { writer = try makeWriter?() }
             guard let writer else { throw CalendarEventWriteError.openFailed }
             try await writer.openInCalendar(event.id)
         } catch {
+            guard externalOpenGeneration == request, selectionGeneration == selection,
+                  rowID == initialRow, initialRow == nil || initialRow == event.id else { return }
             if rowID == nil {
+                selectionGeneration &+= 1
                 rowID = event.id
                 rowDay = day ?? DueDay(date: event.start, calendar: CalendarMonthMath.calendar())
             }
