@@ -189,6 +189,33 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertNil(feed.nextWake)
     }
 
+    func testNextEventIgnoresAReadCompletedAfterTasksHidesAndReloadsOnReturn() async {
+        let held = HeldCalendarReader()
+        defer { held.completeAll() }
+        let calendar = calendar
+        let morning = calendar.date(bySettingHour: 9, minute: 0, second: 0,
+                                    of: Date().addingTimeInterval(7 * 86_400))!
+        let feed = TasksNextEventFeed(source: held, now: { morning }, calendar: { calendar })
+        defer { feed.setActive(false) }
+        let event = CalendarEvent(id: "return", title: "On return", start: morning.addingTimeInterval(600),
+                                  end: morning.addingTimeInterval(3_600), isAllDay: false,
+                                  calendarTitle: "Test", colour: .init(red: 0, green: 0, blue: 0))
+        feed.setEnabled(true)
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        feed.setActive(false)
+        held.completeFirst([event])
+        await feed.waitForReadForTesting()
+        XCTAssertNil(feed.current, "an in-flight read must not publish into a hidden Tasks page")
+        XCTAssertNil(feed.nextWake)
+
+        feed.setActive(true)
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        held.completeFirst([event])
+        await feed.waitForReadForTesting()
+        XCTAssertEqual(feed.current?.id, "return")
+        XCTAssertNotNil(feed.nextWake)
+    }
+
     func testCalendarPageFetchLeavesTheMainThread() async throws {
         let fetched = expectation(description: "page event fetch")
         let backend = FakeCalendarEventStore()

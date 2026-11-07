@@ -43,6 +43,7 @@ final class TasksNextEventFeed {
     private let calendar: () -> Calendar
     private let locale: Locale
     private var enabled = false
+    private var active = true
     private var timer: Timer?
     private var enabledObservation: AnyCancellable?
     private var readTask: Task<Void, Never>?
@@ -73,6 +74,14 @@ final class TasksNextEventFeed {
         refresh()
     }
 
+    /// Pause the retained page's Calendar work while Tasks is out of view.
+    /// Keep the last row until return, when a fresh read replaces it.
+    func setActive(_ on: Bool) {
+        guard active != on else { return }
+        active = on
+        refresh()
+    }
+
     /// Reads today's events again: on a calendar change, when the page
     /// shows, when the shown event ends and at midnight.
     func refresh() {
@@ -80,6 +89,10 @@ final class TasksNextEventFeed {
         readTask?.cancel()
         timer?.invalidate()
         timer = nil
+        guard active else {
+            if !enabled { publish(nil) }
+            return
+        }
         // Never `requestAccess()` here: only the Calendar page asks.
         guard enabled, source.accessState == .granted else { publish(nil); return }
         let date = now(), calendar = calendar()
@@ -91,7 +104,7 @@ final class TasksNextEventFeed {
             readTask = Task { [weak self] in
                 let events = await reader.loadEvents(in: interval)
                 guard !Task.isCancelled, let self, self.readGeneration == generation,
-                      self.enabled else { return }
+                      self.enabled, self.active else { return }
                 guard self.source.accessState == .granted else { self.publish(nil); return }
                 let current = self.now(), currentCalendar = self.calendar()
                 guard currentCalendar.isDate(current, inSameDayAs: date), currentCalendar.timeZone == calendar.timeZone else {
