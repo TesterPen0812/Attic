@@ -252,7 +252,10 @@ final class RecentlyDeletedModel: ObservableObject {
     @Published var query = "" {
         didSet { if query != oldValue { pruneSelection() } }
     }
-    @Published private(set) var message: Message?
+    @Published private(set) var message: Message? {
+        didSet { messageGeneration &+= 1 }
+    }
+    private var messageGeneration: UInt64 = 0
     /// Set while a permanent-deletion confirmation is shown.
     @Published private(set) var emptyRequest: EmptyRequest?
     /// The selected entries' ids (control audit item 11): only listed
@@ -517,18 +520,20 @@ final class RecentlyDeletedModel: ObservableObject {
         guard let library, !request.selection.isEmpty else { return finishEmpty(request) }
         library.emptyRecentlyDeleted(request.selection)
         finishEmpty(request)
+        let feedbackAtStart = messageGeneration
         // Deleted tasks with notes finish through the coordinated purge
         // (Phase 3); the list and its message follow when they are done.
         if library.taskNotePurge != nil, !request.selection.items(.task).isEmpty || !request.selection.items(.note).isEmpty {
             Task { @MainActor [weak self] in
                 guard !(await library.emptyTaskNoteFamilies(request.selection)).isEmpty else { return }
-                self?.finishEmpty(request)
+                self?.finishEmpty(request, onlyIfFeedbackIs: feedbackAtStart)
             }
         }
     }
 
-    private func finishEmpty(_ request: EmptyRequest) {
+    private func finishEmpty(_ request: EmptyRequest, onlyIfFeedbackIs generation: UInt64? = nil) {
         reload()
+        if let generation, messageGeneration != generation { return }
         let kept = entries.filter { entry in
             switch entry.source {
             case let .item(item): request.selection.contains(item: item.ref, deletedAt: item.deletedAt)

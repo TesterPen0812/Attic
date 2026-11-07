@@ -9,6 +9,13 @@ import XCTest
 /// Empty All… still taking everything.
 @MainActor
 final class RecentlyDeletedSelectionTests: XCTestCase {
+    private final class HeldFamilyPurge {
+        var gate: CheckedContinuation<Set<UUID>, Never>?
+        func wait() async -> Set<UUID> {
+            await withCheckedContinuation { gate = $0 }
+        }
+    }
+
     private var calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
@@ -271,6 +278,29 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertNil(model.emptyRequest)
         model.restoreSelected()
         XCTAssertEqual(model.entries.count, 1)
+    }
+
+    func testFix18LateFamilyPurgeDoesNotEraseNewerRestoreError() async throws {
+        let fixture = try makeFixture()
+        let ids = try deleteTasks(["A", "B"], in: fixture)
+        fixture.library.presentationDefaults = nil
+        let held = HeldFamilyPurge()
+        fixture.library.taskNotePurge = { _, _, _ in await held.wait() }
+        let model = model(fixture)
+        let removed = try entry("A", in: model)
+        model.requestDelete([removed])
+        model.confirmEmpty()
+        for _ in 0..<200 where held.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(held.gate)
+
+        model.restore(removed) // Its deletion has been purged, so this is a newer error.
+        let feedback = try XCTUnwrap(model.message)
+        XCTAssertEqual(feedback.tone, .error)
+        gate.resume(returning: [ids[0]])
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(model.message?.text, feedback.text,
+            "the older purge completion must not erase newer feedback")
+        XCTAssertEqual(model.message?.tone, .error)
     }
 
     /// The page's keys and its Undo name: ⌘R restores, ⌘⌫ asks.
