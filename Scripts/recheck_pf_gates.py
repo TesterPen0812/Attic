@@ -55,7 +55,7 @@ class Sampler:
                 name = 'AtticP3PFBaseHost' if reference else 'AtticP3CrashHost'
                 bundle = 'pfbase' if reference else 'crashhost'
                 env = dict(os.environ, TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY='1' if reference else '0')
-                command = [str(ROOT / 'Scripts/xcodebuild-locked.sh'), 'test-without-building',
+                command = [str(ROOT / 'Scripts/xcodebuild_locked.sh'), 'test-without-building',
                            '-project', str(source / 'Attic.xcodeproj'), '-scheme', 'Attic', '-configuration', 'Local',
                            '-destination', 'platform=macOS', '-derivedDataPath', str(derived),
                            '-resultBundlePath', str(directory / f'{role}-{test}.xcresult'),

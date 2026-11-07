@@ -87,7 +87,7 @@ class FreshOpenMemoryTests(unittest.TestCase):
             with patch.object(fresh.subprocess, 'run', side_effect=measure), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(fresh.main(argv), 0)
             self.assertEqual(len(calls), 21)
-            self.assertTrue(all(command[0].endswith('xcodebuild-locked.sh') for command in calls))
+            self.assertTrue(all(command[0].endswith('xcodebuild_locked.sh') for command in calls))
             for role in ('base', 'candidate', 'base-after'):
                 self.assertEqual(gate.parse_log(root / (role + '.log'))['PF'][fresh.KEY], [2] * 7)
             with contextlib.redirect_stdout(io.StringIO()):
@@ -112,7 +112,7 @@ class FreshOpenMemoryTests(unittest.TestCase):
                 run.return_value.stdout = 'measurement failed'
                 self.assertEqual(fresh.main(argv), 1)
                 command = run.call_args.args[0]
-                self.assertTrue(command[0].endswith('xcodebuild-locked.sh'))
+                self.assertTrue(command[0].endswith('xcodebuild_locked.sh'))
             for role in ('base', 'candidate', 'base-after'):
                 self.assertNotIn(fresh.MARKER, (root / (role + '.log')).read_text())
 
