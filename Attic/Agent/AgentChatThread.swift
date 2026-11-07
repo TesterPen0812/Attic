@@ -98,15 +98,19 @@ struct AgentWordRenderer: TextRenderer {
     }
 }
 
-/// A floating line of text: the design's soft glow keeps it readable on the
-/// blur in every appearance.
-private struct AgentChatGlow: ViewModifier {
+/// A floating line of text keeps the app's own tight opposite-tone edge on the
+/// blur, the same one clear glass uses, not a visible glow around the words.
+private struct AgentChatEdge: ViewModifier {
     let dark: Bool
+    @Environment(\.colorSchemeContrast) private var systemContrast
+
     func body(content: Content) -> some View {
-        let colour = dark ? Color.black : Color.white
-        content
-            .shadow(color: colour.opacity(dark ? 0.7 : 0.95), radius: 5)
-            .shadow(color: colour.opacity(dark ? 0.6 : 0.9), radius: 1.5)
+        let increased = AtticContrastSeam.resolve(systemContrast) == .increased
+        content.shadow(
+            color: (dark ? Color.black : Color.white)
+                .opacity(AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: increased)),
+            radius: AtticClearGlassReadabilityPolicy.edgeRadius
+        )
     }
 }
 
@@ -195,14 +199,14 @@ struct AgentChatThread: View {
         switch entry.content {
         case let .asked(text):
             AgentAskedRow(text: text, first: first, alive: alive, viewport: viewport, fx: fx)
-                .modifier(AgentChatGlow(dark: dark))
+                .modifier(AgentChatEdge(dark: dark))
         case let .step(step):
-            AgentStepRow(step: step, alive: alive, fx: fx).modifier(AgentChatGlow(dark: dark))
+            AgentStepRow(step: step, alive: alive, fx: fx).modifier(AgentChatEdge(dark: dark))
         case let .week(week):
             AgentWeekStrip(id: entry.id, week: week, first: first, alive: alive,
                            running: model.phase != .idle && model.runWeek == entry.id, fx: fx)
         case let .reply(reply):
-            AgentReplyView(reply: reply, fx: fx).modifier(AgentChatGlow(dark: dark))
+            AgentReplyView(reply: reply, fx: fx).modifier(AgentChatEdge(dark: dark))
         case let .changes(changes):
             AgentChangesRow(changes: changes, first: first, alive: alive, fx: fx,
                             toggle: { model.toggleChanges(entry.id) }, undo: { model.undo(entry.id) })
@@ -211,7 +215,7 @@ struct AgentChatThread: View {
                 .font(.system(size: 10.5))
                 .lineSpacing(3)
                 .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
-                .modifier(AgentChatGlow(dark: dark))
+                .modifier(AgentChatEdge(dark: dark))
         }
     }
 }
