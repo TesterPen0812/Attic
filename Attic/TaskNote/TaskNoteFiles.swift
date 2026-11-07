@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Files dropped on a Tasks row go into the task's note (`p3-22` row 4),
 /// at its end. A task with no note gets one: the drop is the first content
@@ -9,6 +10,37 @@ enum TaskNoteFiles {
     /// How long the headless import may take before the drop reports it
     /// could not finish (the batch itself keeps going and stays recoverable).
     static var importTimeout: Duration = .seconds(60)
+
+    /// Insert › Image or File and /file share the task editor's live session.
+    /// Slash replaces only its captured command, and a late picker/loader
+    /// cannot write into another task or an already closed workspace.
+    static func importSlashFile(_ url: URL, for request: NoteSlashFileRequest,
+                                presenter: TaskNotePresenter, controller: NotesPageController) async -> Bool {
+        guard let session = presenter.session, let engine = request.engine,
+              presenter.lease != nil, session.engine === engine,
+              engine.isPending(request), !session.isReadOnly else { request.cancel(); return false }
+        if let failure = controller.sourceAdmissionFailure(url, in: session).1 {
+            session.showNotice(NoteNotice(kind: .notAdded, detail: failure))
+            request.cancel()
+            return false
+        }
+        let type = UTType(filenameExtension: url.pathExtension) ?? .data
+        let item: NoteImportedObject
+        if type.conforms(to: .image), let (image, pixelSize) = await controller.imageLoader(url) {
+            item = NoteImportedObject(staged: image.copying(id: UUID()), pixelSize: pixelSize)
+        } else {
+            item = await NotesPageController.loadFile(url, type: type.identifier)
+        }
+        guard presenter.lease != nil, presenter.session === session, session.engine === engine,
+              engine.activity == .idle, engine.isPending(request) else { request.cancel(); return false }
+        let added = engine.commitSlashObject(item, for: request)
+        if !added {
+            request.cancel()
+            session.showNotice(NoteNotice(kind: .notAdded,
+                detail: String(localized: "The file could not be added to this note.")))
+        }
+        return added
+    }
 
     static func add(_ staging: TaskAttachmentStaging, to taskID: UUID, tasks: TaskStore,
                     controller: NotesPageController, toasts: PanelToastCenter?, open: @escaping () -> Void) {

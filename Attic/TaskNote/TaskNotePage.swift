@@ -1080,9 +1080,12 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         var objects: NoteObjectControls?
         var titleAccessories: NoteTitleAccessories?
         weak var engine: NoteEditorEngine?
+        var filePickerOwner: UUID?
         let scrollIndicators = PanelNativeScrollIndicators()
 
         func invalidate() {
+            if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
+            filePickerOwner = nil
             scrollIndicators.stop()
             controls?.invalidate()
             objects?.invalidate()
@@ -1149,6 +1152,31 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
             let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: host.scrollView, design: design)
             controls.requestFormatBar = { [weak chrome] keyboard in chrome?.openFormatBar(keyboard: keyboard) }
             controls.closeFormatBar = { [weak chrome] in chrome?.closeFormatBar() }
+            controls.requestFile = { [weak coordinator, weak presenter] slash in
+                guard let coordinator, let presenter, presenter.lease != nil,
+                      let session = presenter.session, let controller = presenter.page.controller,
+                      !session.isReadOnly else { slash?.cancel(); return }
+                if let previous = coordinator.filePickerOwner { TaskAttachmentPickerSession.cancel(owner: previous) }
+                let owner = UUID(), taskID = presenter.taskID, selection = textView.selectedRange()
+                let engine = session.engine
+                coordinator.filePickerOwner = owner
+                TaskAttachmentPickerSession.present(owner: owner, parentWindow: textView.window,
+                    allowedTypes: [.item], allowsMultipleSelection: slash == nil) { [weak coordinator, weak presenter] urls in
+                    guard let coordinator, coordinator.filePickerOwner == owner else { slash?.cancel(); return }
+                    coordinator.filePickerOwner = nil
+                    guard let presenter, presenter.lease != nil, presenter.taskID == taskID,
+                          presenter.session === session, session.engine === engine,
+                          !session.isReadOnly, !urls.isEmpty else { slash?.cancel(); return }
+                    if let slash {
+                        Task { @MainActor in
+                            _ = await TaskNoteFiles.importSlashFile(urls[0], for: slash,
+                                presenter: presenter, controller: controller)
+                        }
+                    } else {
+                        controller.importFiles(urls, at: selection, into: session)
+                    }
+                }
+            }
             // ⌃⇧Tab leaves the writing for the Subtasks block (§ 7); ⌃Tab
             // enters the next card's controls (cards are slice 3).
             controls.leaveEditor = { [weak model = presenter.model] forward in
