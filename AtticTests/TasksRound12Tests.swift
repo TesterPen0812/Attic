@@ -15,6 +15,46 @@ final class TasksRound12Tests: XCTestCase {
     }
     @MainActor private final class QueueTurn { var ran = false }
 
+    func testRowAndHeaderFramesFollowLivePagerOffsetWithoutNewGeometryReports() {
+        let pointer = TasksPointer()
+        let now = TasksRowID(tab: .now, id: UUID())
+        let done = TasksRowID(tab: .done, id: UUID())
+        let nowCell = TasksCellReports()
+        let doneCell = TasksCellReports()
+        let local = CGRect(x: 10, y: 50, width: 60, height: 30)
+        pointer.setFrame(local, for: now, from: nowCell)
+        pointer.setFrame(CGRect(x: 12, y: 100, width: 60, height: 30), for: done, from: doneCell)
+        pointer.setHeaderFrame(CGRect(x: 11, y: 25, width: 80, height: 20), for: "today")
+        pointer.setCompletedTodayFrame(CGRect(x: 15, y: 180, width: 80, height: 25), for: .now)
+
+        var offsets: [TasksTab: CGFloat] = [:]
+        pointer.pageOffset = { offsets[$0] ?? 0 }
+        XCTAssertEqual(pointer.frame(for: now), local)
+        offsets[.now] = -55
+        offsets[.done] = 100
+
+        // The stored frame is unchanged, but its page-space X moves with the
+        // pager. Each tab has its own movement and row identity.
+        XCTAssertEqual(pointer.frame(for: now)?.minX, -45)
+        XCTAssertEqual(pointer.frames[now]?.minX, -45)
+        XCTAssertEqual(pointer.frame(for: done)?.minX, 112)
+        XCTAssertEqual(pointer.headerFrame(for: "today")?.minX, -44)
+        XCTAssertEqual(pointer.completedTodayFrames[.now]?.minX, -40)
+        XCTAssertEqual(pointer.row(at: CGPoint(x: -30, y: 65), in: .now), now.id)
+        XCTAssertNil(pointer.row(at: CGPoint(x: 30, y: 65), in: .now))
+
+        // A direct page-space assignment remains page-space on read; the
+        // old per-tab callers do not have to know how frames are stored.
+        let assigned = CGRect(x: 122, y: 110, width: 60, height: 30)
+        pointer.frames[done] = assigned
+        XCTAssertEqual(pointer.frame(for: done), assigned)
+        offsets[.done] = 90
+        XCTAssertEqual(pointer.frame(for: done)?.minX, 112)
+        pointer.removeFrame(for: now, of: nowCell)
+        XCTAssertNil(pointer.frame(for: now))
+        XCTAssertNotNil(pointer.frame(for: done))
+    }
+
     func testBugs3AFieldAttachmentServicesThePendingExplicitFindWithoutWaitingForARetry() async throws {
         try requireKeyWindowTests()
         for canceled in [false, true] {

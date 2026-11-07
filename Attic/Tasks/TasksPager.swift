@@ -647,6 +647,7 @@ struct TasksPagerPages<Page: View>: View {
                     }
                 }
                 .frame(width: size.width, height: size.height)
+                .coordinateSpace(TasksPagerSlot.localSpace(index))
                 .modifier(TasksPagerSlot(motion: motion, index: index, width: size.width))
                 // Only the page shown takes clicks and is read.
                 .allowsHitTesting(index == shown)
@@ -675,6 +676,11 @@ struct TasksPagerSlot: ViewModifier {
     @ObservedObject var motion: TasksPagerMotion
     let index: Int
     let width: CGFloat
+
+    /// Inside the moving slot, coordinates are invariant as the pager slides.
+    static func localSpace(_ index: Int) -> NamedCoordinateSpace {
+        .named("AtticTasksSlot-\(index)")
+    }
 
     func body(content: Content) -> some View {
         let fadingOut = motion.fadingOut == index
