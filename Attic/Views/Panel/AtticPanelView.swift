@@ -51,7 +51,8 @@ struct AtticPanelView: View {
         settings: AppSettings,
         toasts: PanelToastCenter? = nil,
         tasksPageState: TasksPageState? = nil,
-        calendarPageState: CalendarPageState? = nil
+        calendarPageState: CalendarPageState? = nil,
+        composerState: PanelComposerState? = nil
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -64,6 +65,7 @@ struct AtticPanelView: View {
         // A test hands one in to reach the page's model (round 12).
         _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
         _calendarPageState = StateObject(wrappedValue: calendarPageState ?? CalendarPageState())
+        _composerState = StateObject(wrappedValue: composerState ?? PanelComposerState())
     }
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
@@ -665,7 +667,15 @@ struct AtticPanelView: View {
     /// feel's navigation spring, a little quicker (Accepted 2026-11-04);
     /// instant under Reduce Motion or Animations: Reduced.
     private var pageMotion: PanelPageMotion {
+        #if DEBUG
+        // Hosted motion tests run on machines with different accessibility
+        // settings. The existing test seam must apply to SwiftUI page travel
+        // as well as AppKit and model-driven transitions.
+        let systemReduced = AtticMotionPreference.systemReduceMotionOverride ?? reduceMotion
+        return PanelPageMotion.current(reduceMotion: systemReduced || settings.animations == .reduced)
+        #else
         PanelPageMotion.current(reduceMotion: reduceMotion || settings.animations == .reduced)
+        #endif
     }
 
     /// A page built or released by a switch travels as a kept page does:
