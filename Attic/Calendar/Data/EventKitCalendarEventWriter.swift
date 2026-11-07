@@ -35,6 +35,49 @@ private final class CalendarEventWriteWorker: @unchecked Sendable {
     }
 }
 
+/// A committed command and its exact inverse. Both EventKit adapters execute
+/// the same plan; only their scheduling and Undo publication differ.
+private struct CalendarEventCommandPlan<Value: Sendable>: Sendable {
+    let name: String
+    let value: Value
+    let undo: @Sendable (CalendarEventTransactions) throws -> Void
+    let redo: @Sendable (CalendarEventTransactions) throws -> Void
+}
+
+private enum CalendarEventCommands {
+    static func create(_ draft: CalendarEventDraft, id: UUID,
+                       in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<CalendarOwnedEvent> {
+        let made = try core.insert(id, draft: draft)
+        return CalendarEventCommandPlan(name: "Create Event", value: made,
+            undo: { try $0.remove(id, expecting: made.draft) },
+            redo: { _ = try $0.insert(id, draft: made.draft) })
+    }
+
+    static func edit(_ id: UUID, draft: CalendarEventDraft,
+                     in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<CalendarOwnedEvent> {
+        let before = try core.current(id).draft
+        let edited = try core.update(id, draft: draft, expecting: before)
+        return CalendarEventCommandPlan(name: "Edit Event", value: edited,
+            undo: { _ = try $0.update(id, draft: before, expecting: edited.draft) },
+            redo: { _ = try $0.update(id, draft: edited.draft, expecting: before) })
+    }
+
+    static func delete(_ id: UUID, in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<Void> {
+        let before = try core.current(id).draft
+        try core.remove(id, expecting: before)
+        return CalendarEventCommandPlan(name: "Delete Event", value: (),
+            undo: { _ = try $0.insert(id, draft: before) },
+            redo: { try $0.remove(id, expecting: before) })
+    }
+
+    static func replayOutcome(for error: Error) -> UndoOutcome {
+        switch error as? CalendarEventWriteError {
+        case .notOwned, .eventMissing, .eventChanged, .repeatingEvent: .obsolete
+        default: .failed
+        }
+    }
+}
+
 /// Keep event commands serialized through their main-actor history publication,
 /// not just through the disk commit. Cancellation never abandons a staged write.
 @MainActor
@@ -81,39 +124,26 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
         defer { CalendarEventCommandGate.shared.leave() }
         let route = try history()
         let id = UUID()
-        let made = try await reporting { try $0.insert(id, draft: draft) }
-        record("Create Event", route: route,
-               undo: { try $0.remove(id, expecting: made.draft) },
-               redo: { _ = try $0.insert(id, draft: made.draft) })
-        return made
+        let plan = try await reporting { try CalendarEventCommands.create(draft, id: id, in: $0) }
+        record(plan, route: route)
+        return plan.value
     }
 
     func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
         await CalendarEventCommandGate.shared.enter()
         defer { CalendarEventCommandGate.shared.leave() }
         let route = try history()
-        let (before, edited) = try await reporting { core in
-            let before = try core.current(id)
-            return (before.draft, try core.update(id, draft: draft, expecting: before.draft))
-        }
-        record("Edit Event", route: route,
-               undo: { _ = try $0.update(id, draft: before, expecting: edited.draft) },
-               redo: { _ = try $0.update(id, draft: edited.draft, expecting: before) })
-        return edited
+        let plan = try await reporting { try CalendarEventCommands.edit(id, draft: draft, in: $0) }
+        record(plan, route: route)
+        return plan.value
     }
 
     func delete(_ id: UUID) async throws {
         await CalendarEventCommandGate.shared.enter()
         defer { CalendarEventCommandGate.shared.leave() }
         let route = try history()
-        let before = try await reporting { core in
-            let before = try core.current(id)
-            try core.remove(id, expecting: before.draft)
-            return before.draft
-        }
-        record("Delete Event", route: route,
-               undo: { _ = try $0.insert(id, draft: before) },
-               redo: { try $0.remove(id, expecting: before) })
+        let plan = try await reporting { try CalendarEventCommands.delete(id, in: $0) }
+        record(plan, route: route)
     }
 
     func openInCalendar(_ occurrenceID: String) async throws {
@@ -140,23 +170,16 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
         }
     }
 
-    private func record(_ name: String, route: UndoRoute,
-                        undo: @escaping @Sendable (CalendarEventTransactions) throws -> Void,
-                        redo: @escaping @Sendable (CalendarEventTransactions) throws -> Void) {
-        var step = UndoStep(name: name, undoOutcome: { .failed }, redoOutcome: { .failed })
+    private func record<Value: Sendable>(_ plan: CalendarEventCommandPlan<Value>, route: UndoRoute) {
+        var step = UndoStep(name: plan.name, undoOutcome: { .failed }, redoOutcome: { .failed })
         step.replay = { [self] isRedo, commit in
             await CalendarEventCommandGate.shared.enter()
             defer { CalendarEventCommandGate.shared.leave() }
             do {
-                try await reporting(isRedo ? redo : undo)
+                try await reporting(isRedo ? plan.redo : plan.undo)
                 try commit()
                 return .applied
-            } catch let error as CalendarEventWriteError {
-                switch error {
-                case .notOwned, .eventMissing, .eventChanged, .repeatingEvent: return .obsolete
-                default: return .failed
-                }
-            } catch { return .failed }
+            } catch { return CalendarEventCommands.replayOutcome(for: error) }
         }
         route.record(step, in: .calendar)
     }
@@ -193,34 +216,26 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
             let id = UUID()
-            let made = try core.insert(id, draft: draft)
-            undoRoute.record(UndoStep(name: "Create Event",
-                undoOutcome: { [self] in replay { try core.remove(id, expecting: made.draft) } },
-                redoOutcome: { [self] in replay { _ = try core.insert(id, draft: made.draft) } }), in: .calendar)
-            return made
+            let plan = try CalendarEventCommands.create(draft, id: id, in: core)
+            record(plan, route: undoRoute)
+            return plan.value
         }
     }
 
     func edit(_ id: UUID, draft: CalendarEventDraft) throws -> CalendarOwnedEvent {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
-            let previous = try core.current(id)
-            let edited = try core.update(id, draft: draft, expecting: previous.draft)
-            undoRoute.record(UndoStep(name: "Edit Event",
-                undoOutcome: { [self] in replay { _ = try core.update(id, draft: previous.draft, expecting: edited.draft) } },
-                redoOutcome: { [self] in replay { _ = try core.update(id, draft: edited.draft, expecting: previous.draft) } }), in: .calendar)
-            return edited
+            let plan = try CalendarEventCommands.edit(id, draft: draft, in: core)
+            record(plan, route: undoRoute)
+            return plan.value
         }
     }
 
     func delete(_ id: UUID) throws {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
-            let previous = try core.current(id)
-            try core.remove(id, expecting: previous.draft)
-            undoRoute.record(UndoStep(name: "Delete Event",
-                undoOutcome: { [self] in replay { _ = try core.insert(id, draft: previous.draft) } },
-                redoOutcome: { [self] in replay { try core.remove(id, expecting: previous.draft) } }), in: .calendar)
+            let plan = try CalendarEventCommands.delete(id, in: core)
+            record(plan, route: undoRoute)
         }
     }
 
@@ -249,14 +264,15 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
         if core.takeNotification() { center.post(name: .EKEventStoreChanged, object: self) }
     }
 
+    private func record<Value: Sendable>(_ plan: CalendarEventCommandPlan<Value>, route: UndoRoute) {
+        route.record(UndoStep(name: plan.name,
+            undoOutcome: { [self] in replay { try plan.undo(core) } },
+            redoOutcome: { [self] in replay { try plan.redo(core) } }), in: .calendar)
+    }
+
     private func replay(_ work: () throws -> Void) -> UndoOutcome {
         do { try reporting(work); return .applied }
-        catch let error as CalendarEventWriteError {
-            switch error {
-            case .notOwned, .eventMissing, .eventChanged, .repeatingEvent: return .obsolete
-            default: return .failed
-            }
-        } catch { return .failed }
+        catch { return CalendarEventCommands.replayOutcome(for: error) }
     }
 }
 
