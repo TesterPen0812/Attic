@@ -8,6 +8,10 @@ import XCTest
 @MainActor
 private final class FakeRunner: AgentRunning {
     var continuation: AsyncStream<AgentEvent>.Continuation?
+    var observedContinuation: AsyncStream<AgentEvent>.Continuation?
+    var retainsThread = false
+    var snapshot = AgentThreadSnapshot(entries: [], events: [], isRunning: false)
+    var forgotten = false
     var sent: [(text: String, watching: Bool)] = []
     var watching: [Bool] = []
     var resolved: [(UUID, Bool)] = []
@@ -30,6 +34,14 @@ private final class FakeRunner: AgentRunning {
         cancels += 1
         continuation?.finish()
     }
+    func observe() -> AsyncStream<AgentEvent> {
+        AsyncStream { continuation in
+            observedContinuation = continuation
+            snapshot.events.forEach { _ = continuation.yield($0) }
+        }
+    }
+    func threadSnapshot() -> AgentThreadSnapshot { snapshot }
+    func forgetThread() { forgotten = true }
 }
 
 @MainActor
@@ -97,6 +109,33 @@ final class AgentChatTests: XCTestCase {
 
     private func tasks(_ titles: [String]) -> [AgentTarget] {
         titles.map { AgentTarget(page: .tasks, itemID: UUID(), title: $0) }
+    }
+
+    func testReconnectingLiveRunnerRestoresHistoryAndReplaysInFlightStepsOnce() async {
+        let reading = step(.read, targets: tasks(["Real task"]), title: "Reading 1 task")
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: [
+            AgentThreadEntry(id: UUID(), role: "user", text: "Earlier"),
+            AgentThreadEntry(id: UUID(), role: "assistant", text: "Done."),
+            AgentThreadEntry(id: UUID(), role: "user", text: "What next?"),
+            AgentThreadEntry(id: UUID(), role: "assistant", text: "Reading 1 task")
+        ], events: [.stepStarted(reading), .textDelta("Reading 1 task")], isRunning: true)
+
+        model.connect(runner)
+        await settle()
+        XCTAssertEqual(model.entries.compactMap { if case let .asked(text) = $0.content { return text }; return nil },
+                       ["Earlier", "What next?"])
+        XCTAssertEqual(steps.map(\.title), ["Reading 1 task"], "Replayed events must not duplicate live tool rows")
+        XCTAssertTrue(model.isBusy)
+        var finished = reading
+        finished.state = .done
+        runner.observedContinuation?.yield(.stepFinished(finished))
+        runner.observedContinuation?.yield(.finished)
+        await settle()
+        XCTAssertEqual(steps.count, 1)
+        XCTAssertFalse(model.isBusy)
+        model.newChat()
+        XCTAssertTrue(runner.forgotten, "A new conversation must also clear the persisted CLI thread")
     }
 
     private func readTheCalendar() async {

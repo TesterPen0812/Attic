@@ -4,6 +4,65 @@ import XCTest
 
 @MainActor
 final class AgentRunHostedTests: XCTestCase {
+    /// Explicit Air-only integration gate: the real signed-in Codex process
+    /// uses the same sandboxed host and MCP server as Chat, against an empty
+    /// in-memory test store. Never run against a person's Attic identity.
+    func testRealCodexReadsWritesNeedsApprovalAndUndoesUsingAtticTools() async throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_REAL_CODEX_SMOKE"] == "1" else {
+            throw XCTSkip("Air-only live Codex gate; set ATTIC_REAL_CODEX_SMOKE=1")
+        }
+        let store = try makeTestStore()
+        let library = AtticLibrary(tasks: store)
+        let tools = AgentTaskTools(store: store, library: library)
+        let server = AgentServer(port: 0, bearerToken: try AgentAccessTokenStore.generateToken(),
+                                 handler: MCPRequestHandler(tools: tools, actions: AgentActions(tasks: tools)))
+        let runner = AgentRunEngine(selectedBackend: { .codex },
+                                    tools: { AgentRunMCPServer.live(server: server) },
+                                    journalURL: journalURL(), undo: { id in
+            let result = try await server.undoFinishedAgentChangeSet(id: id)
+            guard result.failures.isEmpty, result.remaining == nil else {
+                throw AgentRunError.undoUnavailable
+            }
+        })
+        defer { runner.shutdown(); server.stop() }
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(110))
+            if runner.threadSnapshot().isRunning { runner.cancel() }
+        }
+        defer { watchdog.cancel() }
+
+        let prompt = """
+        Exercise the real Attic MCP tools for this isolated test store. First CALL list_tasks to read the tasks.
+        Next CALL create_task with title 'Attic CLI smoke item'. Then CALL delete_task for that created item.
+        Deleting needs my approval: wait for approval, then poll agent_approval_status if told to wait.
+        Report completion only after those real Attic calls. Do not guess the store's state or answer without tools.
+        """
+        var events = [AgentEvent]()
+        for await event in runner.send(prompt, watching: true) {
+            events.append(event)
+            if case let .approvalNeeded(approval) = event {
+                runner.resolve(approval: approval.id, allow: true)
+            }
+        }
+        let steps = events.compactMap { event -> AgentStep? in
+            if case let .stepFinished(step) = event { return step }
+            return nil
+        }
+        XCTAssertTrue(steps.contains { $0.title.lowercased().contains("list") }, "Codex must read through Attic MCP")
+        XCTAssertTrue(steps.contains { $0.kind == .create }, "Codex must write through Attic MCP")
+        XCTAssertTrue(steps.contains { $0.kind == .delete }, "Codex must request a protected deletion")
+        XCTAssertTrue(events.contains { if case .approvalNeeded = $0 { return true }; return false },
+                      "Deletion must need a trusted owner approval")
+        let changes = try XCTUnwrap(events.compactMap { event -> AgentChangeSet? in
+            if case let .changes(set) = event { return set }
+            return nil
+        }.last)
+        XCTAssertEqual(changes.count, 2)
+        try await runner.undo(changeSet: changes.id)
+        XCTAssertTrue(store.tasks.isEmpty, "Undo must return the test store to its initial state")
+        XCTAssertEqual(events.last, .finished)
+    }
+
     func testStreamingBackgroundReopenAndRelaunch() async throws {
         let url = journalURL()
         let helper = FakeRunHelper()
