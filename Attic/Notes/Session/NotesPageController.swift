@@ -301,6 +301,7 @@ final class NotesPageController: ObservableObject {
     private(set) var undoRoute = UndoRoute()
     private var undoRevisionSubscription: AnyCancellable?
     private var purgeSubscription: AnyCancellable?
+    private var storeRevisionSubscription: AnyCancellable?
     let journal: NoteDraftJournaling?
     /// The identity's own defaults (nil in tests and previews); the
     /// notes list's layout is kept here too.
@@ -345,6 +346,14 @@ final class NotesPageController: ObservableObject {
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
     private var verifyingAvailability = Set<UUID>()
     private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
+    private var attachmentMetadataContextID: ObjectIdentifier?
+    private var attachmentMetadataGeneration: UInt64 = 0
+    #if DEBUG
+    var attachmentVerificationWillRun: ((UUID) async -> Void)?
+    var attachmentMetadataCacheCounts: (availability: Int, resolved: Int, verifying: Int) {
+        (verifiedAvailability.count, resolvedAttachmentRows.count, verifyingAvailability.count)
+    }
+    #endif
     private let cacheLimit = 8
     private var didStart = false
     private var startRequested = false
@@ -806,7 +815,20 @@ final class NotesPageController: ObservableObject {
         }
         attachUndoRoute(undoRoute)
         (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleNotes = self
-        purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in self?.forgetPurgedSnapshots(ids) }
+        attachmentMetadataContextID = ObjectIdentifier(store.modelContext)
+        purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in
+            self?.evictAttachmentMetadata()
+            self?.forgetPurgedSnapshots(ids)
+        }
+        // A refreshed store installs a new ModelContext. No resolved row
+        // from the old context may stay strongly retained by this page.
+        storeRevisionSubscription = store.$revision.dropFirst().sink { [weak self] _ in
+            guard let self else { return }
+            let contextID = ObjectIdentifier(self.store.modelContext)
+            guard self.attachmentMetadataContextID != contextID else { return }
+            self.attachmentMetadataContextID = contextID
+            self.evictAttachmentMetadata()
+        }
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
@@ -3450,8 +3472,12 @@ extension NotesPageController: NoteImageProviding {
             let payloads = store.attachmentFamily(id).compactMap(\.payload)
             let digest = row.contentDigest
             let size = row.byteCount
+            let generation = attachmentMetadataGeneration
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                #if DEBUG
+                await self.attachmentVerificationWillRun?(id)
+                #endif
                 let available: Bool
                 if !payloads.isEmpty {
                     available = await Task.detached(priority: .utility) {
@@ -3463,7 +3489,7 @@ extension NotesPageController: NoteImageProviding {
                     available = await self.store.materializedURL(for: row, allowRetained: true) != nil
                 }
                 self.verifyingAvailability.remove(id)
-                if self.store.revision == revision,
+                if self.store.revision == revision, self.attachmentMetadataGeneration == generation,
                    self.attachmentRow(id)?.contentDigest == digest {
                     self.verifiedAvailability[id] = (revision, digest, available)
                     self.objectWillChange.send()
@@ -3501,6 +3527,14 @@ extension NotesPageController: NoteImageProviding {
         }
         resolvedAttachmentRows[id] = (store.revision, resolved)
         return resolved
+    }
+
+    private func evictAttachmentMetadata() {
+        attachmentMetadataGeneration &+= 1
+        verifiedAvailability.removeAll()
+        resolvedAttachmentRows.removeAll()
+        // Keep verifyingAvailability until each task finishes. Clearing it
+        // would permit an older verifier to remove a newer task's ticket.
     }
 }
 

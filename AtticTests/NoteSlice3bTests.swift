@@ -44,6 +44,24 @@ private actor FirstSuspendedLoader {
 }
 
 @MainActor
+private final class AttachmentAvailabilityGate {
+    private var pending: CheckedContinuation<Void, Never>?
+    private var released = false
+    private(set) var isWaiting = false
+
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { pending = $0; isWaiting = true }
+    }
+
+    func release() {
+        released = true
+        pending?.resume()
+        pending = nil
+    }
+}
+
+@MainActor
 private final class OnDemandFailingJournal: NoteDraftJournaling {
     struct Failure: Error {}
     let base: NoteDraftJournal
@@ -899,6 +917,45 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertTrue(controller.hasAttachmentBytes(item.id))
         let retainedURL = await controller.fileURL(forAttachment: item.id)
         XCTAssertNotNil(retainedURL)
+    }
+
+    func testE04AttachmentMetadataEvictsOnStoreRefreshAndPurge() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let item = staged()
+        let noteID = UUID()
+        let doc = NoteDocument(blocks: [.text("Attachment"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case .success = store.createDocumentNote(id: noteID, document: doc, staged: [item]) else {
+            return XCTFail("setup")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        let gate = AttachmentAvailabilityGate()
+        defer { gate.release() }
+        controller.attachmentVerificationWillRun = { _ in await gate.wait() }
+        XCTAssertTrue(controller.hasAttachmentBytes(item.id))
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 1)
+        try await waitFor { gate.isWaiting }
+
+        store.refresh() // A new ModelContext replaces the old attachment models.
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 0)
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0)
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.verifying, 1,
+                       "the old in-flight ticket survives eviction")
+        gate.release()
+        try await waitFor { controller.attachmentMetadataCacheCounts.verifying == 0 }
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0,
+                       "the old verifier cannot restore its previous context's result")
+        XCTAssertTrue(controller.hasAttachmentBytes(item.id))
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 1)
+        try await waitFor { controller.attachmentMetadataCacheCounts.availability == 1 }
+
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: noteID))))
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [noteID])
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 0)
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0)
+        await Task.yield() // An earlier verifier must not restore purged metadata.
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 0)
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0)
     }
 
     func testR5PurgeKeepsLiveUndoBytesAfterVersionsExpireUntilHistoryIsReleased() async throws {
