@@ -1020,17 +1020,20 @@ final class NoteStore: ObservableObject {
     /// Attachments removed from notes that are still shown, newest first.
     func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
         do {
-            let rows = try makeFreshContext().fetch(FetchDescriptor<NoteAttachment>(
+            let fresh = try makeFreshContext()
+            let removed = try fresh.fetch(FetchDescriptor<NoteAttachment>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
+            guard !removed.isEmpty else { return [] }
+            let ids = Array(Set(removed.map(\.id)))
+            // A live physical replica may be newer than a removed one. Choose
+            // the canonical winner before deciding whether to list deletion.
+            let rows = try fresh.fetch(FetchDescriptor<NoteAttachment>(
+                predicate: #Predicate { ids.contains($0.id) }
+            ))
             let liveNoteIDs = Set(notes.map(\.id))
-            var newest: [UUID: NoteAttachment] = [:]
-            for row in rows where liveNoteIDs.contains(row.noteID) {
-                if let existing = newest[row.id], existing.updatedAt >= row.updatedAt { continue }
-                newest[row.id] = row
-            }
-            return newest.values.compactMap { row -> DeletedAttachmentSummary? in
-                guard let deletedAt = row.deletedAt else { return nil }
+            return Self.canonicalAttachmentRows(from: rows).values.compactMap { row -> DeletedAttachmentSummary? in
+                guard liveNoteIDs.contains(row.noteID), let deletedAt = row.deletedAt else { return nil }
                 return DeletedAttachmentSummary(
                     attachmentID: row.id,
                     owner: AtticItemRef(.note, row.noteID),
@@ -1729,6 +1732,20 @@ final class NoteStore: ObservableObject {
     static func visibleUniqueAttachments(
         from fetched: [NoteAttachment]
     ) -> [UUID: [NoteAttachment]] {
+        let newestByID = canonicalAttachmentRows(from: fetched)
+        // An attachment removed into Recently Deleted is stored but not shown
+        // and does not count toward a note's limits.
+        return Dictionary(grouping: newestByID.values.filter { $0.deletedAt == nil }) { $0.noteID }
+            .mapValues { attachments in
+                attachments.sorted {
+                    if $0.sortIndex != $1.sortIndex { return $0.sortIndex < $1.sortIndex }
+                    if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                    return $0.id.uuidString < $1.id.uuidString
+                }
+            }
+    }
+
+    private static func canonicalAttachmentRows(from fetched: [NoteAttachment]) -> [UUID: NoteAttachment] {
         var newestByID: [UUID: NoteAttachment] = [:]
         for attachment in fetched {
             guard let existing = newestByID[attachment.id] else {
@@ -1742,17 +1759,7 @@ final class NoteStore: ObservableObject {
                 newestByID[attachment.id] = attachment
             }
         }
-
-        // An attachment removed into Recently Deleted is stored but not shown
-        // and does not count toward a note's limits.
-        return Dictionary(grouping: newestByID.values.filter { $0.deletedAt == nil }) { $0.noteID }
-            .mapValues { attachments in
-                attachments.sorted {
-                    if $0.sortIndex != $1.sortIndex { return $0.sortIndex < $1.sortIndex }
-                    if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-                    return $0.id.uuidString < $1.id.uuidString
-                }
-            }
+        return newestByID
     }
 
     /// Metadata reconciliation only reads id, digest, filename and byte count.

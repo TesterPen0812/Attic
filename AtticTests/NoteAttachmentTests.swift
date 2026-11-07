@@ -563,6 +563,40 @@ func testRemovingDuplicateAttachmentReplicasDeletesEveryRowOnlyAfterSave() throw
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
     }
 
+    func testRecentlyDeletedAttachmentUsesWinnerAcrossLiveAndRemovedPhysicalReplicas() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let noteID = UUID()
+        let attachmentID = UUID()
+        let earlier = Date(timeIntervalSince1970: 1_000)
+        seed.insert(NoteItem(id: noteID, body: "Note"))
+
+        let removed = NoteAttachment(
+            id: attachmentID, noteID: noteID, originalFilename: "removed.txt",
+            byteCount: 0, sortIndex: 0, contentDigest: String(repeating: "0", count: 64),
+            createdAt: earlier, updatedAt: earlier
+        )
+        removed.deletedAt = earlier.addingTimeInterval(10)
+        let live = NoteAttachment(
+            id: attachmentID, noteID: noteID, originalFilename: "current.txt",
+            byteCount: 0, sortIndex: 0, contentDigest: String(repeating: "0", count: 64),
+            createdAt: earlier, updatedAt: earlier.addingTimeInterval(60)
+        )
+        seed.insert(removed)
+        seed.insert(live)
+        try seed.save()
+
+        let store = trackAttachmentReconciliation(of: NoteStore(
+            container: container, attachmentFileStore: makeTestAttachmentFileStore()
+        ))
+        XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), ["current.txt"])
+        XCTAssertTrue(store.recentlyDeletedAttachments().isEmpty,
+                      "an older removed physical copy cannot put a live attachment in Recently Deleted")
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0,
+                       "a divergent physical family still cannot be purged")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
+    }
+
     /// Re-review item 3: a row may keep no bytes of its own (`payload` is
     /// nil), so the file is the only copy. A stale request after removal must
     /// not delete it, and a restore must show it again.
