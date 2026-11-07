@@ -46,6 +46,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
 
     private func ids(_ groups: [NotesLibraryModel.Group]) -> Set<UUID> { Set(groups.flatMap { $0.rows.map(\.id) }) }
 
+    #if !ATTIC_GENERATED_TESTS
     func testSearchExcerptExplainsDeepBodyTitleAndTagMatches() async throws {
         let body = "A first paragraph that is irrelevant. Another section goes on and on. Finally orchid appears beside its context."
         let id = try create("Meeting notes", body, tags: ["botany"])
@@ -72,6 +73,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(NoteSearchExcerpt.find(title: "", tags: [], body: "orchidology", files: [], query: "chid")?.text,
                        "orchidology", "substring matches keep their surrounding word")
     }
+    #endif
 
     #if !ATTIC_GENERATED_TESTS
     func testSW03DeletedSummaryIsPrunedEvenWhenNoteCountIsUnchanged() throws {
