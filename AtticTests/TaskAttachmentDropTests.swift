@@ -114,6 +114,41 @@ final class TaskAttachmentDropTests: XCTestCase {
 
     // MARK: - R4 routing
 
+    func testE03FileDragHoverUsesLiveTabFramesAndCachedMembership() {
+        let pointer = TasksPointer()
+        pointer.pageOffset = { $0 == .now ? 17 : -23 }
+        var frames: [TasksRowID: CGRect] = [:]
+        var nowIDs: [UUID] = []
+        for index in 0..<1_200 {
+            let id = UUID()
+            nowIDs.append(id)
+            frames[TasksRowID(tab: .now, id: id)] = CGRect(x: 0, y: CGFloat(index * 32), width: 110, height: 24)
+            frames[TasksRowID(tab: .backlog, id: UUID())] = CGRect(x: 0, y: CGFloat(index * 32), width: 110, height: 24)
+        }
+        pointer.frames = frames
+        let eligible = Set(nowIDs)
+        let point = CGPoint(x: 35, y: 25 * 32 + 8)
+        XCTAssertEqual(pointer.fileDropRow(at: point, in: .now, eligible: eligible), nowIDs[25])
+        XCTAssertNil(pointer.fileDropRow(at: point, in: .backlog, eligible: eligible))
+        XCTAssertNil(pointer.fileDropRow(at: CGPoint(x: 300, y: point.y), in: .now, eligible: eligible))
+
+        let iterations = 300
+        func ms(_ work: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            work()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+        }
+        let old = ms {
+            for _ in 0..<iterations {
+                _ = TasksPage.row(at: point, frames: pointer.frames, tab: .now, among: Set(nowIDs))
+            }
+        }
+        let new = ms {
+            for _ in 0..<iterations { _ = pointer.fileDropRow(at: point, in: .now, eligible: eligible) }
+        }
+        print("E03_HOVER registered_frames=\(frames.count) hovers=\(iterations) old_ms=\(old) current_ms=\(new)")
+    }
+
     func testDropContentSeparatesTaskRowsGalleryCardsFilesAndText() async throws {
         func classify(_ types: [UTType]) -> TaskDropContent {
             TaskDropContent.classify { wanted in types.contains { type in wanted.contains { type.conforms(to: $0) } } }
