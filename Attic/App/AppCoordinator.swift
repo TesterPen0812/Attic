@@ -389,6 +389,7 @@ final class AppCoordinator: ObservableObject {
     /// An agent's `show` over the real panel (the shell tools hold it weakly).
     private let agentPresenter: PanelAgentPresenter
     private let agentServer: AgentServer
+    private let agentRunner: AgentRunEngine
     /// Trusted in-app runner seam. A run registers here before giving its
     /// private MCP bearer to the installed Claude Code or Codex process.
     var agentRunServer: AgentServer { agentServer }
@@ -607,7 +608,6 @@ final class AppCoordinator: ObservableObject {
         // Slice 2: the workspace tools run through the app's task-note pages.
         agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
         let agentChat = uiState.agentChat
-        agentChat.connect(ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst }))
         agentChat.weekDays = { [weak store] day in
             AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [])
         }
@@ -638,6 +638,23 @@ final class AppCoordinator: ObservableObject {
         } else {
             agentServer = AgentServer(port: settings.agentServerPort, handler: agentHandler)
         }
+        let agentRunner = AgentRunEngine(
+            selectedBackend: { [weak settings] in settings?.inAppAgentBackend ?? .claude },
+            tools: { AgentRunMCPServer.live(server: agentServer) },
+            journalURL: runtime.usesEphemeralAgentCredential
+                ? runtime.galleryScratchRoot.appendingPathComponent("AgentThread.json")
+                : runtime.applicationSupportURL?.appendingPathComponent("AtticAgentThread.json"),
+            undo: { id in
+                let report = try await agentServer.undoFinishedAgentChangeSet(id: id)
+                if !report.failures.isEmpty || report.remaining != nil {
+                    throw AgentActionsError.invalid(
+                        report.failures.isEmpty ? "Some changes could not be undone."
+                            : report.failures.joined(separator: "; ")
+                    )
+                }
+            }
+        )
+        agentChat.connect(agentRunner)
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
         // The combination Settings chose (round 10: the recorder).
@@ -679,6 +696,7 @@ final class AppCoordinator: ObservableObject {
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
+        self.agentRunner = agentRunner
         self.newTaskHotKey = newTaskHotKey
         cleanupService = DailyCleanupService(
             store: store,
@@ -1115,6 +1133,7 @@ final class AppCoordinator: ObservableObject {
         newTaskHotKey.unregister()
         appearanceObservation = nil
         agentAccessObservation = nil
+        agentRunner.shutdown()
         agentServer.stop()
         menuNotificationTokens.forEach(NotificationCenter.default.removeObserver)
         menuNotificationTokens.removeAll()

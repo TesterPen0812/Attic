@@ -77,6 +77,68 @@ final class AgentRunMCPServer: AgentRunToolServing {
     func close() { end() }
 }
 
+@MainActor
+private final class LiveAgentRunToken {
+    var value: String?
+}
+
+extension AgentRunMCPServer {
+    /// Register each run with the same action server used by external MCP.
+    /// The listener is asynchronous: never hand a CLI an endpoint until it is
+    /// actually ready, and use the bound port rather than a settings guess.
+    static func live(server: AgentServer) -> AgentRunMCPServer {
+        let current = LiveAgentRunToken()
+        return AgentRunMCPServer(
+            begin: { title, watching in
+                let token = try server.beginAgentRun(title: title, watching: watching)
+                current.value = token
+                do {
+                    for _ in 0..<160 {
+                        switch server.state {
+                        case .running:
+                            if let port = server.boundPort {
+                                return AgentRunMCPAddress(url: "http://127.0.0.1:\(port)/mcp", token: token)
+                            }
+                        case let .failed(message):
+                            throw AgentRunError.toolServer(message)
+                        case .stopped:
+                            throw AgentRunError.toolServer("Attic's agent server stopped.")
+                        case .starting: break
+                        }
+                        try await Task.sleep(for: .milliseconds(25))
+                    }
+                    throw AgentRunError.toolServer("Attic's agent server did not become ready.")
+                } catch {
+                    server.finishAgentRun(token: token)
+                    current.value = nil
+                    throw error
+                }
+            },
+            watchingChanged: { watching in
+                if let token = current.value { try? server.setRunWatching(watching, token: token) }
+            },
+            approvals: {
+                current.value.map { server.pendingRunApprovals(token: $0) } ?? []
+            },
+            answer: { id, allow in
+                guard let token = current.value else {
+                    throw AgentRunError.toolServer("The agent run has finished.")
+                }
+                try await server.resolveRunApproval(id: id, allow: allow, token: token)
+            },
+            changes: {
+                current.value.flatMap { server.runChangeSet(token: $0) }
+            },
+            end: {
+                if let token = current.value {
+                    current.value = nil
+                    server.finishAgentRun(token: token)
+                }
+            }
+        )
+    }
+}
+
 enum AgentRunError: LocalizedError {
     case toolServer(String)
     case undoUnavailable
@@ -99,6 +161,7 @@ private struct AgentRunArchive: Codable {
 /// turned off or the panel changes pages.
 @MainActor
 final class AgentRunEngine: AgentRunning {
+    var retainsThread: Bool { true }
     typealias HelperFactory = @MainActor () throws -> any AgentHelperTransmitting
     typealias ToolFactory = @MainActor () -> any AgentRunToolServing
 
@@ -211,6 +274,14 @@ final class AgentRunEngine: AgentRunning {
 
     func threadSnapshot() -> AgentThreadSnapshot {
         AgentThreadSnapshot(entries: archive.entries, events: currentEvents, isRunning: isRunning)
+    }
+
+    func forgetThread() {
+        guard !isRunning else { return }
+        archive = AgentRunArchive()
+        currentEvents = []
+        activeReplyID = nil
+        _ = persist()
     }
 
     /// Called on app termination. Closing the parent socket also causes the

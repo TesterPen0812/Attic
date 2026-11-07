@@ -64,4 +64,29 @@ final class AgentHelperLaunchTests: XCTestCase {
         XCTAssertNotEqual(second.launchAppIsTerminated, true)
     }
 
+    func testAnExpiredInvitationCannotHijackANewHelperLaunch() async throws {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AtticAgentInvitations", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // The expired ticket sorts first, exercising the helper's expiry
+        // check before it claims its fresh, independent invitation.
+        let ticket = directory.appendingPathComponent("00000000-0000-0000-0000-00000000000F.ticket")
+        let stale: [String: Any] = ["port": "9", "token": String(repeating: "s", count: 43),
+                                    "expires": Date().addingTimeInterval(-60).timeIntervalSince1970]
+        try JSONSerialization.data(withJSONObject: stale).write(to: ticket, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: ticket) }
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        helper.probe()
+        var receivedAvailability = false
+        for await frame in helper.events {
+            if frame.type == "availability" {
+                receivedAvailability = true
+                break
+            }
+        }
+        XCTAssertTrue(receivedAvailability, "The helper must ignore a stale invitation and authenticate its current launch")
+    }
+
 }

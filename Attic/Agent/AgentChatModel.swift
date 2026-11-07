@@ -250,7 +250,34 @@ final class AgentChatModel: ObservableObject {
     var isBusy: Bool { isRunning }
 
     /// The one place a runner comes in. `AppCoordinator` calls it.
-    func connect(_ runner: AgentRunning) { self.runner = runner }
+    func connect(_ runner: AgentRunning) {
+        runTask?.cancel()
+        self.runner = runner
+        guard runner.retainsThread else { return }
+        let snapshot = runner.threadSnapshot()
+        // The active turn is replayed from real events. Its archived text and
+        // tool titles would otherwise appear twice when observe() reattaches.
+        let activeStart = snapshot.isRunning
+            ? snapshot.entries.lastIndex(where: { $0.role == "user" })
+            : nil
+        let archived = activeStart.map { Array(snapshot.entries[..<$0]) } ?? snapshot.entries
+        entries = []
+        for message in archived {
+            switch message.role {
+            case "user": entries.append(AgentChatEntry(.asked(message.text)))
+            case "assistant": if !message.text.isEmpty { appendText(message.text); closeReply() }
+            case "tool", "error": entries.append(AgentChatEntry(.note(message.text)))
+            default: break
+            }
+        }
+        guard snapshot.isRunning else { return }
+        if let activeStart { entries.append(AgentChatEntry(.asked(snapshot.entries[activeStart].text))) }
+        isRunning = true
+        phase = .waiting
+        snapshot.events.forEach(apply)
+        refreshBar()
+        listen(to: runner.observe(), skipping: snapshot.events.count)
+    }
 
     // MARK: Open and close
 
@@ -313,14 +340,23 @@ final class AgentChatModel: ObservableObject {
         phase = .waiting
         refreshBar()
         if isOpen { effects.send(.sent(entry.id)) }
-        let stream = runner.send(text, watching: isOpen)
+        let sent = runner.send(text, watching: isOpen)
+        let stream = runner.retainsThread ? runner.observe() : sent
+        listen(to: stream)
+    }
+
+    private func listen(to stream: AsyncStream<AgentEvent>, skipping replayed: Int = 0) {
+        runTask?.cancel()
         runTask = Task { [weak self] in
+            var skipped = 0
             for await event in stream {
+                guard !Task.isCancelled else { return }
+                if skipped < replayed { skipped += 1; continue }
                 guard let self else { return }
                 await self.waitForReply(before: event)
                 self.apply(event)
             }
-            self?.runEnded()
+            if !Task.isCancelled { self?.runEnded() }
         }
     }
 
@@ -343,6 +379,7 @@ final class AgentChatModel: ObservableObject {
         if isRunning { runner?.cancel() }
         runTask?.cancel()
         runTask = nil
+        runner?.forgetThread()
         isRunning = false
         entries = []
         approval = nil

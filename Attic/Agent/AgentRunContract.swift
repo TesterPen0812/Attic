@@ -84,4 +84,18 @@ protocol AgentRunning: AnyObject {
     /// Reattach to a running agent without starting a new request.
     func observe() -> AsyncStream<AgentEvent>
     func threadSnapshot() -> AgentThreadSnapshot
+    /// The live backend owns its history and events across view lifetimes.
+    var retainsThread: Bool { get }
+    func forgetThread()
+}
+
+extension AgentRunning {
+    // Existing scripted runners and test doubles continue to deliver their
+    // events from send(). Only the live backend has a persistent thread.
+    var retainsThread: Bool { false }
+    func observe() -> AsyncStream<AgentEvent> { AsyncStream { $0.finish() } }
+    func threadSnapshot() -> AgentThreadSnapshot {
+        AgentThreadSnapshot(entries: [], events: [], isRunning: false)
+    }
+    func forgetThread() {}
 }
