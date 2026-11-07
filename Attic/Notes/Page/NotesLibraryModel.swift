@@ -3,6 +3,46 @@ import Combine
 import Foundation
 import SwiftUI
 
+/// A short, case-preserving explanation of a library search result.
+/// Prefer the title or a tag over body text, and show deep body matches
+/// instead of always repeating the note's first line.
+struct NoteSearchExcerpt: Equatable {
+    let text: String
+    let match: String
+
+    static func find(title: String, tags: [String], body: String, files: [String], query: String) -> Self? {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return nil }
+        if let title = excerpt(title, query: needle, label: "Title: ") { return title }
+        for tag in tags {
+            if let tag = excerpt("#" + tag, query: needle) { return tag }
+        }
+        if let body = excerpt(body, query: needle) { return body }
+        for file in files {
+            if let file = excerpt(file, query: needle, label: "File: ") { return file }
+        }
+        return nil
+    }
+
+    private static func excerpt(_ source: String, query: String, label: String = "") -> Self? {
+        let normalized = source.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard let range = normalized.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else { return nil }
+        let before = normalized[..<range.lowerBound]
+        let after = normalized[range.upperBound...]
+        let preceding = before.split(separator: " ")
+        let following = after.split(separator: " ")
+        let head = preceding.suffix(5).joined(separator: " ")
+        let tail = following.prefix(7).joined(separator: " ")
+        let leading = preceding.count > 5 ? "…" : ""
+        let trailing = following.count > 7 ? "…" : ""
+        let found = String(normalized[range])
+        // Keep the actual boundaries, including a match within a word.
+        let text = label + leading + head + (before.last == " " ? " " : "") + found
+            + (after.first == " " ? " " : "") + tail + trailing
+        return Self(text: text, match: found)
+    }
+}
+
 /// All notes: rows in date groups, an optional tag filter (the top line's
 /// recent tags and More tags…), a search that reads away from the main
 /// actor with loading and failure states, and the list's keyboard selection.
@@ -101,6 +141,10 @@ final class NotesLibraryModel: ObservableObject {
     private weak var observedStore: NoteStore?
     private var storeSubscription: AnyCancellable?
     private var presentationSubscription: AnyCancellable?
+    /// Kept across opening a search result. The hidden library suspends its
+    /// search (no background rereads on autosave) and restores the query and
+    /// keyboard row on Back.
+    private var searchReturn: (query: String, highlightedID: UUID?)?
     var dateEnvironmentDidPublish: ((Notification) -> Void)?
     private var dateEnvironmentSubscription: AnyCancellable?
     private var storeRevision: UInt64 = 0
@@ -154,6 +198,7 @@ final class NotesLibraryModel: ObservableObject {
         let taskMetadata: [UUID: TaskMetadata]
         let revision: UInt64
         let matches: Set<UUID>?
+        let matchedQuery: String
         let attention: Set<UUID>
         let drafts: [UUID]
         let day: Int
@@ -214,6 +259,11 @@ final class NotesLibraryModel: ObservableObject {
             presentationSubscription = controller.$isLibraryPresented.sink { [weak self, weak controller] shown in
                 guard let self else { return }
                 if !shown { self.clearSearch(); return }
+                if let kept = self.searchReturn {
+                    self.searchReturn = nil
+                    self.query = kept.query
+                    self.highlightedID = kept.highlightedID
+                }
                 self.failedProposalRevision = nil
                 // Before the list is built: a filter that would hide the
                 // note you came from never shows for a frame.
@@ -259,13 +309,12 @@ final class NotesLibraryModel: ObservableObject {
 
     func clearSearch() { query = "" }
 
-    /// Opening a note may await disk work while the person edits the library
-    /// search. Dismissal clears the old search synchronously; keep a newer
-    /// query if this request no longer owns the field.
+    /// Opening a note can await disk work while the user edits the query.
+    /// Keep the current field, including any newer query, for Back; hidden
+    /// libraries still clear the active query to avoid autosave searches.
     func dismissAfterOpenedNote(_ controller: NotesPageController, requestedQuery: String) {
-        let newerQuery = query == requestedQuery ? nil : query
+        searchReturn = query.isEmpty ? nil : (query, highlightedID)
         controller.dismissLibrary()
-        if let newerQuery { query = newerQuery }
     }
 
     private func scheduleSearch(immediately: Bool = false) {
@@ -331,7 +380,8 @@ final class NotesLibraryModel: ObservableObject {
         var unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching
         taskMetadata = readTaskMetadata(store)
-        let key = RowsKey(taskMetadata: taskMetadata, revision: store.revision, matches: searching ? matches : nil, attention: attention,
+        let key = RowsKey(taskMetadata: taskMetadata, revision: store.revision, matches: searching ? matches : nil,
+                          matchedQuery: searching ? matchedQuery : "", attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
                           dateEnvironment: DatePresentationEnvironment(calendar: calendar),
                           tag: tagFilter, prepareSummaries: prepareSummaries)
@@ -651,11 +701,16 @@ final class NotesLibraryModel: ObservableObject {
         // An item in Tasks: its task's live title and circle, and no
         // "Task note" wording (one-item plan, "All notes rows").
         let rowTaskState: AtticTaskState? = note.taskID.map { taskMetadata[$0]?.state ?? self.taskState?($0) ?? AtticTaskState.todo }
+        let excerpt = isSearching && matches?.contains(note.id) == true
+            ? NoteSearchExcerpt.find(title: summary.title, tags: tags(of: note), body: note.plainText,
+                                     files: store.attachments(for: note.id).map(\.originalFilename), query: matchedQuery)
+            : nil
         let spoken = summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
+            + (excerpt.map { ", match: \($0.text)" } ?? "")
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
-            preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
-            spoken: spoken, taskState: rowTaskState
+            preview: excerpt?.text ?? summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
+            spoken: spoken, taskState: rowTaskState, searchMatch: excerpt?.match
         )
     }
 
@@ -700,9 +755,12 @@ final class NotesLibraryModel: ObservableObject {
         let document = session.engine.document()
         let summary = NoteRowSummary(document: document, filename: { _ in nil })
         let time = Self.time(session.lastEditAt ?? now(), now: now(), calendar: calendar)
+        let excerpt = isSearching ? NoteSearchExcerpt.find(title: summary.title, tags: session.engine.tags,
+            body: NoteTextExport.plainText(document), files: [], query: matchedQuery) : nil
         return AtticNoteRowModel(id: session.noteID, title: summary.title, time: time, needsAttention: true,
-                                 preview: summary.preview, checklist: summary.checklist, images: summary.images,
-                                 files: summary.files, spoken: summary.spoken(time: time, needsAttention: true))
+                                 preview: excerpt?.text ?? summary.preview, checklist: summary.checklist, images: summary.images,
+                                 files: summary.files, spoken: summary.spoken(time: time, needsAttention: true)
+                                    + (excerpt.map { ", match: \($0.text)" } ?? ""), searchMatch: excerpt?.match)
     }
 
     /// Today "09:40", this week "Mon", then "12 Sep" (and the year when it

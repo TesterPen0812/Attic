@@ -133,7 +133,7 @@ struct NotesLibraryRow: View {
             }
             if !row.preview.isEmpty {
                 separator(metaInk)
-                Text(verbatim: row.preview)
+                NoteSearchMark.text(row.preview, matching: row.searchMatch)
                     .foregroundStyle(metaInk)
                     .lineLimit(1)
                     .truncationMode(.tail)

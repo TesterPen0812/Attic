@@ -217,12 +217,26 @@ struct AtticNoteRowModel: Identifiable, Equatable {
     /// An item in Tasks: its task's circle before the title (`p3-22` row
     /// 3; no "Task note" wording since C2). Nil: an ordinary note.
     var taskState: AtticTaskState? = nil
+    /// A search result's visible occurrence, marked in either row layout.
+    var searchMatch: String? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.title == rhs.title && lhs.time == rhs.time && lhs.needsAttention == rhs.needsAttention
             && lhs.hasProposal == rhs.hasProposal && lhs.preview == rhs.preview && lhs.checklist?.done == rhs.checklist?.done
             && lhs.checklist?.total == rhs.checklist?.total && lhs.images == rhs.images && lhs.files == rhs.files
-            && lhs.taskState == rhs.taskState
+            && lhs.taskState == rhs.taskState && lhs.searchMatch == rhs.searchMatch
+    }
+}
+
+enum NoteSearchMark {
+    static func text(_ value: String, matching match: String?) -> Text {
+        guard let match, !match.isEmpty,
+              let range = value.range(of: match, options: [.caseInsensitive, .diacriticInsensitive]) else {
+            return Text(verbatim: value)
+        }
+        return Text(verbatim: String(value[..<range.lowerBound]))
+            + Text(verbatim: String(value[range])).bold().underline()
+            + Text(verbatim: String(value[range.upperBound...]))
     }
 }
 

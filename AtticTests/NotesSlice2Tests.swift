@@ -641,11 +641,14 @@ final class NotesLibraryModelTests: XCTestCase {
         library.query = "second search"
         library.dismissAfterOpenedNote(controller, requestedQuery: "first search")
         XCTAssertFalse(controller.isLibraryPresented)
-        XCTAssertEqual(library.query, "second search")
+        XCTAssertEqual(library.query, "", "hidden libraries do no background search")
 
         XCTAssertTrue(controller.showLibrary())
+        XCTAssertEqual(library.query, "second search", "Back restores the newer user query")
         library.dismissAfterOpenedNote(controller, requestedQuery: "second search")
-        XCTAssertEqual(library.query, "", "Only the query the completed open owns may be cleared")
+        XCTAssertEqual(library.query, "")
+        XCTAssertTrue(controller.showLibrary())
+        XCTAssertEqual(library.query, "second search", "opening a result keeps the search for another result")
     }
 
     func testR10TaskNoteSearchClearsOnAcceptanceButSurvivesRefusal() throws {

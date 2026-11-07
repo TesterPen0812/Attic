@@ -237,7 +237,7 @@ struct NotesBoardCard: View {
     }
 
     private var snippet: some View {
-        Text(verbatim: row.preview)
+        NoteSearchMark.text(row.preview, matching: row.searchMatch)
             .font(.system(size: M.snippetSize))
             .lineSpacing(M.lineSpacing(size: M.snippetSize, line: M.snippetLine))
             .lineLimit(M.snippetLines)

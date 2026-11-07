@@ -46,6 +46,33 @@ final class NotesLibraryOrganizeTests: XCTestCase {
 
     private func ids(_ groups: [NotesLibraryModel.Group]) -> Set<UUID> { Set(groups.flatMap { $0.rows.map(\.id) }) }
 
+    func testSearchExcerptExplainsDeepBodyTitleAndTagMatches() async throws {
+        let body = "A first paragraph that is irrelevant. Another section goes on and on. Finally orchid appears beside its context."
+        let id = try create("Meeting notes", body, tags: ["botany"])
+        let library = NotesLibraryModel(search: { [store] query in try await store!.searchNoteIDs(matching: query) }, store: store)
+        library.query = "orchid"
+        await library.waitForSearch()
+        let result = try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+        XCTAssertTrue(result.preview.contains("orchid appears beside its context"))
+        XCTAssertFalse(result.preview.hasPrefix("A first paragraph"))
+        XCTAssertEqual(result.searchMatch, "orchid")
+        XCTAssertTrue(result.spoken.contains("match:"), "VoiceOver explains why it matched")
+
+        library.query = "Meeting"
+        await library.waitForSearch()
+        let title = try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+        XCTAssertTrue(title.preview.hasPrefix("Title: Meeting"))
+        XCTAssertEqual(title.searchMatch, "Meeting")
+
+        library.query = "botany"
+        await library.waitForSearch()
+        let tag = try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+        XCTAssertEqual(tag.preview, "#botany")
+        XCTAssertEqual(tag.searchMatch, "botany")
+        XCTAssertEqual(NoteSearchExcerpt.find(title: "", tags: [], body: "orchidology", files: [], query: "chid")?.text,
+                       "orchidology", "substring matches keep their surrounding word")
+    }
+
     #if !ATTIC_GENERATED_TESTS
     func testSW03DeletedSummaryIsPrunedEvenWhenNoteCountIsUnchanged() throws {
         let first = try create("Old note", "Private old body")
