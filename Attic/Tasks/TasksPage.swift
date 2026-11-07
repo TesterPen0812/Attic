@@ -1465,9 +1465,7 @@ struct TasksPage: View {
 
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
-        let (rows, sections, entries) = model.listSnapshot(for: tab)
-        let selectionRuns = TasksSelectionRuns.make(ids: rows.map(\.id), selected: model.selection, expanded: model.expanded)
-        let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
+        let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
@@ -1586,7 +1584,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
