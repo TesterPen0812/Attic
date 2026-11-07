@@ -52,6 +52,15 @@ final class PanelComposerState: ObservableObject {
         model = made
         return made
     }
+
+    /// AppKit sends Escape to the window when focus is outside the card.
+    /// Give the open card first refusal, including its unsaved draft.
+    @discardableResult
+    func closeForUnhandledEscape() -> Bool {
+        guard let model, model.isOpen else { return false }
+        model.close()
+        return true
+    }
 }
 
 /// The "+" corner growing into the card and back (P4's `p1c` box: 54 → 578

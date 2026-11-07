@@ -94,6 +94,17 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(page.addBar.text, "Replacement draft")
     }
 
+    func testUnhandledEscapeClosesTheComposerAndKeepsItsDraftBeforeWindowDismissal() {
+        let state = PanelComposerState()
+        let shared = state.model(tasks: page, services: ComposerServices())
+        shared.open(on: .tasks(.now))
+        type("Keep this draft")
+        XCTAssertTrue(state.closeForUnhandledEscape())
+        XCTAssertFalse(shared.isOpen)
+        XCTAssertEqual(page.addBar.text, "Keep this draft")
+        XCTAssertFalse(state.closeForUnhandledEscape(), "A second Escape can dismiss the panel")
+    }
+
     func testAnInFlightEventCreatesOnceAndLeavesAReopenedDraftAlone() async throws {
         let staged = expectation(description: "event proof staged off main")
         let release = DispatchSemaphore(value: 0)

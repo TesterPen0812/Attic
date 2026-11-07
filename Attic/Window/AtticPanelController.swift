@@ -229,6 +229,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let canvasSession: CanvasSession
     private let noteDraft: NoteDraftController
     private let chromeInteractionState: PanelChromeInteractionState
+    private let composerState = PanelComposerState()
     private let settings: AppSettings
     private let uiState: PanelUIState
     /// The panel's Undo toast; dismissed whenever the panel hides.
@@ -352,7 +353,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 settings: settings,
                 toasts: toasts,
                 // The Tasks page remembers its page and views (L7).
-                tasksPageState: TasksPageState(memory: tasksMemory)
+                tasksPageState: TasksPageState(memory: tasksMemory),
+                composerState: composerState
             ),
             panelCornerRadius: settings.panelCornerSize,
             dockedCorner: settings.corner,
@@ -849,6 +851,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // the corner then needs the pointer to leave before it reveals again.
         panel.onUnhandledEscape = { [weak self] in
             guard let self, self.panel.isVisible else { return }
+            if self.composerState.closeForUnhandledEscape() { return }
             self.requestInteractiveHide()
         }
         // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
