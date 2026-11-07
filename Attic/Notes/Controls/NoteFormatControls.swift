@@ -31,6 +31,9 @@ final class NoteFormatControls: NSObject {
     private let addressHost: AtticOverlayHostingView
     private let linkSuggestionsHost: AtticOverlayHostingView
     private var linkRoom: CGFloat = 0
+    /// The part of the link's layout gap left visible so suggestions clear
+    /// the header; reversed when the list shrinks or closes.
+    private var linkRoomViewportLift: CGFloat = 0
     private var linkRoomMinimum: NSSize?
     private var changingLinkRoom = false
     private(set) var design: AtticDesignContext
@@ -1142,6 +1145,7 @@ final class NoteFormatControls: NSObject {
             // field is open. Dismissal still retires all presentation state.
             if height == 0 {
                 linkRoom = 0
+                linkRoomViewportLift = 0
                 engine.linkSuggestionGap = nil
                 if let minimum = linkRoomMinimum { textView.minSize = minimum }
                 linkRoomMinimum = nil
@@ -1175,8 +1179,21 @@ final class NoteFormatControls: NSObject {
         }
         let after = textView.firstRect(forCharacterRange: anchor, actualRange: nil)
         let delta = before.minY - after.minY
+        // Normally the selection stays on the same screen line. At the top,
+        // that would undo the gap and put the upward-growing suggestions over
+        // the pinned controls. Let just enough of the gap move the text down.
+        let oldLift = linkRoomViewportLift
+        let neededLift: CGFloat
+        if height > 0, linkInBar, let barCover {
+            // The viewport's top follows the scroll correction `delta`;
+            // compare against that destination, not its old position.
+            neededLift = max(0, usableRect().minY + delta + height - (barCover.minY - oldLift))
+        } else {
+            neededLift = 0
+        }
+        linkRoomViewportLift = neededLift
         let currentOrigin = scrollView.contentView.bounds.origin
-        scrollView.contentView.scroll(to: CGPoint(x: currentOrigin.x, y: currentOrigin.y + delta))
+        scrollView.contentView.scroll(to: CGPoint(x: currentOrigin.x, y: currentOrigin.y + delta - (neededLift - oldLift)))
         if height == 0 { textView.sizeToFit() }
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
@@ -1722,6 +1739,11 @@ final class NoteFormatControls: NSObject {
         let room = AtticNoteFormatMetrics.shadowRoom
         guard let textView, let parent = barHost.superview else { return .zero }
         return textView.convert(barHost.frame, from: parent).insetBy(dx: room, dy: room)
+    }
+    var linkSuggestionsFrame: NSRect {
+        let room = AtticNoteFormatMetrics.shadowRoom
+        guard !linkSuggestionsHost.isHidden, let textView, let parent = linkSuggestionsHost.superview else { return .zero }
+        return textView.convert(linkSuggestionsHost.frame, from: parent).insetBy(dx: room, dy: room)
     }
     var isCardOpen: Bool { cardModel.card != nil }
 }

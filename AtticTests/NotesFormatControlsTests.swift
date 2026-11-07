@@ -1054,6 +1054,38 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
     }
 
+    func testLinkSuggestionsStayBelowTheNoteHeaderOnFirstBodyLine() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let topInset: CGFloat = 60
+        let doc = NoteDocument(blocks: [.text("Title"), .text("Destinations on the first line"),
+                                        .text("Further content")])
+        let (controls, engine, textView) = make(doc, topInset: topInset)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        engine.linkableNotes = {
+            ["Destinations list", "Destinations archive", "Destinations plan", "Destinations map"]
+                .map { .init(id: UUID(), title: $0) }
+        }
+        textView.setSelectedRange(range("Destinations on the first line", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertTrue(controls.linkInBar, "the selection uses the in-place link field")
+        controls.cardModel.linkText = "Destinations"
+        controls.refresh()
+        spin()
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 4)
+        let clearTop = textView.visibleRect.minY + max(0, topInset - AtticNoteMetrics.titleTopGap)
+        XCTAssertGreaterThanOrEqual(controls.linkSuggestionsFrame.minY, clearTop - 1,
+                                    "four suggestions must stay below the header's controls (suggestions \(controls.linkSuggestionsFrame), top \(clearTop), bar \(controls.barFrame))")
+        controls.cardModel.linkText = "Destinations list"
+        controls.refresh()
+        spin()
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 1)
+        let narrowedTop = textView.visibleRect.minY + max(0, topInset - AtticNoteMetrics.titleTopGap)
+        XCTAssertGreaterThanOrEqual(controls.linkSuggestionsFrame.minY, narrowedTop - 1,
+                                    "narrowing suggestions must also keep the header clear")
+    }
+
     func testAuditB6SuggestionsMakeRoomAboveTheSelectionAndRestoreTheText() {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
