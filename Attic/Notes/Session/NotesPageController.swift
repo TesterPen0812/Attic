@@ -344,8 +344,11 @@ final class NotesPageController: ObservableObject {
     /// the bottom row's status pill).
     @Published private(set) var isProposalReviewBusy = false
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
+    private var availabilityCacheOrder: [UUID] = []
     private var verifyingAvailability = Set<UUID>()
     private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
+    private var resolvedRowsCacheOrder: [UUID] = []
+    private let attachmentMetadataLimit = 256
     private var attachmentMetadataContextID: ObjectIdentifier?
     private var attachmentMetadataGeneration: UInt64 = 0
     #if DEBUG
@@ -3492,8 +3495,19 @@ extension NotesPageController: NoteImageProviding {
                 if self.store.revision == revision, self.attachmentMetadataGeneration == generation,
                    self.attachmentRow(id)?.contentDigest == digest {
                     self.verifiedAvailability[id] = (revision, digest, available)
+                    if !self.availabilityCacheOrder.contains(id) {
+                        self.availabilityCacheOrder.append(id)
+                        if self.availabilityCacheOrder.count > self.attachmentMetadataLimit {
+                            self.verifiedAvailability[self.availabilityCacheOrder.removeFirst()] = nil
+                        }
+                    }
                     self.objectWillChange.send()
                     for session in self.cache.values { session.engine.invalidateAttachmentPresentation(id) }
+                } else if self.store.revision != revision || self.attachmentMetadataGeneration != generation {
+                    // A refresh replaced the models during this suspended
+                    // check. Restart against the new rows after releasing
+                    // the ticket; never publish the old result.
+                    _ = self.hasAttachmentBytes(id)
                 }
             }
         }
@@ -3526,13 +3540,21 @@ extension NotesPageController: NoteImageProviding {
             resolved = nil
         }
         resolvedAttachmentRows[id] = (store.revision, resolved)
+        if !resolvedRowsCacheOrder.contains(id) {
+            resolvedRowsCacheOrder.append(id)
+            if resolvedRowsCacheOrder.count > attachmentMetadataLimit {
+                resolvedAttachmentRows[resolvedRowsCacheOrder.removeFirst()] = nil
+            }
+        }
         return resolved
     }
 
     private func evictAttachmentMetadata() {
         attachmentMetadataGeneration &+= 1
         verifiedAvailability.removeAll()
+        availabilityCacheOrder.removeAll()
         resolvedAttachmentRows.removeAll()
+        resolvedRowsCacheOrder.removeAll()
         // Keep verifyingAvailability until each task finishes. Clearing it
         // would permit an older verifier to remove a newer task's ticket.
     }

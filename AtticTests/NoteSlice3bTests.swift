@@ -930,7 +930,8 @@ final class NoteSlice3bTests: XCTestCase {
         }
         let controller = NotesPageController(store: store, journal: nil)
         let gate = AttachmentAvailabilityGate()
-        defer { gate.release() }
+        let refreshedGate = AttachmentAvailabilityGate()
+        defer { gate.release(); refreshedGate.release() }
         controller.attachmentVerificationWillRun = { _ in await gate.wait() }
         XCTAssertTrue(controller.hasAttachmentBytes(item.id))
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 1)
@@ -941,13 +942,17 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0)
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.verifying, 1,
                        "the old in-flight ticket survives eviction")
+        controller.attachmentVerificationWillRun = { _ in await refreshedGate.wait() }
         gate.release()
-        try await waitFor { controller.attachmentMetadataCacheCounts.verifying == 0 }
+        try await waitFor { refreshedGate.isWaiting }
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0,
                        "the old verifier cannot restore its previous context's result")
-        XCTAssertTrue(controller.hasAttachmentBytes(item.id))
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.verifying, 1,
+                       "a new-context verification replaces the retired check")
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 1)
-        try await waitFor { controller.attachmentMetadataCacheCounts.availability == 1 }
+        refreshedGate.release()
+        try await waitFor { controller.attachmentMetadataCacheCounts.availability == 1 &&
+                            controller.attachmentMetadataCacheCounts.verifying == 0 }
 
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: noteID))))
         XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [noteID])
@@ -956,6 +961,15 @@ final class NoteSlice3bTests: XCTestCase {
         await Task.yield() // An earlier verifier must not restore purged metadata.
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 0)
         XCTAssertEqual(controller.attachmentMetadataCacheCounts.availability, 0)
+    }
+
+    func testE04MissingAttachmentMetadataIsBoundedWithoutAStoreRefresh() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil)
+        for _ in 0..<300 { XCTAssertFalse(controller.hasAttachmentBytes(UUID())) }
+        print("E04_MISSING_ROWS queried=300 retained=\(controller.attachmentMetadataCacheCounts.resolved)")
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.resolved, 256)
+        XCTAssertEqual(controller.attachmentMetadataCacheCounts.verifying, 0)
     }
 
     func testR5PurgeKeepsLiveUndoBytesAfterVersionsExpireUntilHistoryIsReleased() async throws {
