@@ -82,30 +82,83 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
-        let size = SettingsWindowLayout.preferredContentSize
-        let host = NSHostingView(rootView: GeometryReader { geometry in
-            SettingsAdaptiveScroll(size: geometry.size) {
-                HStack(spacing: 0) {
-                    Color.clear.frame(width: AtticLayout.settingsSidebarWidth)
-                    Color.clear.frame(maxWidth: .infinity)
-                }
-            }
-        })
-        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+        let suite = "SettingsUX2.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let settings = AppSettings(defaults: defaults)
+        let host = NSHostingView(rootView: SettingsView(
+            settings: settings,
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6_000, y: -6_000),
+                                                  size: SettingsWindowLayout.preferredContentSize),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        defer { window.contentView = nil; window.close() }
-        host.layoutSubtreeIfNeeded()
-        spin(0.1)
-        host.layoutSubtreeIfNeeded()
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        spin(0.3)
+
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
         func scrollViews(in view: NSView) -> [NSScrollView] {
             (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap(scrollViews)
         }
-        let scroll = try XCTUnwrap(scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 })
-        let document = try XCTUnwrap(scroll.documentView)
-        XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 2,
-                                 "The default 860-point window must not have inaccessible horizontal content")
+        func element(_ id: String) -> AnyObject? {
+            host.layoutSubtreeIfNeeded()
+            return elements(host).first { $0.accessibilityIdentifier?() == id }
+        }
+        func frame(_ id: String) throws -> CGRect {
+            let item = try XCTUnwrap(element(id), "\(id) should appear in the page")
+            return try XCTUnwrap((item as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+        }
+        func assertContentFits(_ identifiers: [String], at size: CGSize) throws {
+            host.layoutSubtreeIfNeeded()
+            spin(0.1)
+            host.layoutSubtreeIfNeeded()
+            for id in identifiers {
+                let bounds = try frame(id)
+                XCTAssertGreaterThan(bounds.width, 0, "\(id) is laid out")
+                XCTAssertGreaterThanOrEqual(bounds.minX, window.frame.minX + AtticLayout.settingsSidebarWidth - 2,
+                                            "\(id) stays clear of the sidebar at \(size): \(bounds)")
+                XCTAssertLessThanOrEqual(bounds.maxX, window.frame.maxX - AtticSpacing.settingsCardInset + 2,
+                                         "\(id) fits inside the page at \(size): \(bounds)")
+            }
+        }
+
+        for size in [SettingsWindowLayout.preferredContentSize, SettingsWindowLayout.minimumContentSize] {
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 })
+            let document = try XCTUnwrap(scroll.documentView)
+            XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 2,
+                                     "No horizontal Settings content beyond \(size)")
+            try assertContentFits(["setting-launch-at-login", "setting-animations", "setting-hide-animation",
+                                   "setting-quick-capture-shortcut"], at: size)
+            let sidebarBefore = try frame("settings-nav-general")
+            let appearance = try XCTUnwrap(element("settings-nav-appearance"))
+            XCTAssertTrue(appearance.accessibilityPerformPress?() ?? false)
+            try assertContentFits(["setting-appearance-preview", "setting-appearance-system",
+                                   "setting-appearance-light", "setting-appearance-dark",
+                                   "setting-panel-surface", "setting-panel-theme"], at: size)
+            let dark = try XCTUnwrap(element("setting-appearance-dark"))
+            XCTAssertTrue(dark.accessibilityPerformPress?() ?? false)
+            try assertContentFits(["setting-appearance-system", "setting-appearance-light",
+                                   "setting-appearance-dark", "setting-panel-theme"], at: size)
+            XCTAssertEqual(try frame("settings-nav-general").minX, sidebarBefore.minX, accuracy: 0.5,
+                           "Choosing Dark must not scroll the sidebar horizontally")
+            let general = try XCTUnwrap(element("settings-nav-general"))
+            XCTAssertTrue(general.accessibilityPerformPress?() ?? false)
+        }
     }
 
     private func makeWindow() -> SettingsWindow {
