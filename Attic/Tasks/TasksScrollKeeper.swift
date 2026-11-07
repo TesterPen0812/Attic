@@ -260,9 +260,9 @@ struct TasksScrollKeeper: NSViewRepresentable {
             guard let clip = observedClip, let scroll = enclosingScrollView,
                   let saved = model?.scrollOffsets[tab] else { return }
             scroll.layoutSubtreeIfNeeded()
-            let maxY = max(-clip.contentInsets.top, (scroll.documentView?.frame.height ?? 0) - clip.bounds.height)
             var origin = clip.bounds.origin
-            origin.y = min(max(saved, -clip.contentInsets.top), maxY)
+            // Include the bottom inset, as the live list's scroll limit does.
+            origin.y = TasksScrollKeeper.clampedOriginY(saved, in: scroll)
             guard abs(origin.y - clip.bounds.origin.y) > 0.5 else { return }
             clip.scroll(to: origin)
             scroll.reflectScrolledClipView(clip)

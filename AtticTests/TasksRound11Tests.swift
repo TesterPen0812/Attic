@@ -120,6 +120,33 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertFalse(list.isHidden, "Back restores the same native scroll view")
     }
 
+    func testLongListReturnsToExactSavedOffsetAfterRelaunch() throws {
+        let suite = "AtticTests.TasksScrollRestore.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let memory = TasksPageMemory(defaults: defaults)
+
+        let first = try Hosted(height: 520, long: true, memory: memory)
+        first.spin(1.5)
+        let firstList = try XCTUnwrap(pageLists(first).first { !$0.isHidden })
+        let bottom = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: firstList)
+        XCTAssertGreaterThan(bottom, 150, "the long list must have room to scroll")
+        firstList.contentView.scroll(to: CGPoint(x: 0, y: bottom))
+        firstList.reflectScrolledClipView(firstList.contentView)
+        first.spin(0.2)
+        let saved = try XCTUnwrap(first.model.scrollOffsets[.now])
+        XCTAssertEqual(saved, bottom, accuracy: 2, "a scroll records the original position")
+        first.close()
+
+        let reopened = try Hosted(height: 520, long: true, memory: memory)
+        defer { reopened.close() }
+        reopened.spin(1.5)
+        let list = try XCTUnwrap(pageLists(reopened).first { !$0.isHidden })
+        let reopenedMax = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: list)
+        XCTAssertEqual(list.contentView.bounds.origin.y, saved, accuracy: 2,
+                       "reopening must restore the original offset after the rows settle (final maximum \(reopenedMax), model \(String(describing: reopened.model.scrollOffsets[.now])), persisted \(String(describing: memory.scrollOffsets[.now])))")
+    }
+
     /// Hiding the panel retains the built tab hosts under the lightweight
     /// retention budget; a reveal reuses them without a cold warm-up.
     func testHidingRetainsTheKeptPagesForTheNextReveal() throws {
