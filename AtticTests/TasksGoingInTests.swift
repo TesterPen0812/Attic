@@ -774,9 +774,11 @@ final class TasksNextEventHostTests: XCTestCase {
         var onChange: (@MainActor () -> Void)?
         var events: [CalendarEvent] = []
         var requests = 0
+        var reads = 0
         func requestAccess() async -> CalendarAccessState { requests += 1; return accessState }
         func events(in interval: DateInterval) -> [CalendarEvent] {
-            accessState == .granted ? events.filter { $0.overlaps(interval) }.sortedForAgenda() : []
+            reads += 1
+            return accessState == .granted ? events.filter { $0.overlaps(interval) }.sortedForAgenda() : []
         }
         func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { [] }
     }
@@ -804,9 +806,11 @@ final class TasksNextEventHostTests: XCTestCase {
         let feed = TasksNextEventFeed(source: source, calendar: { calendar })
         let state = TasksPageState(nextEventFeed: feed)
         let current = Current()
+        let uiState = PanelUIState()
+        uiState.panelDidReveal()
         let size = CGSize(width: AtticLayout.panelSize.width, height: 520)
         let shell = Shell(current: current) { isCurrent in
-            TasksPageHost(store: store, uiState: PanelUIState(), settings: AppSettings(defaults: defaults), state: state,
+            TasksPageHost(store: store, uiState: uiState, settings: AppSettings(defaults: defaults), state: state,
                           layout: PanelPageLayout(cornerSize: 24, panelSize: size), chromeInteractionState: PanelChromeInteractionState(),
                           primaryInputFocusRequest: 0, isCurrent: isCurrent)
         }
@@ -831,5 +835,27 @@ final class TasksNextEventHostTests: XCTestCase {
         spin(0.6)
         XCTAssertEqual(model.nextEvent?.title, "Launch sync", "Tasks current again: the row")
         XCTAssertEqual(source.requests, 0, "Tasks never asks")
+
+        let shownReads = source.reads
+        XCTAssertGreaterThan(shownReads, 0)
+        XCTAssertNotNil(feed.nextWake)
+        current.value = false
+        spin(0.3)
+        XCTAssertNil(feed.nextWake, "a page behind another must not keep its event timer")
+        source.onChange?()
+        XCTAssertEqual(source.reads, shownReads, "a hidden page must not read Calendar on changes")
+        current.value = true
+        spin(0.3)
+        XCTAssertGreaterThan(source.reads, shownReads, "returning to Tasks reloads the next event")
+
+        uiState.panelDidHide()
+        spin(0.3)
+        let hiddenReads = source.reads
+        XCTAssertNil(feed.nextWake, "a hidden panel must release the event timer")
+        source.onChange?()
+        XCTAssertEqual(source.reads, hiddenReads, "a hidden panel must not read Calendar")
+        uiState.panelDidReveal()
+        spin(0.3)
+        XCTAssertGreaterThan(source.reads, hiddenReads, "revealing Tasks refreshes the event")
     }
 }

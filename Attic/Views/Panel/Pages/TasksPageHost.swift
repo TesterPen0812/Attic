@@ -103,7 +103,10 @@ struct TasksPageHost: View {
     /// first build: the feed publishes into the model).
     private func followNextEvent(_ model: TasksPageModel) {
         let feed = state.nextEventFeed
-        guard feed.onUpdate == nil else { feed.refresh(); return }
+        feed.setActive(isCurrent && uiState.isPanelOnScreen)
+        // Returning from a disappearance reactivates the feed above; that
+        // transition already refreshes it, so do not perform a second read.
+        guard feed.onUpdate == nil else { return }
         feed.onUpdate = { [weak model] in model?.nextEvent = $0 }
         feed.follow(settings.$nextEventInNow.eraseToAnyPublisher())
     }
@@ -147,9 +150,11 @@ struct TasksPageHost: View {
         .onChange(of: isCurrent) { _, current in
             editHold.setSuspended(!current)
             model.isPageShown = current
+            state.nextEventFeed.setActive(current && uiState.isPanelOnScreen)
         }
         .onDisappear {
             editHold.setSuspended(true)
+            state.nextEventFeed.setActive(false)
             // The shell retains the model after this host is released. Its
             // warm span must not claim that now-discarded list views exist.
             model.pagerSwipe.motion.coolDown(releasingPages: true)
@@ -159,8 +164,6 @@ struct TasksPageHost: View {
         // Now (`revealCount`, below).
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
-            // Access may have been granted on Calendar meanwhile.
-            state.nextEventFeed.refresh()
             model.pageDidReturn()
             // Back from a task's page: the anchor row has the keyboard.
             if let row = uiState.taskNoteReturnRow, uiState.openTaskNoteID == nil {
@@ -259,8 +262,14 @@ struct TasksPageHost: View {
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
         // Reveal and hide come from the panel controller (Astra 7); a
         // covered or off-Space window is still open and keeps its place.
-        .onReceive(uiState.$revealCount.dropFirst()) { _ in model.resetForReveal() }
-        .onReceive(uiState.$hideCount.dropFirst()) { _ in model.pageDidHide() }
+        .onReceive(uiState.$revealCount.dropFirst()) { _ in
+            state.nextEventFeed.setActive(isCurrent)
+            model.resetForReveal()
+        }
+        .onReceive(uiState.$hideCount.dropFirst()) { _ in
+            state.nextEventFeed.setActive(false)
+            model.pageDidHide()
+        }
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
         // A deferred `show` runs once the edit that blocked it has ended.
