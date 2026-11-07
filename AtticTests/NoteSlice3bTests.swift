@@ -3187,6 +3187,51 @@ extension NoteSlice3bTests {
         try await waitFor { !controller.recoveryWarnings.contains("Attachment data is still being read.") }
         XCTAssertFalse(controller.active?.notice?.contains("still being read") == true)
     }
+
+    func testFix18OldAttachmentReadMustNotClearNewerReadWarning() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let first = stagedSized("old.pdf", bytes: 12_345)
+        let second = stagedSized("new.pdf", bytes: 23_456)
+        let ids = [UUID(), UUID()]
+        for (id, item) in zip(ids, [first, second]) {
+            let document = NoteDocument(blocks: [.text("Open"), .file(attachmentID: item.id,
+                filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                byteCount: item.byteCount)])
+            guard case .success = store.createDocumentNote(id: id, document: document, staged: [item])
+                else { return XCTFail("could not make fixture") }
+        }
+        await store.waitForAttachmentReconciliation()
+        store.clearVerifiedAttachmentCache()
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        controller.recoveryResponseTimeout = .milliseconds(60)
+        let oldBarrier = AllPayloadReadBarrier(bytes: 12_345)
+        let newBarrier = AllPayloadReadBarrier(bytes: 23_456)
+        defer { oldBarrier.resume(); newBarrier.resume(); NotePayloadDigest.observe(nil) }
+        NotePayloadDigest.observe { main, bytes in
+            oldBarrier.observe(main: main, bytes: bytes)
+            newBarrier.observe(main: main, bytes: bytes)
+        }
+
+        let oldOpen = Task { @MainActor in await controller.openDurably(noteID: ids[0]) }
+        try await waitFor { oldBarrier.started }
+        await XCTAssertTrueAsync(await oldOpen.value)
+        XCTAssertTrue(controller.recoveryWarnings.contains("Attachment data is still being read."))
+
+        let newOpen = Task { @MainActor in await controller.openDurably(noteID: ids[1]) }
+        try await waitFor { newBarrier.started }
+        await XCTAssertTrueAsync(await newOpen.value)
+        let current = try XCTUnwrap(controller.active)
+        XCTAssertEqual(current.noteID, ids[1])
+        XCTAssertTrue(current.notice?.contains("still being read") == true)
+
+        oldBarrier.resume()
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(controller.recoveryWarnings.contains("Attachment data is still being read."),
+            "the old completed read must not erase the newer read's warning")
+        XCTAssertTrue(current.notice?.contains("still being read") == true)
+        newBarrier.resume()
+        try await waitFor { !controller.recoveryWarnings.contains("Attachment data is still being read.") }
+    }
 }
 
 // MARK: Fix round 6: retention decoding
@@ -3356,9 +3401,11 @@ private final class AllPayloadReadBarrier: @unchecked Sendable {
     private let condition = NSCondition()
     private var entered = false
     private var released = false
+    private let bytes: Int
+    init(bytes: Int = 12_345) { self.bytes = bytes }
     var started: Bool { condition.lock(); defer { condition.unlock() }; return entered }
     func observe(main: Bool, bytes: Int) {
-        guard !main, bytes == 12_345 else { return }
+        guard !main, bytes == self.bytes else { return }
         condition.lock(); defer { condition.unlock() }
         entered = true
         let deadline = Date().addingTimeInterval(5)
