@@ -92,10 +92,16 @@ protocol CalendarEventWriter: AnyObject {
     var lastError: CalendarEventWriteError? { get }
     func writableCalendars() async throws -> [CalendarWriteCalendar]
     func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent?
+    func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent?
     func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
     func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
     func delete(_ id: UUID) async throws
     func openInCalendar(_ occurrenceID: String) async throws
+}
+
+extension CalendarEventWriter {
+    // Existing injected writers may only support occurrence lookup.
+    func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent? { nil }
 }
 
 /// Local proof: EventKit identity and the captured user-visible values. Attic
