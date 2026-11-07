@@ -347,7 +347,7 @@ struct DrawCanvasTagEditor: View {
             }, onCreate: { name, _ in
                 model.setTag(name, on: true)
                 return true
-            })
+            }, onEscape: model.closeTags)
         }
         .background(AtticFieldClaimProbe(claim: fieldClaim, placeholder: String(localized: "Tag"),
             wanted: { model.mode == .tags }).accessibilityHidden(true))

@@ -723,26 +723,32 @@ struct AtticDropdownField: View {
     var label: String?
     var identifier: String?
     var onSubmit: () -> Void = {}
+    /// A native editor handles Escape when this picker owns the keyboard.
+    var onEscape: (() -> Void)?
+    var onMove: ((Int) -> Void)?
 
     @Environment(\.atticDesign) private var design
 
     /// A field alone in its card.
     init(text: Binding<String>, placeholder: String, systemName: String? = nil, focus: FocusState<Bool>.Binding,
-         label: String? = nil, identifier: String? = nil, onSubmit: @escaping () -> Void = {}) {
+         label: String? = nil, identifier: String? = nil, onSubmit: @escaping () -> Void = {},
+         onEscape: (() -> Void)? = nil, onMove: ((Int) -> Void)? = nil) {
         self.init(text: text, placeholder: placeholder, systemName: systemName, focus: .flag(focus),
-                  label: label, identifier: identifier, onSubmit: onSubmit)
+                  label: label, identifier: identifier, onSubmit: onSubmit, onEscape: onEscape, onMove: onMove)
     }
 
     /// A card's field beside its list (`AtticDropdownFocusTarget.field`).
     init(text: Binding<String>, placeholder: String, systemName: String? = nil,
          focus: FocusState<AtticDropdownFocusTarget?>.Binding,
-         label: String? = nil, identifier: String? = nil, onSubmit: @escaping () -> Void = {}) {
+         label: String? = nil, identifier: String? = nil, onSubmit: @escaping () -> Void = {},
+         onEscape: (() -> Void)? = nil, onMove: ((Int) -> Void)? = nil) {
         self.init(text: text, placeholder: placeholder, systemName: systemName, focus: .target(focus),
-                  label: label, identifier: identifier, onSubmit: onSubmit)
+                  label: label, identifier: identifier, onSubmit: onSubmit, onEscape: onEscape, onMove: onMove)
     }
 
     private init(text: Binding<String>, placeholder: String, systemName: String?, focus: AtticDropdownFieldFocus,
-                 label: String?, identifier: String?, onSubmit: @escaping () -> Void) {
+                 label: String?, identifier: String?, onSubmit: @escaping () -> Void,
+                 onEscape: (() -> Void)?, onMove: ((Int) -> Void)?) {
         _text = text
         self.placeholder = placeholder
         self.systemName = systemName
@@ -750,6 +756,20 @@ struct AtticDropdownField: View {
         self.label = label
         self.identifier = identifier
         self.onSubmit = onSubmit
+        self.onEscape = onEscape
+        self.onMove = onMove
+    }
+
+    private var nativeFocus: Binding<Bool> {
+        switch focus {
+        case let .flag(binding):
+            Binding(get: { binding.wrappedValue }, set: { binding.wrappedValue = $0 })
+        case let .target(binding):
+            Binding(get: { binding.wrappedValue == .field }, set: { wants in
+                if wants { binding.wrappedValue = .field }
+                else if binding.wrappedValue == .field { binding.wrappedValue = nil }
+            })
+        }
     }
 
     var body: some View {
@@ -766,13 +786,22 @@ struct AtticDropdownField: View {
             ZStack(alignment: .leading) {
                 Text(verbatim: placeholder).font(font).lineLimit(1).fixedSize().hidden()
                     .accessibilityHidden(true)
-                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
-                    .textFieldStyle(.plain)
-                    .font(font)
-                    .modifier(AtticDropdownFieldFocusModifier(focus: focus))
-                    .onSubmit(onSubmit)
-                    .accessibilityLabel(label ?? placeholder)
-                    .accessibilityIdentifier(identifier ?? "")
+                if let onEscape {
+                    AtticNativeSearchInput(text: $text, placeholder: placeholder,
+                        identifier: identifier ?? "dropdown-native-input", isFocused: nativeFocus,
+                        color: NSColor(design.tokens.color(.heading)),
+                        placeholderColor: NSColor(design.tokens.color(.placeholder)),
+                        headerFont: font, onEscape: onEscape, onMove: onMove, onSubmit: onSubmit)
+                        .accessibilityLabel(label ?? placeholder)
+                } else {
+                    TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
+                        .textFieldStyle(.plain)
+                        .font(font)
+                        .modifier(AtticDropdownFieldFocusModifier(focus: focus))
+                        .onSubmit(onSubmit)
+                        .accessibilityLabel(label ?? placeholder)
+                        .accessibilityIdentifier(identifier ?? "")
+                }
             }
         }
         .padding(.leading, systemName == nil ? m.rowPadding : m.fieldIconLeading)

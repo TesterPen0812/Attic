@@ -887,6 +887,9 @@ struct AtticTagPicker: View {
     /// (`atticDropdownList`): Tab from the field reaches them. Nil: the
     /// rows take no keyboard.
     var onListHighlight: Binding<Int?>? = nil
+    var onFieldEscape: (() -> Void)? = nil
+    var onFieldMove: ((Int) -> Void)? = nil
+    var onFieldSubmit: (() -> Void)? = nil
 
     /// The rows the list shows: the tags, then "New tag" when there is one.
     /// The one count the list's keyboard stop, Tab and the keys use.
@@ -935,7 +938,8 @@ struct AtticTagPicker: View {
             // name no tag has, "New Tag “#…”" (answer 3 A: no foot at rest).
             AtticDropdownFieldHeader {
                 AtticDropdownField(text: $query, placeholder: String(localized: "Tag"),
-                                   systemName: "magnifyingglass", focus: focus, label: String(localized: "Find or add a tag"))
+                                   systemName: "magnifyingglass", focus: focus, label: String(localized: "Find or add a tag"),
+                                   onSubmit: onFieldSubmit ?? {}, onEscape: onFieldEscape, onMove: onFieldMove)
             }
             AtticDropdownSectionHeader(title: String(localized: "Tags"))
             VStack(alignment: .leading, spacing: 0) {
@@ -1040,6 +1044,7 @@ struct AtticTagPickerCard: View {
     let onCreate: (_ name: String, _ completed: @escaping () -> Void) -> Bool
     /// The field has the keyboard as the card opens.
     var focusField = true
+    var onEscape: (() -> Void)? = nil
 
     @State private var query = ""
     @State private var highlight: AtticTagPickerHighlight?
@@ -1056,6 +1061,19 @@ struct AtticTagPickerCard: View {
         let highlightIndex = Binding<Int?>(
             get: { highlighted },
             set: { highlight = AtticTagPickerHighlight.at($0, in: filtered, create: create) })
+        let moveHighlight: (Int) -> Void = { step in
+            guard count > 0 else { return }
+            let previous = highlightIndex.wrappedValue ?? (step > 0 ? -1 : count)
+            highlightIndex.wrappedValue = min(max(previous + step, 0), count - 1)
+        }
+        let submitHighlighted: () -> Void = {
+            if let index = highlightIndex.wrappedValue, index < filtered.count {
+                onToggle(filtered[index].name)
+            } else if let create {
+                let clear = { query = "" }
+                if onCreate(create, clear) { clear() }
+            }
+        }
         AtticTagPicker(
             query: $query,
             tags: filtered,
@@ -1072,7 +1090,10 @@ struct AtticTagPickerCard: View {
                 if next != highlighted { highlightIndex.wrappedValue = next }
             },
             listRows: listRows,
-            onListHighlight: highlightIndex
+            onListHighlight: highlightIndex,
+            onFieldEscape: onEscape,
+            onFieldMove: onEscape == nil ? nil : moveHighlight,
+            onFieldSubmit: onEscape == nil ? nil : submitHighlighted
         )
         .atticDropdownFocus($focus, when: focusField)
         .atticDropdownTabs(focus: $focus, count: count)
@@ -1090,24 +1111,18 @@ struct AtticTagPickerCard: View {
             switch press.key {
             case .downArrow:
                 guard count > 0 else { return .ignored }
-                highlightIndex.wrappedValue = min((highlighted ?? -1) + 1, count - 1)
+                moveHighlight(1)
                 return .handled
             case .upArrow:
                 guard count > 0 else { return .ignored }
-                highlightIndex.wrappedValue = max((highlighted ?? count) - 1, 0)
+                moveHighlight(-1)
                 return .handled
             case .return, .space:
                 // Space presses the highlighted row only while the rows have
                 // the keyboard; in the field it types.
                 if press.key == .space, focus != .list { return .ignored }
-                if let highlighted, highlighted < filtered.count {
-                    onToggle(filtered[highlighted].name)
-                } else if let create {
-                    let clear = { query = "" }
-                    if onCreate(create, clear) { clear() }
-                } else {
-                    return .ignored
-                }
+                guard highlighted != nil || create != nil else { return .ignored }
+                submitHighlighted()
                 return .handled
             default:
                 return .ignored

@@ -1015,6 +1015,8 @@ struct AtticTabsSearchField: View {
     @Binding var text: String
     var isFocused: Binding<Bool>?
     var nativeInputIdentifier: String? = nil
+    var nativeOnMove: ((Int) -> Void)? = nil
+    var nativeOnSubmit: (() -> Void)? = nil
     /// Top glass (2026-10-22): on the top line, which content scrolls
     /// under, the field floats on the raised material at the Medium height
     /// (as the add bar does) instead of the recessed fill. The find bar,
@@ -1059,7 +1061,7 @@ struct AtticTabsSearchField: View {
                         identifier: nativeInputIdentifier, isFocused: isFocused,
                         color: NSColor(tokens.color(.heading)), placeholderColor: NSColor(tokens.color(.helper)),
                         headerFont: header ? font : nil,
-                        onEscape: onEscape)
+                        onEscape: onEscape, onMove: nativeOnMove, onSubmit: nativeOnSubmit)
                         .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
                             wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
                 } else if capture == nil {
@@ -2468,7 +2470,7 @@ struct AtticPopoverGap: View {
 
 /// Literal native edits do not change the field's allocated geometry or
 /// invalidate the surrounding task page. External replacements still update.
-private struct AtticNativeSearchInput: NSViewRepresentable {
+struct AtticNativeSearchInput: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let identifier: String
@@ -2481,6 +2483,8 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     /// page; elsewhere it keeps the list body.
     let headerFont: Font?
     let onEscape: () -> Void
+    var onMove: ((Int) -> Void)? = nil
+    var onSubmit: (() -> Void)? = nil
 
     static let bodyHeight: CGFloat = 18
 
@@ -2595,9 +2599,25 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
             if owner.isFocused?.wrappedValue == true { owner.isFocused?.wrappedValue = false }
         }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
-            owner.onEscape()
-            return true
+            switch commandSelector {
+            case #selector(NSResponder.cancelOperation(_:)):
+                owner.onEscape()
+                return true
+            case #selector(NSResponder.moveUp(_:)):
+                guard let onMove = owner.onMove else { return false }
+                onMove(-1)
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                guard let onMove = owner.onMove else { return false }
+                onMove(1)
+                return true
+            case #selector(NSResponder.insertNewline(_:)):
+                guard let onSubmit = owner.onSubmit else { return false }
+                onSubmit()
+                return true
+            default:
+                return false
+            }
         }
     }
 }

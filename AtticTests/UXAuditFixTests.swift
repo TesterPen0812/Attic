@@ -328,9 +328,48 @@ final class UXAuditFixTests: XCTestCase {
             let field = try XCTUnwrap(findSearch(host), "Draw Search needs an AppKit Escape handler while typing")
             let delegate = try XCTUnwrap(field.delegate)
             XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.moveDown(_:))) == true)
+            XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.moveUp(_:))) == true)
+            XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
                 doCommandBy: #selector(NSResponder.cancelOperation(_:))) == true)
             XCTAssertFalse(model.isSearching)
             XCTAssertEqual(model.search.query, "")
+        }
+    }
+
+    func testDrawTagsEscapeReachesItsFocusedFieldDelegate() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let size = CGSize(width: 320, height: 460)
+        try withHost(DrawPageHost(model: model, uiState: PanelUIState(),
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size))) { host in
+            model.start()
+            model.openFilter()
+            model.library.perform(.tags)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            func findTagField(_ view: NSView) -> NSTextField? {
+                if let field = view as? NSTextField,
+                   AtticTabsSearchField.isSearchField(field, placeholder: String(localized: "Tag")) { return field }
+                for child in view.subviews {
+                    if let result = findTagField(child) { return result }
+                }
+                return nil
+            }
+            let field = try XCTUnwrap(findTagField(host))
+            XCTAssertEqual(model.library.mode, .tags)
+            let delegate = try XCTUnwrap(field.delegate)
+            field.stringValue = "audit"
+            delegate.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
+                "Return in the native tag editor must keep adding the typed tag")
+            XCTAssertTrue(model.library.currentCanvas?.tags.contains("audit") == true)
+            XCTAssertTrue(delegate.control?(field, textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.cancelOperation(_:))) == true,
+                "Escape from the tag editor must close its owning Draw menu")
+            XCTAssertEqual(model.library.mode, .list)
+            XCTAssertFalse(model.isFiltering)
         }
     }
 
