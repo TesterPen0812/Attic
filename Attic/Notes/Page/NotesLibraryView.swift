@@ -763,7 +763,7 @@ private struct PreparedNotesBoardCard: View, Equatable {
 final class NotesLibraryReveal {
     private struct Weak { weak var view: NSView? }
     private var views: [UUID: Weak] = [:]
-    let glide = TasksScrollGlide()
+    let glide = AtticPanelScrollGlide()
 
     func register(_ view: NSView, for id: UUID) { views[id] = Weak(view: view) }
 
@@ -792,7 +792,7 @@ final class NotesLibraryReveal {
         if reduceMotion {
             glide.stop()
             var origin = clip.bounds.origin
-            origin.y = TasksScrollKeeper.clampedOriginY(origin.y + delta, in: scroll)
+            origin.y = AtticPanelScrollGeometry.clampedOriginY(origin.y + delta, in: scroll)
             clip.scroll(to: origin)
             scroll.reflectScrolledClipView(clip)
         } else {
