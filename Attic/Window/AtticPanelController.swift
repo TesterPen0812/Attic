@@ -283,6 +283,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var onOutsidePress: ((CGPoint) -> Void)?
     private var isDisplayingResizeCursor = false
     private var visibilityTransition = PanelVisibilityTransitionState()
+    private var isSavingCalendarForHide = false
+    private var calendarHideCompletions: [(PanelHideCompletion) -> Void] = []
     private(set) var currentScreen: NSScreen?
     private var lastUsableFrame: CGRect?
     private(set) var currentCorner: ScreenCorner = .topRight
@@ -690,6 +692,47 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard noteDraft.prepareToLeave(.hide) else {
                 return .rejected(.draftFlushFailed)
             }
+        }
+        // Calendar's editor writes asynchronously. Leave the panel visible
+        // until the save settles, so a failure can keep its draft and error.
+        if isSavingCalendarForHide {
+            calendarHideCompletions.append(completion)
+            return .accepted
+        }
+        let openCalendarRows = CalendarDraftTerminationRegistry.shared.openRows(for: .docked)
+        if !openCalendarRows.isEmpty {
+            isSavingCalendarForHide = true
+            calendarHideCompletions.append(completion)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var saved = true
+                for rows in openCalendarRows {
+                    let settled = await rows.waitForInFlightWorkBeforeQuit()
+                    if !settled {
+                        saved = false
+                        break
+                    }
+                    if !(await rows.close()) {
+                        saved = false
+                        break
+                    }
+                }
+                self.isSavingCalendarForHide = false
+                let completions = self.calendarHideCompletions
+                self.calendarHideCompletions.removeAll()
+                guard saved else {
+                    if self.uiState.selectedSection != .calendar {
+                        self.uiState.switchPage(to: .calendar, motion: .instant)
+                    }
+                    completions.forEach { $0(.superseded) }
+                    return
+                }
+                let result = self.requestHide { outcome in
+                    completions.forEach { $0(outcome) }
+                }
+                if !result.isAccepted { completions.forEach { $0(.superseded) } }
+            }
+            return .accepted
         }
         // The dismissal is committed; no second outside press should start
         // another hide during the chosen animation.

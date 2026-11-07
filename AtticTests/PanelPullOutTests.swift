@@ -396,6 +396,48 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    func testDismissingDockedCalendarSavesAndFailureKeepsItsDraft() throws {
+        try withRig { rig in
+            let backend = FakeCalendarEventWriteStore()
+            backend.availableCalendars = [CalendarWriteCalendar(id: "test", title: "Test",
+                colour: .init(red: 0.2, green: 0.5, blue: 0.9), sourceID: "fake",
+                sourceTitle: "Fake", isWritable: true)]
+            let undo = UndoRoute()
+            let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(),
+                undoRoute: undo, notificationCenter: NotificationCenter())
+            let start = Date(timeIntervalSince1970: 1_793_361_600)
+            let owned = try writer.create(CalendarEventDraft(title: "Original", start: start,
+                length: 3600, calendarID: "test", timeZoneID: "Europe/London"))
+            let rows = CalendarEventRowState(makeWriter: { writer })
+            CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+            let event = CalendarEvent(id: owned.occurrenceID, title: "Original", start: start,
+                end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+                calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+            Task { await rows.toggle(event) }
+            spin(until: { rows.canEdit })
+            XCTAssertTrue(rows.canEdit)
+            rows.title = "Edited"
+            backend.commitError = .saveFailed("Test failure")
+            var outcome: PanelHideCompletion?
+            XCTAssertTrue(rig.controller.requestHide { outcome = $0 }.isAccepted)
+            spin(until: { outcome != nil })
+            XCTAssertEqual(outcome, .superseded)
+            XCTAssertTrue(rig.panel.isVisible)
+            XCTAssertNotNil(rows.rowID)
+            XCTAssertEqual(rows.title, "Edited")
+            XCTAssertNotNil(rows.failure)
+            XCTAssertEqual(backend.events.values.first?.draft.title, "Original")
+
+            backend.commitError = nil
+            outcome = nil
+            XCTAssertTrue(rig.controller.requestHide { outcome = $0 }.isAccepted)
+            spin(until: { outcome != nil })
+            XCTAssertEqual(outcome, .hidden)
+            XCTAssertNil(rows.rowID)
+            XCTAssertEqual(backend.events.values.first?.draft.title, "Edited")
+        }
+    }
+
     /// A pulled-out panel docked back in goes away with its window and its
     /// hosting view (and its subscriptions), every time. Its press callback
     /// held it (Astra F3).

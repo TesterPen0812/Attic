@@ -23,6 +23,16 @@ final class CalendarDraftTerminationRegistry {
         entries.append(Entry(rows, owner: owner))
     }
 
+    /// Only the docked Calendar draft belongs to a docked-panel dismissal.
+    /// A pulled-out Calendar keeps editing in its own window.
+    func openRows(for owner: Owner) -> [CalendarEventRowState] {
+        entries.removeAll { $0.rows == nil }
+        return entries.compactMap { entry in
+            guard entry.owner == owner, let rows = entry.rows, rows.rowID != nil else { return nil }
+            return rows
+        }
+    }
+
     func prepareForTerminationDurably() async -> Bool {
         await prepareForTerminationResult() == .ready
     }
