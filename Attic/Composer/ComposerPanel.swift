@@ -333,7 +333,9 @@ struct ComposerOverlay: View {
     }
 
     private func transition(_ open: Bool) {
-        if chrome?.plusHandedOver != open { chrome?.plusHandedOver = open }
+        // Hold the underlying controls until the folding surface is gone;
+        // their return animation can then begin with no extra delay.
+        if open { chrome?.plusHandedOver = true }
         guard let animation = ComposerMotion.animation(showing: open), open || !model.closedAtOnce else {
             // At once, whatever transaction the change came in (a page
             // switch's spring must not carry the card's parts apart).
@@ -342,6 +344,7 @@ struct ComposerOverlay: View {
             withTransaction(instant) {
                 presented = open
                 expanded = open
+                chrome?.plusHandedOver = open
             }
             room?.set(height: open ? card.height : 0, open: open)
             return
@@ -357,6 +360,7 @@ struct ComposerOverlay: View {
             } completion: {
                 guard !model.isOpen else { return }
                 presented = false
+                chrome?.plusHandedOver = false
                 room?.set(height: 0, open: false)
             }
         }

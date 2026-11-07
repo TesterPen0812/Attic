@@ -109,9 +109,9 @@ struct PanelPageMotion: Equatable {
     static let speed: Double = 0.83
 
     /// The top row's own change in place (option A's sequence, kept): what
-    /// differs fades out, then the new page's fades in.
+    /// differs fades out while the new page's header starts fading in at once.
     static let fadeOut: TimeInterval = 0.09
-    static let fadeInDelay: TimeInterval = fadeOut
+    static let fadeInDelay: TimeInterval = 0
     static let fadeIn: TimeInterval = 0.16
 
     /// The motion for a switch now, in the current feel.
@@ -146,10 +146,15 @@ struct PanelPageMotion: Equatable {
         return incoming ? nil : .linear(duration: 0.001).delay(settleDuration)
     }
 
-    /// The top row's in-place fade: out at once, in once the old has gone.
+    /// The top row's in-place fade: both begin at once; the new header keeps
+    /// its 160 ms entrance while the outgoing header fades out in 90 ms.
     func inPlaceOpacityAnimation(incoming: Bool) -> Animation? {
         guard travels else { return nil }
-        return incoming ? .easeOut(duration: Self.fadeIn).delay(Self.fadeInDelay) : .easeIn(duration: Self.fadeOut)
+        if incoming {
+            let fade = Animation.easeOut(duration: Self.fadeIn)
+            return Self.fadeInDelay == 0 ? fade : fade.delay(Self.fadeInDelay)
+        }
+        return .easeIn(duration: Self.fadeOut)
     }
 }
 

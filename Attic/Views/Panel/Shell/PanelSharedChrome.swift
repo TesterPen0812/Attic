@@ -325,12 +325,10 @@ struct PanelSharedBottomBar: View {
 
     /// How far the pills move as the card takes the row (12 design px).
     static let takenSlide: CGFloat = 6
-    /// The row going under the card: the quick leave. Coming back as the
-    /// card folds: the popover's show, 90 ms in, so the pills return as the
-    /// card has gone (the design's `transition-delay: 90ms`).
+    /// The row going under the card uses the quick leave. After the card
+    /// finishes folding, the row starts its normal popover show immediately.
     static func rowAnimation(taken: Bool, reduceMotion: Bool) -> Animation? {
-        let animation = AtticMotionPreset.popover.animation(reduceMotion: reduceMotion, showing: !taken)
-        return taken || reduceMotion ? animation : animation?.delay(0.09)
+        AtticMotionPreset.popover.animation(reduceMotion: reduceMotion, showing: !taken)
     }
 
     /// Where the bar sits in the panel; the "+" card grows from this

@@ -1421,3 +1421,12 @@ Behaviour only: no token, colour, radius, size or motion preset changed.
 Light Create and selected Calendar day keys again use the resolved heading ink
 with pure white text in standard and increased contrast. The inverse colour
 pair applies only in Dark, as originally intended.
+
+## 2026-11-06 · Approved shorter click delays (Fix 16)
+
+- Incoming page-header fade begins immediately; the outgoing header still
+  fades for 90 ms and the incoming header still takes 160 ms.
+- Dropdown contents already appear from the start of their existing 180 ms
+  card entrance (`AtticDropdownReveal.frame`, V-11); no motion edit needed.
+- Bottom-bar controls begin their normal return as soon as the composer has
+  finished folding, with no additional 90 ms wait or controls peeking through.
