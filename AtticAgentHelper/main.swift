@@ -207,8 +207,18 @@ private final class HelperService {
             // not enter this agent's context. Disable native execution,
             // browser, app and customization tool capabilities in addition to
             // read-only sandboxing and an explicit never-approve thread.
+            guard bundledCodexHost(executable: executable) != nil else {
+                send(["type": "failed", "message": "Codex's tool host is missing. Update Codex to use Attic tools."])
+                return
+            }
             environment["ATTIC_RUN_MCP_TOKEN"] = mcpToken
-            let mcpOnly = "mcp_servers={attic={url=\"\(server)\",bearer_token_env_var=\"ATTIC_RUN_MCP_TOKEN\"}}"
+            // npm's launcher keeps its code-mode host inside the platform
+            // package. Codex must be given that exact path to run MCP tools.
+            configureBundledCodexHost(executable: executable, environment: &environment)
+            // Codex's own MCP confirmation would be refused by this
+            // noninteractive thread. Attic alone authorizes protected actions
+            // through the trusted chat approval path.
+            let mcpOnly = "mcp_servers={attic={url=\"\(server)\",bearer_token_env_var=\"ATTIC_RUN_MCP_TOKEN\",default_tools_approval_mode=\"approve\"}}"
             arguments = ["app-server", "--strict-config", "--config", mcpOnly]
                 + ["shell_tool", "unified_exec", "browser_use", "computer_use", "apps",
                    "standalone_web_search", "hooks", "skill_search"].flatMap { ["--disable", $0] }
@@ -335,11 +345,42 @@ private final class HelperService {
     }
 
     private func find(_ name: String, environment: [String: String]) -> String? {
+        var fallback: String?
         for folder in (environment["PATH"] ?? "").split(separator: ":") {
             let path = URL(fileURLWithPath: String(folder)).appendingPathComponent(name).path
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+            guard FileManager.default.isExecutableFile(atPath: path) else { continue }
+            if name != "codex" { return path }
+            // Some standalone Codex binaries lack the companion host needed
+            // to invoke MCP tools. Prefer a complete installation on PATH.
+            fallback = fallback ?? path
+            if bundledCodexHost(executable: path) != nil { return path }
         }
+        return fallback
+    }
+
+    private func bundledCodexHost(executable: String) -> URL? {
+        let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
+        let sibling = resolved.deletingLastPathComponent().appendingPathComponent("codex-code-mode-host")
+        if FileManager.default.isExecutableFile(atPath: sibling.path) { return sibling }
+        let packageRoot = resolved.deletingLastPathComponent().deletingLastPathComponent()
+        #if arch(arm64)
+        let platform = "codex-darwin-arm64/vendor/aarch64-apple-darwin"
+        #elseif arch(x86_64)
+        let platform = "codex-darwin-x64/vendor/x86_64-apple-darwin"
+        #else
         return nil
+        #endif
+        let bundled = packageRoot.appendingPathComponent("node_modules/@openai/\(platform)/bin")
+            .appendingPathComponent("codex-code-mode-host")
+        return FileManager.default.isExecutableFile(atPath: bundled.path) ? bundled : nil
+    }
+
+    private func configureBundledCodexHost(executable: String, environment: inout [String: String]) {
+        guard let bundled = bundledCodexHost(executable: executable) else { return }
+        // Make the companion discoverable to both PATH and explicit-host
+        // implementations without changing the user's shell or CLI install.
+        environment["CODEX_CODE_MODE_HOST_PATH"] = bundled.path
+        environment["PATH"] = bundled.deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "")
     }
 
     private func isSignedIn(_ name: String, executable: String, environment: [String: String]) -> Bool {
