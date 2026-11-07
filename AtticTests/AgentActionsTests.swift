@@ -78,7 +78,8 @@ final class AgentActionsTests: XCTestCase {
         let f = try fixture()
         let defs = f.actions.definitions
         let names = Set(defs.compactMap { $0["name"] as? String })
-        XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "open_page", "calendar_search",
+        XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "create_tasks", "update_tasks",
+                                             "search_items", "open_page", "calendar_search",
                                              "calendar_read", "calendar_create", "calendar_update", "calendar_delete",
                                              "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes"]))
         for definition in defs {
@@ -476,7 +477,8 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(f.backend.events.count, 1)
         XCTAssertEqual(handler.runChangeSet(token: run)?.count, 1)
 
-        let refused = try await mcpTool(handler, "calendar_delete", args: ["id": UUID().uuidString], token: run)
+        let createdID = try XCTUnwrap((ready["data"] as? [String: Any])?["id"] as? String)
+        let refused = try await mcpTool(handler, "calendar_delete", args: ["id": createdID], token: run)
         let refusedID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(refused["approval_id"] as? String)))
         try await handler.resolveRunApproval(id: refusedID, allow: false, token: run)
         let refusal = try await mcpTool(handler, "agent_approval_status", args: [
@@ -528,7 +530,8 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(f.backend.events.count, 1)
 
         let waitedFrom = Date()
-        let pending = try await mcpTool(handler, "calendar_delete", args: ["id": UUID().uuidString], token: token)
+        let createdID = try XCTUnwrap((completed["data"] as? [String: Any])?["id"] as? String)
+        let pending = try await mcpTool(handler, "calendar_delete", args: ["id": createdID], token: token)
         XCTAssertEqual(pending["status"] as? String, "waiting")
         XCTAssertGreaterThan(Date().timeIntervalSince(waitedFrom), 0.25)
         XCTAssertEqual(pending["poll_tool"] as? String, "agent_approval_status")
@@ -558,5 +561,228 @@ final class AgentActionsTests: XCTestCase {
         let response = try await task.value
         XCTAssertEqual((response["result"] as? [String: Any])?["isError"] as? Bool, true)
         XCTAssertTrue(f.backend.events.isEmpty)
+    }
+
+    func testAgentCanUpdateTasksByLooseNameInOneBatchWithPartialFailures() async throws {
+        let f = try fixture()
+        let first = try XCTUnwrap(f.library.createTasks([
+            TaskDraft(title: "Pay electricity bill"), TaskDraft(title: "Send project proposal")
+        ]))
+        let request = f.actions.beginRequest(title: "Friday tasks")
+        let result = try performed(await f.actions.call(name: "update_tasks", arguments: [
+            "updates": [
+                ["query": "electric bills", "due": "friday"],
+                ["query": "send proposal", "priority": "high"],
+                ["query": "nonexistent errand", "due": "tomorrow"]
+            ]
+        ], watching: false, requestID: request))
+        let json = try payload(result.text)
+        XCTAssertEqual(json["updated"] as? Int, 2)
+        XCTAssertEqual(json["failed"] as? Int, 1)
+        let rows = try XCTUnwrap(json["results"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual((rows[0]["task"] as? [String: Any])?["id"] as? String, first[0].id.uuidString)
+        XCTAssertEqual((rows[1]["task"] as? [String: Any])?["id"] as? String, first[1].id.uuidString)
+        XCTAssertTrue((rows[2]["error"] as? String ?? "").contains("search_items"))
+        XCTAssertEqual(result.step.targets.count, 2)
+        XCTAssertEqual(f.actions.changeSet(for: request)?.count, 2)
+        let undone = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 2)
+        XCTAssertTrue(undone.failures.isEmpty)
+    }
+
+    func testRunBatchMCPReportsPartialAndAllFailedResultsAccurately() async throws {
+        let f = try fixture()
+        _ = try XCTUnwrap(f.library.createTasks([TaskDraft(title: "Send invoice")]))
+        let handler = MCPRequestHandler(tools: f.actions.tasks, actions: f.actions, approvalWait: 0)
+        let token = try handler.beginAgentRun(title: "Batch status", watching: false)
+        let partial = try await mcpTool(handler, "update_tasks", args: ["updates": [
+            ["query": "send invoice", "priority": "high"],
+            ["query": "missing invoice", "priority": "high"]
+        ]], token: token)
+        XCTAssertEqual(partial["status"] as? String, "partial")
+        let partialData = try XCTUnwrap(partial["data"] as? [String: Any])
+        XCTAssertEqual(partialData["updated"] as? Int, 1)
+        XCTAssertEqual(partialData["failed"] as? Int, 1)
+        XCTAssertEqual(handler.runChangeSet(token: token)?.count, 1)
+
+        let allFailed = try await mcp(handler, "tools/call", params: [
+            "name": "update_tasks", "arguments": ["updates": [["query": "no matching task", "priority": "high"]]]
+        ], token: token)
+        let outcome = try XCTUnwrap(allFailed["result"] as? [String: Any])
+        XCTAssertEqual(outcome["isError"] as? Bool, true)
+        let content = try XCTUnwrap(outcome["content"] as? [[String: Any]])
+        let response = try payload(try XCTUnwrap(content.first?["text"] as? String))
+        XCTAssertEqual(response["status"] as? String, "failed")
+        XCTAssertEqual((response["data"] as? [String: Any])?["failed"] as? Int, 1)
+        XCTAssertEqual(handler.runChangeSet(token: token)?.count, 1,
+                       "An unsuccessful batch must not create a phantom Undo entry")
+    }
+
+    func testRunLooseNameRejectsAmbiguousTaskMatches() async throws {
+        let f = try fixture()
+        _ = try XCTUnwrap(f.library.createTasks([
+            TaskDraft(title: "Pay electric bill"), TaskDraft(title: "Pay water bill")
+        ]))
+        let request = f.actions.beginRequest(title: "Ambiguous task")
+        do {
+            _ = try await f.actions.call(name: "update_task", arguments: [
+                "query": "pay bill", "priority": "high"
+            ], watching: false, requestID: request)
+            XCTFail("A loose query with multiple matches must not modify either task")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Ambiguous task"))
+        }
+        XCTAssertNil(f.actions.changeSet(for: request))
+        XCTAssertTrue(f.store.orderedTasks(for: .todo).allSatisfy { $0.priority == .none })
+    }
+
+    func testRunConvenienceNoteEditsResolveTitleAndRevisionWithoutPreRead() async throws {
+        let store = try makeTestStore()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: store, noteStore: notes)
+        let actions = AgentActions(tasks: tools)
+        let note = try payload(tools.call(name: "create_note", arguments: ["title": "Annual planning", "body": "Before"]))
+        let row = try XCTUnwrap(note["note"] as? [String: Any])
+        let id = try XCTUnwrap(row["id"] as? String)
+        let request = actions.beginRequest(title: "Update a note")
+        let updated = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "annual plan", "body": "After"
+        ], watching: false, requestID: request))
+        let result = try payload(updated.text)
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertEqual((result["note"] as? [String: Any])?["id"] as? String, id)
+        XCTAssertEqual((result["note"] as? [String: Any])?["body"] as? String, "After")
+        let undo = await actions.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 1)
+        XCTAssertEqual(notes.note(withID: try XCTUnwrap(UUID(uuidString: id)))?.body, "Before")
+    }
+
+    func testCalendarCreateAndPartialUpdateUseDefaultsAndOccurrenceIdentifier() async throws {
+        let f = try fixture()
+        let request = f.actions.beginRequest(title: "Calendar convenience")
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let created = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Lunch", "start": iso(date)
+        ], watching: false, requestID: request))
+        let resolvedCreation = try await f.actions.resolve(approval: created.id, allow: true)
+        let event = try XCTUnwrap(resolvedCreation)
+        let row = try payload(event.text)
+        let stableID = try XCTUnwrap(row["id"] as? String)
+        XCTAssertEqual(row["calendar_id"] as? String, "home")
+        XCTAssertEqual(row["end"] as? String, iso(date.addingTimeInterval(3600)))
+        let edit = try approval(await f.actions.call(name: "calendar_update", arguments: [
+            "id": stableID, "title": "Later lunch"
+        ], watching: false, requestID: request))
+        let resolvedUpdate = try await f.actions.resolve(approval: edit.id, allow: true)
+        let updated = try XCTUnwrap(resolvedUpdate)
+        XCTAssertEqual(try payload(updated.text)["title"] as? String, "Later lunch")
+        XCTAssertEqual(f.backend.events.count, 1)
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, "Later lunch")
+        let remove = try approval(await f.actions.call(name: "calendar_delete", arguments: [
+            "occurrence_id": try XCTUnwrap(payload(updated.text)["occurrence_id"] as? String)
+        ], watching: false, requestID: request))
+        _ = try await f.actions.resolve(approval: remove.id, allow: true)
+        XCTAssertTrue(f.backend.events.isEmpty)
+        let undo = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 3)
+        XCTAssertTrue(undo.failures.isEmpty)
+    }
+
+    func testCalendarApprovalRechecksOwnershipWhenEventChanges() async throws {
+        let f = try fixture()
+        let request = f.actions.beginRequest(title: "Calendar ownership")
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let pendingCreate = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Meeting", "start": iso(date)
+        ], watching: false, requestID: request))
+        let resolvedCreate = try await f.actions.resolve(approval: pendingCreate.id, allow: true)
+        let created = try XCTUnwrap(resolvedCreate)
+        let stableID = try XCTUnwrap(try payload(created.text)["id"] as? String)
+        let pendingEdit = try approval(await f.actions.call(name: "calendar_update", arguments: [
+            "id": stableID, "title": "Agent meeting"
+        ], watching: false, requestID: request))
+        let eventID = try XCTUnwrap(f.backend.events.keys.first)
+        f.backend.events[eventID]?.draft.title = "Owner changed meeting"
+        do {
+            _ = try await f.actions.resolve(approval: pendingEdit.id, allow: true)
+            XCTFail("A delayed approval cannot replace an owner's newer event edit")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("changed"))
+        }
+        XCTAssertEqual(f.backend.events[eventID]?.draft.title, "Owner changed meeting")
+        XCTAssertEqual(f.actions.changeSet(for: request)?.count, 1)
+    }
+
+    func testDrawCanSelectOnlyCanvasWithoutLookup() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Only board")
+        // A newly created empty canvas is an unsaved draft and is deliberately
+        // absent from library(). Give the selection a saved canvas to find.
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Existing"))]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Sketch")
+        let result = try performed(await f.actions.call(name: "draw_add_text", arguments: [
+            "text": "Idea", "x": 8, "y": 12
+        ], watching: false, requestID: request))
+        XCTAssertEqual(result.step.targets.first?.containerID, canvas.id)
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.count, 2)
+        XCTAssertTrue(try f.draw.open(canvas.id).objects.contains { $0.text == "Idea" })
+    }
+
+    func testLooseSearchReturnsTasksNotesAndSavedCanvases() async throws {
+        let store = try makeTestStore()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: store, notes: notes)
+        let draw = DrawInMemoryStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: store, noteStore: notes, library: library), draw: draw)
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Plan agenda")]))
+        _ = try XCTUnwrap(notes.create(title: "Planning notes", body: "Discuss agenda"))
+        let canvas = draw.create(name: "Plan board")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("Start"))]), on: canvas.id).isSaved)
+        let request = actions.beginRequest(title: "Find the plan")
+        let result = try performed(await actions.call(name: "search_items", arguments: [
+            "query": "plan"
+        ], watching: false, requestID: request))
+        let data = try payload(result.text)
+        let items = try XCTUnwrap(data["items"] as? [[String: Any]])
+        XCTAssertEqual(data["count"] as? Int, 3)
+        XCTAssertEqual(Set(items.compactMap { $0["page"] as? String }), Set(["tasks", "notes", "draw"]))
+        XCTAssertNil(result.changeSet)
+    }
+
+    func testRealisticMultiPageRequestMeasuresMCPToolCallCount() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Plan")
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Existing"))]), on: canvas.id).isSaved)
+        let handler = MCPRequestHandler(tools: f.actions.tasks, actions: f.actions, approvalWait: 0)
+        let run = try handler.beginAgentRun(title: "Plan the week", watching: false)
+        var callCount = 0
+        func call(_ name: String, _ args: [String: Any]) async throws -> [String: Any] {
+            callCount += 1
+            return try await mcpTool(handler, name, args: args, token: run)
+        }
+        let created = try await call("create_tasks", ["tasks": [
+            ["title": "Prepare agenda"], ["title": "Send reminder"], ["title": "Review notes"]
+        ]])
+        XCTAssertEqual((created["text"] as? String).flatMap { try? payload($0)["created"] as? Int }, 3)
+        let changed = try await call("update_tasks", ["updates": [
+            ["query": "prepare agenda", "due": "friday"],
+            ["query": "send reminder", "due": "friday"]
+        ]])
+        XCTAssertEqual((changed["text"] as? String).flatMap { try? payload($0)["updated"] as? Int }, 2)
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let event = try await call("calendar_create", ["title": "Team planning", "start": iso(date)])
+        let prompt = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(event["approval_id"] as? String)))
+        try await handler.resolveRunApproval(id: prompt, allow: true, token: run)
+        let approvalResult = try await call("agent_approval_status", ["approval_id": prompt.uuidString])
+        XCTAssertEqual(approvalResult["status"] as? String, "done")
+        XCTAssertEqual((approvalResult["data"] as? [String: Any])?["title"] as? String, "Team planning")
+        XCTAssertEqual(handler.runChangeSet(token: run)?.pages, Set([.tasks, .calendar]))
+        let sketch = try await call("draw_add_text", ["text": "Plan", "x": 10, "y": 20])
+        XCTAssertEqual(sketch["status"] as? String, "done")
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.count, 2)
+        XCTAssertEqual(handler.runChangeSet(token: run)?.pages, Set([.tasks, .calendar, .draw]))
+        print("AGENT_REALISTIC_REQUEST_MCP_TOOL_CALLS=\(callCount)")
+        XCTAssertEqual(callCount, 5)
     }
 }

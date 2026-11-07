@@ -99,14 +99,14 @@ final class AgentActions {
     }
 
     var definitions: [[String: Any]] {
-        tasks.definitions + Self.extraDefinitions.filter { def in
+        (tasks.definitions + Self.extraDefinitions).filter { def in
             guard let name = def["name"] as? String else { return false }
             if name.hasPrefix("calendar_") {
                 return name == "calendar_search" || name == "calendar_read" ? calendarSource != nil : calendarWriter != nil
             }
             if name.hasPrefix("draw_") { return draw != nil }
             return true
-        }
+        }.map(Self.runDefinition)
     }
 
     @discardableResult
@@ -126,16 +126,18 @@ final class AgentActions {
     func call(name: String, arguments: [String: Any], watching: Bool, requestID: UUID) async throws -> AgentActionCall {
         guard journals[requestID] != nil else { throw AgentActionsError.invalid("Unknown request.") }
         try validate(name, arguments)
-        if AgentActionApprovalPolicy.requiresApproval(name, arguments: arguments) {
+        let localArguments = try preparedArguments(name: name, arguments: arguments)
+        let prepared = try await preparedCalendarArguments(name: name, arguments: localArguments)
+        if AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
             let id = UUID()
-            let targets = targetsForArguments(name, arguments)
+            let targets = targetsForArguments(name, prepared)
             let approval = AgentApproval(id: id, title: "Allow \(name.replacingOccurrences(of: "_", with: " "))?", targets: targets)
-            approvals[id] = AwaitingApproval(name: name, arguments: arguments, watching: watching, requestID: requestID)
+            approvals[id] = AwaitingApproval(name: name, arguments: prepared, watching: watching, requestID: requestID)
             return .approvalNeeded(approval)
         }
         activeCalls[requestID, default: 0] += 1
         defer { activeCalls[requestID, default: 0] -= 1 }
-        return .performed(try await execute(name: name, arguments: arguments, watching: watching, requestID: requestID))
+        return .performed(try await execute(name: name, arguments: prepared, watching: watching, requestID: requestID))
     }
 
     /// Only the trusted UI/runner can resolve the opaque ID issued by call().
@@ -174,6 +176,10 @@ final class AgentActions {
             text = try Self.json(["opened": page.rawValue])
             step = AgentStep(id: UUID(), title: "Open \(page.rawValue.capitalized)", kind: .openPage,
                              targets: [AgentTarget(page: page)], state: .done)
+        } else if name == "create_tasks" || name == "update_tasks" {
+            (text, step) = try taskBatchAction(name, arguments)
+        } else if name == "search_items" {
+            (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
             (text, step) = try await calendarAction(name, arguments)
         } else if name.hasPrefix("draw_") {
@@ -229,7 +235,9 @@ final class AgentActions {
         if !entries.contains(where: { if case .history = $0 { return true }; return false }) {
             entries.append(contentsOf: extraEntries)
         }
-        if entries.isEmpty && Self.isMutation(name) {
+        let actionFailed: Bool
+        if case .failed = step.state { actionFailed = true } else { actionFailed = false }
+        if entries.isEmpty && Self.isMutation(name) && !actionFailed {
             // Never silently promise Undo for a store change without a confirmed history.
             entries.append(.unavailable("\(step.title): no reversible store step was recorded"))
         }
@@ -337,9 +345,11 @@ final class AgentActions {
             throw AgentActionsError.invalid("Unknown action: \(name)")
         }
         let unknown = Set(arguments.keys).subtracting(properties.keys)
-        guard unknown.isEmpty else { throw AgentActionsError.invalid("Unknown arguments: \(unknown.sorted().joined(separator: ", "))") }
+        guard unknown.isEmpty else {
+            throw AgentActionsError.invalid("Unknown arguments: \(unknown.sorted().joined(separator: ", ")). Allowed fields for \(name): \(properties.keys.sorted().joined(separator: ", ")).")
+        }
         for required in schema["required"] as? [String] ?? [] where arguments[required] == nil {
-            throw AgentActionsError.invalid("Missing \(required).")
+            throw AgentActionsError.invalid("Missing \(required) for \(name). Allowed fields: \(properties.keys.sorted().joined(separator: ", ")).")
         }
     }
 
@@ -390,6 +400,12 @@ final class AgentActions {
 
     private static func targetsFromResponse(_ text: String, name: String, arguments: [String: Any]) -> [AgentTarget] {
         let payload = ((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]) ?? [:]
+        if name.hasPrefix("calendar_") {
+            let id = ((payload["id"] ?? arguments["id"]) as? String).flatMap(UUID.init(uuidString:))
+            let occurrence = (payload["occurrence_id"] ?? arguments["occurrence_id"]) as? String
+            let title = (payload["title"] ?? arguments["_resolved_title"] ?? arguments["title"]) as? String
+            return [AgentTarget(page: .calendar, itemID: id, title: title, externalID: occurrence)]
+        }
         let kind = arguments["kind"] as? String
         let page: AgentPage = kind == "note" || name.contains("note") ? .notes :
             (kind == "canvas" ? .draw : .tasks)

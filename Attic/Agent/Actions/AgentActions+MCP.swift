@@ -192,6 +192,21 @@ final class AgentActionsMCP {
         var output: [String: Any] = [
             "status": "done", "text": value.text, "step": step(value.step)
         ]
+        // Keep the text response for existing consumers, and expose parsed
+        // result fields so a coding agent can reuse IDs without parsing JSON twice.
+        if let data = value.text.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            output["data"] = object
+            if let rows = object as? [String: Any], let failed = rows["failed"] as? Int,
+               failed > 0, let count = rows["count"] as? Int, failed < count {
+                output["status"] = "partial"
+                output["message"] = "\(failed) of \(count) operations failed; inspect data.results for individual errors. Successful changes remain undoable."
+            }
+        }
+        if case let .failed(reason) = value.step.state {
+            output["status"] = "failed"
+            output["error"] = reason
+        }
         if let changeSet = value.changeSet {
             output["change_set"] = [
                 "id": changeSet.id.uuidString, "title": changeSet.title,

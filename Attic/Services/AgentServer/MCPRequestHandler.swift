@@ -145,7 +145,8 @@ final class MCPRequestHandler {
                let raw = payload["approval_id"] as? String, let approvalID = UUID(uuidString: raw) {
                 payload = try await runActions.awaitApproval(approvalID, token: token, maximumWait: approvalWait)
             }
-            return toolResponse(id: id, text: try AgentActions.json(payload), isError: false)
+            return toolResponse(id: id, text: try AgentActions.json(payload),
+                                isError: payload["status"] as? String == "failed")
         } catch {
             return toolResponse(id: id, text: error.localizedDescription, isError: true)
         }

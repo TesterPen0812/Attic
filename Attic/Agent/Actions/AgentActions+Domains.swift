@@ -20,41 +20,55 @@ extension AgentActions {
             "size": ["type": "string", "enum": DrawSize.allCases.map(\.rawValue)],
             "corners": ["type": "string", "enum": DrawCorners.allCases.map(\.rawValue)]
         ]
-        let canvas: [String: Any] = ["canvas_id": string]
+        let canvas: [String: Any] = ["canvas_id": string,
+                                     "canvas_name": ["type": "string", "description": "Canvas title; omit both canvas selectors when only one canvas exists."]]
         let eventFields: [String: Any] = [
             "title": string, "start": string, "end": string, "calendar_id": string,
             "time_zone": string, "all_day": ["type": "boolean"], "notes": string
         ]
         let span: [String: Any] = ["start": string, "end": string]
+        var createTaskFields = (AgentTaskTools.taskDefinitions.first { $0["name"] as? String == "create_task" }?["inputSchema"] as? [String: Any])?["properties"] as? [String: Any] ?? [:]
+        createTaskFields["parent_query"] = string
+        var updateTaskFields = (AgentTaskTools.taskDefinitions.first { $0["name"] as? String == "update_task" }?["inputSchema"] as? [String: Any])?["properties"] as? [String: Any] ?? [:]
+        updateTaskFields["query"] = string
         return [
+            definition("search_items", "Find tasks, notes and canvases using loose wording, typos and partial titles. Returns names, IDs and state.",
+                       ["query": string, "pages": ["type": "array", "items": ["type": "string", "enum": ["tasks", "notes", "draw"]]],
+                        "limit": ["type": "integer", "minimum": 1, "maximum": 100]], required: ["query"]),
+            definition("create_tasks", "Create up to 50 tasks or subtasks in one call. Every result includes saved state or its own error; earlier successes remain undoable.",
+                       ["tasks": ["type": "array", "minItems": 1, "maxItems": 50,
+                                  "items": schema(createTaskFields, required: ["title"])]], required: ["tasks"]),
+            definition("update_tasks", "Update up to 50 tasks in one call using id or a unique loose-name query for each. Returns changed task states and explicit individual failures.",
+                       ["updates": ["type": "array", "minItems": 1, "maxItems": 50,
+                                    "items": schema(updateTaskFields)]], required: ["updates"]),
             definition("open_page", "Open an Attic page only while its owner is watching.",
                        ["page": ["type": "string", "enum": AgentPage.allCases.map(\.rawValue)]], required: ["page"]),
-            definition("calendar_search", "Search Calendar occurrences in the supplied ISO-8601 date interval.",
-                       span.merging(["query": string]) { _, new in new }, required: ["query", "start", "end"]),
+            definition("calendar_search", "Find Calendar occurrences by loose wording. Defaults to the previous 7 through next 30 days; use start/end to choose a window.",
+                       span.merging(["query": string]) { _, new in new }, required: ["query"]),
             definition("calendar_read", "Read one Calendar occurrence by its occurrence_id from search results.",
                        ["occurrence_id": string], required: ["occurrence_id"]),
-            definition("calendar_create", "Create an event in a writable Calendar. End is exclusive; times include a UTC offset.",
-                       eventFields, required: ["title", "start", "end", "calendar_id"]),
-            definition("calendar_update", "Replace all values of an Attic-owned Calendar event by its UUID.",
-                       eventFields.merging(["id": string]) { _, new in new },
-                       required: ["id", "title", "start", "end", "calendar_id"]),
-            definition("calendar_delete", "Delete an Attic-owned Calendar event by UUID.",
-                       ["id": string], required: ["id"]),
+            definition("calendar_list_calendars", "List writable calendars with titles and stable calendar_id values.", [:]),
+            definition("calendar_create", "Create an event; with one writable calendar it is selected automatically. End defaults to one hour after start (one day for all-day events). Dates use ISO-8601 with UTC offset.",
+                       eventFields, required: ["title", "start"]),
+            definition("calendar_update", "Change selected fields of an Attic-owned event by id or occurrence_id. Unspecified fields keep their existing values.",
+                       eventFields.merging(["id": string, "occurrence_id": string]) { _, new in new }),
+            definition("calendar_delete", "Delete an Attic-owned event by id or occurrence_id; the owner approves first.",
+                       ["id": string, "occurrence_id": string]),
             definition("draw_list_canvases", "List live Draw canvases and their IDs.", [:]),
             definition("draw_add_text", "Add a text box to an existing Draw canvas; geometry is in points.",
                        canvas.merging(frame.merging(style) { _, new in new }.merging(["text": string]) { _, new in new }) { _, new in new },
-                       required: ["canvas_id", "text", "x", "y"]),
+                       required: ["text", "x", "y"]),
             definition("draw_add_shape", "Add a rectangle, ellipse, line or arrow to Draw.",
                        canvas.merging(frame.merging(style) { _, new in new }.merging([
                         "shape": ["type": "string", "enum": DrawShape.allCases.map(\.rawValue)]
                        ]) { _, new in new }) { _, new in new },
-                       required: ["canvas_id", "shape", "x", "y", "width", "height"]),
+                       required: ["shape", "x", "y", "width", "height"]),
             definition("draw_add_strokes", "Add a freehand stroke with absolute point coordinates.",
                        canvas.merging(style.merging(["points": [
                         "type": "array", "minItems": 2, "maxItems": 1000,
                         "items": schema(position, required: ["x", "y"])
                        ]]) { _, new in new }) { _, new in new },
-                       required: ["canvas_id", "points"])
+                       required: ["points"])
         ]
     }()
 
@@ -97,6 +111,83 @@ extension AgentActions {
         AgentTarget(page: .calendar, itemID: nil, title: event.title, externalID: event.id)
     }
 
+    /// Resolve owned occurrences and writable calendars before an approval is
+    /// shown. A stored draft protects the owner against edits made while the
+    /// prompt is waiting. No EventKit write happens during preparation.
+    func preparedCalendarArguments(name: String, arguments: [String: Any]) async throws -> [String: Any] {
+        guard ["calendar_create", "calendar_update", "calendar_delete"].contains(name) else { return arguments }
+        guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar editing is unavailable.") }
+        var args = arguments
+        if name == "calendar_update" || name == "calendar_delete" {
+            let owned: CalendarOwnedEvent
+            if let occurrence = args["occurrence_id"] as? String {
+                guard let found = try await writer.ownedEvent(matching: occurrence) else {
+                    throw AgentActionsError.invalid("That occurrence is not an Attic-owned editable event. Use calendar_search to find an owned event.")
+                }
+                owned = found
+                if let rawID = args["id"] as? String, rawID != owned.id.uuidString {
+                    throw AgentActionsError.invalid("id and occurrence_id refer to different events; use just occurrence_id.")
+                }
+            } else if let rawID = args["id"] as? String, let id = UUID(uuidString: rawID) {
+                guard let found = try await writer.ownedEvent(id: id) else {
+                    throw AgentActionsError.invalid("No editable Attic-owned event has that id. Use calendar_search to find its occurrence_id.")
+                }
+                owned = found
+            } else {
+                throw AgentActionsError.invalid("Supply id or occurrence_id. calendar_search returns occurrence_id.")
+            }
+            args["id"] = owned.id.uuidString
+            args["occurrence_id"] = owned.occurrenceID
+            args["_expected_draft"] = try JSONEncoder().encode(owned.draft).base64EncodedString()
+            args["_resolved_title"] = owned.draft.title
+            if name == "calendar_update" {
+                args["title"] = args["title"] ?? owned.draft.title
+                args["calendar_id"] = args["calendar_id"] ?? owned.draft.calendarID
+                args["time_zone"] = args["time_zone"] ?? owned.draft.timeZoneID
+                args["all_day"] = args["all_day"] ?? owned.draft.isAllDay
+                if let newStart = args["start"] {
+                    if args["end"] == nil {
+                        let date = try Self.isoDate(newStart, "start")
+                        args["end"] = ISO8601DateFormatter().string(from: date.addingTimeInterval(
+                            owned.draft.end.timeIntervalSince(owned.draft.start)))
+                    }
+                } else { args["start"] = ISO8601DateFormatter().string(from: owned.draft.start) }
+                args["end"] = args["end"] ?? ISO8601DateFormatter().string(from: owned.draft.end)
+                if args["notes"] == nil { args["notes"] = owned.draft.notes }
+            }
+        }
+        if name == "calendar_create" || name == "calendar_update" {
+            let calendars = try await writer.writableCalendars()
+            let raw = args["calendar_id"] as? String
+            if raw == nil, calendars.count == 1 { args["calendar_id"] = calendars[0].id }
+            else if let raw {
+                if !calendars.contains(where: { $0.id == raw }) {
+                    let matches = calendars.filter { $0.title.localizedStandardCompare(raw) == .orderedSame }
+                    if matches.count == 1 { args["calendar_id"] = matches[0].id }
+                    else { throw AgentActionsError.invalid("Unknown or ambiguous calendar_id '\(raw)'. Call calendar_list_calendars; writable calendars: \(calendars.map { "\($0.title) (\($0.id))" }.joined(separator: "; ")).") }
+                }
+            } else {
+                throw AgentActionsError.invalid("Specify calendar_id. Call calendar_list_calendars; writable calendars: \(calendars.map { "\($0.title) (\($0.id))" }.joined(separator: "; ")).")
+            }
+            guard let title = args["title"] as? String, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AgentActionsError.invalid("Event title must be nonempty.")
+            }
+            let start = try Self.isoDate(args["start"], "start")
+            if let end = args["end"] {
+                guard try Self.isoDate(end, "end") > start else { throw AgentActionsError.invalid("Event end must be after start.") }
+            }
+        }
+        return args
+    }
+
+    private static func ownedCalendarRow(_ event: CalendarOwnedEvent) -> [String: Any] {
+        ["id": event.id.uuidString, "occurrence_id": event.occurrenceID,
+         "title": event.draft.title, "start": ISO8601DateFormatter().string(from: event.draft.start),
+         "end": ISO8601DateFormatter().string(from: event.draft.end),
+         "calendar_id": event.draft.calendarID, "all_day": event.draft.isAllDay,
+         "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
+    }
+
     func calendarAction(_ name: String, _ args: [String: Any]) async throws -> (String, AgentStep) {
         func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget]) -> (String, AgentStep) {
             (text, AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
@@ -108,12 +199,16 @@ extension AgentActions {
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw AgentActionsError.invalid("Calendar search requires a nonempty query and an event source.")
             }
-            let start = try Self.isoDate(args["start"], "start")
-            let end = try Self.isoDate(args["end"], "end")
+            let defaultStart = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-7 * 86_400)
+            let start = try args["start"].map { try Self.isoDate($0, "start") } ??
+                (args["end"] != nil ? Self.isoDate(args["end"], "end").addingTimeInterval(-30 * 86_400) : defaultStart)
+            let end = try args["end"].map { try Self.isoDate($0, "end") } ?? start.addingTimeInterval(37 * 86_400)
             guard end > start, end.timeIntervalSince(start) <= 366 * 86_400 else {
                 throw AgentActionsError.invalid("Calendar search interval must be positive and at most one year.")
             }
-            let events = source.search(query, in: DateInterval(start: start, end: end))
+            let events = source.events(in: DateInterval(start: start, end: end)).filter {
+                Self.matchScore(query: query, in: $0.title + " " + ($0.location ?? "")) != nil
+            }
             return try result(Self.json(["events": events.map(Self.calendarRow), "count": events.count]),
                               .read, events.map(Self.calendarTarget))
         case "calendar_read":
@@ -129,35 +224,64 @@ extension AgentActions {
                 throw AgentActionsError.invalid("Calendar occurrence not found.")
             }
             return try result(Self.json(["event": Self.calendarRow(event)]), .read, [Self.calendarTarget(event)])
+        case "calendar_list_calendars":
+            guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
+            let calendars = try await writer.writableCalendars()
+            return try result(Self.json(["calendars": calendars.map { row in
+                ["calendar_id": row.id, "title": row.title, "source": row.sourceTitle]
+            }, "count": calendars.count]), .read, [])
         case "calendar_create", "calendar_update":
             guard let writer = calendarWriter, let title = args["title"] as? String,
                   !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let calendarID = args["calendar_id"] as? String, !calendarID.isEmpty else {
-                throw AgentActionsError.invalid("title and calendar_id are required.")
+                throw AgentActionsError.invalid("title and calendar_id are required. Use calendar_list_calendars to choose a calendar.")
             }
             let start = try Self.isoDate(args["start"], "start")
-            let end = try Self.isoDate(args["end"], "end")
-            guard end > start else { throw AgentActionsError.invalid("end must be after start.") }
             let zone = (args["time_zone"] as? String) ?? TimeZone.current.identifier
-            guard TimeZone(identifier: zone) != nil else { throw AgentActionsError.invalid("Unknown time_zone.") }
+            guard let timeZone = TimeZone(identifier: zone) else { throw AgentActionsError.invalid("Unknown time_zone '\(zone)'.") }
+            let allDay = (args["all_day"] as? Bool) ?? false
+            let end: Date
+            if let rawEnd = args["end"] { end = try Self.isoDate(rawEnd, "end") }
+            else if allDay {
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = timeZone
+                end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+            } else { end = start.addingTimeInterval(3600) }
+            guard end > start else { throw AgentActionsError.invalid("end must be after start.") }
             let draft = CalendarEventDraft(title: title, start: start, end: end,
-                                           isAllDay: (args["all_day"] as? Bool) ?? false,
+                                           isAllDay: allDay,
                                            calendarID: calendarID, timeZoneID: zone, notes: args["notes"] as? String)
             let saved: CalendarOwnedEvent
             if name == "calendar_create" { saved = try await writer.create(draft) }
-            else { saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft) }
+            else {
+                try await verifyCalendarBaseline(args, using: writer)
+                saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft)
+            }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
                                      externalID: saved.occurrenceID)
-            return try result(Self.json(["id": saved.id.uuidString, "occurrence_id": saved.occurrenceID,
-                                         "title": saved.draft.title]), name == "calendar_create" ? .create : .update, [target])
+            return try result(Self.json(Self.ownedCalendarRow(saved)), name == "calendar_create" ? .create : .update, [target])
         case "calendar_delete":
             guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
             let id = try Self.uuid(args["id"], "id")
+            try await verifyCalendarBaseline(args, using: writer)
             try await writer.delete(id)
-            return try result(Self.json(["deleted": id.uuidString]), .delete,
-                              [AgentTarget(page: .calendar, itemID: id)])
+            return try result(Self.json(["deleted": id.uuidString, "status": "deleted",
+                                         "title": args["_resolved_title"] ?? "",
+                                         "occurrence_id": args["occurrence_id"] ?? ""]), .delete,
+                              [AgentTarget(page: .calendar, itemID: id, title: args["_resolved_title"] as? String,
+                                           externalID: args["occurrence_id"] as? String)])
         default:
             throw AgentActionsError.invalid("Unknown Calendar action.")
+        }
+    }
+
+    private func verifyCalendarBaseline(_ args: [String: Any], using writer: any CalendarEventWriter) async throws {
+        guard let encoded = args["_expected_draft"] as? String,
+              let data = Data(base64Encoded: encoded),
+              let expected = try? JSONDecoder().decode(CalendarEventDraft.self, from: data),
+              let occurrence = args["occurrence_id"] as? String else { return }
+        guard let current = try await writer.ownedEvent(matching: occurrence), current.draft == expected else {
+            throw AgentActionsError.invalid("This event changed while approval was pending. Call calendar_search to get its current occurrence_id, then retry the change.")
         }
     }
 
@@ -222,7 +346,20 @@ extension AgentActions {
                              kind: .create,
                              targets: [AgentTarget(page: .draw, itemID: object.id, title: snapshot.canvas.name,
                                                    containerID: canvasID)], state: .done)
-        return (try Self.json(["object_id": object.id.uuidString, "canvas_id": canvasID.uuidString]), step, after)
+        var row: [String: Any] = ["id": object.id.uuidString, "canvas_id": canvasID.uuidString,
+                                  "canvas_name": snapshot.canvas.name, "x": frame.x, "y": frame.y,
+                                  "width": frame.width, "height": frame.height, "z_index": object.zIndex,
+                                  "colour": colour.rawValue, "size": size.rawValue, "corners": corners.rawValue]
+        switch content {
+        case let .text(text): row["text"] = text; row["kind"] = "text"
+        case let .shape(shape): row["shape"] = shape.rawValue; row["kind"] = "shape"
+        case let .stroke(points):
+            row["points"] = points.map { ["x": $0.x, "y": $0.y] }
+            row["kind"] = "stroke"
+        case .image: break
+        }
+        return (try Self.json(["object_id": object.id.uuidString, "canvas_id": canvasID.uuidString,
+                               "object": row]), step, after)
     }
 
     private static func enumValue<T: RawRepresentable>(_ type: T.Type, _ input: Any?, name: String,

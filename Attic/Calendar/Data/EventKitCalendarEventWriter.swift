@@ -76,6 +76,10 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
         try await reporting { try $0.ownedEvent(matching: occurrenceID) }
     }
 
+    func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent? {
+        try await reporting { try $0.ownedEvent(id: id) }
+    }
+
     func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
         await CalendarEventCommandGate.shared.enter()
         defer { CalendarEventCommandGate.shared.leave() }
@@ -189,6 +193,10 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
         try reporting { try core.ownedEvent(matching: occurrenceID) }
     }
 
+    func ownedEvent(id: UUID) throws -> CalendarOwnedEvent? {
+        try reporting { try core.ownedEvent(id: id) }
+    }
+
     func create(_ draft: CalendarEventDraft) throws -> CalendarOwnedEvent {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
@@ -291,6 +299,12 @@ final class CalendarEventTransactions {
             return owned(id, current)
         }
         return nil
+    }
+
+    func ownedEvent(id: UUID) throws -> CalendarOwnedEvent? {
+        try begin()
+        guard let current = try? editable(id) else { return nil }
+        return owned(id, current)
     }
 
     func current(_ id: UUID) throws -> CalendarWriteSnapshot {
