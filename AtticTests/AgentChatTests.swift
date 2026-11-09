@@ -56,6 +56,12 @@ final class AgentChatTests: XCTestCase {
         runner = FakeRunner()
         model.connect(runner)
         model.currentPage = { [unowned self] in self.page }
+        // A strip only shows when the week holds something (a day with a bar).
+        model.weekDays = { day in
+            AgentChatModel.emptyWeek(holding: day).enumerated().map { index, entry in
+                AgentChatWeekDay(day: entry.day, bars: index == 2 ? [0.1...0.3] : [])
+            }
+        }
     }
 
     private func settle() async {
@@ -463,6 +469,17 @@ final class AgentChatTests: XCTestCase {
         XCTAssertEqual(week?.landed, 1)
     }
 
+    func testAWeekWithNothingOnItIsNotDrawn() async {
+        model.weekDays = { AgentChatModel.emptyWeek(holding: $0) }
+        model.open()
+        await start()
+        await emit(.stepStarted(step(.read, targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)])))
+        XCTAssertNil(week, "Seven blank boxes say nothing")
+        let moved = AgentTarget(page: .tasks, itemID: UUID(), title: "Call")
+        await emit(.stepStarted(step(.move(toDay: Date(timeIntervalSince1970: 1_800_000_000)), targets: [moved])))
+        XCTAssertNotNil(week, "A move still has a day to land on")
+    }
+
     func testAMoveToAnotherWeekShowsTheWeekThatHoldsTheDay() async {
         let friday = november(6)
         model.now = { friday }
@@ -488,7 +505,7 @@ final class AgentChatTests: XCTestCase {
         model.now = { wednesday }
         model.weekDays = {
             asked += 1
-            return AgentChatModel.emptyWeek(holding: $0)
+            return AgentChatModel.emptyWeek(holding: $0).map { AgentChatWeekDay(day: $0.day, bars: [0.1...0.3]) }
         }
         model.open()
         await start()

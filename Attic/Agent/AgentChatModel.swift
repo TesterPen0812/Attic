@@ -534,7 +534,11 @@ final class AgentChatModel: ObservableObject {
         if case let .move(day?) = step.kind {
             weekID = showWeek(holding: day, target: day, dots: step.targets.count)
         } else if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
-            weekID = showWeek(holding: now(), target: nil, dots: 0)
+            // Adaptive UI: an empty week would be seven blank boxes.
+            let days = runWeek == nil ? weekDays(now()) : nil
+            if days?.contains(where: { !$0.bars.isEmpty }) ?? true {
+                weekID = showWeek(holding: now(), target: nil, dots: 0, days: days)
+            }
         }
         guard isOpen else {
             if let weekID, case .move = step.kind { update(weekID) { Self.landAll(&$0) } }
@@ -608,9 +612,9 @@ final class AgentChatModel: ObservableObject {
     /// The run's strip, made on first use. A move's day is always on show:
     /// the strip takes that day's week, so chips have a slot to land on and the
     /// strip says where the tasks went, whatever day the runner picks.
-    private func showWeek(holding day: Date, target: Date?, dots: Int) -> UUID {
+    private func showWeek(holding day: Date, target: Date?, dots: Int, days: [AgentChatWeekDay]? = nil) -> UUID {
         guard let runWeek else {
-            let entry = AgentChatEntry(.week(AgentChatWeek(days: weekDays(day), target: target, dots: dots)))
+            let entry = AgentChatEntry(.week(AgentChatWeek(days: days ?? weekDays(day), target: target, dots: dots)))
             entries.append(entry)
             runWeek = entry.id
             return entry.id
