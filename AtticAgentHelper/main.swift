@@ -301,6 +301,11 @@ private final class HelperService {
             var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
                         "--verbose", "--include-partial-messages", "--restricted", "--tools", "",
                         "--strict-mcp-config", "--disable-slash-commands", "--mcp-config", config.path,
+                        // Non-interactive Claude Code refuses any tool it has not
+                        // been granted, before Attic hears of it. As with Codex,
+                        // Attic alone authorizes protected actions, through the
+                        // trusted chat approval path in AgentActionsMCP.
+                        "--allowedTools", "mcp__attic",
                         "--system-prompt", prompt]
             if let session = message["sessionID"] as? String, !session.isEmpty {
                 args += ["--resume", session]
