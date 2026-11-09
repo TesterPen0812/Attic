@@ -127,11 +127,22 @@ struct AgentChatThread: View {
     @State private var viewport: CGFloat = 0
     @State private var turnHeight: CGFloat = 0
     @State private var followsEnd = true
+    /// How far the earlier exchange sits below its resting place while it
+    /// moves up out of the way; the scroll itself is instant. Only those
+    /// rows ride it: the new message rises from the composer on its own.
+    @State private var outgoingSlide: CGFloat = 0
+
+    #if DEBUG
+    /// Test seam: the distance the last send asked the earlier rows to travel.
+    static var lastOutgoingTravel: CGFloat = 0
+    #endif
 
     static let topInset: CGFloat = 52
     static let sideInset: CGFloat = 22
     static let bottomInset: CGFloat = 11
     private static let gap: CGFloat = 7
+    /// Between one exchange's end and the next one's start.
+    private static let turnGap: CGFloat = gap * 3
     private static let tail = "agent-chat-tail"
     private static let turnTop = "agent-chat-turn"
 
@@ -141,17 +152,21 @@ struct AgentChatThread: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: Self.gap) {
+                    // Every row starts clear of the top controls, so even a
+                    // short earlier exchange can be scrolled back into view.
+                    Color.clear.frame(height: Self.topInset)
                     ForEach(model.entries[..<turnStart]) { row($0, viewport: viewport) }
-                    // The anchor reaches up over the gap, so a turn rests
-                    // clear of the top controls with no hole between turns.
-                    Color.clear.frame(height: Self.topInset).id(Self.turnTop)
-                        .padding(.top, turnStart == 0 ? 0 : Self.gap - Self.topInset)
+                        .offset(y: outgoingSlide)
+                    if turnStart > 0 { Color.clear.frame(height: Self.gap) }
                     VStack(alignment: .leading, spacing: Self.gap) {
                         ForEach(model.entries[turnStart...]) { row($0, viewport: viewport) }
                         if model.phase == .waiting { AgentChatWaitingSlot() }
                     }
                     .onGeometryChange(for: CGFloat.self, of: \.size.height) { turnHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(AgentChatStage.space)).minY }) { fx.turnTop = $0 }
                     .frame(minHeight: max(0, viewport - Self.topInset - Self.bottomInset), alignment: .top)
+                    // Zero height, so the scroll's anchor names one exact point.
+                    .overlay(alignment: .top) { Color.clear.frame(height: 0).id(Self.turnTop) }
                     Color.clear.frame(height: 1).id(Self.tail)
                 }
                 .padding(.horizontal, Self.sideInset)
@@ -160,10 +175,13 @@ struct AgentChatThread: View {
                 .background(Color.clear.contentShape(Rectangle()).onTapGesture(perform: onAway))
             }
             .onGeometryChange(for: CGFloat.self, of: \.size.height) { viewport = $0 }
+            .onChange(of: viewport) { old, new in if old == 0, new > 0 { scrollToTurn(proxy, in: new) } }
             .onScrollPhaseChange { _, phase in if phase == .interacting { followsEnd = false } }
-            .onChange(of: turnStart, initial: true) { _, _ in
+            .onChange(of: turnStart, initial: true) { old, new in
                 followsEnd = true
-                proxy.scrollTo(Self.turnTop, anchor: .top)
+                let travel = new > old && alive ? travelForLeavingRows() : 0
+                scrollToTurn(proxy, in: viewport)
+                moveLeavingRows(by: travel)
             }
             .onChange(of: turnHeight) { _, height in
                 guard followsEnd, height > viewport - Self.topInset - Self.bottomInset else { return }
@@ -181,6 +199,32 @@ struct AgentChatThread: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             }
+        }
+    }
+
+    /// How far up the rows of the exchange being replaced have to travel:
+    /// from where they end now to where they end once the new one is at rest.
+    /// Read before this update's layout, so `fx.turnTop` is still the old turn's.
+    private func travelForLeavingRows() -> CGFloat {
+        guard let top = fx.turnTop else { return 0 }
+        let restingBottom = Self.topInset + Self.gap - Self.turnGap
+        return max(0, min(top + turnHeight - restingBottom, viewport))
+    }
+
+    /// Rests the current exchange at the one height every exchange rests at.
+    private func scrollToTurn(_ proxy: ScrollViewProxy, in viewport: CGFloat) {
+        guard viewport > 0 else { return }
+        proxy.scrollTo(Self.turnTop, anchor: UnitPoint(x: 0.5, y: (Self.topInset + Self.gap) / viewport))
+    }
+
+    private func moveLeavingRows(by travel: CGFloat) {
+        #if DEBUG
+        Self.lastOutgoingTravel = travel
+        #endif
+        guard travel > 0 else { return }
+        outgoingSlide = travel
+        DispatchQueue.main.async {
+            withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.56)) { outgoingSlide = 0 }
         }
     }
 

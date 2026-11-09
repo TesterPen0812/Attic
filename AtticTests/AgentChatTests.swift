@@ -833,6 +833,7 @@ final class AgentChatHostedTests: XCTestCase {
     private var chrome: PanelSharedChrome!
     private var topRow: PanelTopRowState!
     private var window: NSWindow!
+    private var fx: AgentChatFX { AgentChatHost.lastFX! }
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
@@ -934,6 +935,50 @@ final class AgentChatHostedTests: XCTestCase {
 
     private var weekIDs: [UUID] {
         model.entries.compactMap { if case .week = $0.content { $0.id } else { nil } }
+    }
+
+    private func findScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let scroll = view as? NSScrollView { return scroll }
+        for child in view.subviews { if let found = findScrollView(in: child) { return found } }
+        return nil
+    }
+
+    /// A finished exchange in the open chat: the message and a short reply.
+    private func exchange(_ text: String) {
+        model.draft = text
+        model.send()
+        spin(0.05)
+        runner.continuation?.yield(.textDelta("All done, nothing else to do here."))
+        spin(0.1)
+        runner.continuation?.yield(.finished)
+        spin(0.6)
+    }
+
+    func testTheSecondMessageLandsWhereTheFirstDid() {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.open()
+        spin(0.2)
+        exchange("hi")
+        let first = fx.turnTop
+        exchange("hi")
+        XCTAssertEqual(fx.turnTop ?? 0, first ?? -1, accuracy: 0.5, "Each message rests at the same height")
+        XCTAssertGreaterThan(AgentChatThread.lastOutgoingTravel, 20, "The earlier exchange moves up, it doesn't vanish")
+    }
+
+    func testTheEarlierExchangeIsStillThereAboveTheNewOne() {
+        model.open()
+        spin(0.2)
+        exchange("hi")
+        exchange("hi again")
+        let top = fx.turnTop ?? 0
+        let scroll = try? XCTUnwrap(findScrollView(in: window.contentView))
+        scroll?.contentView.scroll(to: .zero)
+        scroll?.reflectScrolledClipView(scroll!.contentView)
+        spin(0.1)
+        XCTAssertGreaterThan(fx.turnTop ?? 0, top + 40, "Scrolling back up shows the earlier exchange, clear of the top")
+        XCTAssertEqual(model.entries.filter { if case .asked = $0.content { true } else { false } }.count, 2)
     }
 
     /// One run in the open chat: reads the calendar, moves a task to `day`.

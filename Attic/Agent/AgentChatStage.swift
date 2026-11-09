@@ -69,8 +69,15 @@ struct AgentChatHost: View {
     @State private var mounted = false
     /// Held here so Undo can still run a step's motion after a close and reopen.
     @StateObject private var fx = AgentChatFX()
+    #if DEBUG
+    /// Test seam: the alive layer of the host on screen.
+    static var lastFX: AgentChatFX?
+    #endif
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.lastFX = fx
+        #endif
         ZStack {
             if mounted {
                 AgentChatStage(model: model, fx: fx, shown: bar.isChatOpen, layout: layout, rows: rows, setTyping: setTyping,
