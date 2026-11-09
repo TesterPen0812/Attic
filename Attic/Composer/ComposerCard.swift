@@ -214,15 +214,6 @@ struct ComposerCard: View {
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
                 window.makeFirstResponder(field)
             }
-            // The writing field can finish resigning on the following SwiftUI
-            // transaction and take back the responder set above. Restore the
-            // title once that transaction has run, unless a newer Tab moved on.
-            DispatchQueue.main.async {
-                guard model.isOpen, titleFocused, !writingFocused, keyboardStop == nil,
-                      let field = model.editor.textView, let window = field.window,
-                      window.firstResponder !== field else { return }
-                window.makeFirstResponder(field)
-            }
         }
     }
 
