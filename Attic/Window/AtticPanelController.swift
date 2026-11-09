@@ -932,14 +932,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
+                PerformanceSignposts.noteInput("page-responder-begin")
                 panel.cancelTrackpadSwipe()
                 // A page kept built behind the new one must not keep the
                 // keyboard (a field in it would take what is typed on the
                 // page now showing). The new page asks for focus itself.
                 if let responder = panel.firstResponder as? NSView, responder !== hostingView,
                    responder.isDescendant(of: hostingView) {
+                    PerformanceSignposts.noteInput("page-responder-resign-begin")
                     panel.makeFirstResponder(nil)
+                    PerformanceSignposts.noteInput("page-responder-resign-end")
                 }
+                PerformanceSignposts.noteInput("page-responder-end")
             }
             .store(in: &cancellables)
 
@@ -2052,6 +2056,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private(set) var keptPagesBuildAttemptsForTesting = 0
 
     private func buildKeptPagesAfterReveal() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ATTIC_PAGE_BENCH_SKIP_WARM"] == "1" { return }
+        #endif
         keptPagesBuildGeneration &+= 1
         scheduleKeptPagesBuild(generation: keptPagesBuildGeneration, after: Self.keptPagesBuildDelay)
     }

@@ -347,6 +347,7 @@ final class PanelUIState: ObservableObject {
     func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
         IdleLatencyTrace.point("page_change_decision")
         guard selectedSection != section, !routeElsewhere(section) else { return }
+        PerformanceSignposts.noteInput("page-handler-begin from=\(PanelPage(selectedSection).rawValue) to=\(PanelPage(section).rawValue) built=\(builtPages.map(\.rawValue).sorted().joined(separator: ","))")
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1
         let generation = pageSlideGeneration
@@ -361,6 +362,7 @@ final class PanelUIState: ObservableObject {
             guard sliding, let self, self.pageSlideGeneration == generation else { return }
             self.pageTransit.sliding = false
         }
+        PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }
 
     /// A page switch's slide is running (Accepted 2026-11-04): the pages'
@@ -390,8 +392,11 @@ final class PanelUIState: ObservableObject {
         confirmingTaskDeletionID = nil
         confirmingTaskCompletionID = nil
         isCanvasConfirmationPresented = false
+        PerformanceSignposts.noteInput("page-selection-publish-begin")
         selectedSection = section
+        PerformanceSignposts.noteInput("page-selection-publish-end")
         island.show(PanelPage(section))
+        PerformanceSignposts.noteInput("page-selection-finish")
     }
 
     func endAdding() {
