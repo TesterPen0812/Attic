@@ -444,7 +444,7 @@ final class NoteFindController: ObservableObject {
                 engine.textView?.window?.makeFirstResponder(engine.textView)
             }
             engine.textView?.setSelectedRange(match.noteRange)
-            engine.textView?.scrollRangeToVisible(match.noteRange)
+            engine.textView?.scrollFindMatchToVisible(match.noteRange)
         }
         // Navigation changes only the selection. The cached match ink stays
         // identical; entering a table refreshes its editor through enterTable.
