@@ -246,7 +246,8 @@ final class PanelChromeTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func withPanel(_ body: (_ host: AtticPanelHostingView, _ state: PanelUIState, _ tasks: TasksPageState,
+    private func withPanel(composerState: PanelComposerState? = nil,
+                           _ body: (_ host: AtticPanelHostingView, _ state: PanelUIState, _ tasks: TasksPageState,
                                     _ store: TaskStore, _ draft: NoteDraftController,
                                     _ chrome: PanelChromeInteractionState) throws -> Void) throws {
         let suite = "PanelChrome.\(UUID().uuidString)"
@@ -271,7 +272,7 @@ final class PanelChromeTests: XCTestCase {
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
                                      noteDraft: draft, chromeInteractionState: chrome, uiState: state,
-                                     settings: settings, tasksPageState: tasksState),
+                                     settings: settings, tasksPageState: tasksState, composerState: composerState),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
         final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
         let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
@@ -976,6 +977,35 @@ final class PanelChromeTests: XCTestCase {
     }
 
     // MARK: The "+" card (Phase B)
+
+    /// 4 Nov #16: an outside press may already be folding the card when a
+    /// task page opens. Its Back row must be reachable in the first frame;
+    /// the pending fold cannot continue over the task page.
+    func testOpeningTaskPageInterruptsAnAlreadyFoldingComposer() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let composerState = PanelComposerState()
+        try withPanel(composerState: composerState) { host, state, _, store, _, _ in
+            let add = try XCTUnwrap(element("tasks-new-task", in: host))
+            XCTAssertTrue(add.accessibilityPerformPress?() ?? false)
+            spin(0.45)
+            let model = try XCTUnwrap(composerState.model)
+            XCTAssertTrue(model.isOpen)
+            XCTAssertTrue(ComposerOverlay.isPresented)
+            model.close() // outside press begins the ordinary fold
+            spin(0.02)
+            XCTAssertFalse(model.isOpen)
+            XCTAssertTrue(ComposerOverlay.isPresented, "the ordinary close is still folding")
+
+            let taskID = try XCTUnwrap(store.tasks.first?.id)
+            state.openTaskNote(taskID, from: .tasks, row: taskID)
+            spin(0.04)
+            XCTAssertFalse(ComposerOverlay.isPresented, "the route must interrupt the in-flight fold at once")
+            spin(0.8)
+            XCTAssertNotNil(element("task-note-back", in: host), "Back is reachable")
+            XCTAssertNil(element("panel-more-button", in: host), "the list's menu gives way to the task page")
+        }
+    }
 
     private func barFrames(_ ids: [String], in host: AtticPanelHostingView) throws -> [CGRect] {
         try ids.map { try XCTUnwrap(frame(of: $0, in: host), "\($0) is drawn") }

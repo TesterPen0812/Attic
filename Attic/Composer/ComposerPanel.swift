@@ -333,6 +333,11 @@ struct ComposerOverlay: View {
         .padding(ComposerGrow.anchor(layout: layout))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .onChange(of: model.isOpen, initial: true) { _, open in transition(open) }
+        .onChange(of: model.interruptFoldRequest) { _, _ in
+            // The model may already be closed while the ordinary fold is
+            // drawing. A task page or page switch takes its row immediately.
+            if !model.isOpen { transition(false) }
+        }
         .onChange(of: card.height) { _, height in
             if presented { room?.set(height: height, open: model.isOpen) }
         }
