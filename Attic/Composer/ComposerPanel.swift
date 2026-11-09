@@ -241,7 +241,7 @@ extension EnvironmentValues {
 /// Size, radius and material from one animatable progress. The card fades
 /// in as it grows from the "+" corner and out as it folds back (P4: the
 /// bar's own "+" fades out under it, so there is no second "+" to draw).
-private struct ComposerGrowFrame: ViewModifier, Animatable {
+struct ComposerGrowFrame: ViewModifier, Animatable {
     var progress: CGFloat
     let card: CGSize
     /// Whether the surface is drawn at all: only while open or folding, so a
@@ -260,6 +260,10 @@ private struct ComposerGrowFrame: ViewModifier, Animatable {
         #endif
         let shape = AtticControlShape.shape(cornerRadius: geometry.cornerRadius, exponent: AtticShape.controlExponent)
         content
+            // Lay out the editor once at the card's final dimensions. The
+            // outer frame is still the animated visible size, so the clip,
+            // material and lower-right anchor follow exactly the same path.
+            .frame(width: card.width, height: card.height, alignment: .bottomTrailing)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomTrailing)
             .clipShape(shape)
             .background {
