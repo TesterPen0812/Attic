@@ -75,14 +75,14 @@ struct TasksGroupHeader: View {
 enum TasksDesignMetrics {
     /// The design's ease, `cubic-bezier(0.3, 0.7, 0.2, 1)`.
     static func curve(_ duration: Double) -> Animation {
-        .timingCurve(0.3, 0.7, 0.2, 1, duration: duration)
+        AtticPanelChromeMetrics.curve(duration)
     }
 
     /// The bottom bar's fold, as the footer's tabs folded for the add
     /// field (pd-combined): the design's ease at 260 ms; Reduce Motion a
     /// 150 ms fade.
     static func fold(reduceMotion: Bool) -> Animation {
-        reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
+        AtticPanelChromeMetrics.fold(reduceMotion: reduceMotion)
     }
 
     // Group header: 22 px text on a 28 px line, gap 8 px. Its padding was
@@ -98,11 +98,11 @@ enum TasksDesignMetrics {
     // Row: padding 14 × 18 px (`TasksRowDesign` holds the row's sizes);
     // the ring's 28 px column, then 20 px to the title.
     static let rowPaddingX: CGFloat = 9
-    static let ringToTitle: CGFloat = 10
+    static let ringToTitle: CGFloat = AtticTaskRowLayout.ringToTitle
     /// The title column in the page (title at 43 from the panel's edge):
     /// after the circle's column, the design's 10 pt gap. The rest of the
     /// app keeps `AtticLayout.textX` (8 pt after the circle, spacing B).
-    static let textX: CGFloat = AtticLayout.circleX + AtticControlSize.statusCircle + ringToTitle
+    static let textX: CGFloat = AtticTaskRowLayout.textX
     /// A group header's text starts on the rows' padding: the row fill's
     /// inset, then the row's 18 px.
     static let groupHeaderX: CGFloat = AtticLayout.rowHighlightInset + rowPaddingX
@@ -117,13 +117,13 @@ enum TasksDesignMetrics {
     // apart (Accepted 2026-11-05, "Header spacing"; was 6 px).
     /// The design's inner controls (`rInner`, 28 px): the date button, tag
     /// pills, Clear filters. Each clamps to half its side, as CSS does.
-    static let innerRadius: CGFloat = 14
+    static let innerRadius: CGFloat = AtticTaskRowLayout.innerRadius
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
-    static let headerGap: CGFloat = 5
+    static let headerGap: CGFloat = AtticPanelChromeMetrics.headerGap
 
     // Bottom bar: gap 10 px; its controls are the top row's 27 pt capsules.
-    static let footerGap: CGFloat = 5
+    static let footerGap: CGFloat = AtticPanelChromeMetrics.footerGap
     static let footerRadius: CGFloat = AtticRadius.header
 
     /// The list starts 6 under the header (Accepted 2026-11-05, "Header

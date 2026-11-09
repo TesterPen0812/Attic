@@ -12,7 +12,7 @@
 # derived data in `.build/dd-opt`, every xcodebuild through the machine lock.
 set -euo pipefail
 readonly root=${0:A:h:h}
-readonly lock=/Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
+readonly lock=$root/Scripts/xcodebuild_locked.sh
 cd "$root"
 (( $# > 0 )) || { print -u2 "usage: $0 <test identifier>..."; exit 2 }
 
@@ -26,7 +26,5 @@ typeset -a common=(-project Attic.xcodeproj -scheme Attic -configuration Local -
 typeset -a only=()
 for identifier in "$@"; do only+=(-only-testing:$identifier); done
 
-xcodebuild_command=$lock
-[[ -x $xcodebuild_command ]] || xcodebuild_command=xcodebuild
-$xcodebuild_command build-for-testing "${common[@]}" "${flags[@]}"
-$xcodebuild_command test-without-building "${common[@]}" "${flags[@]}" "${only[@]}"
+$lock build-for-testing "${common[@]}" "${flags[@]}"
+$lock test-without-building "${common[@]}" "${flags[@]}" "${only[@]}"

@@ -182,7 +182,7 @@ struct NoteTagLineEditorView: View {
         let placeholder = String(localized: "Find or add a tag")
         return TextField("", text: $query,
                          prompt: Text(verbatim: placeholder)
-                            .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color))
+                            .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color))
             .textFieldStyle(.plain)
             .font(font)
             .foregroundStyle(tokens.ink(.heading).color)
@@ -260,11 +260,11 @@ private struct NoteTagMatchButton: View {
             HStack(spacing: m.countGap) {
                 if match.isNew {
                     AtticText(verbatim: NoteTagLineMatch.addTitle(match.name), style: .tag, ink: hue.ink, truncates: true)
-                        .colour(TasksPanelDesign.tagInk(hue, tokens: tokens))
+                        .colour(AtticSurfaceInk.tagInk(hue, tokens: tokens))
                 } else {
                     AtticTagLabel(name: match.name, style: .tag, truncates: true)
                     AtticText(verbatim: "\(match.count)", style: m.countStyle, ink: .helper)
-                        .colour(TasksPanelDesign.toneInk(.meta, tokens: tokens))
+                        .colour(AtticSurfaceInk.toneInk(.meta, tokens: tokens))
                 }
             }
             .padding(.horizontal, m.suggestionPadding)

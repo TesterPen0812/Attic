@@ -237,6 +237,6 @@ final class NoteMarqueeSelection {
         // Reuse the established export path, including table fallback and
         // private attachment payload, without changing the live selection.
         return engine.writeSelection(selectedText(), to: board,
-            types: [NoteEditorEngine.fragmentType, .rtfd, .rtf, .string, TasksTextExport.markdownType])
+            types: [NoteEditorEngine.fragmentType, .rtfd, .rtf, .string, AtticPasteboardTypes.markdown])
     }
 }

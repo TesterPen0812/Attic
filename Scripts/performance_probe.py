@@ -26,7 +26,7 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / ".build" / "performance"
 LOCK = "/tmp/attic-xcodebuild.lock"
-WRAPPER = "/Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh"
+WRAPPER = str(ROOT / "Scripts" / "xcodebuild_locked.sh")
 
 
 def command(*args, **kwargs):
@@ -161,8 +161,7 @@ def build_preview(identity):
     derived = BUILD / "dd"
     flags = ["CODE_SIGNING_ALLOWED=YES", "CODE_SIGNING_REQUIRED=YES",
              "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM="]
-    build_command = os.environ.get("ATTIC_XCODEBUILD_COMMAND") or (
-        WRAPPER if Path(WRAPPER).is_file() else "/usr/bin/xcodebuild")
+    build_command = os.environ.get("ATTIC_XCODEBUILD_COMMAND") or WRAPPER
     command(build_command, "build", "-project", "Attic.xcodeproj", "-scheme", "Attic",
             "-configuration", "Local", "-destination", "platform=macOS",
             "-derivedDataPath", str(derived), f"PRODUCT_BUNDLE_IDENTIFIER={bundle}",

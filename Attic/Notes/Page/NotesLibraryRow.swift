@@ -113,8 +113,8 @@ struct NotesLibraryRow: View {
     /// time.
     private var metaLine: some View {
         let tokens = design.tokens
-        let timeInk = TasksPanelDesign.toneInk(.date, tokens: tokens).color
-        let metaInk = TasksPanelDesign.toneInk(.meta, tokens: tokens).color
+        let timeInk = AtticSurfaceInk.toneInk(.date, tokens: tokens).color
+        let metaInk = AtticSurfaceInk.toneInk(.meta, tokens: tokens).color
         return HStack(spacing: M.metaGap) {
             if row.needsAttention {
                 AtticIcon(systemName: "exclamationmark.circle", size: M.metaSize, weight: .medium, ink: .warningText)
@@ -148,9 +148,7 @@ struct NotesLibraryRow: View {
     }
 
     private func tagInk(_ tag: String, tokens: AtticColorTokens) -> Color {
-        let text = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: tag)),
-                                               dark: design.mode == .dark).text
-        return TasksPanelDesign.vivid(text, tokens: tokens).color
+        AtticSurfaceInk.colouredTagText(colouring.hue(for: tag), dark: design.mode == .dark, tokens: tokens).color
     }
 
     private func actionsButton(shown: Bool) -> some View {

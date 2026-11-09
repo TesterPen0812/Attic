@@ -423,7 +423,7 @@ final class NotesBoardTests: XCTestCase {
     /// between the two cells. The other switches travel on the pop spring.
     func testTheSwitchChipSlidesBetweenTheCells() throws {
         XCTAssertEqual(NotesLayoutSwitch.selectionAnimation(reduceMotion: false),
-                       TasksDesignMetrics.fold(reduceMotion: false))
+                       AtticPanelChromeMetrics.fold(reduceMotion: false))
         XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16),
                        "the crossfade in place keeps its token")
         XCTAssertNil(NotesLayoutSwitch.selectionAnimation(reduceMotion: true), "Reduce Motion: at once")

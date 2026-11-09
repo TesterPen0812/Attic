@@ -4,6 +4,14 @@ Task rows with file tiles now expose each tile as a separate labelled element
 for native file dragging and VoiceOver. The task row keeps its existing
 spoken description and focus behavior; rows without tiles remain combined.
 
+## 2026-11-09 · Shared task reorder mechanics (F22)
+
+DesignSystem now owns the existing reorder geometry, landing thresholds and
+window-level drag cancellation used by the Tasks list and subtask Quick Look.
+Tasks keeps its feature-specific drag state and forwards the same math. Shared
+task-row spacing tokens retain the existing dimensions, with no gesture,
+animation or visible layout changes.
+
 ## 2026-11-05 · Pop-over row pressed state
 
 Shared pop-over rows now respond to the button's actual pressed state with the

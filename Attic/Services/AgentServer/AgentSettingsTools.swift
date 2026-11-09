@@ -32,7 +32,7 @@ final class AgentSettingsTools {
         self.init(settings: settings, launchAtLogin: { loginItemService.isEnabled }, undo: undo)
     }
 
-    static let toolNames: Set<String> = ["get_settings", "update_settings"]
+    static let toolNames: Set<String> = Set(definitions.compactMap { $0["name"] as? String })
 
     /// The owner's decision (2026-09-26), said plainly to the agent.
     static let launchAtLoginRefusal = "Agents can't change Launch at login: the owner decided only they change it, "

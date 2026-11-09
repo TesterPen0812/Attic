@@ -172,13 +172,13 @@ struct CalendarDateTile: View {
                 if let relative = text.relative {
                     Text(verbatim: relative)
                         .font(.system(size: CalendarDesign.tileDateFont, weight: .semibold))
-                        .foregroundStyle(group.isToday ? TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens).color
-                                         : TasksPanelDesign.toneInk(.date, tokens: tokens).color)
+                        .foregroundStyle(group.isToday ? AtticSurfaceInk.vivid(CalendarDesign.red, tokens: tokens).color
+                                         : AtticSurfaceInk.toneInk(.date, tokens: tokens).color)
                         .frame(height: CalendarDesign.tileDateLine)
                 }
                 Text(verbatim: text.weekday)
                     .font(.system(size: CalendarDesign.tileWeekdayFont))
-                    .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
                     .frame(height: CalendarDesign.tileWeekdayLine)
             }
             .lineLimit(1)
@@ -211,8 +211,8 @@ struct CalendarDateTile: View {
         case .yesterday: String(localized: "Yesterday")
         case nil: nil
         }
-        return (TaskRowPresentation.format(date, template: "dMMM", calendar: calendar, locale: locale), relative,
-                TaskRowPresentation.format(date, template: "EEEE", calendar: calendar, locale: locale))
+        return (AtticDateFormatting.template(date, template: "dMMM", calendar: calendar, locale: locale), relative,
+                AtticDateFormatting.template(date, template: "EEEE", calendar: calendar, locale: locale))
     }
 }
 
@@ -293,16 +293,16 @@ struct CalendarEventRow: View {
                 Text(verbatim: event.title)
                     .font(.system(size: CalendarDesign.eventTitleFont, weight: .medium))
                     .opacity(isOpen && rows.canEdit ? 0 : 1)
-                    .foregroundStyle(past ? TasksPanelDesign.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
+                    .foregroundStyle(past ? AtticSurfaceInk.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
                     .lineSpacing(CalendarDesign.eventLine - CalendarDesign.eventTitleFont * 1.2)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 7) {
                     Text(verbatim: Self.timeText(event))
-                        .foregroundStyle(TasksPanelDesign.toneInk(past ? .meta : .groupHeader, tokens: tokens).color)
+                        .foregroundStyle(AtticSurfaceInk.toneInk(past ? .meta : .groupHeader, tokens: tokens).color)
                         .layoutPriority(1)
                     if let location = event.location, !location.isEmpty {
                         Text(verbatim: location)
-                            .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                            .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
                             .truncationMode(.tail)
                     }
                 }
@@ -350,7 +350,7 @@ struct CalendarEventRow: View {
         VStack(alignment: .leading, spacing: 6) {
             if let notes = rows.owned?.draft.notes, !notes.isEmpty {
                 Text(verbatim: notes).font(.system(size: 11))
-                    .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.groupHeader, tokens: design.tokens).color)
             }
             HStack(spacing: 4) {
                 if rows.canEdit {
@@ -382,7 +382,7 @@ struct CalendarEventRow: View {
                     .accessibilityIdentifier("calendar-event-failure-\(event.id)")
             }
         }
-        .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+        .foregroundStyle(AtticSurfaceInk.toneInk(.groupHeader, tokens: design.tokens).color)
     }
 
     private var choices: some View {
@@ -450,8 +450,8 @@ struct CalendarEventRow: View {
     static func timeText(_ event: CalendarEvent, locale: Locale = .current) -> String {
         if event.isAllDay { return String(localized: "All day") }
         let calendar = CalendarMonthMath.calendar()
-        let start = TaskRowPresentation.format(event.start, template: "jmm", calendar: calendar, locale: locale)
-        let end = TaskRowPresentation.format(event.end, template: "jmm", calendar: calendar, locale: locale)
+        let start = AtticDateFormatting.template(event.start, template: "jmm", calendar: calendar, locale: locale)
+        let end = AtticDateFormatting.template(event.end, template: "jmm", calendar: calendar, locale: locale)
         return "\(start)–\(end)"
     }
 }
@@ -462,13 +462,13 @@ struct CalendarNowLine: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let red = TasksPanelDesign.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
+        let red = AtticSurfaceInk.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
         let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
         TimelineView(.everyMinute) { context in
             HStack(spacing: 5) {
                 Circle().fill(red).frame(width: CalendarDesign.nowDot, height: CalendarDesign.nowDot)
                 Capsule().fill(red).frame(height: CalendarDesign.nowLine)
-                Text(verbatim: TaskRowPresentation.format(context.date, template: "jmm", calendar: CalendarMonthMath.calendar(),
+                Text(verbatim: AtticDateFormatting.template(context.date, template: "jmm", calendar: CalendarMonthMath.calendar(),
                                                           locale: .current))
                     .font(.system(size: CalendarDesign.nowFont, weight: .semibold).monospacedDigit())
                     .foregroundStyle(red)

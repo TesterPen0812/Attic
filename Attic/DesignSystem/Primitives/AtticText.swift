@@ -1,4 +1,11 @@
+import AppKit
 import SwiftUI
+
+/// Shared text representation for clipboard and drag interoperability.
+/// A wire type's identifier must remain stable across Tasks and Notes.
+enum AtticPasteboardTypes {
+    static let markdown = NSPasteboard.PasteboardType("net.daringfireball.markdown")
+}
 
 /// Every piece of design-system text goes through this view, so each run
 /// has a role (`AtticInk`) and a style, never wraps (labels truncate; only
@@ -17,7 +24,7 @@ struct AtticText: View {
     /// the letters in the primary ink (the Done search, owner item 17).
     var highlights: [Range<String.Index>] = []
     /// A colour of its own for this role (the Tasks panel design's greys,
-    /// `TasksPanelDesign.tone`); the role still sets its floor, and the
+    /// `AtticSurfaceInk.tone`); the role still sets its floor, and the
     /// appearance check judges this colour against it.
     private(set) var colour: AtticRGBA?
 

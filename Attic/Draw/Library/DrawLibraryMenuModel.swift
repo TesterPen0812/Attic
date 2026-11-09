@@ -186,7 +186,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         let found = canvases
         var rows = found.map { canvas in
             Row(kind: .canvas(canvas), title: Self.displayName(canvas.name),
-                detail: NotesLibraryModel.time(canvas.updatedAt, now: instant, calendar: calendar),
+                detail: AtticRelativeDateFormatting.editTime(canvas.updatedAt, now: instant, calendar: calendar),
                 isOpen: canvas.id == currentCanvasID)
         }
         if !query.isEmpty, found.isEmpty {

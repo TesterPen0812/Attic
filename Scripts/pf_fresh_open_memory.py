@@ -38,7 +38,7 @@ def main(argv=None):
     parser.add_argument('--candidate-project', required=True, type=Path)
     parser.add_argument('--candidate-dd', required=True, type=Path)
     parser.add_argument('--output-dir', required=True, type=Path)
-    parser.add_argument('--wrapper', type=Path, default=Path(__file__).with_name('xcodebuild-locked.sh'))
+    parser.add_argument('--wrapper', type=Path, default=Path(__file__).with_name('xcodebuild_locked.sh'))
     args = parser.parse_args(argv)
     try:
         base = gate.parse_log(args.base)['PF'][KEY]

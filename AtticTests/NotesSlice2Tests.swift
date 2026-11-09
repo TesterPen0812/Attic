@@ -858,6 +858,26 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(week.count, 4, week)
     }
 
+    func testSharedEditTimesRespectLocalMidnightAndYearBoundaries() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        var losAngeles = utc
+        losAngeles.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let newYear = utc.date(from: DateComponents(year: 2026, month: 1, day: 1, hour: 0, minute: 30))!
+        let previousEvening = utc.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 23, minute: 30))!
+
+        let previousDay = AtticRelativeDateFormatting.editTime(previousEvening, now: newYear, calendar: utc)
+        XCTAssertFalse(previousDay.contains(":"), "past local day uses abbreviated weekday: \(previousDay)")
+        XCTAssertLessThanOrEqual(previousDay.count, 4)
+        let sameDay = AtticRelativeDateFormatting.editTime(previousEvening, now: newYear, calendar: losAngeles)
+        XCTAssertTrue(sameDay.contains(":"), "same local day uses time: \(sameDay)")
+
+        let oldYear = utc.date(from: DateComponents(year: 2025, month: 12, day: 20, hour: 12))!
+        let oldYearLabel = AtticRelativeDateFormatting.editTime(oldYear, now: newYear, calendar: utc)
+        XCTAssertTrue(oldYearLabel.contains("2025"), "older dates show the year: \(oldYearLabel)")
+        XCTAssertEqual(NotesLibraryModel.time(oldYear, now: newYear, calendar: utc), oldYearLabel)
+    }
+
     func testKeyboardHighlightMovesThroughTheRows() async throws {
         let a = try create("A", daysAgo: 0)
         let b = try create("B", daysAgo: 1)

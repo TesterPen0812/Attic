@@ -12,7 +12,7 @@ enum NotesBarMetrics {
     /// Curve 1.4: a capsule, half the height.
     static let radius: CGFloat = AtticShape.controlRadius(height: control)
     /// 10 px between the controls.
-    static let gap: CGFloat = TasksDesignMetrics.footerGap
+    static let gap: CGFloat = AtticPanelChromeMetrics.footerGap
     /// The tag bar's inner padding (6 px) and its tags (One size: 21 pt
     /// tall, capsules; 15 px padding, 2 px apart, 21 px text).
     static let tagBarPadding: CGFloat = AtticPageButtonMetrics.inset
@@ -65,7 +65,7 @@ struct NotesTagBar: View {
 
     var body: some View {
         let m = NotesBarMetrics.self
-        let motion = design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)
+        let motion = design.reduceMotion ? nil : AtticPanelChromeMetrics.curve(0.26)
         let collapsed = tags.isEmpty
         PanelTagBarWidth(collapsed: collapsed) {
             // Sizes the bar: All and the tags at their own widths.
@@ -111,7 +111,7 @@ struct NotesTagBar: View {
 
     private func scroller(motion: Animation?) -> some View {
         let m = NotesBarMetrics.self
-        let shape = Squircle(cornerRadius: m.radius, exponent: TasksDesignMetrics.cornerExponent)
+        let shape = Squircle(cornerRadius: m.radius, exponent: AtticControlShape.designExponent)
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: m.pillGap) {
@@ -270,10 +270,9 @@ struct NotesTagBarPill: View {
     var body: some View {
         let m = NotesBarMetrics.self
         let tokens = design.tokens
-        let shape = Squircle(cornerRadius: m.pillRadius, exponent: TasksDesignMetrics.cornerExponent)
+        let shape = Squircle(cornerRadius: m.pillRadius, exponent: AtticControlShape.designExponent)
         let ink = tag.map {
-            TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)),
-                                                               dark: design.mode == .dark).text, tokens: tokens).color
+            AtticSurfaceInk.colouredTagText(colouring.hue(for: $0), dark: design.mode == .dark, tokens: tokens).color
         } ?? tokens.color(.heading)
         Button(action: action) {
             Text(verbatim: title)

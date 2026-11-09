@@ -135,8 +135,8 @@ final class AgentWorkspaceCall {
 /// page for the call, closed durably afterwards.
 @MainActor
 extension AgentTaskTools {
-    static let asyncToolNames: Set<String> = ["make_subtask", "make_note_checkbox", "make_task_from_note",
-                                              "add_to_tasks", "remove_from_tasks", "restore", "move_files_into_note", "delete_task", "delete_note", "delete_item", "restore_item"]
+    static let asyncToolNames: Set<String> =
+        Set(registeredCommands.filter { $0.asyncRoute != .none }.map(\.name))
 
     static let workspaceDefinitions: [[String: Any]] = [
         definition("make_subtask", title: "Make Subtasks from a Task's Note",
@@ -183,7 +183,9 @@ extension AgentTaskTools {
     func callAsync(name: String, arguments: [String: Any]) async throws -> String {
         guard let notes = notesController?() else { throw AgentToolError.notPerformed("Task notes aren't available.") }
         notes.workspaceTaskStore = store
-        if ["delete_task", "delete_note", "delete_item", "restore_item"].contains(name) {
+        guard let registration = Self.registeredCommands.first(where: { $0.name == name }),
+              registration.asyncRoute != .none else { throw AgentToolError.unknownTool(name) }
+        if registration.asyncRoute == .wholeItem {
             return try await wholeItemLifecycle(name: name, arguments: arguments, notes: notes)
         }
         let intent = try workspaceIntent(name: name, arguments: arguments)

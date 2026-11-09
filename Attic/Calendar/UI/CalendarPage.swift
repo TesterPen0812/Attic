@@ -166,7 +166,7 @@ struct CalendarPage: View {
                     : snapshot.groups[index - 1].day.year != group.day.year) {
                     Text(verbatim: String(group.day.year))
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color)
+                        .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color)
                         .padding(.horizontal, CalendarDesign.dayPadding)
                         .padding(.top, 4)
                         .padding(.bottom, 6)
@@ -180,7 +180,7 @@ struct CalendarPage: View {
             if snapshot.showsNoMatches {
                 Text("No matches")
                     .font(.system(size: CalendarDesign.noMatchesFont))
-                    .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color)
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color)
                     .padding(.vertical, CalendarDesign.noMatchesPaddingY)
                     .padding(.horizontal, CalendarDesign.noMatchesPaddingX)
                     .accessibilityIdentifier("calendar-no-matches")

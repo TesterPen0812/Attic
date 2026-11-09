@@ -670,15 +670,15 @@ struct AtticGlassMenuStyle {
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
 
     /// The card's material controls its inks, independently of the panel.
-    private func secondary(_ tone: TasksDesignTone) -> NSColor {
-        if isGlass { return TasksPanelDesign.toneInk(tone, tokens: tokens).nsColor }
+    private func secondary(_ tone: AtticPanelTone) -> NSColor {
+        if isGlass { return AtticSurfaceInk.toneInk(tone, tokens: tokens).nsColor }
         // The opaque menu fill differs from the panel base, notably in Dark.
-        return TasksPanelDesign.tone(tone, tokens: tokens)
-            .tuned(toContrast: TasksPanelDesign.toneFloor(tokens), against: [tokens.popoverFill], lighten: dark).nsColor
+        return AtticSurfaceInk.tone(tone, tokens: tokens)
+            .tuned(toContrast: AtticSurfaceInk.toneFloor(tokens), against: [tokens.popoverFill], lighten: dark).nsColor
     }
 
     func colourInk(_ colour: AtticRGBA) -> AtticRGBA {
-        isGlass ? TasksPanelDesign.vivid(colour, tokens: tokens) : colour
+        isGlass ? AtticSurfaceInk.vivid(colour, tokens: tokens) : colour
     }
 
     static let titleFont = NSFont.systemFont(ofSize: AtticTextStyle.dropdownRow.spec.size)

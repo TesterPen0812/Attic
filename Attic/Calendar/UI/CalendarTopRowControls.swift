@@ -21,7 +21,7 @@ struct CalendarMonthTitle: View {
                     .foregroundStyle(tokens.ink(.heading).color)
                 Text(verbatim: title.year)
                     .font(.system(size: CalendarDesign.pillFont).monospacedDigit())
-                    .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
             }
             .lineLimit(1)
             .minimumScaleFactor(0.8)
@@ -42,7 +42,7 @@ struct CalendarMonthTitle: View {
     static func monthTitle(_ month: CalendarMonth, locale: Locale = .current) -> (month: String, year: String) {
         let calendar = CalendarMonthMath.calendar()
         let date = month.firstDay.startDate(in: calendar) ?? Date()
-        let name = TaskRowPresentation.format(date, template: "LLLL", calendar: calendar, locale: locale)
+        let name = AtticDateFormatting.template(date, template: "LLLL", calendar: calendar, locale: locale)
         return (name, String(month.year))
     }
 }

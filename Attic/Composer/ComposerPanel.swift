@@ -142,7 +142,7 @@ final class PanelComposerEndFollower {
     private weak var room: PanelComposerRoom?
     private var subscription: AnyCancellable?
     private var insetObservation: NSKeyValueObservation?
-    private let glide = TasksScrollGlide()
+    private let glide = AtticPanelScrollGlide()
     private var generation = 0
     private var expectedBottomInset: CGFloat?
     var isCurrent = true { didSet { if !isCurrent { expectedBottomInset = nil; glide.stop() } } }
@@ -173,7 +173,7 @@ final class PanelComposerEndFollower {
         generation += 1
         expectedBottomInset = nil
         guard isCurrent, let scroll,
-              glide.isRunning || scroll.contentView.bounds.minY >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1 else { return }
+              glide.isRunning || scroll.contentView.bounds.minY >= AtticPanelScrollGeometry.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1 else { return }
         let oldExtra = max(0, (room?.height ?? 0) - AtticControlSize.addBarHeight)
         let newExtra = max(0, height - AtticControlSize.addBarHeight)
         expectedBottomInset = scroll.contentInsets.bottom + newExtra - oldExtra
@@ -189,7 +189,7 @@ final class PanelComposerEndFollower {
                   let expected = self.expectedBottomInset, abs(scroll.contentInsets.bottom - expected) < 0.5 else { return }
             self.expectedBottomInset = nil
             scroll.superview?.layoutSubtreeIfNeeded()
-            let target = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)
+            let target = AtticPanelScrollGeometry.clampedOriginY(.greatestFiniteMagnitude, in: scroll)
             let delta = target - scroll.contentView.bounds.minY
             guard abs(delta) > 0.5 else { return }
             if AtticMotionPreference.reducesMotion {

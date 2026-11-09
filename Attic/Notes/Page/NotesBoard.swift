@@ -212,7 +212,7 @@ struct NotesBoardCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             if pinned {
                 NotesBoardPin()
-                    .fill(TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color)
+                    .fill(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color)
                     .frame(width: M.pinSize.width, height: M.pinSize.height)
                     .padding(.top, M.pinTop)
                     .accessibilityHidden(true)
@@ -241,7 +241,7 @@ struct NotesBoardCard: View {
             .font(.system(size: M.snippetSize))
             .lineSpacing(M.lineSpacing(size: M.snippetSize, line: M.snippetLine))
             .lineLimit(M.snippetLines)
-            .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+            .foregroundStyle(AtticSurfaceInk.toneInk(.date, tokens: design.tokens).color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -255,10 +255,10 @@ struct NotesBoardCard: View {
                 AtticIcon(systemName: "exclamationmark.circle", size: M.metaSize, weight: .medium, ink: .warningText)
             } else if row.hasProposal {
                 AtticIcon(systemName: "sparkle", size: M.metaSize, ink: .helper)
-                    .colour(TasksPanelDesign.toneInk(.meta, tokens: tokens))
+                    .colour(AtticSurfaceInk.toneInk(.meta, tokens: tokens))
             }
             Text(verbatim: row.time)
-                .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
                 .fixedSize()
             if let tag = details.tag {
                 Text(verbatim: "#" + tag)
@@ -272,9 +272,7 @@ struct NotesBoardCard: View {
     }
 
     private func tagInk(_ tag: String, tokens: AtticColorTokens) -> Color {
-        let text = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: tag)),
-                                               dark: design.mode == .dark).text
-        return TasksPanelDesign.vivid(text, tokens: tokens).color
+        AtticSurfaceInk.colouredTagText(colouring.hue(for: tag), dark: design.mode == .dark, tokens: tokens).color
     }
 
     /// The design's stand-in for the note's images: a striped block with
@@ -300,7 +298,7 @@ struct NotesBoardCard: View {
             }
             Text(verbatim: row.images == 1 ? String(localized: "1 image") : String(localized: "\(row.images) images"))
                 .font(.system(size: M.imageLabelSize).monospacedDigit())
-                .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+                .foregroundStyle(AtticSurfaceInk.toneInk(.date, tokens: design.tokens).color)
                 .padding(M.imageLabelPadding)
         }
         .frame(maxWidth: .infinity)
@@ -312,7 +310,7 @@ struct NotesBoardCard: View {
         let radius = AtticShape.controlRadius(height: M.actionsSide)
         return Button(action: onShowActions) {
             AtticIcon(systemName: "ellipsis", size: M.actionsGlyphSize, weight: .medium, ink: .icon)
-                .colour(TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                .colour(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens))
                 .frame(width: M.actionsSide, height: M.actionsSide)
                 .background {
                     if actionsHovered {
@@ -402,7 +400,7 @@ struct NotesLayoutSwitch: View {
     /// bottom bar's 260 ms fold; Reduce Motion at once. Only this switch:
     /// the others' markers travel on the pop spring.
     static func selectionAnimation(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : TasksDesignMetrics.fold(reduceMotion: false)
+        reduceMotion ? nil : AtticPanelChromeMetrics.fold(reduceMotion: false)
     }
 
     private func choose(_ layout: NotesLibraryLayout) {
@@ -419,7 +417,7 @@ struct NotesLayoutSwitch: View {
             ForEach(layouts) { layout in
                 let on = layout == selection
                 let ink = on || hovered == layout ? tokens.ink(.heading).color
-                    : TasksPanelDesign.toneInk(.meta, tokens: tokens).color
+                    : AtticSurfaceInk.toneInk(.meta, tokens: tokens).color
                 Button { choose(layout) } label: {
                     NotesLayoutGlyph(layout: layout)
                         .stroke(ink, style: StrokeStyle(lineWidth: layout == .board ? 0.9 : 1, lineCap: .round, lineJoin: .round))

@@ -88,7 +88,7 @@ final class DrawSearchModel: ObservableObject {
             } else if !nameMatches, !canvas.tags.isEmpty {
                 detail = canvas.tags.map { "#\($0)" }.joined(separator: " ")
             } else {
-                detail = NotesLibraryModel.time(canvas.updatedAt, now: Date(), calendar: .autoupdatingCurrent)
+                detail = AtticRelativeDateFormatting.editTime(canvas.updatedAt, now: Date(), calendar: .autoupdatingCurrent)
             }
             return Result(canvas: canvas, title: DrawLibraryMenuModel.displayName(canvas.name), detail: detail,
                           textBoxIDs: line == nil ? [] : match.matchingTextBoxIDs)

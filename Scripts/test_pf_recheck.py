@@ -107,7 +107,7 @@ class PFRecheckTests(unittest.TestCase):
             calls=[]
             def run(args, **kwargs):
                 if 'test-without-building' in args:
-                    self.assertTrue(args[0].endswith('xcodebuild-locked.sh'))
+                    self.assertTrue(args[0].endswith('xcodebuild_locked.sh'))
                     calls.append(kwargs['env']['TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY'])
                 return type('Result', (), {'returncode': 0})()
             with patch('recheck_pf_gates.subprocess.run', run): Sampler()(Path(tmp)/'retry')

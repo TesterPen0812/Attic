@@ -434,7 +434,7 @@ struct NotesLibraryView: View {
                         ForEach(groups) { group in
                             let folded = model.foldedGroups.contains(group.id)
                             TasksGroupHeader(title: group.title, count: group.rows.count, folded: folded, items: .notes) {
-                                withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
+                                withAnimation(design.reduceMotion ? nil : AtticPanelChromeMetrics.curve(0.26)) {
                                     model.toggleGroup(group.id, in: groups)
                                 }
                             }
@@ -763,7 +763,7 @@ private struct PreparedNotesBoardCard: View, Equatable {
 final class NotesLibraryReveal {
     private struct Weak { weak var view: NSView? }
     private var views: [UUID: Weak] = [:]
-    let glide = TasksScrollGlide()
+    let glide = AtticPanelScrollGlide()
 
     func register(_ view: NSView, for id: UUID) { views[id] = Weak(view: view) }
 
@@ -792,7 +792,7 @@ final class NotesLibraryReveal {
         if reduceMotion {
             glide.stop()
             var origin = clip.bounds.origin
-            origin.y = TasksScrollKeeper.clampedOriginY(origin.y + delta, in: scroll)
+            origin.y = AtticPanelScrollGeometry.clampedOriginY(origin.y + delta, in: scroll)
             clip.scroll(to: origin)
             scroll.reflectScrolledClipView(clip)
         } else {
