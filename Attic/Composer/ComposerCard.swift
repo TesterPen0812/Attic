@@ -1,6 +1,49 @@
 import AppKit
 import SwiftUI
 
+/// One of the "+" card's quiet text buttons (Accepted 2026-11-09, option A
+/// in `composer-buttons-drafts.html`): no fill at rest; the hover is a soft
+/// wash that hugs the icon and label, and takes them to the heading ink.
+/// The hover is held here so moving over a button redraws only this button.
+private struct ComposerChipFace<Label: View>: View {
+    let open: Bool
+    @ViewBuilder let label: (_ hovered: Bool) -> Label
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
+    @State private var pointerInside = false
+
+    var body: some View {
+        let hovered = forced == .hover || pointerInside
+        label(hovered)
+            .background {
+                Squircle(cornerRadius: ComposerMetrics.chipHeight / 2, exponent: AtticShape.controlExponent)
+                    .fill(ComposerChipLook.fill(open: open, hovered: hovered, tokens: design.tokens).color)
+                    // On the wash alone: the card's own frame never animates from here.
+                    .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: hovered)
+            }
+            .onHover { pointerInside = $0 }
+    }
+}
+
+/// The look of a "+" card button. The wash is the card's heading ink, so it
+/// reads in Light and Dark.
+enum ComposerChipLook {
+    /// Option A's hover: half today's 7.5 % (Accepted 2026-11-09).
+    static let hoverAlpha: Double = 0.04
+    /// The button whose picker is open keeps its 6 %.
+    static let openAlpha: Double = 0.06
+
+    static func fill(open: Bool, hovered: Bool, tokens: AtticColorTokens) -> AtticRGBA {
+        tokens.ink(.heading).withAlpha(open ? openAlpha : (hovered ? hoverAlpha : 0))
+    }
+
+    /// An unset button is quiet until the pointer is on it.
+    static func ink(set: Bool, hovered: Bool, heading: AtticRGBA, muted: AtticRGBA) -> AtticRGBA {
+        set || hovered ? heading : muted
+    }
+}
+
 /// The design's numbers for the "+" card (P4 in `plus-inline-drafts.html`,
 /// P1's in-page card `.ic`/`.ib`, drawn at 2x; halved here): 289 × 90 pt.
 enum ComposerMetrics {
@@ -614,29 +657,29 @@ struct ComposerCard: View {
     private func chip(_ id: Chip, systemName: String?, dot: Color? = nil, label: String, set: Bool,
                       showsLabel: Bool = true, colour: AtticRGBA? = nil) -> some View {
         let muted = TasksPanelDesign.toneInk(.meta, tokens: design.tokens)
-        let ink = set ? design.tokens.ink(.heading) : muted
+        let heading = design.tokens.ink(.heading)
         return Button {
             if id == .pin { model.pinned.toggle(); return }
             open = open == id ? nil : id
         } label: {
-            HStack(spacing: 3.5) {
-                if let systemName {
-                    AtticIcon(systemName: systemName, size: ComposerMetrics.chipIcon, weight: .semibold, ink: .glyph).colour(ink)
-                } else if let dot {
-                    Circle().fill(dot).frame(width: 6, height: 6).frame(width: ComposerMetrics.chipIcon)
+            ComposerChipFace(open: open == id) { hovered in
+                let ink = ComposerChipLook.ink(set: set, hovered: hovered, heading: heading, muted: muted)
+                HStack(spacing: 3.5) {
+                    if let systemName {
+                        AtticIcon(systemName: systemName, size: ComposerMetrics.chipIcon, weight: .semibold, ink: .glyph).colour(ink)
+                    } else if let dot {
+                        Circle().fill(dot).frame(width: 6, height: 6).frame(width: ComposerMetrics.chipIcon)
+                    }
+                    if showsLabel {
+                        AtticText(verbatim: label, style: .composerChip, ink: .body, truncates: true).colour(colour ?? ink)
+                    }
                 }
-                if showsLabel {
-                    AtticText(verbatim: label, style: .composerChip, ink: .body, truncates: true).colour(colour ?? ink)
-                }
+                .padding(.horizontal, ComposerMetrics.chipPadding)
+                // Each chip hugs its icon and label: its hover is only as
+                // wide as it (Accepted 2026-11-04: Date's stretched across
+                // the row).
+                .frame(minHeight: ComposerMetrics.chipHeight, alignment: .leading)
             }
-            .padding(.horizontal, ComposerMetrics.chipPadding)
-            // Each chip hugs its icon and label: its hover is only as wide
-            // as it (Accepted 2026-11-04: Date's stretched across the row).
-            .frame(minHeight: ComposerMetrics.chipHeight, alignment: .leading)
-            .background(
-                Squircle(cornerRadius: ComposerMetrics.chipHeight / 2, exponent: AtticShape.controlExponent)
-                    .fill(Color.black.opacity(open == id ? 0.06 : 0))
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -691,6 +691,38 @@ struct AtticHighlight: View {
     }
 }
 
+/// What a Task or Note row draws for its state
+/// (`AtticColorTokens.rowHighlight`).
+enum AtticRowHighlightStyle: Equatable {
+    case fill(AtticRGBA)
+    /// The same raised material as the controls: "Now"'s capsule is this.
+    case raisedChip
+}
+
+/// A row's highlight in one of those styles. The chip keeps the row's own
+/// outline, so hover and selection have the same corners.
+struct AtticRowHighlight: View {
+    let style: AtticRowHighlightStyle
+    var cornerRadius: CGFloat = AtticRadius.highlight
+    var run: AtticSelectionRun = .single
+    var joinOverlap: CGFloat = (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2
+
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
+
+    var body: some View {
+        switch style {
+        case let .fill(fill):
+            AtticHighlight(fill: fill, cornerRadius: cornerRadius, run: run, joinOverlap: joinOverlap)
+        case .raisedChip:
+            Color.clear
+                .atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false)
+                .environment(\.atticControlCornerExponent, cornerExponent == nil ? nil : AtticShape.surfaceExponent)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// Keyboard focus: a 2 pt accent ring with a 2 pt gap, following the
 /// shape (its radius is the shape's plus the ring's offset).
 struct AtticFocusRing: View {

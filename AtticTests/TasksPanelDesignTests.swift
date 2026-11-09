@@ -225,6 +225,60 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertGreaterThan(dark.text.relativeLuminance, dark.fill.relativeLuminance, "dark mode: light text on a deep fill")
     }
 
+    /// Row hover and selection on Glass (Accepted 2026-11-09, `hover-drafts.html`):
+    /// the selected row is a raised glass chip, the hover is doubled from
+    /// today (7 % / 8 %), and nothing else moves.
+    @MainActor
+    func testRowHighlightOnGlassIsChipAndDoubledHover() {
+        let light = AtticDesignContext(mode: .light, surface: .glass).tokens
+        let dark = AtticDesignContext(mode: .dark, surface: .glass).tokens
+        XCTAssertEqual(light.rowHighlight(selected: false, hovered: true), .fill(.black(0.07)))
+        XCTAssertEqual(dark.rowHighlight(selected: false, hovered: true), .fill(.white(0.08)))
+        for tokens in [light, dark] {
+            XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false), .raisedChip)
+            XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: true), .raisedChip, "selection wins over hover")
+            XCTAssertNil(tokens.rowHighlight(selected: false, hovered: false))
+        }
+        // Rows selected together stay one joined flat shape, about twice the hover.
+        for run in [AtticSelectionRun.first, .middle, .last] {
+            XCTAssertEqual(light.rowHighlight(selected: true, hovered: false, run: run), .fill(.black(0.14)))
+            XCTAssertEqual(dark.rowHighlight(selected: true, hovered: false, run: run), .fill(.white(0.16)))
+        }
+        // The shared tokens that menus, Settings and tags use do not move.
+        XCTAssertEqual(light.hover, .black(0.035))
+        XCTAssertEqual(dark.hover, .white(0.04))
+        XCTAssertEqual(light.selected, .black(0.075))
+        XCTAssertEqual(dark.selected, .white(0.09))
+    }
+
+    /// The other surfaces keep the shared fills.
+    @MainActor
+    func testRowHighlightOffGlassKeepsSharedFills() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for surface in [PanelSurfaceStyle.solid, .frosted] {
+                let tokens = AtticDesignContext(mode: mode, surface: surface).tokens
+                XCTAssertEqual(tokens.rowHighlight(selected: false, hovered: true), .fill(tokens.hover), "\(mode) \(surface)")
+                XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false), .fill(tokens.selected), "\(mode) \(surface)")
+                XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false, run: .middle), .fill(tokens.selected), "\(mode) \(surface)")
+            }
+        }
+    }
+
+    /// A row's text stays readable on the stronger fills.
+    @MainActor
+    func testRowHighlightFillsKeepRowTextLegible() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let tokens = AtticDesignContext(mode: mode, surface: .glass).tokens
+            let base = tokens.panel.base.withAlpha(1)
+            let run: AtticRGBA = mode == .dark ? .white(0.16) : .black(0.14)
+            for fill in [tokens.rowHover, run] {
+                let surface = fill.over(base)
+                XCTAssertGreaterThanOrEqual(tokens.ink(.heading).contrast(on: surface), 4.5, "\(mode) heading")
+                XCTAssertGreaterThanOrEqual(tokens.ink(.body).contrast(on: surface), 4.5, "\(mode) body")
+            }
+        }
+    }
+
     /// The row's `#name`: the changelog colour on Solid (Light), today's
     /// clean colour on glass; readable everywhere; never a pill at rest,
     /// only the hover fill.

@@ -377,6 +377,28 @@ struct AtticColorTokens: Equatable, Sendable {
     var tableGrid: AtticRGBA {
         ink(.heading).withAlpha(context.increaseContrast ? 0.30 : (context.mode == .dark ? 0.18 : 0.13))
     }
+    /// A Task or Note row under the pointer. On Glass, double the shared
+    /// hover (Accepted 2026-11-09, `hover-drafts.html` A): black 7 % / white
+    /// 8 %. Every other surface keeps the shared hover.
+    var rowHover: AtticRGBA {
+        guard context.surface == .glass else { return hover }
+        return context.mode == .dark ? .white(0.08) : .black(0.07)
+    }
+
+    /// What a Task or Note row draws for its state, nil for none. A selected
+    /// row on Glass is a raised glass chip (Accepted 2026-11-09,
+    /// `hover-drafts.html` B). Rows selected together are one joined shape,
+    /// which separate glass pieces cannot make, so a run is a flat fill at
+    /// the same sheet's A (14 % / 16 %), still about twice the hover.
+    func rowHighlight(selected: Bool, hovered: Bool, run: AtticSelectionRun = .single) -> AtticRowHighlightStyle? {
+        if selected {
+            guard context.surface == .glass else { return .fill(self.selected) }
+            guard run == .single else { return .fill(context.mode == .dark ? .white(0.16) : .black(0.14)) }
+            return .raisedChip
+        }
+        return hovered ? .fill(rowHover) : nil
+    }
+
     /// The header row's fill (Light black 3.5 %).
     var tableHeaderFill: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.055 : 0.035) }
     /// The active cell's ring: a neutral focus ink, as drawn.

@@ -1022,6 +1022,14 @@ final class ComposerTests: XCTestCase {
         XCTAssertGreaterThan(abs(date.midY - length.midY), 20, "length has its own row")
         XCTAssertGreaterThan(abs(length.midY - calendar.midY), 20, "calendar has its own row")
         XCTAssertGreaterThan(view.fittingSize.height, ComposerMetrics.height + 40)
+        // Option A (Accepted 2026-11-09): nothing at rest, a soft wash under the
+        // pointer, and the open button still reads stronger than the hover.
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let tokens = AtticDesignContext(mode: mode, surface: .glass).tokens
+            XCTAssertEqual(ComposerChipLook.fill(open: false, hovered: false, tokens: tokens).alpha, 0)
+            XCTAssertEqual(ComposerChipLook.fill(open: false, hovered: true, tokens: tokens), tokens.ink(.heading).withAlpha(0.04))
+            XCTAssertEqual(ComposerChipLook.fill(open: true, hovered: true, tokens: tokens), tokens.ink(.heading).withAlpha(0.06))
+        }
         // The chip hugs its name (Accepted 2026-11-04: the Date hover was
         // far too wide); the row leaves a long name its room before Create.
         XCTAssertGreaterThan(try frame("composer-create").minX - calendar.minX, 150, "calendar names have room")
