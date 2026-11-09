@@ -215,9 +215,9 @@ private final class HelperService {
                 let claude = self.find("claude", environment: env)
                 let codex = self.find("codex", environment: env)
                 let claudeLogin = claude.flatMap { self.isSignedIn("claude", executable: $0,
-                    environment: env) }
+                    environment: self.childEnvironment(env, backend: "claude")) }
                 let codexLogin = codex.flatMap { self.isSignedIn("codex", executable: $0,
-                    environment: env) }
+                    environment: self.childEnvironment(env, backend: "codex")) }
                 self.queue.async {
                     guard !self.stopping else { return }
                     var response: [String: Any] = ["type": "availability", "claude": claude != nil,
@@ -252,7 +252,7 @@ private final class HelperService {
             // Only ask the installed CLI whether its own sign-in works. Never
             // read its credentials, stdout or stderr for authentication data.
             let signedIn = executable.flatMap { self.isSignedIn(name, executable: $0,
-                environment: env) }
+                environment: self.childEnvironment(env, backend: name)) }
             self.queue.async {
                 self.startingCLI = false
                 guard !self.stopping else { return }
@@ -267,7 +267,7 @@ private final class HelperService {
                     return
                 }
                 self.launchCLI(name: name, message: message, executable: executable,
-                               environment: env)
+                               environment: self.childEnvironment(env, backend: name))
             }
         }
     }
@@ -459,23 +459,80 @@ private final class HelperService {
     }
 
     private func find(_ name: String, environment: [String: String]) -> String? {
-        var fallback: String?
         for folder in (environment["PATH"] ?? "").split(separator: ":") {
             let path = URL(fileURLWithPath: String(folder)).appendingPathComponent(name).path
             guard FileManager.default.isExecutableFile(atPath: path) else { continue }
-            if name != "codex" { return path }
-            // Some standalone Codex binaries lack the companion host needed
-            // to invoke MCP tools. Prefer a complete installation on PATH.
-            fallback = fallback ?? path
-            if bundledCodexHost(executable: path) != nil { return path }
+            guard let validated = Self.verifiedExecutable(name: name, at: URL(fileURLWithPath: path)) else {
+                continue
+            }
+            if name != "codex" { return validated.path }
+            // Only a complete, signed installation can reach Attic tools.
+            // Skip standalone CLI builds without the companion MCP host.
+            if bundledCodexHost(executable: validated.path) != nil { return validated.path }
         }
-        return fallback
+        return nil
+    }
+
+    /// Resolve wrappers to the signed vendor binary before even running an
+    /// auth-status command. Executable permission or PATH precedence is never
+    /// sufficient to select code for the unsandboxed helper.
+    private static func verifiedExecutable(name: String, at candidate: URL) -> URL? {
+        let resolved = candidate.resolvingSymlinksInPath()
+        if name == "claude" {
+            return signed(resolved, identifier: "com.anthropic.claude-code", team: "Q6L2SF6YDW")
+                ? resolved : nil
+        }
+        let native: URL
+        if resolved.pathExtension == "js" {
+            let package = resolved.deletingLastPathComponent().deletingLastPathComponent()
+            guard resolved.lastPathComponent == "codex.js", package.lastPathComponent == "codex",
+                  package.deletingLastPathComponent().lastPathComponent == "@openai" else { return nil }
+            #if arch(arm64)
+            let platform = "codex-darwin-arm64/vendor/aarch64-apple-darwin"
+            #elseif arch(x86_64)
+            let platform = "codex-darwin-x64/vendor/x86_64-apple-darwin"
+            #else
+            return nil
+            #endif
+            native = package.appendingPathComponent("node_modules/@openai/\(platform)/bin/codex")
+        } else {
+            native = resolved
+        }
+        return signed(native, identifier: "codex", team: "2DC432GLL2") ? native : nil
+    }
+
+    private static func signed(_ url: URL, identifier: String, team: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: url.path) else { return false }
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, SecCSFlags(), &code) == errSecSuccess,
+              let code, SecStaticCodeCheckValidity(code, SecCSFlags(), nil) == errSecSuccess else {
+            return false
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let properties = information as? [String: Any] else { return false }
+        return properties[kSecCodeInfoIdentifier as String] as? String == identifier &&
+               properties[kSecCodeInfoTeamIdentifier as String] as? String == team
+    }
+
+    private func childEnvironment(_ login: [String: String], backend: String) -> [String: String] {
+        let common: Set<String> = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL",
+            "LC_CTYPE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"]
+        let specific: Set<String> = backend == "claude"
+            ? ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+            : ["CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL"]
+        var clean = login.filter { common.contains($0.key) || specific.contains($0.key) }
+        clean["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        clean["HOME"] = login["HOME"] ?? NSHomeDirectory()
+        return clean
     }
 
     private func bundledCodexHost(executable: String) -> URL? {
         let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
         let sibling = resolved.deletingLastPathComponent().appendingPathComponent("codex-code-mode-host")
-        if FileManager.default.isExecutableFile(atPath: sibling.path) { return sibling }
+        if Self.signedHost(sibling) { return sibling }
         let packageRoot = resolved.deletingLastPathComponent().deletingLastPathComponent()
         #if arch(arm64)
         let platform = "codex-darwin-arm64/vendor/aarch64-apple-darwin"
@@ -486,7 +543,20 @@ private final class HelperService {
         #endif
         let bundled = packageRoot.appendingPathComponent("node_modules/@openai/\(platform)/bin")
             .appendingPathComponent("codex-code-mode-host")
-        return FileManager.default.isExecutableFile(atPath: bundled.path) ? bundled : nil
+        return Self.signedHost(bundled) ? bundled : nil
+    }
+
+    private static func signedHost(_ url: URL) -> Bool {
+        // Host builds have used more than one identifier; its signing team is
+        // the invariant shared with the Codex binary, including npm installs.
+        guard FileManager.default.isExecutableFile(atPath: url.path) else { return false }
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, SecCSFlags(), &code) == errSecSuccess,
+              let code, SecStaticCodeCheckValidity(code, SecCSFlags(), nil) == errSecSuccess else { return false }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let properties = information as? [String: Any] else { return false }
+        return properties[kSecCodeInfoTeamIdentifier as String] as? String == "2DC432GLL2"
     }
 
     private func configureBundledCodexHost(executable: String, environment: inout [String: String]) {
