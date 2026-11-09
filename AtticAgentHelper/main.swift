@@ -379,6 +379,7 @@ private final class HelperService {
     }
 
     private func finishedCLI(status: Int32) {
+        guard !stopping else { return }
         let name = backend
         cliOutput?.fileHandleForReading.readabilityHandler = nil
         cliError?.fileHandleForReading.readabilityHandler = nil
@@ -397,21 +398,35 @@ private final class HelperService {
 
     private func interruptCLI() {
         guard let cli, cli.isRunning else { return }
-        cli.interrupt()
+        Self.signal(cli, SIGINT)
         queue.asyncAfter(deadline: .now() + 1.5) { [weak self, weak cli] in
             guard let cli, cli.isRunning else { return }
-            cli.terminate()
-            self?.send(["type": "interrupted"])
+            Self.signal(cli, SIGTERM)
+            if self?.stopping != true { self?.send(["type": "interrupted"]) }
+        }
+        queue.asyncAfter(deadline: .now() + 3.5) { [weak cli] in
+            guard let cli, cli.isRunning else { return }
+            Self.signal(cli, SIGKILL)
         }
     }
 
     private func stop() {
-        interruptCLI()
+        guard !stopping else { return }
+        stopping = true
         connection.cancel()
-        // The child is reaped before exiting. Do not leave an agent alive when
-        // the owner app quits or the authenticated socket closes.
-        if let cli, cli.isRunning { cli.terminate(); cli.waitUntilExit() }
-        exit(0)
+        // Never waitUntilExit on the transport queue. Interrupt, terminate,
+        // then force kill on a worker with finite escalation windows.
+        guard let cli, cli.isRunning else {
+            exit(0)
+        }
+        Self.signal(cli, SIGINT)
+        DispatchQueue.global(qos: .utility).async {
+            if !Self.waitForExit(cli, seconds: 0.5) { Self.signal(cli, SIGTERM) }
+            if !Self.waitForExit(cli, seconds: 1.5) { Self.signal(cli, SIGKILL) }
+            if Self.waitForExit(cli, seconds: 1) { cli.waitUntilExit() }
+            else { DispatchQueue.global(qos: .utility).async { cli.waitUntilExit() } }
+            exit(0)
+        }
     }
 
     private func send(_ message: [String: Any]) {
