@@ -168,7 +168,7 @@ struct NotesTagBar: View {
         .clipShape(shape)
         .frame(height: m.control)
         // The glass behind the pills, never over them.
-        .background(Color.clear.atticRaisedMaterial(cornerRadius: m.radius, interactive: false))
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: m.radius, interactive: false, edgeLight: true))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
         .accessibilityIdentifier(idPrefix)
