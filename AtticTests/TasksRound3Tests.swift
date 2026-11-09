@@ -342,6 +342,19 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(Cell.offset(of: ids[0], in: up, heights: height), 0)
     }
 
+    func testQuickLookReorderUsesTheSameLandingThresholdsAndOffsets() {
+        let ids = (0..<3).map { _ in UUID() }
+        let pitch: CGFloat = 28
+        XCTAssertEqual(AtticReorderSupport.target(start: 0, translation: 14, group: ids,
+                                                 heights: { _ in pitch }), 0)
+        XCTAssertEqual(AtticReorderSupport.target(start: 0, translation: 15, group: ids,
+                                                 heights: { _ in pitch }), 1)
+        let drag = AtticReorderPosition(id: ids[0], group: ids, startIndex: 0, targetIndex: 2)
+        XCTAssertEqual(AtticReorderSupport.offset(of: ids[0], in: drag, heights: { _ in pitch }), 0)
+        XCTAssertEqual(AtticReorderSupport.offset(of: ids[1], in: drag, heights: { _ in pitch }), -pitch)
+        XCTAssertEqual(AtticReorderSupport.offset(of: ids[2], in: drag, heights: { _ in pitch }), -pitch)
+    }
+
     // MARK: - The list viewport (owner fix 8, review 9)
 
     func testTheViewportKeepsTheRestingRowAndClearsTheMeasuredBottomStack() {

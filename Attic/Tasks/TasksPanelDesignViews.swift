@@ -98,11 +98,11 @@ enum TasksDesignMetrics {
     // Row: padding 14 × 18 px (`TasksRowDesign` holds the row's sizes);
     // the ring's 28 px column, then 20 px to the title.
     static let rowPaddingX: CGFloat = 9
-    static let ringToTitle: CGFloat = 10
+    static let ringToTitle: CGFloat = AtticTaskRowLayout.ringToTitle
     /// The title column in the page (title at 43 from the panel's edge):
     /// after the circle's column, the design's 10 pt gap. The rest of the
     /// app keeps `AtticLayout.textX` (8 pt after the circle, spacing B).
-    static let textX: CGFloat = AtticLayout.circleX + AtticControlSize.statusCircle + ringToTitle
+    static let textX: CGFloat = AtticTaskRowLayout.textX
     /// A group header's text starts on the rows' padding: the row fill's
     /// inset, then the row's 18 px.
     static let groupHeaderX: CGFloat = AtticLayout.rowHighlightInset + rowPaddingX
@@ -117,7 +117,7 @@ enum TasksDesignMetrics {
     // apart (Accepted 2026-11-05, "Header spacing"; was 6 px).
     /// The design's inner controls (`rInner`, 28 px): the date button, tag
     /// pills, Clear filters. Each clamps to half its side, as CSS does.
-    static let innerRadius: CGFloat = 14
+    static let innerRadius: CGFloat = AtticTaskRowLayout.innerRadius
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
     static let headerGap: CGFloat = AtticPanelChromeMetrics.headerGap

@@ -1523,7 +1523,7 @@ struct AtticTaskRow: View {
                         .padding(.top, d.tilesTop)
                 }
             }
-            .padding(.leading, TasksDesignMetrics.textX)
+            .padding(.leading, AtticTaskRowLayout.textX)
             // The date's text ends where the design's capsule text does.
             .padding(.trailing, AtticLayout.rowHighlightInset + d.paddingX + d.dateInset)
             .padding(.top, d.paddingY)
@@ -1532,7 +1532,7 @@ struct AtticTaskRow: View {
             .background(alignment: .bottomLeading) {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
-                        .padding(.leading, TasksDesignMetrics.textX)
+                        .padding(.leading, AtticTaskRowLayout.textX)
                         .atticDropdown(isPresented: tagsPresented(twoLine: false), label: String(localized: "Tags")) { meta?.tagPicker() }
                 }
             }
@@ -2026,7 +2026,7 @@ struct AtticMetaPill: View {
         let m = AtticTaskRowMetrics.self
         // In the panel design: `rInner` in the superellipse corner, clamped.
         AtticControlShape.shape(cornerRadius: cornerExponent == nil ? AtticRadius.control(height: m.metaPillHeight)
-                                    : TasksDesignMetrics.innerRadius,
+                                    : AtticTaskRowLayout.innerRadius,
                                 exponent: cornerExponent)
             .fill((visible ? design.tokens.chipHover : .clear).color)
             .frame(height: m.metaPillHeight)
@@ -2115,7 +2115,7 @@ struct AtticCompletedLine: View {
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .frame(width: AtticControlSize.statusCircle)
                     .padding(.leading, AtticLayout.circleX)
-                    .padding(.trailing, TasksDesignMetrics.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
+                    .padding(.trailing, AtticTaskRowLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
                 HStack(spacing: m.gap) {
                     AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
                     AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
@@ -2382,7 +2382,7 @@ struct AtticQuickLook: View {
     /// The same completion-group move as the keys and row menu, committed
     /// only on release, so the whole drag is one Undo step.
     var onReorder: ((UUID, Int, [UUID]) -> Void)? = nil
-    @State private var drag: TasksDrag?
+    @State private var drag: AtticReorderPosition?
     @State private var translation: CGFloat = 0
 
     @Environment(\.atticCapture) private var capture
@@ -2409,7 +2409,7 @@ struct AtticQuickLook: View {
                                 onFocusChange: { onFocusChange(subtask.id, $0) },
                                 popover: popover?.id == subtask.id ? popover?.popover : nil)
                     .offset(y: drag?.id == subtask.id ? translation : drag.map {
-                        TasksReorderCell<EmptyView, EmptyView>.offset(of: subtask.id, in: $0, heights: { _ in AtticLayout.subtaskPitch })
+                        AtticReorderSupport.offset(of: subtask.id, in: $0, heights: { _ in AtticLayout.subtaskPitch })
                     } ?? 0)
                     .background {
                         if drag?.id == subtask.id {
@@ -2432,7 +2432,7 @@ struct AtticQuickLook: View {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
         }
-        .padding(.leading, TasksDesignMetrics.textX)
+        .padding(.leading, AtticTaskRowLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
         .padding(.bottom, AtticQuickLookMetrics.bottomPadding)
     }
@@ -2441,9 +2441,9 @@ struct AtticQuickLook: View {
         let group = drag?.group ?? subtasks.filter { $0.isDone == subtask.isDone }.map(\.id)
         guard let start = drag?.startIndex ?? group.firstIndex(of: subtask.id) else { return }
         translation = amount
-        let target = TasksReorderCell<EmptyView, EmptyView>.target(start: start, translation: amount,
+        let target = AtticReorderSupport.target(start: start, translation: amount,
             group: group, heights: { _ in AtticLayout.subtaskPitch })
-        drag = TasksDrag(id: subtask.id, tab: .now, group: group, startIndex: start, targetIndex: target)
+        drag = AtticReorderPosition(id: subtask.id, group: group, startIndex: start, targetIndex: target)
     }
 }
 
@@ -2454,7 +2454,7 @@ private struct AtticSubtaskDrag: ViewModifier {
     let ended: ((CGFloat) -> Void)?
     let cancelled: (() -> Void)?
     @GestureState private var dragging = false
-    @State private var cancellation = TasksDragCancellation()
+    @State private var cancellation = AtticDragCancellation()
     func body(content: Content) -> some View {
         content.gesture(changed == nil ? nil : DragGesture(minimumDistance: 4)
             .updating($dragging) { _, state, _ in state = true }

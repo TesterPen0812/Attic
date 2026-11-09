@@ -215,6 +215,12 @@ enum AtticQuietActionMetrics {
     static let chevronPullIn: CGFloat = 4
 }
 
+enum AtticTaskRowLayout {
+    static let ringToTitle: CGFloat = 10
+    static let textX: CGFloat = AtticLayout.circleX + AtticControlSize.statusCircle + ringToTitle
+    static let innerRadius: CGFloat = 14
+}
+
 enum AtticQuickLookMetrics {
     static let bottomPadding: CGFloat = 4
 }
