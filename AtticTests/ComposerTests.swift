@@ -856,24 +856,65 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(opened.isEmpty)
     }
 
-    /// UX audit A4: Tab and ⇧Tab move between the title and the writing
-    /// line and never leave the card.
+    /// Accepted P4 (3 Nov): all of the card's chips and Create are keyboard
+    /// reachable after the writing line. Reverse traversal returns to Title.
     func testTabAndShiftTabStayInsideTheCard() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
         let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
         typeKeys(field, "Call Sam")
         @MainActor func inWriting() -> Bool {
             guard let editor = window.firstResponder as? NSTextView, editor !== field else { return false }
             return (editor.delegate as? NSView)?.isDescendant(of: hosting) ?? editor.isDescendant(of: hosting)
         }
-        key(window, "\t", code: 48)
+        // Pass events through NSApplication: the card's native Tab monitor
+        // runs there, before AppKit's default key-view traversal.
+        func tab(back: Bool = false) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: back ? .shift : [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: back ? "\u{19}" : "\t", charactersIgnoringModifiers: "\t",
+                    isARepeat: false, keyCode: 48)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            var sent = 0
+            while sent < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                sent += 1
+            }
+            spin(0.15)
+        }
+        func focused(_ id: String) -> Bool {
+            func find(_ object: AnyObject) -> Bool {
+                guard let element = object as? NSAccessibilityProtocol else { return false }
+                if element.accessibilityIdentifier() == id && element.isAccessibilityFocused() { return true }
+                return (element.accessibilityChildren() ?? []).contains { find($0 as AnyObject) }
+            }
+            hosting.layoutSubtreeIfNeeded()
+            return find(hosting)
+        }
+        tab()
         XCTAssertTrue(inWriting(), "Tab from the title goes to the writing line, not out of the card")
-        key(window, "\t", code: 48)
-        XCTAssertTrue(window.firstResponder === field, "Tab from the writing line comes back to the title")
-        key(window, "\u{19}", code: 48, modifiers: .shift)
-        XCTAssertTrue(inWriting(), "⇧Tab from the title goes to the writing line")
-        key(window, "\u{19}", code: 48, modifiers: .shift)
-        XCTAssertTrue(window.firstResponder === field, "⇧Tab from the writing line comes back to the title")
+        tab(back: true)
+        XCTAssertTrue(window.firstResponder === field, "⇧Tab from writing returns to Title")
+        tab()
+        XCTAssertTrue(inWriting())
+        for id in ["composer-chip-date", "composer-chip-priority", "composer-chip-tags", "composer-create"] {
+            tab()
+            XCTAssertTrue(focused(id), "Tab moves onto \(id) in P4 order")
+        }
+        for id in ["composer-chip-tags", "composer-chip-priority", "composer-chip-date"] {
+            tab(back: true)
+            XCTAssertTrue(focused(id), "⇧Tab moves onto \(id) in reverse")
+        }
+        tab(back: true)
+        XCTAssertTrue(inWriting(), "⇧Tab from Date returns to writing")
+        tab(back: true)
+        XCTAssertTrue(window.firstResponder === field, "⇧Tab from writing returns to Title")
         XCTAssertEqual(page.addBar.text, "Call Sam")
+        XCTAssertTrue(liveTasks().isEmpty, "keyboard traversal does not submit the draft")
     }
 
     func testCommandReturnInTheTitleCreatesAndOpens() throws {

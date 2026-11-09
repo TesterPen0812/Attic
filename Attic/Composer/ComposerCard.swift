@@ -201,8 +201,8 @@ struct ComposerCard: View {
             : titleFieldHeight
     }
 
-    /// Tab and ⇧Tab stay inside the card (A4): the title and the writing
-    /// line take turns.
+    /// Return from Writing to Title; forward Tab continues through the
+    /// card's chips and Create (fix16-4).
     private func moveKeyboard(toWriting: Bool) {
         keyboardStop = nil
         if toWriting {
@@ -212,6 +212,15 @@ struct ComposerCard: View {
             writingFocused = false
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
+                window.makeFirstResponder(field)
+            }
+            // The writing field can finish resigning on the following SwiftUI
+            // transaction and take back the responder set above. Restore the
+            // title once that transaction has run, unless a newer Tab moved on.
+            DispatchQueue.main.async {
+                guard model.isOpen, titleFocused, !writingFocused, keyboardStop == nil,
+                      let field = model.editor.textView, let window = field.window,
+                      window.firstResponder !== field else { return }
                 window.makeFirstResponder(field)
             }
         }
