@@ -159,10 +159,54 @@ final class TaskAttachmentDropTests: XCTestCase {
         let cardTypes = card.registeredTypeIdentifiers.compactMap(UTType.init)
         XCTAssertEqual(classify(cardTypes), .attachmentCard, "releasing a card over its panel must not re-import it")
         XCTAssertEqual(classify(cardTypes.filter { $0 != TaskDropContent.attachmentCardType }), .files)
-        // A row takes files from outside only: the card marker (no file row
-        // starts one since the files list went, Accepted 2026-11-01) is refused.
+        // A row takes files from outside and in-app tile cards; a self-copy
+        // is refused during the store's verified source import.
         XCTAssertTrue(TasksFileDropDelegate.takes(.files))
-        XCTAssertFalse(TasksFileDropDelegate.takes(.attachmentCard))
+        XCTAssertTrue(TasksFileDropDelegate.takes(.attachmentCard))
+    }
+
+    func testNativeTileMarkerCopiesToAnotherTaskButRejectsSelfAndStaleSources() async throws {
+        let (store, _, files) = try makeStore()
+        let source = try XCTUnwrap(store.create(title: "Source"))
+        let destination = try XCTUnwrap(store.create(title: "Destination"))
+        let original = try pngFile(named: "Moodboard.png")
+        let initiallyAttached = await store.attachStagedFiles(to: source.id) {
+            TaskAttachmentStaging(urls: [original])
+        }
+        XCTAssertEqual(initiallyAttached?.count, 1)
+        let reference = try XCTUnwrap(store.task(withID: source.id)?.attachments.first)
+        let provider = TaskAttachmentDragItem(reference: reference, files: files).itemProvider()
+        let copied = await store.attachCopies(to: destination.id) {
+            try await TaskDroppedAttachmentCards.sources(from: [provider], in: store)
+        }
+        XCTAssertEqual(copied?.count, 1)
+        let result = try XCTUnwrap(store.task(withID: destination.id)?.attachments.first)
+        XCTAssertEqual(result.filename, reference.filename)
+        XCTAssertNotEqual(result.id, reference.id, "a copy owns separate private storage")
+        let verifiedDestinationURL = try await files.verifiedURL(for: result)
+        let verifiedSourceURL = try await files.verifiedURL(for: reference)
+        let destinationURL = try XCTUnwrap(verifiedDestinationURL)
+        let sourceURL = try XCTUnwrap(verifiedSourceURL)
+        XCTAssertEqual(try Data(contentsOf: destinationURL), try Data(contentsOf: sourceURL))
+
+        let selfCopy = await store.attachCopies(to: source.id) {
+            try await TaskDroppedAttachmentCards.sources(from: [provider], in: store)
+        }
+        XCTAssertNil(selfCopy, "dropping a tile back on its owner must never duplicate it")
+        XCTAssertEqual(store.task(withID: source.id)?.attachments.count, 1)
+
+        let stale = NSItemProvider()
+        stale.registerDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier,
+                                         visibility: .ownProcess) { completion in
+            completion(Data(UUID().uuidString.utf8), nil)
+            return nil
+        }
+        do {
+            _ = try await TaskDroppedAttachmentCards.sources(from: [stale], in: store)
+            XCTFail("an unowned attachment marker must not resolve")
+        } catch TaskDropError.attachmentUnavailable {
+            // A marker is a lookup key, never authorization to copy an arbitrary file.
+        }
     }
 
     // MARK: - R4 staging

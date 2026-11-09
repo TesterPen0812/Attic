@@ -1,3 +1,9 @@
+## 2026-11-09 · Task attachment tile accessibility
+
+Task rows with file tiles now expose each tile as a separate labelled element
+for native file dragging and VoiceOver. The task row keeps its existing
+spoken description and focus behavior; rows without tiles remain combined.
+
 ## 2026-11-05 · Pop-over row pressed state
 
 Shared pop-over rows now respond to the button's actual pressed state with the

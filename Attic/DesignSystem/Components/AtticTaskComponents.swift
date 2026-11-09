@@ -1559,9 +1559,10 @@ struct AtticTaskRow: View {
         }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)
-        // While the title is edited, its field is its own element, so
-        // VoiceOver (and a UI test) reaches the text being typed.
-        .accessibilityElement(children: titleEditing == nil ? .combine : .contain)
+        // While editing, the title field is reachable. When the row has
+        // attachment tiles, its individual file drag targets also remain
+        // reachable; the row still supplies its own spoken description.
+        .accessibilityElement(children: titleEditing == nil && !hasTiles ? .combine : .contain)
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityAction { actions.openPage() }

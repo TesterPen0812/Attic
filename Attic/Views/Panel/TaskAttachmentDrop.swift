@@ -233,6 +233,37 @@ enum TaskProviderLoadLimit {
     nonisolated(unsafe) static var seconds: TimeInterval = 60
 }
 
+/// Read only Attic's private attachment identifier from an in-app tile.
+/// The store resolves and re-verifies the complete source inside its copy
+/// reservation; an unowned, stale, or self-dropped tile never imports a file.
+@MainActor
+enum TaskDroppedAttachmentCards {
+    static func sources(from providers: [NSItemProvider], in store: TaskStore) async throws -> [TaskAttachmentSource] {
+        guard !providers.isEmpty, providers.count <= AttachmentLimits.maxAttachmentsPerNote else {
+            throw TaskDropError.unsupported
+        }
+        var sources: [TaskAttachmentSource] = []
+        for provider in providers {
+            guard provider.hasItemConformingToTypeIdentifier(TaskDropContent.attachmentCardType.identifier) else {
+                throw TaskDropError.unsupported
+            }
+            let data = try await TaskProviderLoad<Data>.run { load in
+                provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                    guard let data else {
+                        load.finish(.failure(error ?? TaskDropError.attachmentUnavailable))
+                        return
+                    }
+                    load.finish(.success(data))
+                }
+            }
+            guard let raw = String(data: data, encoding: .utf8), let id = UUID(uuidString: raw),
+                  let source = store.attachmentSource(for: id) else { throw TaskDropError.attachmentUnavailable }
+            sources.append(source)
+        }
+        return sources
+    }
+}
+
 /// Turns dropped item providers into importable files, one provider at a
 /// time. A file URL is used as is. Promised or in-memory content is loaded by
 /// the system into a temporary file that exists only during its callback, so

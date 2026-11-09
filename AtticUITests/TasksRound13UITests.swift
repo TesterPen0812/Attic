@@ -46,13 +46,17 @@ final class TasksRound13UITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TEST_SEED_FILES"] = "9"
         app.launch()
         app.activate()
-        let image = app.buttons.matching(NSPredicate(format: "label == %@", "Moodboard.png")).firstMatch
+        let image = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-attachment-tile-", "Moodboard.png"))
+            .firstMatch
         XCTAssertTrue(image.waitForExistence(timeout: 5))
         let destination = row("Ship appearance PR")
         XCTAssertTrue(destination.waitForExistence(timeout: 5))
         image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.3, thenDragTo: destination.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
-        waitFor(app.buttons.matching(NSPredicate(format: "label == %@", "Moodboard.png")).count == 2,
+        waitFor(app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "task-attachment-tile-", "Moodboard.png"
+        )).count == 2,
                 "source and destination both show the file")
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "panel-error-message").firstMatch.exists)
     }

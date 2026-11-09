@@ -3165,13 +3165,11 @@ struct TasksPage: View {
         return CGRect(x: rowFrame.minX + TasksDesignMetrics.textX, y: lineTop + (pitch - side) / 2, width: side, height: side)
     }
 
-    /// Whether the task can take what is dragged over it: files from
-    /// outside. (A file row dragged from another task's files list went
-    /// with the list, Accepted 2026-11-01 "Task rows: no paperclip count";
-    /// Attic's own card marker is refused, so it never re-imports.)
+    /// Finder files and another task's file tile both copy onto a row.
+    /// The store verifies each in-app source and rejects a self-copy.
     static func canAcceptDrop(_ content: TaskDropContent, onto id: UUID, store: TaskStore) -> Bool {
         guard store.attachmentOwnerID(for: id) != nil else { return false }
-        return content == .files
+        return content == .files || content == .attachmentCard
     }
 
     /// The row among `ids` on `tab`'s page whose frame holds `point` (pure,
@@ -3184,6 +3182,18 @@ struct TasksPage: View {
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
         guard let owner = store.attachmentOwnerID(for: id) else { return }
+        if content == .attachmentCard {
+            Task { @MainActor in
+                guard let ids = await store.attachCopies(to: owner, of: {
+                    try await TaskDroppedAttachmentCards.sources(from: providers, in: store)
+                }) else { return }
+                let title = store.task(withID: owner)?.title ?? ""
+                AccessibilityNotification.Announcement(
+                    ids.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(ids.count) files to \(title)")
+                ).post()
+            }
+            return
+        }
         // Phase 3: dropped files go into the task's note, created by the
         // drop when it has none (`p3-22` row 4). The row stays where it is.
         if content == .files, let addToNote = model.services.addFilesToTaskNote {
@@ -4809,9 +4819,9 @@ struct TasksFileDropDelegate: DropDelegate {
         return (content, id)
     }
 
-    /// Files from outside.
+    /// Files from outside, or a verified file tile from another task.
     static func takes(_ content: TaskDropContent) -> Bool {
-        content == .files
+        content == .files || content == .attachmentCard
     }
 
     func validateDrop(info: DropInfo) -> Bool {
