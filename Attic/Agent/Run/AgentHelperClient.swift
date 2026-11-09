@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import Network
 import os
+import Security
 
 struct AgentHelperFrame: Sendable {
     let type: String
@@ -71,6 +72,11 @@ final class AgentHelperClient {
     private var incoming = Data()
     private var authenticated = false
     private var authenticatedHelperPID: pid_t?
+    private var verifiedHelperPID: pid_t?
+    private let helperProof = UUID().uuidString + UUID().uuidString
+    private var identityPath: URL?
+    private var identityListener: DispatchSourceRead?
+    private var pendingIdentityPeers: [(fd: Int32, pid: pid_t)] = []
     private var isStopped = false
     private var invitationURL: URL?
 
@@ -130,7 +136,10 @@ final class AgentHelperClient {
             stop()
             throw AgentHelperConnectionError.missingHelper
         }
-        do { try makeLaunchInvitation(port: port) }
+        do {
+            try prepareIdentitySocket()
+            try makeLaunchInvitation(port: port)
+        }
         catch { stop(); throw error }
         #if DEBUG
         onInvitationReadyForTests?(port, token)
@@ -143,7 +152,8 @@ final class AgentHelperClient {
         // environment for hosts that support it and use the expiring sandbox
         // invitation for Launch Services implementations that omit it too.
         configuration.environment = ["ATTIC_HELPER_PORT": String(port),
-                                     "ATTIC_HELPER_TOKEN": token]
+                                     "ATTIC_HELPER_TOKEN": token,
+                                     "ATTIC_HELPER_ID_SOCKET": identityPath?.path ?? ""]
         // Install the handshake waiter before Launch Services can connect.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             helloWaiter = continuation
@@ -157,6 +167,7 @@ final class AgentHelperClient {
                     self.logger.info("Opening bundled agent helper")
                     self.application = try await NSWorkspace.shared.openApplication(at: self.helperURL,
                                                                                    configuration: configuration)
+                    self.authorizeIdentityPeers()
                     self.logger.info("Launch Services returned helper process")
                 } catch {
                     self.logger.error("Launch Services could not open helper: \(error.localizedDescription, privacy: .public)")
@@ -195,6 +206,7 @@ final class AgentHelperClient {
         send(["type": "stop"])
         connection?.cancel()
         connection = nil
+        stopIdentitySocket()
         for candidate in candidates.values { candidate.cancel() }
         candidates.removeAll()
         listener?.cancel()
@@ -276,7 +288,12 @@ final class AgentHelperClient {
         guard !isStopped else { return }
         if !authenticated {
             guard candidates[ObjectIdentifier(peer)] != nil else { return }
-            guard frame["type"] as? String == "hello", frame["token"] as? String == token else {
+            // A stolen invitation does not establish identity. The proof is
+            // delivered separately over a Unix socket to the kernel-attested,
+            // signed process returned by Launch Services.
+            guard frame["type"] as? String == "hello", frame["token"] as? String == token,
+                  frame["proof"] as? String == helperProof,
+                  let pid = frame["pid"] as? pid_t, pid == verifiedHelperPID else {
                 dropCandidate(peer); return
             }
             authenticated = true
@@ -284,7 +301,7 @@ final class AgentHelperClient {
             candidates[ObjectIdentifier(peer)] = nil
             for candidate in candidates.values { candidate.cancel() }
             candidates.removeAll()
-            authenticatedHelperPID = frame["pid"] as? pid_t
+            authenticatedHelperPID = pid
             logger.info("Agent helper handshake succeeded")
             discardLaunchInvitation()
             send(["type": "ready", "token": token])
@@ -292,6 +309,7 @@ final class AgentHelperClient {
             helloWaiter = nil
             listener?.cancel() // Only the one authenticated connection may remain.
             listener = nil
+            stopIdentitySocket()
             return
         }
         guard connection === peer else { return }
@@ -309,15 +327,115 @@ final class AgentHelperClient {
         else { peer.cancel() }
     }
 
+    /// The TCP connection has no peer audit token. Bind its hello to a second,
+    /// kernel-attested local Unix socket before accepting any agent bearer.
+    private func prepareIdentitySocket() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ah-\(UUID().uuidString.prefix(12))")
+        let bytes = path.path.utf8CString.map { UInt8(bitPattern: $0) }
+        var address = sockaddr_un()
+        let capacity = MemoryLayout.size(ofValue: address.sun_path)
+        guard bytes.count <= capacity else { throw AgentHelperConnectionError.invitation }
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw AgentHelperConnectionError.invitation }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.chmod(path.path, 0o600) == 0,
+              Darwin.listen(fd, 8) == 0 else {
+            _ = Darwin.close(fd)
+            _ = Darwin.unlink(path.path)
+            throw AgentHelperConnectionError.invitation
+        }
+        identityPath = path
+        let flags = Darwin.fcntl(fd, F_GETFL)
+        if flags >= 0 { _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler { [weak self] in
+            let peer = Darwin.accept(fd, nil, nil)
+            guard peer >= 0 else { return }
+            var pid: pid_t = 0
+            var size = socklen_t(MemoryLayout<pid_t>.size)
+            guard Darwin.getsockopt(peer, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0,
+                  size == socklen_t(MemoryLayout<pid_t>.size) else {
+                _ = Darwin.close(peer)
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self, !self.isStopped else { _ = Darwin.close(peer); return }
+                self.pendingIdentityPeers.append((peer, pid))
+                self.authorizeIdentityPeers()
+            }
+        }
+        source.setCancelHandler { _ = Darwin.close(fd) }
+        identityListener = source
+        source.resume()
+    }
+
+    private func authorizeIdentityPeers() {
+        guard !isStopped, let appPID = application?.processIdentifier else { return }
+        let peers = pendingIdentityPeers
+        pendingIdentityPeers.removeAll()
+        for peer in peers {
+            defer { _ = Darwin.close(peer.fd) }
+            guard peer.pid == appPID, helperSignatureMatches(pid: peer.pid),
+                  verifiedHelperPID == nil else { continue }
+            let bytes = Array(helperProof.utf8)
+            let written = bytes.withUnsafeBytes { Darwin.write(peer.fd, $0.baseAddress, $0.count) }
+            if written == bytes.count { verifiedHelperPID = peer.pid }
+        }
+    }
+
+    private func helperSignatureMatches(pid: pid_t) -> Bool {
+        var launched: SecCode?
+        let pidAttribute = [kSecGuestAttributePid as String: Int(pid)] as CFDictionary
+        guard SecCodeCopyGuestWithAttributes(nil, pidAttribute, SecCSFlags(), &launched) == errSecSuccess,
+              let launched, SecCodeCheckValidity(launched, SecCSFlags(), nil) == errSecSuccess else {
+            return false
+        }
+        var expected: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(helperURL as CFURL, SecCSFlags(), &expected) == errSecSuccess,
+              let expected, SecStaticCodeCheckValidity(expected, SecCSFlags(), nil) == errSecSuccess else {
+            return false
+        }
+        var actualInfo: CFDictionary?
+        var expectedInfo: CFDictionary?
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(launched, flags, &actualInfo) == errSecSuccess,
+              SecCodeCopySigningInformation(expected, flags, &expectedInfo) == errSecSuccess,
+              let actual = actualInfo as? [String: Any], let bundled = expectedInfo as? [String: Any],
+              let actualHash = actual[kSecCodeInfoUnique as String] as? Data,
+              let bundledHash = bundled[kSecCodeInfoUnique as String] as? Data else { return false }
+        // A code-directory hash is available for ad-hoc signatures as well as
+        // Developer ID signatures. Match the exact bundled helper, not a team.
+        return actualHash == bundledHash
+    }
+
+    private func stopIdentitySocket() {
+        identityListener?.cancel()
+        identityListener = nil
+        for peer in pendingIdentityPeers { _ = Darwin.close(peer.fd) }
+        pendingIdentityPeers.removeAll()
+        if let path = identityPath { _ = Darwin.unlink(path.path) }
+        identityPath = nil
+    }
+
     private func fail(_ error: Error) {
         discardLaunchInvitation()
         portWaiter?.resume(throwing: error)
         portWaiter = nil
         helloWaiter?.resume(throwing: error)
         helloWaiter = nil
-        // A failed launch also releases the listener and untrusted peers.
+        // Failed launches also need to release the listener, identity socket
+        // and any untrusted peers. Otherwise a timed-out handshake leaks them.
         if !isStopped {
             isStopped = true
+            stopIdentitySocket()
             for candidate in candidates.values { candidate.cancel() }
             candidates.removeAll()
             connection?.cancel()
@@ -338,6 +456,7 @@ final class AgentHelperClient {
         // fixed token file. A claimed ticket is removed by the helper itself.
         let file = directory.appendingPathComponent("\(UUID().uuidString).ticket")
         let payload: [String: Any] = ["port": String(port), "token": token,
+                                      "identitySocket": identityPath?.path ?? "",
                                       "expires": Date().addingTimeInterval(20).timeIntervalSince1970]
         let bytes = try JSONSerialization.data(withJSONObject: payload)
         let fd = Darwin.open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)

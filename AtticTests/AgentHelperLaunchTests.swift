@@ -55,6 +55,10 @@ final class AgentHelperLaunchTests: XCTestCase {
         try await verifyForgedPeerDoesNotPreventRealHelper(stolenToken: false)
     }
 
+    func testStolenTicketTokenAloneCannotImpersonateSignedHelper() async throws {
+        try await verifyForgedPeerDoesNotPreventRealHelper(stolenToken: true)
+    }
+
     /// Runs inside the sandboxed invisible AtticUnitTestHost. A real signed
     /// Launch Services helper must connect and authenticate without UI or a
     /// copied credential file; no model CLI is launched by this test.

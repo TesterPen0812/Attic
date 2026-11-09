@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Darwin
 import os
+import Security
 
 // This background app is deliberately outside the Attic app sandbox. Its only
 // interface is one authenticated loopback connection to its launching Attic.
@@ -12,6 +13,8 @@ private final class HelperService {
     private let queue = DispatchQueue(label: "com.taha.Attic.AgentHelper")
     private let connection: NWConnection
     private let token: String
+    private let identitySocket: String
+    private var identityProof: String?
     private var incoming = Data()
     private var authenticated = false
     private var cli: Process?
@@ -28,21 +31,24 @@ private final class HelperService {
         // hosts discard custom environment too; atomically claim a short-lived
         // invitation from the embedding app's sandbox in that case.
         let env = ProcessInfo.processInfo.environment
-        let launch: (port: String, token: String)?
-        if let port = env["ATTIC_HELPER_PORT"], let token = env["ATTIC_HELPER_TOKEN"] {
-            launch = (port, token)
+        let launch: (port: String, token: String, socket: String)?
+        if let port = env["ATTIC_HELPER_PORT"], let token = env["ATTIC_HELPER_TOKEN"],
+           let socket = env["ATTIC_HELPER_ID_SOCKET"], !socket.isEmpty {
+            launch = (port, token, socket)
         } else {
             launch = Self.sandboxInvitation()
         }
         guard let launch,
               let port = UInt16(launch.port), port > 0,
               launch.token.count >= 32,
+              !launch.socket.isEmpty,
               let endpoint = NWEndpoint.Port(rawValue: port) else { return nil }
         token = launch.token
+        identitySocket = launch.socket
         connection = NWConnection(host: .ipv4(.loopback), port: endpoint, using: .tcp)
     }
 
-    private static func sandboxInvitation() -> (port: String, token: String)? {
+    private static func sandboxInvitation() -> (port: String, token: String, socket: String)? {
         let parentApp = Bundle.main.bundleURL
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         guard parentApp.pathExtension == "app", let parentID = Bundle(url: parentApp)?.bundleIdentifier else {
@@ -76,16 +82,30 @@ private final class HelperService {
                   let expires = json["expires"] as? TimeInterval,
                   expires >= Date().timeIntervalSince1970,
                   expires <= Date().addingTimeInterval(30).timeIntervalSince1970,
-                  let port = json["port"] as? String, let token = json["token"] as? String else {
+                  let port = json["port"] as? String, let token = json["token"] as? String,
+                  let socket = json["identitySocket"] as? String, !socket.isEmpty else {
                 continue
             }
-            return (port, token)
+            return (port, token, socket)
         }
         return nil
     }
 
     func start() {
         logger.info("Attic helper started")
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard let proof = Self.obtainIdentityProof(socketPath: self.identitySocket) else {
+                self.logger.error("Attic helper identity handshake failed")
+                self.stop()
+                return
+            }
+            self.identityProof = proof
+            self.startTransport()
+        }
+    }
+
+    private func startTransport() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -93,6 +113,7 @@ private final class HelperService {
                 self.logger.info("Attic helper loopback connected")
                 self.queue.async {
                     self.send(["type": "hello", "token": self.token,
+                               "proof": self.identityProof ?? "",
                                "pid": ProcessInfo.processInfo.processIdentifier])
                     self.receive()
                 }
@@ -109,6 +130,39 @@ private final class HelperService {
             self.logger.error("Attic helper handshake timed out")
             self.stop()
         }
+    }
+
+    /// The proof arrives only if the app verified the kernel's real Unix peer
+    /// PID and the launched helper's exact code signature. It never enters
+    /// process arguments, tickets, environment variables or persistent files.
+    private static func obtainIdentityProof(socketPath: String) -> String? {
+        let bytes = socketPath.utf8CString.map { UInt8(bitPattern: $0) }
+        var address = sockaddr_un()
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { return nil }
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { _ = Darwin.close(fd) }
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        _ = Darwin.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        _ = Darwin.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else { return nil }
+        var payload = Data()
+        while payload.count < 128 {
+            var buffer = [UInt8](repeating: 0, count: 128)
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if count <= 0 { break }
+            payload.append(contentsOf: buffer.prefix(count))
+        }
+        let proof = String(decoding: payload, as: UTF8.self)
+        return proof.count >= 32 && proof.count <= 80 ? proof : nil
     }
 
     private func receive() {
