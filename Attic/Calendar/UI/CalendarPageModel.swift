@@ -310,7 +310,7 @@ final class CalendarPageModel: ObservableObject {
                     let events = await reader.loadEvents(in: interval)
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.eventRequest == interval else { return }
-                    self.eventCache = (interval, events)
+                    self.eventCache = (interval, CalendarEventPresentation.orderedUnique(events))
                     self.eventRequest = nil
                     self.rebuildOrDefer()
                 }
@@ -320,7 +320,7 @@ final class CalendarPageModel: ObservableObject {
             }
             return []
         }
-        let events = source.events(in: interval)
+        let events = CalendarEventPresentation.orderedUnique(source.events(in: interval))
         eventCache = (interval, events)
         #if DEBUG
         sourceFetches += 1
@@ -350,12 +350,12 @@ final class CalendarPageModel: ObservableObject {
                         guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                               self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
                         for event in batch where seen.insert(event).inserted { matches.append(event) }
-                        self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
+                        self.searchCache = (query, interval, CalendarEventPresentation.orderedUnique(matches))
                         self.rebuildOrDefer()
                     }
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
-                    self.searchCache = (query, interval, EventKitCalendarEventSource.uniquingIDs(matches.sortedForAgenda()))
+                    self.searchCache = (query, interval, CalendarEventPresentation.orderedUnique(matches))
                     self.searchCacheComplete = true
                     self.searchRequest = nil
                     self.rebuildOrDefer()
@@ -375,7 +375,7 @@ final class CalendarPageModel: ObservableObject {
                     let events = await reader.loadEvents(in: interval).filter { $0.matches(query) }
                     guard !Task.isCancelled, let self, epoch == self.sourceGeneration,
                           self.searchRequest?.query == query, self.searchRequest?.interval == interval else { return }
-                    self.searchCache = (query, interval, events)
+                    self.searchCache = (query, interval, CalendarEventPresentation.orderedUnique(events))
                     self.searchCacheComplete = true
                     self.searchRequest = nil
                     self.rebuildOrDefer()
@@ -386,7 +386,7 @@ final class CalendarPageModel: ObservableObject {
             }
             return []
         }
-        let events = source.search(query, in: interval)
+        let events = CalendarEventPresentation.orderedUnique(source.search(query, in: interval))
         searchCache = (query, interval, events)
         searchCacheComplete = true
         #if DEBUG

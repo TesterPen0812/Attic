@@ -310,6 +310,64 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertEqual(source.events(in: month).map(\.id), events.map(\.id), "ids are stable across reads")
     }
 
+    func testAsyncSearchFallbackUniquingMatchesStreamedAndEventKitOccurrences() async throws {
+        let reader = HeldCalendarReader()
+        defer { reader.completeAll() }
+        let now = date(2026, 10, 29, 12)
+        let start = date(2026, 10, 29, 9)
+        let base = CalendarEvent(id: "repeat@start", title: "A recurring meeting", start: start,
+                                 end: start.addingTimeInterval(1800), isAllDay: false,
+                                 calendarTitle: "Fixture", colour: .init(red: 0.1, green: 0.2, blue: 0.3))
+        var second = base
+        second.title = "B recurring meeting"
+        let model = CalendarPageModel(store: try makeTestStore(), source: reader, calendar: calendar, now: { now })
+        await XCTAssertTrueAsync(await waitUntil { reader.pendingCount == 1 })
+        reader.completeFirst([])
+        await model.waitForEventReadsForTesting()
+        model.setVisible(true)
+        model.setQuery("recurring")
+        model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { reader.pendingCount == 1 })
+        reader.completeFirst([second, base])
+        await model.waitForEventReadsForTesting()
+        let ids = model.snapshot.groups.flatMap(\.items).compactMap { item -> String? in
+            guard case let .event(event) = item else { return nil }
+            return event.id
+        }
+        XCTAssertEqual(ids, ["repeat@start", "repeat@start#2"],
+                       "all Calendar search sources must assign the same stable display identities")
+        model.setVisible(false)
+    }
+
+    func testStreamingSearchNormalizesOverlappingOccurrenceIDsAfterEachBatch() async throws {
+        let reader = HeldCalendarSearchSource()
+        defer { reader.finish() }
+        let now = date(2026, 10, 29, 12)
+        let start = date(2026, 10, 29, 9)
+        let base = CalendarEvent(id: "repeat@start", title: "A recurring meeting", start: start,
+                                 end: start.addingTimeInterval(1800), isAllDay: false,
+                                 calendarTitle: "Fixture", colour: .init(red: 0.1, green: 0.2, blue: 0.3))
+        var second = base
+        second.title = "B recurring meeting"
+        let model = CalendarPageModel(store: try makeTestStore(), source: reader, calendar: calendar, now: { now })
+        model.setVisible(true)
+        model.setQuery("recurring")
+        model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { reader.streams.count == 1 })
+        reader.streams[0].yield([second])
+        await XCTAssertTrueAsync(await waitUntil { model.snapshot.groups.flatMap(\.items).count == 1 })
+        reader.streams[0].yield([base])
+        reader.streams[0].finish()
+        await model.waitForEventReadsForTesting()
+        let events = model.snapshot.groups.flatMap(\.items).compactMap { item -> CalendarEvent? in
+            guard case let .event(event) = item else { return nil }
+            return event
+        }
+        XCTAssertEqual(events.map(\.title), ["A recurring meeting", "B recurring meeting"])
+        XCTAssertEqual(events.map(\.id), ["repeat@start", "repeat@start#2"])
+        model.setVisible(false)
+    }
+
     func testCollidingIDsAreMadeUnique() {
         let store = FakeCalendarEventStore()
         let start = date(2026, 10, 29, 9)

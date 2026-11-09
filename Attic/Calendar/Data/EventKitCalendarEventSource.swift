@@ -228,19 +228,6 @@ final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEvent
         return worker.search(query, in: interval, around: date)
     }
 
-    /// Lists need unique ids; two different occurrences sharing an identifier
-    /// and start (rare detached repeats) get a stable suffix in agenda order.
-    nonisolated static func uniquingIDs(_ events: [CalendarEvent]) -> [CalendarEvent] {
-        var counts: [String: Int] = [:]
-        return events.map { event in
-            let count = counts[event.id, default: 0] + 1
-            counts[event.id] = count
-            guard count > 1 else { return event }
-            var copy = event
-            copy.id = "\(event.id)#\(count)"
-            return copy
-        }
-    }
 }
 
 /// Confined serial ownership, including lazy EKEventStore creation, mapping
@@ -324,7 +311,7 @@ private final class CalendarEventReadWorker: @unchecked Sendable {
                 events.append(event)
             }
         }
-        return EventKitCalendarEventSource.uniquingIDs(events.sortedForAgenda())
+        return CalendarEventPresentation.orderedUnique(events)
     }
 
 }
