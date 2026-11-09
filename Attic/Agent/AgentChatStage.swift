@@ -348,6 +348,9 @@ struct AgentChatComposer: View {
     @State private var height: CGFloat = 62
     @State private var shake: CGFloat = 0
 
+    /// Where the field's text and the mode's label both start, inside the card.
+    private static let textInset: CGFloat = 4
+
     private var insets: EdgeInsets { PanelSharedBottomBar.plusInsets(layout: layout) }
     private var width: CGFloat { max(0, layout.panelSize.width - insets.leading - insets.trailing) }
     private var side: CGFloat { AtticControlSize.headerControl }
@@ -471,7 +474,7 @@ struct AgentChatComposer: View {
                 .lineSpacing(3)
                 .foregroundStyle(ink)
                 .focused($focused)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, Self.textInset)
                 .padding(.vertical, 2)
                 .onSubmit(model.send)
                 .onKeyPress(.return, phases: .down) { press in
@@ -521,7 +524,8 @@ struct AgentChatComposer: View {
                 Image(systemName: "chevron.down").font(.system(size: 6, weight: .bold))
             }
             .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
-            .padding(.horizontal, 6)
+            .padding(.leading, Self.textInset)
+            .padding(.trailing, 6)
             .frame(height: 21)
             .contentShape(Rectangle())
         }
