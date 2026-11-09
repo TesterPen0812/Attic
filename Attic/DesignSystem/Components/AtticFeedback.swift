@@ -146,7 +146,7 @@ struct AtticNotice: View {
             if let actionTitle, let onAction {
                 AtticNoticeButton(title: actionTitle, action: onAction)
             }
-            AtticSmallButton(systemName: "xmark", label: "Dismiss", acceptsKeyboardFocus: false, action: onDismiss)
+            AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
                 .accessibilityIdentifier("panel-error-dismiss")
         }
         .padding(.leading, AtticToastMetrics.leadingPadding)
@@ -179,8 +179,10 @@ private struct AtticNoticeButton: View {
                 .contentShape(AtticUndoToast.buttonShape())
         }
         .buttonStyle(.plain)
+        .focusable(true, interactions: .activate)
         .focusEffectDisabled()
-        .focusable(false)
+        .atticOwnFocusRing(.rounded(radius: AtticUndoToast.buttonShape().cornerRadius,
+                                    height: AtticControlSize.smallHeight))
         .onHover { hovered = $0 }
     }
 }

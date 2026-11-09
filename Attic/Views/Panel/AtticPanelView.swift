@@ -2,6 +2,73 @@ import Combine
 import SwiftUI
 import SwiftData
 
+#if ATTIC_LOCAL_ONLY
+/// Narrow, test-only counters for the shell's retained-host invalidations.
+@MainActor enum PanelInvalidationProbe {
+    static var shell: (() -> Void)?
+    static var tasksHost: (() -> Void)?
+    static var notesHost: (() -> Void)?
+    static var relevantSettings: (() -> Void)?
+}
+#endif
+
+/// Settings for the panel's geometry, motion and appearance. Other settings
+/// (such as the global quick-capture shortcut) must not rebuild retained pages.
+@MainActor
+private final class PanelRelevantSettingsObserver: ObservableObject {
+    private var subscriptions: Set<AnyCancellable> = []
+
+    init(settings: AppSettings) {
+        func changed<Value>(_ publisher: Published<Value>.Publisher) -> AnyPublisher<Void, Never> {
+            publisher.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        }
+        Publishers.MergeMany([
+            changed(settings.$panelCornerSize),
+            changed(settings.$panelTheme),
+            changed(settings.$panelSurfaceStyle),
+            changed(settings.$panelTint),
+            changed(settings.$panelTintLength),
+            changed(settings.$appearance),
+            changed(settings.$hapticsEnabled),
+            changed(settings.$animations),
+            changed(settings.$motionTuning)
+        ])
+        .sink { [weak self] in
+            #if ATTIC_LOCAL_ONLY
+            PanelInvalidationProbe.relevantSettings?()
+            #endif
+            self?.objectWillChange.send()
+        }
+        .store(in: &subscriptions)
+    }
+}
+
+/// The shell responds to changes that affect its own composition and chrome.
+/// Page-local flags remain owned by their page or their dedicated observer.
+@MainActor
+private final class PanelRelevantUIStateObserver: ObservableObject {
+    private var subscriptions: Set<AnyCancellable> = []
+
+    init(uiState: PanelUIState) {
+        func changed<Value>(_ publisher: Published<Value>.Publisher) -> AnyPublisher<Void, Never> {
+            publisher.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        }
+        Publishers.MergeMany([
+            changed(uiState.$selectedSection),
+            changed(uiState.$panelSize),
+            changed(uiState.$isPageContentLoaded),
+            changed(uiState.$builtPages),
+            changed(uiState.$pagesElsewhere),
+            changed(uiState.$isPanelPinned),
+            changed(uiState.$primaryInputFocusRequest),
+            changed(uiState.$openTaskNoteID),
+            changed(uiState.$isComposerPresented)
+        ])
+        .sink { [weak self] in self?.objectWillChange.send() }
+        .store(in: &subscriptions)
+    }
+}
+
 /// The panel's shell: the surface, the header (Pin and the page switch), the
 /// page host for the current page, and the notices above it (the Undo toast
 /// and the error notice). Pages lay themselves out inside
@@ -12,9 +79,11 @@ struct AtticPanelView: View {
     let canvasSession: CanvasSession
     let noteDraft: NoteDraftController
     let chromeInteractionState: PanelChromeInteractionState
-    @ObservedObject var uiState: PanelUIState
+    let uiState: PanelUIState
+    @StateObject private var relevantUIState: PanelRelevantUIStateObserver
     /// The Draw page's model (its save notice shows like the other pages').
-    @ObservedObject var settings: AppSettings
+    let settings: AppSettings
+    @StateObject private var relevantSettings: PanelRelevantSettingsObserver
     let toasts: PanelToastCenter
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -60,7 +129,9 @@ struct AtticPanelView: View {
         self.noteDraft = noteDraft
         self.chromeInteractionState = chromeInteractionState
         self.uiState = uiState
+        _relevantUIState = StateObject(wrappedValue: PanelRelevantUIStateObserver(uiState: uiState))
         self.settings = settings
+        _relevantSettings = StateObject(wrappedValue: PanelRelevantSettingsObserver(settings: settings))
         self.toasts = toasts ?? PanelToastCenter()
         // A test hands one in to reach the page's model (round 12).
         _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
@@ -99,6 +170,11 @@ struct AtticPanelView: View {
         ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
 
     var body: some View {
+        let _ = relevantSettings
+        let _ = relevantUIState
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.shell?()
+        #endif
         PanelRootLayout { themedPanel }
     }
 

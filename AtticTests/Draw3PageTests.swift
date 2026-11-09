@@ -86,6 +86,35 @@ final class Draw3PageTests: XCTestCase {
                             save: save)
     }
 
+    /// R-19: measures each committed text replacement with the normal
+    /// write-through and crash-checkpoint path intact.
+    func testR19CommittedTextLatencyWithPopulatedCanvas() throws {
+        let durable = try persistentStore()
+        use(durable)
+        let objects = (0..<150).map { index in
+            DrawObject(frame: DrawFrame(x: Double(index) * 5, y: Double(index) * 4),
+                       zIndex: Int64(index), content: .text("Text box \(index) with some real content"))
+        }
+        XCTAssertTrue(model.perform(.put(objects)).isSaved)
+        let target = try XCTUnwrap(objects.first)
+        model.edit(target.id)
+        var samples: [Double] = []
+        for index in 0..<12 {
+            let value = "Edited box \(index): the user is typing committed text into an existing canvas."
+            let start = ContinuousClock.now
+            model.typed(value)
+            let duration = start.duration(to: .now).components
+            samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+            XCTAssertEqual(model.object(target.id)?.text, value)
+            XCTAssertFalse(durable.hasUnsettledEdits)
+        }
+        let ordered = samples.sorted()
+        let canvasID = try XCTUnwrap(model.canvasID)
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(canvasID).objects.first { $0.id == target.id }?.text,
+                       "Edited box 11: the user is typing committed text into an existing canvas.")
+        print("GAP_R19 total_objects=150 samples_ms=\(samples) median_ms=\(ordered[ordered.count / 2]) max_ms=\(ordered.last!) save_attempts=\(durable.metrics.saveAttempts)")
+    }
+
     func testFailedRenameKeepsTypedNameAndRetryClosesOnlyAfterDurableSave() throws {
         struct Injected: Error {}
         var fail = false

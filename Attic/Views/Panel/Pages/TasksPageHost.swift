@@ -129,6 +129,9 @@ struct TasksPageHost: View {
     }
 
     var body: some View {
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.tasksHost?()
+        #endif
         let model = state.model(for: store, toasts: toasts)
         let _ = installTaskNoteServices(model)
         let _ = { if model.services.openCalendarDay == nil { model.services.openCalendarDay = openCalendarDay } }()

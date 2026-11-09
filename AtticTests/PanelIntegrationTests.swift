@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import ObjectiveC
 import SwiftData
 import SwiftUI
@@ -11,6 +12,54 @@ import XCTest
 /// the Haptics seam.
 @MainActor
 final class PanelIntegrationTests: XCTestCase {
+
+    func testR01UnrelatedSettingDoesNotReevaluateRetainedHosts() throws {
+        #if ATTIC_LOCAL_ONLY
+        var counts = [0, 0, 0]
+        var relevantSettingChanges = 0
+        PanelInvalidationProbe.shell = { counts[0] += 1 }
+        PanelInvalidationProbe.tasksHost = { counts[1] += 1 }
+        PanelInvalidationProbe.notesHost = { counts[2] += 1 }
+        PanelInvalidationProbe.relevantSettings = { relevantSettingChanges += 1 }
+        defer {
+            PanelInvalidationProbe.shell = nil
+            PanelInvalidationProbe.tasksHost = nil
+            PanelInvalidationProbe.notesHost = nil
+            PanelInvalidationProbe.relevantSettings = nil
+        }
+        let panel = try makePanel()
+        var uiStateChanges = 0
+        let uiStateSubscription = panel.uiState.objectWillChange.sink { _ in uiStateChanges += 1 }
+        defer { uiStateSubscription.cancel() }
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.6)
+        let idleBefore = counts
+        let stateBeforeIdle = uiStateChanges
+        spin(0.25)
+        let idleChanges = zip(counts, idleBefore).map { current, previous in current - previous }
+        print("GAP_R01 idle_changes shell=\(idleChanges[0]) tasks=\(idleChanges[1]) notes=\(idleChanges[2]) ui_state=\(uiStateChanges - stateBeforeIdle)")
+        let before = counts
+        let stateBeforeToggle = uiStateChanges
+        let settingsBeforeToggle = relevantSettingChanges
+        panel.settings.quickCaptureEnabled.toggle()
+        spin(0.25)
+        let changes = zip(counts, before).map { current, previous in current - previous }
+        print("GAP_R01 unrelated_setting_changes shell=\(changes[0]) tasks_host=\(changes[1]) notes_host=\(changes[2]) ui_state=\(uiStateChanges - stateBeforeToggle) relevant_settings=\(relevantSettingChanges - settingsBeforeToggle)")
+        XCTAssertEqual(changes, [0, 0, 0], "Unrelated settings should leave the shell and retained page bodies alone")
+        panel.settings.panelCornerSize += 1
+        spin(0.25)
+        XCTAssertGreaterThan(counts[0], before[0], "Panel geometry changes must still refresh the shell")
+        XCTAssertGreaterThan(counts[1], before[1], "Panel geometry changes must reach Tasks")
+        XCTAssertGreaterThan(counts[2], before[2], "Panel geometry changes must reach retained Notes")
+        let beforeUnrelatedUIState = counts
+        panel.uiState.isComposerAttachmentPickerPresented.toggle()
+        spin(0.25)
+        let unrelatedUIStateCounts = zip(counts, beforeUnrelatedUIState).map { current, previous in current - previous }
+        print("GAP_R01 unrelated_ui_state_changes shell=\(unrelatedUIStateCounts[0]) tasks_host=\(unrelatedUIStateCounts[1]) notes_host=\(unrelatedUIStateCounts[2])")
+        XCTAssertEqual(unrelatedUIStateCounts, [0, 0, 0], "A composer attachment picker flag should not redraw retained pages")
+        #endif
+    }
     private struct Panel {
         let defaults: UserDefaults
         let suite: String

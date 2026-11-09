@@ -12,7 +12,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     @ObservedObject var noteStore: NoteStore
     let taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
-    @ObservedObject var uiState: PanelUIState
+    let uiState: PanelUIState
     let layout: PanelPageLayout
     /// Notes has restored its session (the page opens only after).
     let isReady: Bool
@@ -23,6 +23,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     @Environment(\.panelSharedChrome) private var sharedChrome
     @State private var presentedTaskID: UUID?
     @State private var taskRouteGeneration = 0
+    @State private var routeStateRevision = 0
 
     /// The route this page serves: only a page opened from here.
     private var requestedID: UUID? { uiState.taskNoteOrigin == page ? uiState.openTaskNoteID : nil }
@@ -33,6 +34,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     }
 
     var body: some View {
+        let _ = routeStateRevision
         let shown = isReady ? displayedTaskID : nil
         ZStack {
             if page == .notes {
@@ -56,6 +58,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
         .onChange(of: shown != nil, initial: true) { _, covered in sharedChrome?.setCovered(covered, page: page) }
         .onDisappear { sharedChrome?.setCovered(false, page: page) }
+        .onReceive(uiState.$openTaskNoteID.dropFirst()) { _ in routeStateRevision &+= 1 }
+        .onReceive(uiState.$taskNoteOrigin.dropFirst()) { _ in routeStateRevision &+= 1 }
         .task(id: requestedID) {
             let requested = requestedID
             // Not this page's route, and none shown here: nothing to hand off.

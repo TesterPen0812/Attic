@@ -1,3 +1,9 @@
+## 2026-11-09 · Notice keyboard actions (R-26)
+
+Retry and Dismiss in a panel notice participate in Tab navigation and use
+the shared keyboard-only focus ring. Appearing notices leave the current
+editor focused; the transient Undo toast keeps its existing focus policy.
+
 ## 2026-11-09 · Task attachment tile accessibility
 
 Task rows with file tiles now expose each tile as a separate labelled element
