@@ -284,9 +284,9 @@ enum PerformanceSignposts {
     }
 }
 
-/// Sparse diagnostic points for the first interaction after idle and its
-/// immediate repeat. `notice` persists in the unified log in optimized builds.
-/// No item IDs, titles, typed text, or item dates enter this stream.
+/// The inexpensive preview-only trace. Each touch yields NDJSON records on a
+/// utility writer queue; main records monotonic clocks at existing boundaries.
+/// A display-link callback is a *frame candidate*, never proof of scan-out.
 @MainActor
 enum IdleLatencyTrace {
     struct Context {
@@ -297,206 +297,196 @@ enum IdleLatencyTrace {
         let activity: Bool
     }
 
-    private static let log = Logger(subsystem: "com.taha.Attic", category: "IdleLatency")
+    #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
     private static var serial = 0
-    private static var current: (id: Int, origin: TimeInterval, started: TimeInterval)?
-    private static var hiddenAt: TimeInterval?
-    private static var cleanupStart: TimeInterval?
-    private static var lastCleanup: (start: TimeInterval, end: TimeInterval)?
-    private static var firstFrameWatch: IdleLatencyFirstFrameWatch?
-    private static var lastPanelPressAt: TimeInterval?
-    /// Discrete input clock for cold-action eligibility. Passive pointer
-    /// approach/reveal markers must not reset the first-click idle window.
-    private static var lastDiscreteInputAt: TimeInterval?
-    #if ATTIC_IDLE_SAMPLER && arch(arm64)
-    private static var measurement: (id: Int, began: TimeInterval, thread: UInt32,
-                                     initial: IdleLatencySnapshot, sampler: IdleLatencyStackSampler?)?
-    #endif
-
-    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
-
-    static func hidden() { hiddenAt = now }
-
-    /// The next visible input is no longer part of the preceding hidden interval.
-    static func revealed() { hiddenAt = nil }
-
-    /// Keep rapid clicks and all keystrokes off the persisted trace path.
-    static var shouldTracePanelPress: Bool {
-        lastPanelPressAt.map { now - $0 >= 1 } ?? true
-    }
-
-    static func panelPressBegan(original: TimeInterval, context: Context) {
-        lastPanelPressAt = now
-        begin("panel_action", original: original, context: context)
-    }
-
-    /// Account for typing, rapid untraced presses, scrolls and dragging without
-    /// emitting any additional trace lines or starting a sampler.
-    static func untracedInput() { lastDiscreteInputAt = now }
-
-    static func cleanupBegan() {
-        cleanupStart = now
-        log.notice("cleanup_begin uptime=\(now, privacy: .public)")
-    }
-
-    static func cleanupEnded() {
-        let end = now
-        if let start = cleanupStart { lastCleanup = (start, end) }
-        cleanupStart = nil
-        log.notice("cleanup_end uptime=\(end, privacy: .public)")
-    }
-
-    static func begin(_ kind: String, original: TimeInterval?, context: Context) {
-        let entry = now
-        let origin = original.flatMap { $0 > 0 && $0 <= entry ? $0 : nil } ?? entry
-        let idleSeconds = lastDiscreteInputAt.map { max(0, entry - $0) }
-        if kind == "panel_action" || kind == "island_action" {
-            lastDiscreteInputAt = entry
+    private static var current: (id: Int, begunNS: UInt64)?
+    private static var hiddenNS: UInt64?
+    private static var lastInputNS = DispatchTime.now().uptimeNanoseconds
+    private static var isPrimed = false
+    private static var lastPanelPressNS: UInt64?
+    static private(set) var lastClassificationForTesting: (first: Bool, idleMS: Double)?
+    private static var frameWatch: IdleLatencyFirstFrameWatch?
+    private static func validPhase(_ phase: String) -> Bool {
+        switch phase {
+        case "reveal_decision", "page_change_decision", "mouse_down_returned",
+             "sendEvent_dispatched", "island_sendEvent_dispatched", "handler_entered",
+             "view_dispatch_done", "commit_handoff", "transaction_flushed",
+             "cleanup_begin", "cleanup_end", "followup_scheduled", "followup_fired": return true
+        default: return false
         }
-        #if ATTIC_IDLE_SAMPLER && arch(arm64)
-        if let previous = measurement { retire(previous) }
-        let thread = AtticIdleMach.mainThread()
-        let initial = AtticIdleMach.snapshot(thread)
-        #endif
+    }
+
+    private static func validSpan(_ phase: String) -> Bool {
+        switch phase {
+        case "show_build_layout", "page_build", "page_layout", "snapshot_capture",
+             "snapshot_prepare", "transaction_flush": return true
+        default: return false
+        }
+    }
+    private static var timestamp: UInt64 { DispatchTime.now().uptimeNanoseconds }
+
+    private static func emit(_ record: FirstTouchLogRecord) {
+        FirstTouchLogWriter.shared.submit(record)
+    }
+
+    /// Prime the clock and queue during startup, so a genuinely idle first
+    /// touch is classified correctly and does not initialize a writer on input.
+    static func startMonitoring() {
+        guard !isPrimed else { return }
+        isPrimed = true
+        lastInputNS = timestamp
+        _ = FirstTouchLogWriter.shared
+    }
+
+    static func hidden() { hiddenNS = timestamp }
+    static func revealed() { hiddenNS = nil }
+    static var shouldTracePanelPress: Bool {
+        let at = timestamp
+        return lastPanelPressNS.map { at >= $0 && at - $0 >= 1_000_000_000 } ?? true
+    }
+    static func panelPressBegan(original: TimeInterval, context: Context) {
+        lastPanelPressNS = timestamp
+        begin("panel_control", original: original, context: context)
+    }
+    static func untracedInput() { lastInputNS = timestamp }
+    static func cleanupBegan() { point("cleanup_begin") }
+    static func cleanupEnded() { point("cleanup_end") }
+
+    static func begin(_ kind: String, original: TimeInterval?, context: Context,
+                      receivedNS: UInt64? = nil) {
+        // Never use data from an event's payload. Only a small fixed kind set
+        // can enter a persistent log, including through this internal API.
+        guard ["corner_approach", "island_action", "island_wake", "panel_control",
+               "explicit_reveal"].contains(kind) else { return }
+        let entered = timestamp
+        let received = min(receivedNS ?? entered, entered)
+        let eventNS = original.flatMap { value -> UInt64? in
+            guard value.isFinite, value > 0, value < Double(received) / 1e9 else { return nil }
+            return UInt64(value * 1e9)
+        } ?? received
+        let idle = received >= lastInputNS ? received - lastInputNS : 0
+        lastInputNS = received
         serial &+= 1
-        current = (serial, origin, entry)
-        firstFrameWatch?.stop()
-        firstFrameWatch = nil
-        let hiddenFor = hiddenAt.map { max(0, entry - $0) } ?? -1
-        let overlapping = cleanupStart.map { $0 <= entry } == true
-            || lastCleanup.map { $0.start <= entry && $0.end >= origin } == true
-        let page = String(describing: context.page)
-        let mode = String(describing: context.mode)
-        log.notice("input id=\(serial, privacy: .public) kind=\(kind, privacy: .public) origin=\(origin, privacy: .public) callback=\(entry, privacy: .public) delivery_ms=\((entry - origin) * 1000, privacy: .public) page=\(page, privacy: .public) hidden_s=\(hiddenFor, privacy: .public) released=\(context.released, privacy: .public) snapshot=\(context.snapshot, privacy: .public) hide_mode=\(mode, privacy: .public) activity=\(context.activity, privacy: .public) cleanup_overlap=\(overlapping, privacy: .public)")
-        #if ATTIC_IDLE_SAMPLER && arch(arm64)
-        let sampler = IdleLatencyStackSampler.startIfEligible(idleSeconds: idleSeconds, thread: thread)
-        measurement = (serial, entry, thread, initial, sampler)
-        log.notice("memory_start id=\(serial, privacy: .public) idle_since_action_s=\((idleSeconds ?? -1), privacy: .public) valid=\(initial.valid, privacy: .public) footprint_bytes=\(initial.footprint, privacy: .public) resident_bytes=\(initial.resident, privacy: .public) compressed_bytes=\(initial.compressed, privacy: .public)")
-        #endif
+        current = (serial, received)
+        frameWatch?.stop()
+        frameWatch = nil
+
+        var record = FirstTouchLogRecord(id: serial, event: "input", atNS: received)
+        record.kind = kind
+        record.originNS = eventNS
+        record.idleMS = Double(idle) / 1e6
+        record.firstAfterIdle = idle >= 20_000_000_000
+        lastClassificationForTesting = (record.firstAfterIdle == true, record.idleMS ?? 0)
+        record.hiddenMS = hiddenNS.map { Double(received >= $0 ? received - $0 : 0) / 1e6 }
+        record.page = context.page.rawValue
+        record.released = context.released
+        record.snapshot = context.snapshot
+        record.hideMode = context.mode.rawValue
+        record.napActivity = context.activity  // Activity request; actual App Nap state requires Energy Log.
+        emit(record)
     }
 
     static func point(_ phase: String) {
-        guard let trace = current, now - trace.started < 8 else { return }
-        log.notice("point id=\(trace.id, privacy: .public) phase=\(phase, privacy: .public) from_input_ms=\((now - trace.origin) * 1000, privacy: .public)")
+        guard validPhase(phase), let trace = current else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
+        record.stage = phase
+        emit(record)
     }
 
     static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
-        let start = now
+        guard validSpan(phase), let trace = current else { return try body() }
+        let before = timestamp
         defer {
-            if let trace = current, start >= trace.started, now - start < 8 {
-                log.notice("span id=\(trace.id, privacy: .public) phase=\(phase, privacy: .public) start_ms=\((start - trace.origin) * 1000, privacy: .public) elapsed_ms=\((now - start) * 1000, privacy: .public)")
+            let after = timestamp
+            if after >= before, after >= trace.begunNS,
+               after - trace.begunNS <= 8_000_000_000 {
+                var record = FirstTouchLogRecord(id: trace.id, event: "span", atNS: after)
+                record.spanStartNS = before
+                record.stage = phase
+                emit(record)
             }
         }
         return try body()
     }
 
     static func followUpScheduled(at deadline: TimeInterval) {
-        guard let trace = current, now - trace.started < 8 else { return }
-        log.notice("followup_schedule id=\(trace.id, privacy: .public) due=\(deadline, privacy: .public)")
+        followup("followup_scheduled", due: deadline)
     }
-
     static func followUpFired(scheduled: TimeInterval) {
-        guard let trace = current, now - trace.started < 8 else { return }
-        log.notice("followup_fire id=\(trace.id, privacy: .public) due=\(scheduled, privacy: .public) actual=\(now, privacy: .public) late_ms=\((now - scheduled) * 1000, privacy: .public)")
+        followup("followup_fired", due: scheduled)
+    }
+    private static func followup(_ name: String, due: TimeInterval) {
+        guard let trace = current else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
+        record.stage = name
+        record.dueNS = due.isFinite && due > 0 ? UInt64(due * 1e9) : nil
+        emit(record)
     }
 
-    /// The next main-thread display-link callback is only a frame candidate.
-    /// It can precede a SwiftUI commit and does not prove any pixels changed.
     static func firstFrameOpportunity(in view: NSView?) {
-        guard let trace = current, now - trace.started < 8, let view else { return }
-        firstFrameWatch?.stop()
-        let watch = IdleLatencyFirstFrameWatch(id: trace.id, origin: trace.origin)
-        firstFrameWatch = watch
+        guard let trace = current, let view else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        frameWatch?.stop()
+        // This marks the next run-loop handoff to CA; commit and WindowServer
+        // presentation must be inspected independently in Instruments.
+        DispatchQueue.main.async {
+            guard current?.id == trace.id else { return }
+            point("commit_handoff")
+        }
+        let watch = IdleLatencyFirstFrameWatch(id: trace.id)
+        frameWatch = watch
         watch.start(in: view)
     }
 
-    fileprivate static func frameObserved(id: Int, origin: TimeInterval, timestamp: TimeInterval) {
+    fileprivate static func frameObserved(id: Int) {
         guard current?.id == id else { return }
-        log.notice("first_frame_candidate id=\(id, privacy: .public) since_input_ms=\((timestamp - origin) * 1000, privacy: .public)")
-        firstFrameWatch = nil
-        #if ATTIC_IDLE_SAMPLER && arch(arm64)
-        if let measure = measurement, measure.id == id {
-            let ending = AtticIdleMach.snapshot(measure.thread)
-            let change = ending.counters.delta(since: measure.initial.counters)
-            let valid = ending.valid & measure.initial.valid
-            log.notice("action_delta id=\(id, privacy: .public) wall_ms=\((timestamp - measure.began) * 1000, privacy: .public) valid=\(valid, privacy: .public) main_user_us=\(change.userUS, privacy: .public) main_system_us=\(change.systemUS, privacy: .public) process_faults=\(change.faults, privacy: .public) process_pageins=\(change.pageins, privacy: .public) process_cow_faults=\(change.cowFaults, privacy: .public) system_wide_decompressions=\(change.systemDecompressions, privacy: .public)")
-            retire(measure, logSamples: true)
-            measurement = nil
-        }
-        #endif
+        frameWatch = nil
+        emit(FirstTouchLogRecord(id: id, event: "frame_candidate", atNS: timestamp))
     }
-
-    #if ATTIC_IDLE_SAMPLER && arch(arm64)
-    /// Called on main after candidate or supersession. Serial queue drain
-    /// ensures the Mach right is not released until sampling has stopped.
-    private static func retire(_ measure: (id: Int, began: TimeInterval, thread: UInt32,
-                                         initial: IdleLatencySnapshot, sampler: IdleLatencyStackSampler?),
-                               logSamples: Bool = false) {
-        guard let sampler = measure.sampler else {
-            AtticIdleMach.release(measure.thread)
-            return
-        }
-        Task { @MainActor in
-            let samples = await sampler.finish()
-            AtticIdleMach.release(measure.thread)
-            if logSamples { emitSamples(samples, id: measure.id) }
-        }
-    }
-
-    /// Image table gives each compact stack token a binary name and UUID.
-    /// dyld lookup and Logger are strictly after thread_resume and queue drain.
-    private static func emitSamples(_ samples: [IdleLatencyStackSample], id: Int) {
-        var images: [String: Int] = [:]
-        for (index, sample) in samples.enumerated() {
-            var entries: [String] = []
-            for pc in sample.frames {
-                guard let image = AtticIdleMach.image(for: pc) else {
-                    entries.append("?+0x\(String(pc, radix: 16))")
-                    continue
-                }
-                let key = image.name + ":" + image.uuid
-                let imageID: Int
-                if let known = images[key] {
-                    imageID = known
-                } else {
-                    imageID = images.count
-                    images[key] = imageID
-                    log.notice("sample_image id=\(id, privacy: .public) image=\(imageID, privacy: .public) name=\(image.name, privacy: .public) uuid=\(image.uuid, privacy: .public)")
-                }
-                entries.append("\(imageID)+0x\(String(image.offset, radix: 16))")
-            }
-            let stack = entries.joined(separator: ",")
-            log.notice("sample id=\(id, privacy: .public) n=\(index, privacy: .public) after_start_ms=\(sample.afterStartMS, privacy: .public) run_state=\(sample.runState, privacy: .public) waiting=\(sample.waiting, privacy: .public) status=\(sample.status, privacy: .public) stack=\(stack, privacy: .public)")
-        }
-    }
+    #else
+    static func startMonitoring() {}
+    static func hidden() {}
+    static func revealed() {}
+    static var shouldTracePanelPress: Bool { false }
+    static func panelPressBegan(original: TimeInterval, context: Context) {}
+    static func untracedInput() {}
+    static func cleanupBegan() {}
+    static func cleanupEnded() {}
+    static func begin(_ kind: String, original: TimeInterval?, context: Context,
+                      receivedNS: UInt64? = nil) {}
+    static func point(_ phase: String) {}
+    static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T { try body() }
+    static func followUpScheduled(at deadline: TimeInterval) {}
+    static func followUpFired(scheduled: TimeInterval) {}
+    static func firstFrameOpportunity(in view: NSView?) {}
     #endif
 }
 
-/// Only installed for the next display-link opportunity after input/flush.
-/// It observes a callback, not the final displayed pixels.
+#if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+/// Installs a display link for only the next opportunity after a touch.
 @MainActor
 private final class IdleLatencyFirstFrameWatch: NSObject {
     let id: Int
-    let origin: TimeInterval
     private var link: CADisplayLink?
-
-    init(id: Int, origin: TimeInterval) { self.id = id; self.origin = origin }
-
+    init(id: Int) { self.id = id }
     func start(in view: NSView) {
         guard view.window?.screen != nil else { return }
-        let link = view.displayLink(target: self, selector: #selector(frame(_:)))
-        self.link = link
-        link.add(to: .main, forMode: .common)
+        let display = view.displayLink(target: self, selector: #selector(frame(_:)))
+        link = display
+        display.add(to: .main, forMode: .common)
     }
-
     @objc private func frame(_ link: CADisplayLink) {
-        let timestamp = ProcessInfo.processInfo.systemUptime
         stop()
-        IdleLatencyTrace.frameObserved(id: id, origin: origin, timestamp: timestamp)
+        IdleLatencyTrace.frameObserved(id: id)
     }
-
     func stop() { link?.invalidate(); link = nil }
 }
+#endif
 
 /// A frame count over a motion (round 11): a display link on the main
 /// screen counts each frame and the refreshes it missed, and the interval

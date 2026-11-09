@@ -1122,10 +1122,12 @@ final class PanelIslandWindow: NSPanel {
             }
             if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("island_sendEvent_dispatched")
+                IdleLatencyTrace.point("view_dispatch_done")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
             }
         }
         if AtticPanel.takesFirstPress(event.type) {
+            IdleLatencyTrace.point("handler_entered")
             pressing = true; trackedRelease = false
             (parent as? AtticPanel)?.beginFirstPress()
         }
@@ -1406,11 +1408,28 @@ final class PanelIslandWindows {
     /// its drag and release.
     func updatePassthrough(at point: CGPoint, eventTimestamp: TimeInterval? = nil) {
         if island.isVisible {
-            let wasAwake = model.isAwake
-            model.track(pointer: point, rest: restFrame, awake: islandFrame)
-            if !wasAwake, model.isAwake, let eventTimestamp, let context = onIdleTraceContext?() {
-                IdleLatencyTrace.begin("island_wake", original: eventTimestamp, context: context)
+            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            let callbackNS = DispatchTime.now().uptimeNanoseconds
+            // Begin before track() changes the observable model state, so its
+            // first SwiftUI-facing work is charged to the island-wake span.
+            var tracingWake = false
+            if !model.isAwake, let eventTimestamp,
+               restFrame.insetBy(dx: -PanelIslandLayout.wakeDistance,
+                                 dy: -PanelIslandLayout.wakeDistance).contains(point),
+               let context = onIdleTraceContext?() {
+                IdleLatencyTrace.begin("island_wake", original: eventTimestamp,
+                                       context: context, receivedNS: callbackNS)
+                IdleLatencyTrace.point("handler_entered")
+                tracingWake = true
             }
+            #endif
+            model.track(pointer: point, rest: restFrame, awake: islandFrame)
+            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            if tracingWake, model.isAwake {
+                IdleLatencyTrace.point("view_dispatch_done")
+                IdleLatencyTrace.firstFrameOpportunity(in: island.contentView)
+            }
+            #endif
         }
         guard NSEvent.pressedMouseButtons == 0 else { return }
         let ignores = island.frame.contains(point) && !capsuleFrame.contains(point)
