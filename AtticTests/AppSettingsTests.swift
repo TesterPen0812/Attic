@@ -5,6 +5,36 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    @MainActor
+    func testFix18RepeatedQuitCommandDoesNotBypassPendingPreparation() throws {
+        var terminationCalls = 0
+        let commands = MenuBarCommands.commands(
+            advertisedNewTaskShortcut: nil,
+            showPanel: {}, newTask: {}, newNote: {}, search: {}, openSettings: {},
+            quit: { terminationCalls += 1 }
+        )
+        let quit = try XCTUnwrap(commands.first(where: { $0.title == "Quit Attic" }))
+
+        quit.action()
+        quit.action()
+
+        XCTAssertEqual(terminationCalls, 1,
+                       "a repeated Quit while durable preparation is pending must not call NSApplication.terminate again")
+    }
+
+    @MainActor
+    func testFix18RefusedQuitAllowsASecondDurabilityAttempt() {
+        let gate = AppQuitRequestGate()
+        var calls = 0
+        gate.request { calls += 1 }
+        XCTAssertTrue(gate.beginPreparation())
+        XCTAssertFalse(gate.beginPreparation(), "reentry must not start another durability preparation")
+        gate.finishPreparation(approved: false)
+        gate.request { calls += 1 }
+        XCTAssertTrue(gate.beginPreparation())
+        XCTAssertEqual(calls, 2, "a refused Quit must allow a later retry")
+    }
+
     func testTerminationVetoPreservesCanvasWork() {
         var events: [String] = []
 
