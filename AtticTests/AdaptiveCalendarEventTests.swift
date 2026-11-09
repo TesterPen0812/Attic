@@ -61,6 +61,20 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         func openInCalendar(_ id: String) async throws { throw CalendarEventWriteError.openFailed }
     }
 
+    private final class HeldExternalOpenWriter: CalendarEventWriter {
+        var gate: CheckedContinuation<Void, Never>?
+        var lastError: CalendarEventWriteError? { nil }
+        func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
+        func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? { nil }
+        func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
+        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func openInCalendar(_ id: String) async throws {
+            await withCheckedContinuation { gate = $0 }
+            throw CalendarEventWriteError.openFailed
+        }
+    }
+
     private func preciseRow(start: Date, duration: TimeInterval) -> (rows: CalendarEventRowState, writer: PreciseWriter, event: CalendarEvent) {
         let draft = CalendarEventDraft(title: "Lunch", start: start, length: duration,
                                        calendarID: "home", timeZoneID: "Europe/London")
@@ -321,6 +335,41 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertEqual(f.backend.events.values.first?.draft, f.made.draft)
         await f.rows.openInCalendar(external)
         XCTAssertEqual(f.backend.opened, [external.id])
+    }
+
+    func testFix18LateExternalOpenFailureCannotMarkAnotherEventOrReopenDismissedEvent() async throws {
+        let writer = HeldExternalOpenWriter()
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        let start = Date(timeIntervalSince1970: 1_793_361_600)
+        let a = CalendarEvent(id: "external-a", title: "A", start: start,
+            end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+            calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+        var b = a
+        b.id = "external-b"
+        b.title = "B"
+
+        await rows.toggle(a)
+        let openA = Task { await rows.openInCalendar(a) }
+        for _ in 0..<200 where writer.gate == nil { await Task.yield() }
+        let firstGate = try XCTUnwrap(writer.gate)
+        let closedA = await rows.close()
+        XCTAssertTrue(closedA)
+        await rows.toggle(b)
+        firstGate.resume()
+        await openA.value
+        XCTAssertEqual(rows.rowID, b.id)
+        XCTAssertNil(rows.failure, "A's external-open error must not mark B")
+
+        writer.gate = nil
+        let openB = Task { await rows.openInCalendar(b) }
+        for _ in 0..<200 where writer.gate == nil { await Task.yield() }
+        let secondGate = try XCTUnwrap(writer.gate)
+        let closedB = await rows.close()
+        XCTAssertTrue(closedB)
+        secondGate.resume()
+        await openB.value
+        XCTAssertNil(rows.rowID, "a dismissed event must stay dismissed")
+        XCTAssertNil(rows.failure)
     }
 
     func testDeleteFailureKeepsDraftAndSuccessfulDeleteHasUndo() async throws {

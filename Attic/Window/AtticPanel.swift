@@ -383,13 +383,14 @@ final class AtticPanel: NSPanel {
             if tracingIdlePress, Self.takesFirstPress(event.type) {
                 IdleLatencyTrace.point("mouse_down_returned")
             }
-            if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
-                IdleLatencyTrace.point("sendEvent_dispatched")
-                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
-                tracingIdlePress = false
-            }
             if changesContent(event) {
                 onContentMayChange?([.mouseMoved, .mouseEntered, .mouseExited].contains(event.type))
+            }
+            if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+                IdleLatencyTrace.point("sendEvent_dispatched")
+                IdleLatencyTrace.point("view_dispatch_done")
+                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+                tracingIdlePress = false
             }
         }
         if event.type == .scrollWheel { lastScrollEventTime = event.timestamp }
@@ -399,7 +400,10 @@ final class AtticPanel: NSPanel {
         // own views in a list do not accept the first mouse). The shared
         // first-press boundary also activates the app for native glass;
         // ordering and hover remain non-activating.
-        if Self.takesFirstPress(event.type) { beginFirstPress() }
+        if Self.takesFirstPress(event.type) {
+            IdleLatencyTrace.point("handler_entered")
+            beginFirstPress()
+        }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()

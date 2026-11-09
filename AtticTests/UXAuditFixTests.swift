@@ -605,6 +605,15 @@ final class UXAuditFixTests: XCTestCase {
         for iteration in 1...24 { try await assertDrawFilterKeyboardHandoff(iteration: iteration) }
     }
 
+    /// Yield until the native field actually takes focus, bounded by 1 s.
+    /// Fixed sleeps made 24 repetitions exceed XCTest's per-method timeout.
+    private func waitForDrawFocus(_ ready: () -> Bool) async throws {
+        for _ in 0..<40 {
+            if ready() { return }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
     private func assertDrawFilterKeyboardHandoff(iteration: Int) async throws {
         try requireKeyWindowTests()
         AtticDraw.enabledOverride = true
@@ -624,7 +633,7 @@ final class UXAuditFixTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(600))
         model.openSearch()
-        try await Task.sleep(for: .milliseconds(600))
+        try await waitForDrawFocus { model.isSearching && window.firstResponder is NSTextView }
         let searchEditor = window.firstResponder as? NSTextView
         XCTAssertNotNil(searchEditor, "opening Search gives its field the keyboard")
         if let searchEditor {
@@ -640,7 +649,9 @@ final class UXAuditFixTests: XCTestCase {
         }
         model.closeSearch()
         model.openFilter()
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForDrawFocus {
+            ((window.firstResponder as? NSTextView)?.delegate as? NSTextField)?.accessibilityIdentifier() == "draw-title-filter"
+        }
         let titleEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let titleField = try XCTUnwrap(titleEditor.delegate as? NSTextField)
         XCTAssertEqual(titleField.accessibilityIdentifier(), "draw-title-filter")
@@ -666,20 +677,36 @@ final class UXAuditFixTests: XCTestCase {
         window.sendEvent(filterEscape)
         let immediatelyAfterEscape = focusState()
         DispatchQueue.main.async { window.focusTrace.append("queued-after: \(focusState())") }
-        try await Task.sleep(for: .milliseconds(200))
+        try await waitForDrawFocus { !model.isFiltering && window.firstResponder is DrawBoardView }
         XCTAssertFalse(model.isFiltering)
         XCTAssertTrue(window.focusTrace.contains { $0.hasPrefix("queued-before:") }, "the native callback queue received its turn")
         XCTAssertTrue(window.focusTrace.contains { $0.hasPrefix("queued-after:") }, "the return callback received its turn before the responder assertion")
         XCTAssertTrue(window.firstResponder is DrawBoardView,
                       "Draw filter keyboard handoff iteration=\(iteration): before=[\(beforeEscape)] immediate=[\(immediatelyAfterEscape)] after=[\(focusState())] trace=\(window.focusTrace.suffix(30))")
         model.openFilter()
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitForDrawFocus {
+            ((window.firstResponder as? NSTextView)?.delegate as? NSTextField)?.accessibilityIdentifier() == "draw-title-filter"
+        }
         model.library.perform(.tags)
-        try await Task.sleep(for: .milliseconds(600))
+        try await waitForDrawFocus {
+            let field = (window.firstResponder as? NSTextView)?.delegate as? NSTextField
+            return model.library.mode == .tags && field?.placeholderAttributedString?.string == String(localized: "Tag")
+        }
         let tagEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
         let field = try XCTUnwrap(tagEditor.delegate as? NSTextField)
         XCTAssertNotEqual(field.accessibilityIdentifier(), "draw-title-filter", "Tags takes over from the canvas filter")
-        XCTAssertTrue(field.placeholderString?.localizedCaseInsensitiveContains("tag") == true)
+        // The native Tag input renders a styled (attributed) placeholder.
+        // Verify the actual editing field and its Escape route, not the
+        // unset plain-placeholder property.
+        XCTAssertEqual(field.placeholderAttributedString?.string ?? field.placeholderString, String(localized: "Tag"))
+        XCTAssertTrue(field.isEditable && field.isEnabled)
+        tagEditor.insertText("handoff", replacementRange: tagEditor.selectedRange())
+        XCTAssertEqual(field.stringValue, "handoff", "the picker owns keyboard input")
+        let tagEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!
+        window.sendEvent(tagEscape)
+        try await waitForDrawFocus { model.library.mode == .list }
+        XCTAssertEqual(model.library.mode, .list, "native Escape closes the Draw tags picker")
     }
 
     private func withHost<Content: View>(_ content: Content, size: CGSize = CGSize(width: 320, height: 460),

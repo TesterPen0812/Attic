@@ -796,6 +796,10 @@ final class TasksRound12Tests: XCTestCase {
         defer { cover.removeFromSuperview() }
         hosted.model.isPageShown = false
         hosted.spin(0.3)
+        // Accepted B5 (2026-11-02): the page is retained for its next reveal.
+        // Its old row focus is released when another section takes over.
+        let afterHide = hosted.window.firstResponder
+        XCTAssertFalse(afterHide === responder, "the hidden Tasks row releases the keyboard")
         let spaceY = try XCTUnwrap(rows.last?.value.maxY) + 24
         hosted.click(y: spaceY)
         hosted.rightClick(y: spaceY)
@@ -805,7 +809,8 @@ final class TasksRound12Tests: XCTestCase {
         hosted.rightClick(y: secondFrame.midY)
         XCTAssertEqual(hosted.model.selection, [first.id], "a hidden page's rows take no press")
         XCTAssertEqual(hosted.model.selectionAnchor, first.id, "and the anchor stays")
-        XCTAssertTrue(hosted.window.firstResponder === responder, "and focus stays")
+        XCTAssertTrue(hosted.window.firstResponder === afterHide,
+                      "hidden clicks cannot take the new section's keyboard")
         XCTAssertNil(hosted.pointer.invocation, "no menu is bound to a hidden row")
 
         // Shown again: the same presses target as before.

@@ -41,6 +41,43 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    func testE01FirstDistantFindRevealsWrappedMatch() throws {
+        for width in [CGFloat(340), CGFloat(420)] {
+            let blocks: [NoteBlock] = [.text("Title")] + (0..<5_000).map { number in
+                .text("Paragraph \(number) needle " +
+                    String(repeating: "Words that wrap on narrow columns. ", count: number % 5 + 1))
+            }
+            let (engine, view) = editor(blocks)
+            let scroll = try XCTUnwrap(view.enclosingScrollView)
+            scroll.frame = NSRect(x: 0, y: 0, width: width, height: 600)
+            let window = NSWindow(contentRect: scroll.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = scroll
+            defer { engine.find.close(); engine.detachView(); window.close() }
+            scroll.layoutSubtreeIfNeeded()
+            engine.find.inTopRow = true
+            engine.find.show()
+            engine.find.query = "needle"
+            let target = try XCTUnwrap(engine.find.matches.last?.noteRange)
+            let searches = engine.find.objectSearchPassCount
+            let scans = engine.find.searchedUTF16Count
+            let coldMS = milliseconds { engine.find.next(backward: true) }
+            XCTAssertEqual(view.selectedRange(), target)
+            view.layoutSubtreeIfNeeded()
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
+            let textTarget = try XCTUnwrap(engine.textRange(for: target))
+            XCTAssertTrue(viewport.intersects(textTarget), "Find must scroll onto the distant target")
+            let visible = view.convert(scroll.contentView.bounds, from: scroll.contentView)
+            let rect = try XCTUnwrap(engine.rect(for: target))
+            XCTAssertTrue(rect.intersects(visible), "the wrapped match must actually be visible")
+            let warmMS = milliseconds { engine.find.next(); engine.find.next(backward: true) }
+            XCTAssertEqual(engine.find.objectSearchPassCount, searches)
+            XCTAssertEqual(engine.find.searchedUTF16Count, scans)
+            print("E01_FIND width=\(width) first_ms=\(coldMS) warm_ms=\(warmMS)")
+        }
+    }
+
     func testFindTableFocusDoesNotRepaintEveryTableInALargeNote() throws {
         let (engine, view) = editor([.text("Title"), .text("needle body"),
             .table(NoteTable(texts: [["needle cell", "needle other"]]))]

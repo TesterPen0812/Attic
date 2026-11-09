@@ -60,6 +60,7 @@ enum MenuBarCommands {
         togglePin: @escaping () -> Void = {},
         isPinned: Bool = false
     ) -> [AtticMenuCommand] {
+        let quitGate = AppQuitRequestGate.shared
         // Open ▸ (round 10): the pages and Pin, with the keys the panel
         // answers, so this menu lists every command there is.
         var open = PanelPage.allCases.map { page in
@@ -79,7 +80,8 @@ enum MenuBarCommands {
             .submenu(String(localized: "Open"), systemImage: "rectangle.stack", startsSection: true, open)
         ] + [
             AtticMenuCommand("Settings…", systemImage: "gearshape", shortcut: KeyboardShortcut(",", modifiers: .command), startsSection: true, action: openSettings),
-            AtticMenuCommand("Quit Attic", systemImage: "power", shortcut: KeyboardShortcut("q", modifiers: .command), startsSection: true, action: quit)
+            AtticMenuCommand("Quit Attic", systemImage: "power", shortcut: KeyboardShortcut("q", modifiers: .command),
+                             startsSection: true, action: { quitGate.request(quit) })
         ]
     }
 }

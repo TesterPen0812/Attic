@@ -42,7 +42,10 @@ final class PhaseXHunt1bTests: XCTestCase {
         let shown = try XCTUnwrap(rows(library, store).first)
         XCTAssertEqual(shown.id, id)
         XCTAssertEqual(shown.title, "Renamed")
-        XCTAssertEqual(shown.preview, "New preview", "A fresh context must replace the old cached body")
+        // Accepted 2026-11-05: search shows the body match with nearby
+        // context. The new title is part of that context, not a stale body.
+        XCTAssertEqual(shown.preview, "Renamed New preview", "A fresh context must replace the old cached body")
+        XCTAssertEqual(shown.searchMatch, "New preview", "the current match is highlighted")
     }
 
     func testR2_01AcceptPreservesTagsChangedAfterReview() async throws {
@@ -472,7 +475,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         await library.waitForSearch(); XCTAssertTrue(rows(library, store).isEmpty)
         library.tagFilter = nil; library.query = "Renamed"
         await library.waitForSearch(); XCTAssertEqual(rows(library, store).map(\.id), [id])
-        XCTAssertEqual(try XCTUnwrap(rows(library, store).first).preview, "Second First")
+        let renamedRow = try XCTUnwrap(rows(library, store).first)
+        XCTAssertEqual(renamedRow.preview, "Title: Renamed", "Accepted 2026-11-05: title matches explain the result")
+        XCTAssertEqual(renamedRow.searchMatch, "Renamed")
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
         await library.waitForSearch(); XCTAssertTrue(rows(library, store).isEmpty)
         XCTAssertEqual(library.queryForNewNote(in: library.groups(store: store, drafts: [])), "Renamed")

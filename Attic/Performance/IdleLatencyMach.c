@@ -143,4 +143,27 @@ uint32_t AtticIdleDescribePC(uint64_t pc, char name[96], char uuid[37], uint64_t
     }
     return 1; // Offset and image name still usable without a UUID.
 }
+
+#if defined(ATTIC_FIRST_TOUCH_LOG)
+// Called only on the diagnostic writer queue. App-wide counters are samples,
+// not proof that a particular callback caused a page-in or decompression.
+void AtticFirstTouchReadMemory(uint64_t out[6]) {
+    memset(out, 0, 6 * sizeof(uint64_t));
+    task_vm_info_data_t vm;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count) == KERN_SUCCESS) {
+        out[0] |= 1;
+        out[1] = vm.phys_footprint;
+        out[2] = vm.resident_size;
+        out[3] = vm.compressed;
+    }
+    task_events_info_data_t events;
+    count = TASK_EVENTS_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_EVENTS_INFO, (task_info_t)&events, &count) == KERN_SUCCESS) {
+        out[0] |= 2;
+        out[4] = (uint32_t)events.faults;
+        out[5] = (uint32_t)events.pageins;
+    }
+}
+#endif
 #endif

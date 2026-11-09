@@ -65,6 +65,67 @@ final class TasksPageModelTests: XCTestCase {
 
     // MARK: - Lists
 
+    func testE02ListSnapshotReusesRowIDsStatusGroupsAndSelectionRuns() throws {
+        let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
+        let initial = model.listSnapshot(for: .now)
+        XCTAssertEqual(Set(initial.ids), Set([a, b, c]))
+        XCTAssertEqual(initial.idsByStatus[.todo], initial.ids)
+        XCTAssertEqual(initial.selectionRuns.count, 0)
+        #if DEBUG
+        let firstBuilds = model.selectionRunRebuildCount
+        #endif
+        for _ in 0..<10 { _ = model.listSnapshot(for: .now) }
+        #if DEBUG
+        XCTAssertEqual(model.selectionRunRebuildCount, firstBuilds, "unchanged evaluations reuse the selection runs")
+        #endif
+
+        model.selectCopies(Array(initial.ids.prefix(2)))
+        let selected = model.listSnapshot(for: .now)
+        XCTAssertEqual(selected.selectionRuns[initial.ids[0]], .first)
+        XCTAssertEqual(selected.selectionRuns[initial.ids[1]], .last)
+        #if DEBUG
+        XCTAssertEqual(model.selectionRunRebuildCount, firstBuilds + 1)
+        #endif
+
+        model.toggleExpanded(initial.ids[0])
+        let expanded = model.listSnapshot(for: .now)
+        XCTAssertEqual(expanded.selectionRuns[initial.ids[0]], .single)
+        XCTAssertEqual(expanded.selectionRuns[initial.ids[1]], .single)
+        #if DEBUG
+        XCTAssertEqual(model.selectionRunRebuildCount, firstBuilds + 2)
+        #endif
+
+        let added = try XCTUnwrap(add("D"))
+        let changed = model.listSnapshot(for: .now)
+        XCTAssertTrue(changed.ids.contains(added))
+        XCTAssertEqual(changed.idsByStatus[.todo], changed.ids)
+        XCTAssertEqual(model.eligibleRowIDs(for: .now), Set(changed.ids))
+    }
+
+    func testE02MeasureUnchangedListEvaluations() throws {
+        for number in 0..<100 { _ = try XCTUnwrap(add("Item \(number)")) }
+        let ids = model.listSnapshot(for: .now).ids
+        model.selectCopies(Array(ids.prefix(20)))
+        _ = model.listSnapshot(for: .now)
+        func ms(_ work: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            work()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+        }
+        let count = 500
+        let previous = ms {
+            for _ in 0..<count {
+                let rows = model.rows(for: .now)
+                _ = TasksSelectionRuns.make(ids: rows.map(\.id), selected: model.selection, expanded: model.expanded)
+                _ = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
+            }
+        }
+        let cached = ms {
+            for _ in 0..<count { _ = model.listSnapshot(for: .now) }
+        }
+        print("E02_SNAPSHOT rows=\(ids.count) evaluations=\(count) old_derived_ms=\(previous) new_cached_ms=\(cached)")
+    }
+
     func testNowIsInProgressThenToDoThenDoneAndBacklogIsItsOwnList() throws {
         let a = try XCTUnwrap(add("A"))
         _ = try XCTUnwrap(add("B"))

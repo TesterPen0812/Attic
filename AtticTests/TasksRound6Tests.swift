@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -398,6 +399,40 @@ final class TasksRound6Tests: XCTestCase {
         }
     }
     #endif
+}
+
+@MainActor
+extension TasksRound6Tests {
+    func testFix18QueuedControlFocusFromOldTabMustNotReachSharedPlus() throws {
+        let store = try makeTestStore()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let destination = TasksTabTarget()
+        let requests = AtticFocusRequests()
+        var delivered: [TasksTab] = []
+        let observer = requests.requests.sink { asked in
+            if asked.base is PanelPlusFocusID { delivered.append(model.tab) }
+        }
+        defer { observer.cancel() }
+
+        destination.request(.plus)
+        destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(delivered, [.now], "a current Tab handoff still reaches the Plus button")
+        delivered.removeAll()
+
+        destination.request(.plus)
+        destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
+        model.select(tab: .done)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(model.tab, .done)
+        XCTAssertTrue(delivered.isEmpty, "the old Tab request must not focus the shared Plus on Done")
+
+        destination.request(.plus)
+        destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .done, model: model, requests: requests)
+        destination.cancel()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(delivered.isEmpty, "a newer focus move also supersedes a queued handoff")
+    }
 }
 
 /// The Tasks page with the demo tasks in a window off screen, as the panel

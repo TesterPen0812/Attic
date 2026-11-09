@@ -342,6 +342,7 @@ final class PanelPullOutController {
     private let outline: PanelLandingOutline
     private var cancellables: Set<AnyCancellable> = []
     private var calendarDockPending = false
+    private var calendarDockGeneration = 0
 
     private struct Drag {
         let page: PanelPage
@@ -419,6 +420,7 @@ final class PanelPullOutController {
         let size = docked.panelSize
         let grab = PanelPullOutLayout.grab(for: panels[page]?.visibleFrame.size ?? size)
         if let floating = panels[page] {
+            invalidateCalendarDock(for: page)
             raise(page, makeKey: false)
             drag = Drag(page: page, grab: grab)
             place(floating, under: pointer)
@@ -503,6 +505,12 @@ final class PanelPullOutController {
 
     // MARK: Snapping in
 
+    private func invalidateCalendarDock(for page: PanelPage) {
+        guard page == .calendar else { return }
+        calendarDockGeneration &+= 1
+        calendarDockPending = false
+    }
+
     /// `page` flies home on the panel's motion (Reduce Motion: at once)
     /// and the docked panel shows it. Calendar returns true when its
     /// asynchronous save check starts; a failed save keeps the panel out.
@@ -513,14 +521,19 @@ final class PanelPullOutController {
         if page == .notes { guard deps.noteDraft.prepareToLeave(.pageSwitch) else { return false } }
         if page == .calendar {
             guard !calendarDockPending else { return true }
+            calendarDockGeneration &+= 1
+            let request = calendarDockGeneration
             calendarDockPending = true
             Task { @MainActor [weak self, weak floating] in
                 guard let self, let floating else { return }
                 let rows = floating.calendarEventRowsForDock
                 let settled = await rows?.waitForInFlightWorkBeforeQuit() ?? true
+                guard self.calendarDockGeneration == request,
+                      self.panels[page] === floating else { return }
                 let saved: Bool
                 if settled { saved = await rows?.close() ?? true }
                 else { saved = false }
+                guard self.calendarDockGeneration == request else { return }
                 self.calendarDockPending = false
                 guard self.panels[page] === floating else { return }
                 guard saved, let currentHome = self.dockedFrame() else {
@@ -530,7 +543,7 @@ final class PanelPullOutController {
                     self.save()
                     return
                 }
-                self.finishDock(page, floating: floating, home: currentHome)
+                self.finishDock(page, floating: floating, home: currentHome, calendarRequest: request)
             }
             return true
         }
@@ -538,10 +551,12 @@ final class PanelPullOutController {
         return true
     }
 
-    private func finishDock(_ page: PanelPage, floating: PanelFloatingPanel, home: CGRect) {
+    private func finishDock(_ page: PanelPage, floating: PanelFloatingPanel, home: CGRect,
+                            calendarRequest: Int? = nil) {
         let finish = { [weak self] in
             guard let self else { return }
             guard self.panels[page] === floating else { return }
+            if let calendarRequest, self.calendarDockGeneration != calendarRequest { return }
             panels[page] = nil
             floating.close()
             state.dockIn(page)
@@ -702,7 +717,10 @@ final class PanelPullOutController {
             floating.panel.orderFrontRegardless()
             save()
         }
-        floating.onDragBegan = { [weak self] in self?.drag = Drag(page: page, grab: nil) }
+        floating.onDragBegan = { [weak self] in
+            self?.invalidateCalendarDock(for: page)
+            self?.drag = Drag(page: page, grab: nil)
+        }
         floating.onDragChanged = { [weak self] frame, pointer in
             self?.dragged(page, frame: frame, pointer: pointer) ?? frame
         }
@@ -716,6 +734,7 @@ final class PanelPullOutController {
         }
         floating.onResized = { [weak self, weak floating] in
             guard let self, let floating else { return }
+            invalidateCalendarDock(for: page)
             state.move(page, to: floating.visibleFrame)
             save()
         }

@@ -281,6 +281,7 @@ struct TasksPage: View {
             let page = motion.fadingOut == index ? 0 : motion.place(of: index) - motion.position
             return page * swipe.width
         }
+        model.rowPointer = pointer
         #if DEBUG
         pointer.keyboardControl = { [focusRequests] in focusRequests.current }
         pointer.keyboardControlRequests = focusRequests
@@ -589,7 +590,9 @@ struct TasksPage: View {
     /// card replaced the add bar there), or the add bar.
     private func focusNewTaskStop() {
         if panelComposer != nil {
-            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
+            tabTarget.request(.plus)
+            tabTarget.queueControlFocus(PanelPlusFocusID(), for: .plus, in: model.tab,
+                                        model: model, requests: focusRequests)
         } else {
             addBarFocused = true
         }
@@ -1064,7 +1067,7 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
-            DispatchQueue.main.async { focusRequests.focus(button) }
+            tabTarget.queueControlFocus(button, for: stop, in: tab, model: model, requests: focusRequests)
         case let .row(id):
             searchFocused = false
             addBarFocused = false
@@ -1090,7 +1093,7 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
-            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
+            tabTarget.queueControlFocus(PanelPlusFocusID(), for: stop, in: tab, model: model, requests: focusRequests)
         }
     }
 
@@ -1465,9 +1468,7 @@ struct TasksPage: View {
 
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
-        let (rows, sections, entries) = model.listSnapshot(for: tab)
-        let selectionRuns = TasksSelectionRuns.make(ids: rows.map(\.id), selected: model.selection, expanded: model.expanded)
-        let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
+        let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
@@ -1586,7 +1587,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
@@ -3144,7 +3145,7 @@ struct TasksPage: View {
     private func fileDropTarget(at point: CGPoint) -> UUID? {
         guard model.tab != .done, let height = pointer.view?.bounds.height,
               pagerBand.contains(point, height: height, stackHeight: bottomStack.height) else { return nil }
-        return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
+        return pointer.fileDropRow(at: point, in: model.tab, eligible: model.eligibleRowIDs(for: model.tab))
     }
 
     /// The add bar's band (O17-06): from the panel's bottom edge to the top
@@ -4508,6 +4509,16 @@ final class TasksPointer {
     func frame(for row: TasksRowID) -> CGRect? {
         localFrames[row]?.offsetBy(dx: pageOffset(row.tab), dy: 0)
     }
+    /// A file hover only needs registered cells on this tab. Keep their
+    /// local frames and offset the one under the pointer, rather than
+    /// copying and offsetting the entire frame dictionary on every drag tick.
+    func fileDropRow(at point: CGPoint, in tab: TasksTab, eligible ids: Set<UUID>) -> UUID? {
+        let dx = pageOffset(tab)
+        return localFrames.first {
+            $0.key.tab == tab && ids.contains($0.key.id) &&
+            $0.value.offsetBy(dx: dx, dy: 0).contains(point)
+        }?.key.id
+    }
     /// This SwiftUI button lives between rows and must keep its native click.
     private var localCompletedTodayFrames: [TasksTab: CGRect] = [:]
     var completedTodayFrames: [TasksTab: CGRect] {
@@ -5302,6 +5313,18 @@ final class TasksTabTarget {
 
     func isCurrent(_ stop: TasksTabStop, generation: UInt64) -> Bool {
         self.generation == generation && self.stop == stop
+    }
+
+    /// The focusable controls use the main queue so they can arm after the
+    /// current field resigns. The pending handoff belongs to this Tab move.
+    func queueControlFocus(_ target: AnyHashable, for stop: TasksTabStop, in tab: TasksTab,
+                           model: TasksPageModel, requests: AtticFocusRequests) {
+        let requestedGeneration = generation
+        DispatchQueue.main.async {
+            guard self.isCurrent(stop, generation: requestedGeneration),
+                  model.tab == tab, model.isPageShown else { return }
+            requests.focus(target)
+        }
     }
 }
 

@@ -256,6 +256,9 @@ final class DrawPageModel: ObservableObject {
     /// The shell's notice for a save the store couldn't confirm (`.retry` or
     /// `.held`), with Retry: the open canvas's first, else any canvas's.
     var saveNotice: PanelNoticeContent? {
+        if let issue = store.recoveryIssue {
+            return PanelNoticeContent(message: issue, canRetry: false)
+        }
         if let problem = saveProblem, problem.message != dismissedSaveProblem {
             return PanelNoticeContent(message: problem.message, canRetry: true)
         }

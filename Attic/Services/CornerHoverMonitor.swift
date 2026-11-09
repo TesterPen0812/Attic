@@ -138,6 +138,7 @@ final class CornerHoverMonitor {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        IdleLatencyTrace.startMonitoring()
         samplingState = CornerHoverSamplingState()
         scheduledCadence = nil
         refreshCachedScreenFrames()
@@ -414,6 +415,7 @@ final class CornerHoverMonitor {
             // the pointer sampling path.
             refreshStoreForReveal()
             panelController.show(on: activeScreen, corner: settings.corner)
+            IdleLatencyTrace.point("view_dispatch_done")
         case .requestHide:
             let result = panelController.requestHide { [weak self] completion in
                 guard let self else { return }
@@ -459,6 +461,9 @@ final class CornerHoverMonitor {
 
     private func pointerActivityObserved(at location: CGPoint, eventTimestamp: TimeInterval? = nil) {
         guard isRunning else { return }
+        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        let callbackNS = DispatchTime.now().uptimeNanoseconds
+        #endif
         let decision = samplingState.update(
             pointer: location,
             screenFrames: cachedScreenFrames,
@@ -470,8 +475,12 @@ final class CornerHoverMonitor {
         let activityAtEntry = responsivenessActivity != nil
         applySamplingCadence(decision.cadence)
         if cadenceChanged, decision.cadence == .responsive, !stateMachine.isVisible {
+            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
             IdleLatencyTrace.begin("corner_approach", original: eventTimestamp,
-                                   context: panelController.idleLatencyContext(activity: activityAtEntry))
+                                   context: panelController.idleLatencyContext(activity: activityAtEntry),
+                                   receivedNS: callbackNS)
+            IdleLatencyTrace.point("handler_entered")
+            #endif
         }
         guard decision.shouldSampleImmediately else { return }
         // A boundary crossing samples at once. Event-driven sampling while

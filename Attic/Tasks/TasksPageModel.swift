@@ -708,7 +708,23 @@ final class TasksPageModel: ObservableObject {
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
     /// for them many times per change.
-    private var rowsCache: [TasksTab: (key: RowsKey, sections: TasksSections, rows: [TasksListRow], entries: [TasksDateListEntry])] = [:]
+    private struct RowsSnapshot {
+        let key: RowsKey
+        let sections: TasksSections
+        let rows: [TasksListRow]
+        let entries: [TasksDateListEntry]
+        let ids: [UUID]
+        let idsByStatus: [TaskStatus: [UUID]]
+        let eligibleIDs: Set<UUID>
+        var selectedForRuns: Set<UUID>?
+        var expandedForRuns: Set<UUID>?
+        var selectionRuns: [UUID: AtticSelectionRun] = [:]
+    }
+
+    private var rowsCache: [TasksTab: RowsSnapshot] = [:]
+    #if DEBUG
+    private(set) var selectionRunRebuildCount = 0
+    #endif
 
     /// The rows a list shows, in order (the keyboard walks them): Now's
     /// open rows (in progress, then to do), then today's done rows when
@@ -727,12 +743,26 @@ final class TasksPageModel: ObservableObject {
     /// The flattened list's sibling entries change with its rows, folds and
     /// date groups, not with the selected row. Reuse their identities and
     /// reorder groups when a selection redraws the page.
-    func listSnapshot(for tab: TasksTab) -> (rows: [TasksListRow], sections: TasksSections, entries: [TasksDateListEntry]) {
-        let snapshot = cached(tab)
-        return (snapshot.rows, snapshot.sections, snapshot.entries)
+    func listSnapshot(for tab: TasksTab) -> (rows: [TasksListRow], sections: TasksSections, entries: [TasksDateListEntry],
+                                              ids: [UUID], idsByStatus: [TaskStatus: [UUID]], selectionRuns: [UUID: AtticSelectionRun]) {
+        var snapshot = cached(tab)
+        if snapshot.selectedForRuns != selection || snapshot.expandedForRuns != expanded {
+            snapshot.selectionRuns = TasksSelectionRuns.make(ids: snapshot.ids, selected: selection, expanded: expanded)
+            snapshot.selectedForRuns = selection
+            snapshot.expandedForRuns = expanded
+            rowsCache[tab] = snapshot
+            #if DEBUG
+            selectionRunRebuildCount += 1
+            #endif
+        }
+        return (snapshot.rows, snapshot.sections, snapshot.entries, snapshot.ids, snapshot.idsByStatus, snapshot.selectionRuns)
     }
 
-    private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow], entries: [TasksDateListEntry]) {
+    /// File-drag hover uses the current snapshot's membership; it never
+    /// walks the task list just because the pointer moved.
+    func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }
+
+    private func cached(_ tab: TasksTab) -> RowsSnapshot {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
@@ -783,7 +813,10 @@ final class TasksPageModel: ObservableObject {
         }
         sections.groups = groups
         let rows = key.completedExpanded ? sections.open + sections.done : sections.open
-        let entry = (key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections))
+        let ids = rows.map(\.id)
+        let entry = RowsSnapshot(key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections),
+                                 ids: ids, idsByStatus: Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) },
+                                 eligibleIDs: Set(ids))
         rowsCache[tab] = entry
         return entry
     }
@@ -1249,6 +1282,10 @@ final class TasksPageModel: ObservableObject {
     /// Whether the shell shows the Tasks page (not kept built behind Notes
     /// or Canvas): only then does it answer page shortcuts such as ⌘F
     /// (round 7, R2).
+    /// Where the page's rows are, for the agent chat's motion. It reads the
+    /// frames the list already measures, so a row's body does no more work.
+    weak var rowPointer: TasksPointer?
+
     @Published var isPageShown = true {
         didSet {
             guard isPageShown != oldValue else { return }

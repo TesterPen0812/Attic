@@ -16,6 +16,9 @@ final class TaskFilesState: ObservableObject {
     /// Families whose launch run waited (their note was open).
     private(set) var deferred: Set<UUID> = []
     private var running = false
+    /// A manual operation takes priority over feedback collected by a
+    /// launch sweep that was already in flight for the same family.
+    private var manualVersions: [UUID: UInt64] = [:]
     /// The note store follows a migration, a Move into Note or a reversal
     /// (the app's Notes page; tests' stores).
     var onNotesChanged: (() -> Void)?
@@ -67,10 +70,12 @@ final class TaskFilesState: ObservableObject {
         guard !running, let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
         running = true
         defer { running = false }
+        let launchVersions = manualVersions
         if let notes {
             await notes.recoverAtLaunchAndWait()
             guard notes.launchRecoveryCompleted else {
-                deferred = Set((try? TaskAttachmentMigration.candidateRoots(in: coordinator.freshContext())) ?? [])
+                deferred = Set(((try? TaskAttachmentMigration.candidateRoots(in: coordinator.freshContext())) ?? [])
+                    .filter { manualVersions[$0] == launchVersions[$0] })
                 refresh(coordinator: coordinator)
                 return
             }
@@ -78,8 +83,10 @@ final class TaskFilesState: ObservableObject {
         refresh(coordinator: coordinator)
         let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: tasks.taskImageFiles,
                                                           isBusy: isBusy, publish: { [weak tasks] in tasks?.refresh() })
-        for (root, refusal) in report.refused { refusals[root] = refusal }
-        deferred = report.deferred
+        for (root, refusal) in report.refused where manualVersions[root] == launchVersions[root] {
+            refusals[root] = refusal
+        }
+        deferred = report.deferred.filter { manualVersions[$0] == launchVersions[$0] }
         refresh(coordinator: coordinator)
         if !report.migrated.isEmpty || !report.reconciled.isEmpty { tasks.refresh(); onNotesChanged?() }
     }
@@ -88,6 +95,7 @@ final class TaskFilesState: ObservableObject {
     /// family that waited): one family, one operation.
     func moveIntoNote(_ rootID: UUID, tasks: TaskStore, notes: NotesPageController) async -> TaskAttachmentMigration.Outcome {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return .deferred }
+        manualVersions[rootID, default: 0] &+= 1
         let outcome = await TaskAttachmentMigration.migrate(rootID: rootID, coordinator: coordinator, files: tasks.taskImageFiles,
                                                             force: true, history: notes.undoRoute.workspace(for: .taskWorkspace(rootID)), publish: { [weak tasks] in tasks?.refresh() })
         if case let .refused(refusal) = outcome { refusals[rootID] = refusal } else { refusals[rootID] = nil }
@@ -110,6 +118,7 @@ final class TaskFilesState: ObservableObject {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else {
             return .refused(String(localized: "Can't reverse now"))
         }
+        manualVersions[rootID, default: 0] &+= 1
         let outcome = await TaskAttachmentMigration.reverse(rootID: rootID, coordinator: coordinator, publish: { [weak tasks] in tasks?.refresh() })
         onNotesChanged?()
         refresh([rootID], coordinator: coordinator)

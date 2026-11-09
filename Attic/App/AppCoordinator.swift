@@ -389,6 +389,10 @@ final class AppCoordinator: ObservableObject {
     /// An agent's `show` over the real panel (the shell tools hold it weakly).
     private let agentPresenter: PanelAgentPresenter
     private let agentServer: AgentServer
+    private let agentRunner: AgentRunEngine
+    /// Trusted in-app runner seam. A run registers here before giving its
+    /// private MCP bearer to the installed Claude Code or Codex process.
+    var agentRunServer: AgentServer { agentServer }
     private let isUITesting: Bool
     private let isRunningTests: Bool
     private let shouldStartInteractiveShellServices: Bool
@@ -603,7 +607,29 @@ final class AppCoordinator: ObservableObject {
         )
         // Slice 2: the workspace tools run through the app's task-note pages.
         agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
-        let agentHandler = MCPRequestHandler(tools: agentTools, shellTools: shellTools)
+        let agentChat = uiState.agentChat
+        agentChat.weekDays = { [weak store] day in
+            AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [])
+        }
+        let agentActions = AgentActions(
+            tasks: agentTools,
+            calendarSource: CalendarEventSources.makeDefault(environment: runtime),
+            calendarWriter: try? CalendarEventWriters.makeDefault(undoRoute: library.undo, environment: runtime),
+            draw: DrawLibraryHub.activeStore,
+            openPage: { [weak uiState] page in
+                guard let uiState else { return false }
+                let section: PanelSection
+                switch page {
+                case .tasks: section = .tasks
+                case .notes: section = .notes
+                case .calendar: section = .calendar
+                case .draw: section = .canvas
+                }
+                uiState.selectSection(section)
+                return uiState.selectedSection == section
+            }
+        )
+        let agentHandler = MCPRequestHandler(tools: agentTools, shellTools: shellTools, actions: agentActions)
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -612,6 +638,23 @@ final class AppCoordinator: ObservableObject {
         } else {
             agentServer = AgentServer(port: settings.agentServerPort, handler: agentHandler)
         }
+        let agentRunner = AgentRunEngine(
+            selectedBackend: { [weak settings] in settings?.inAppAgentBackend ?? .claude },
+            tools: { AgentRunMCPServer.live(server: agentServer) },
+            journalURL: runtime.usesEphemeralAgentCredential
+                ? runtime.galleryScratchRoot.appendingPathComponent("AgentThread.json")
+                : runtime.applicationSupportURL?.appendingPathComponent("AtticAgentThread.json"),
+            undo: { id in
+                let report = try await agentServer.undoFinishedAgentChangeSet(id: id)
+                if !report.failures.isEmpty || report.remaining != nil {
+                    throw AgentActionsError.invalid(
+                        report.failures.isEmpty ? "Some changes could not be undone."
+                            : report.failures.joined(separator: "; ")
+                    )
+                }
+            }
+        )
+        agentChat.connect(agentRunner)
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
         // The combination Settings chose (round 10: the recorder).
@@ -653,6 +696,7 @@ final class AppCoordinator: ObservableObject {
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
+        self.agentRunner = agentRunner
         self.newTaskHotKey = newTaskHotKey
         cleanupService = DailyCleanupService(
             store: store,
@@ -1064,11 +1108,7 @@ final class AppCoordinator: ObservableObject {
         if !isRunningTests {
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 guard let self else { return }
-                if isEnabled {
-                    agentServer.start()
-                } else {
-                    agentServer.stop()
-                }
+                agentServer.setExternalAccessEnabled(isEnabled)
             }
         }
         if !settings.hasShownWelcome {
@@ -1093,6 +1133,7 @@ final class AppCoordinator: ObservableObject {
         newTaskHotKey.unregister()
         appearanceObservation = nil
         agentAccessObservation = nil
+        agentRunner.shutdown()
         agentServer.stop()
         menuNotificationTokens.forEach(NotificationCenter.default.removeObserver)
         menuNotificationTokens.removeAll()

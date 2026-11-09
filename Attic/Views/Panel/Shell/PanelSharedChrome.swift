@@ -244,6 +244,8 @@ struct PanelSharedBottomBar: View {
     @ObservedObject var chrome: PanelSharedChrome
     let page: PanelPage
     let layout: PanelPageLayout
+    /// The floating agent chat, where one is connected: its ✦ sits beside "+".
+    var agentChat: AgentChatModel? = nil
 
     @Environment(\.atticDesign) private var design
 
@@ -252,6 +254,8 @@ struct PanelSharedBottomBar: View {
     static var bodyEvaluations = 0
     /// Test seam: whether the bar drew its own "+" last time.
     static var drawsPlus = false
+    /// Test seam: whether the bar drew the chat's ✦ last time.
+    static var drawsAgentChat = false
     #endif
 
     var body: some View {
@@ -269,6 +273,7 @@ struct PanelSharedBottomBar: View {
         let taken = chrome.plusHandedOver || covered
         #if DEBUG
         let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
+        let _ = Self.drawsAgentChat = look.plus != nil && !folded && agentChat?.isConnected == true
         #endif
         HStack(alignment: .bottom, spacing: 0) {
             // P4: the card takes the row; the pills slide 6 pt toward the
@@ -290,6 +295,15 @@ struct PanelSharedBottomBar: View {
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
             .allowsHitTesting(!folded && !taken)
+            if look.plus != nil, !folded, let agentChat, agentChat.isConnected {
+                PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+                    AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
+                }
+                .allowsHitTesting(!taken)
+                .accessibilityHidden(!look.shown || taken)
+                .padding(.trailing, gap)
+                .transition(.opacity)
+            }
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
@@ -401,7 +415,7 @@ private struct PanelSharedTopControlsObserver: View {
 
     var body: some View {
         let look = chrome.topRow(for: page)
-        let searching = state.isSearching(page)
+        let searching = state.isAway(page)
         let covered = chrome.covered.contains(page)
         HStack(spacing: PanelTopRowLayout.gap) {
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,

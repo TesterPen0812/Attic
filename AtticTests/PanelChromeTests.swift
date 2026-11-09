@@ -1004,11 +1004,11 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
             spin(1.0)
             let card = try XCTUnwrap(frame(of: "composer-card", in: host), "\"+\" opens the card")
-            // The card's element is its contents (inside its padding).
-            let pad = ComposerMetrics.padding
-            XCTAssertGreaterThan(card.width, 289 - pad.leading - pad.trailing - 10, "grown to the card")
-            XCTAssertEqual(card.maxX, before[1].maxX - pad.trailing, accuracy: 0.5, "the card grows from the \"+\"'s corner")
-            XCTAssertEqual(card.maxY, before[1].maxY - pad.bottom, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            // The AX frame includes the card's padding; the outer surface
+            // shares the bottom-trailing corner of the "+" (P4).
+            XCTAssertEqual(card.width, ComposerMetrics.width, accuracy: 0.5, "grown to the full card")
+            XCTAssertEqual(card.maxX, before[1].maxX, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            XCTAssertEqual(card.maxY, before[1].maxY, accuracy: 0.5, "the card grows from the \"+\"'s corner")
             XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Task")
             // P4: the card has the bar's row; its pills and "+" are under it.
             XCTAssertNil(frame(of: "tasks-tag-bar", in: host))
@@ -1123,12 +1123,12 @@ final class PanelChromeTests: XCTestCase {
             PanelComposerRoom.lastSet = nil
             XCTAssertTrue(try XCTUnwrap(element("tasks-new-task", in: host)).accessibilityPerformPress?() ?? false)
             spin(0.3)
-            // The card's element is its contents, inside its padding.
+            // The card AX frame is the complete 90 pt surface, padding included.
             let card = try XCTUnwrap(frame(of: "composer-card", in: host))
-            let pad = ComposerMetrics.padding
-            XCTAssertEqual(card.maxX, plusFrame.maxX - pad.trailing, accuracy: 0.5, "it grows from the \"+\" corner")
-            XCTAssertEqual(card.maxY, plusFrame.maxY - pad.bottom, accuracy: 0.5, "its bottom edge is the bar's bottom edge")
-            XCTAssertEqual(card.height, ComposerMetrics.height - pad.top - pad.bottom, accuracy: 1)
+            XCTAssertEqual(card.width, ComposerMetrics.width, accuracy: 0.5)
+            XCTAssertEqual(card.maxX, plusFrame.maxX, accuracy: 0.5, "it grows from the \"+\" corner")
+            XCTAssertEqual(card.maxY, plusFrame.maxY, accuracy: 0.5, "its bottom edge is the bar's bottom edge")
+            XCTAssertEqual(card.height, ComposerMetrics.height, accuracy: 1)
             XCTAssertNil(element("tasks-tag-bar-books", in: host), "the tag pills go under the card")
             XCTAssertNil(element("tasks-new-task", in: host), "and so does \"+\"")
             let room = try XCTUnwrap(PanelComposerRoom.lastSet)
@@ -1188,9 +1188,8 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
             spin(0.02)
             let card = try XCTUnwrap(frame(of: "composer-card", in: host), "Reduce Motion: the card is there at once")
-            let pad = ComposerMetrics.padding
-            XCTAssertGreaterThan(card.width, 289 - pad.leading - pad.trailing - 10, "Reduce Motion: no grow")
-            XCTAssertEqual(card.maxX, plusFrame.maxX - pad.trailing, accuracy: 0.5)
+            XCTAssertEqual(card.width, ComposerMetrics.width, accuracy: 0.5, "Reduce Motion: full card at once")
+            XCTAssertEqual(card.maxX, plusFrame.maxX, accuracy: 0.5)
             XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Event")
             XCTAssertEqual(state.selectedSection, .calendar, "the Calendar \"+\" stays on the Calendar")
             state.selectSection(.tasks)

@@ -9,10 +9,13 @@ class DrawStore: DrawStoreProtocol {
     private(set) var revision: UInt64 = 0
     private(set) var lastDelta: DrawDelta?
     private(set) var pendingEdits: [UUID: DrawPendingEdit] = [:]
-    var hasUnsettledEdits: Bool { !pendingEdits.isEmpty }
+    private(set) var recoveryIssue: String?
+    var hasUnsettledEdits: Bool { !pendingEdits.isEmpty || recoveryIssue != nil }
 
     @ObservationIgnored private let repository: any DrawRepository
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let recovery: DrawRecoveryJournal?
+    @ObservationIgnored private var recoveredCanvasIDs = Set<UUID>()
     @ObservationIgnored private var states: [UUID: State] = [:]
     @ObservationIgnored private var histories: [UUID: History] = [:]
     @ObservationIgnored private var activeCanvasID: UUID?
@@ -31,33 +34,89 @@ class DrawStore: DrawStoreProtocol {
             DrawSnapshot(canvas: canvas, objects: objects.values.filter { $0.deletedAt == nil }.sorted(by: DrawStore.objectOrder))
         }
     }
-    private struct Step {
+    struct Step: Codable {
+        var id = UUID()
         var change: DrawChange
         var before: DrawCanvas
         var after: DrawCanvas
         var beforePersisted: Bool
         var afterPersisted: Bool
         var reversed: Self {
-            Self(change: change.reversed, before: after, after: before,
+            Self(id: id, change: change.reversed, before: after, after: before,
                  beforePersisted: afterPersisted, afterPersisted: beforePersisted)
         }
     }
     private struct History { var undo: [Step] = []; var redo: [Step] = [] }
-    private enum Action { case edit, undo, redo }
-    private struct Pending { var step: Step; var action: Action }
+    enum Action: String, Codable { case edit, undo, redo }
+    struct Pending: Codable { var step: Step; var action: Action }
     /// How the first unsaved edit is settled: written again (Retry),
     /// reconciled with what the store holds, or whichever its outcome asks.
     private enum Head { case write, reconcile, auto }
 
-    init(repository: any DrawRepository, now: @escaping () -> Date = Date.init) {
+    init(repository: any DrawRepository, now: @escaping () -> Date = Date.init,
+         recovery: DrawRecoveryJournal? = nil) {
         self.repository = repository
         self.now = now
+        self.recovery = recovery
+        recoveryIssue = recovery?.issue
+        recoverDrafts()
+    }
+
+    /// Reconstruct the visible sparse edits before allowing another write.
+    /// The repository reconciles the first attempt against fresh *physical*
+    /// rows, including binary payload copies, before any retry is offered.
+    private func recoverDrafts() {
+        guard let recovery, recoveryIssue == nil else { return }
+        for (id, record) in recovery.records {
+            guard let first = record.edits.first else { continue }
+            let saved = try? repository.load(id)
+            let objects = saved.map { Dictionary(uniqueKeysWithValues: $0.objects.map { ($0.id, $0) }) }
+                ?? first.step.change.objectsBefore
+            states[id] = State(canvas: saved?.canvas ?? first.step.before,
+                               objects: objects, persisted: saved != nil || first.step.beforePersisted)
+            for edit in record.edits { show(edit.step) }
+            pending[id] = record.edits
+            recoveredCanvasIDs.insert(id)
+            let result: DrawWriteOutcome = record.unattempted
+                ? .retry("The recovered next edit has not been saved. Retry when ready.")
+                : repository.reconcile(first.step.change)
+            switch result {
+            case .committed:
+                pending[id]?.removeFirst()
+                if pending[id]?.isEmpty == true {
+                    pending[id] = nil
+                    recoveredCanvasIDs.remove(id)
+                } else {
+                    let next = pending[id]!
+                    pendingEdits[id] = DrawPendingEdit(
+                        canvas: next.last!.step.after, objects: states[id]?.snapshot.objects ?? [],
+                        outcome: .retry("The recovered next edit has not been saved. Retry when ready."), count: next.count
+                    )
+                }
+                try? recovery.update(id, edits: pending[id], proof: nil, unattempted: pending[id] != nil)
+            case let .retry(message):
+                pendingEdits[id] = DrawPendingEdit(
+                    canvas: record.edits.last!.step.after, objects: states[id]?.snapshot.objects ?? [],
+                    outcome: .retry(message), count: record.edits.count
+                )
+            case let .held(message):
+                pendingEdits[id] = DrawPendingEdit(
+                    canvas: record.edits.last!.step.after, objects: states[id]?.snapshot.objects ?? [],
+                    outcome: .held(message), count: record.edits.count
+                )
+            }
+        }
     }
 
     func library(deleted: Bool = false) throws -> [DrawCanvas] {
         // Observe successful changes while keeping the query body-free.
         _ = revision
-        return try repository.library().filter { ($0.deletedAt != nil) == deleted }.sorted {
+        var byID = Dictionary(uniqueKeysWithValues: try repository.library().map { ($0.id, $0) })
+        // A first-save failure also needs a discoverable canvas after relaunch.
+        for id in recoveredCanvasIDs {
+            if let draft = states[id]?.canvas { byID[id] = draft }
+        }
+        return byID.values.filter { ($0.deletedAt != nil) == deleted }.sorted {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         }
@@ -139,6 +198,9 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func purge(_ targets: [DrawPurgeTarget]) -> DrawPurgeReport {
+        // A damaged recovery sidecar may conceal pending edits for any canvas.
+        // Until it can be inspected, no Draw item is safe to remove for good.
+        if recoveryIssue != nil { return DrawPurgeReport(removed: 0, kept: Set(targets).count) }
         var canvases: [UUID: Date] = [:], images: [UUID: DrawImageTarget] = [:], kept = 0
         for target in Set(targets) {
             switch target {
@@ -182,6 +244,7 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
+        if let recoveryIssue { return .held(recoveryIssue) }
         if case .thumbnail(let bytes, let dark) = command { return writeThumbnail(bytes, dark: dark, on: id) }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
@@ -262,6 +325,9 @@ class DrawStore: DrawStoreProtocol {
         _ = revision; _ = pendingEdits
         return pending[id] == nil && !(histories[id]?.redo.isEmpty ?? true)
     }
+
+    func undoStepID(on id: UUID) -> UUID? { histories[id]?.undo.last?.id }
+    func redoStepID(on id: UUID) -> UUID? { histories[id]?.redo.last?.id }
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }
@@ -387,10 +453,24 @@ class DrawStore: DrawStoreProtocol {
 
     private func execute(_ step: Step, action: Action) -> DrawSaveResult {
         let step = stamped(step)
+        if let recovery, step.change.before != nil || step.change.after != nil {
+            do {
+                try recovery.update(step.change.canvasID, edits: [Pending(step: step, action: action)],
+                                    proof: nil, unattempted: true)
+            } catch {
+                show(step)
+                pending[step.change.canvasID] = [Pending(step: step, action: action)]
+                return publishPending(step.change.canvasID, outcome: .held(
+                    "The drawing cannot be saved until its crash-recovery checkpoint can be written: \(error.localizedDescription)"
+                ))
+            }
+        }
         let outcome = write(step)
         show(step)
         switch outcome {
-        case .committed: return .saved(commit(step, action: action))
+        case .committed:
+            try? recovery?.update(step.change.canvasID, edits: nil, proof: nil)
+            return .saved(commit(step, action: action))
         case .retry(let message):
             pending[step.change.canvasID] = [Pending(step: step, action: action)]
             return publishPending(step.change.canvasID, outcome: .retry(message))
@@ -420,6 +500,16 @@ class DrawStore: DrawStoreProtocol {
             } else {
                 edit.step = stamped(edit.step)
                 pending[id]?[0] = edit
+                if let recovery {
+                    do {
+                        try recovery.update(id, edits: pending[id], proof: repository.recoveryProof(for: id),
+                                            unattempted: true)
+                    } catch {
+                        return publishPending(id, outcome: .held(
+                            "The Draw recovery checkpoint could not be written before saving: \(error.localizedDescription)"
+                        ))
+                    }
+                }
                 outcome = write(edit.step)
             }
             first = false
@@ -429,8 +519,21 @@ class DrawStore: DrawStoreProtocol {
                 if pending[id]?.isEmpty == true {
                     pending[id] = nil
                     pendingEdits[id] = nil
+                    recoveredCanvasIDs.remove(id)
                 }
                 saved.append(commit(edit.step, action: edit.action))
+                // Retire the proven head and its proof together; later edits
+                // remain checkpointed until their own saves settle.
+                if let recovery {
+                    do { try recovery.update(id, edits: pending[id], proof: nil, unattempted: pending[id] != nil) }
+                    catch {
+                        if pending[id] != nil {
+                            return publishPending(id, outcome: .held("The Draw recovery checkpoint could not be updated: \(error.localizedDescription)"))
+                        }
+                        // The last save is proven; a stale file remains safe
+                        // to reconcile after relaunch if cleanup failed.
+                    }
+                }
             case .retry(let message):
                 return publishPending(id, outcome: .retry(message))
             case .held(let message):
@@ -480,9 +583,19 @@ class DrawStore: DrawStoreProtocol {
     @discardableResult
     private func publishPending(_ id: UUID, outcome: DrawSaveResult) -> DrawSaveResult {
         guard let edits = pending[id], let last = edits.last else { return outcome }
+        var published = outcome
+        if let recovery {
+            do {
+                try recovery.update(id, edits: edits, proof: repository.recoveryProof(for: id),
+                                    unattempted: recovery.records[id]?.unattempted ?? false)
+            }
+            catch {
+                published = .held("The drawing is held because its crash-recovery checkpoint could not be written: \(error.localizedDescription)")
+            }
+        }
         pendingEdits[id] = DrawPendingEdit(canvas: last.step.after, objects: states[id]?.snapshot.objects ?? [],
-                                           outcome: outcome, count: edits.count)
-        return outcome
+                                           outcome: published, count: edits.count)
+        return published
     }
     private static func name(_ value: String?) -> String {
         let name = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -501,6 +614,26 @@ class DrawStore: DrawStoreProtocol {
             guard !image.original.isEmpty, image.pixelWidth > 0, image.pixelHeight > 0 else { throw DrawStoreError.invalidObject }
         default: break
         }
+    }
+}
+
+// History IDs were added after D-02 recovery checkpoints first shipped.
+// Existing pending edits have no ID, and must remain recoverable.
+extension DrawStore.Step {
+    private enum CodingKeys: String, CodingKey {
+        case id, change, before, after, beforePersisted, afterPersisted
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            change: try values.decode(DrawChange.self, forKey: .change),
+            before: try values.decode(DrawCanvas.self, forKey: .before),
+            after: try values.decode(DrawCanvas.self, forKey: .after),
+            beforePersisted: try values.decode(Bool.self, forKey: .beforePersisted),
+            afterPersisted: try values.decode(Bool.self, forKey: .afterPersisted)
+        )
     }
 }
 

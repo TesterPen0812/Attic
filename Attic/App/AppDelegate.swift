@@ -1,5 +1,33 @@
 import AppKit
 
+/// A second terminate() while AppKit is waiting for a terminateLater reply
+/// can end the process without another delegate callback. Keep one Quit
+/// request alive until the durability check accepts or refuses it.
+@MainActor
+final class AppQuitRequestGate {
+    static let shared = AppQuitRequestGate()
+    private var requestPending = false
+    private var preparationPending = false
+
+    func request(_ terminate: () -> Void) {
+        guard !requestPending else { return }
+        requestPending = true
+        terminate()
+    }
+
+    func beginPreparation() -> Bool {
+        guard !preparationPending else { return false }
+        requestPending = true
+        preparationPending = true
+        return true
+    }
+
+    func finishPreparation(approved: Bool) {
+        preparationPending = false
+        if !approved { requestPending = false }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
@@ -45,8 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         guard let coordinator = AppCoordinator.shared else { return .terminateNow }
+        guard AppQuitRequestGate.shared.beginPreparation() else { return .terminateLater }
         Task { @MainActor in
             let ready = await coordinator.prepareForTerminationDurably()
+            AppQuitRequestGate.shared.finishPreparation(approved: ready)
             sender.reply(toApplicationShouldTerminate: ready)
         }
         return .terminateLater

@@ -1124,10 +1124,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         PerformanceSignposts.noteDidLayout()
     }
 
-    /// Find, heading/navigation and restored selections all share the same
-    /// covered viewport. Resolve a distant target's preceding layout first:
-    /// TextKit's estimated positions differ when paragraphs wrap at 340/420.
+    /// General navigation needs exact preceding layout: TextKit's estimated
+    /// positions can differ when paragraphs wrap at 340/420.
     override func scrollRangeToVisible(_ range: NSRange) {
+        revealTextRange(range, resolvePrefixLayout: true)
+    }
+
+    /// Find already knows the exact text range. Laying out just that range
+    /// avoids a synchronous full-prefix pass on the first distant match;
+    /// the next native layout still corrects the viewport and floating bands.
+    func scrollFindMatchToVisible(_ range: NSRange) {
+        revealTextRange(range, resolvePrefixLayout: false)
+    }
+
+    private func revealTextRange(_ range: NSRange, resolvePrefixLayout: Bool) {
         if let coordinateMapper { coordinateMapper.revealRange(range, margin: 4); return }
         guard let engine else { return super.scrollRangeToVisible(range) }
         guard range.location != NSNotFound,
@@ -1139,9 +1149,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             // would call those empty and relayout the prefix on every key.
             visible.map { rect.maxY >= $0.minY && rect.minY <= $0.maxY } == true
         } == true
-        if !caretIsVisible, let layout = textLayoutManager, let target = engine.textRange(for: range),
-           let prefix = NSTextRange(location: layout.documentRange.location, end: target.endLocation) {
-            layout.ensureLayout(for: prefix)
+        if !caretIsVisible, let layout = textLayoutManager, let target = engine.textRange(for: range) {
+            let needed = (resolvePrefixLayout
+                ? NSTextRange(location: layout.documentRange.location, end: target.endLocation)
+                : nil) ?? target
+            layout.ensureLayout(for: needed)
         }
         super.scrollRangeToVisible(range)
         rangeToRevealAfterLayout = range

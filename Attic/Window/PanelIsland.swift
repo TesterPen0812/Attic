@@ -439,6 +439,8 @@ enum PanelIslandLayout {
 @MainActor
 final class PanelIslandModel: ObservableObject {
     @Published private(set) var page: PanelPage = .tasks
+    /// Pages the agent changed that you have not been back to.
+    @Published var agentDots: Set<AgentPage> = []
     /// The item under the pointer. Never switches.
     @Published private(set) var pointedItem: PanelIslandItem?
     /// The item whose name label shows (L8): the first after 400 ms, the
@@ -753,6 +755,11 @@ struct PanelIslandView: View {
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
             }
+            ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
+                if let agentPage = AgentPage(page), model.agentDots.contains(agentPage) {
+                    agentDot(index, awake: awake, dots: dots)
+                }
+            }
             let settings = itemRect(L.pages.count)
             Group {
                 if interactive {
@@ -765,6 +772,23 @@ struct PanelIslandView: View {
             .offset(x: settings.minX, y: settings.minY)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    /// A page the agent changed while you were elsewhere: a small iris dot on
+    /// its icon, or on its resting dot (Accepted 2026-11-06).
+    private func agentDot(_ index: Int, awake: Bool, dots: [L.RestDot]) -> some View {
+        let rect = itemRect(index)
+        let centre = awake
+            ? CGPoint(x: rect.midX + AtticPageButtonMetrics.iconSize / 2, y: rect.midY - AtticPageButtonMetrics.iconSize / 2)
+            : dotCentre(index, dots: dots)
+        return Circle()
+            .fill(LinearGradient(colors: [AgentIris.blue, AgentIris.pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 5.5, height: 5.5)
+            .background(Circle().fill(.white.opacity(0.85)).padding(-1))
+            .position(centre)
+            .transition(.scale.combined(with: .opacity))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     /// Settings as drawn: no dot of its own at rest. It folds into the last
@@ -1098,10 +1122,12 @@ final class PanelIslandWindow: NSPanel {
             }
             if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("island_sendEvent_dispatched")
+                IdleLatencyTrace.point("view_dispatch_done")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
             }
         }
         if AtticPanel.takesFirstPress(event.type) {
+            IdleLatencyTrace.point("handler_entered")
             pressing = true; trackedRelease = false
             (parent as? AtticPanel)?.beginFirstPress()
         }
@@ -1382,11 +1408,28 @@ final class PanelIslandWindows {
     /// its drag and release.
     func updatePassthrough(at point: CGPoint, eventTimestamp: TimeInterval? = nil) {
         if island.isVisible {
-            let wasAwake = model.isAwake
-            model.track(pointer: point, rest: restFrame, awake: islandFrame)
-            if !wasAwake, model.isAwake, let eventTimestamp, let context = onIdleTraceContext?() {
-                IdleLatencyTrace.begin("island_wake", original: eventTimestamp, context: context)
+            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            let callbackNS = DispatchTime.now().uptimeNanoseconds
+            // Begin before track() changes the observable model state, so its
+            // first SwiftUI-facing work is charged to the island-wake span.
+            var tracingWake = false
+            if !model.isAwake, let eventTimestamp,
+               restFrame.insetBy(dx: -PanelIslandLayout.wakeDistance,
+                                 dy: -PanelIslandLayout.wakeDistance).contains(point),
+               let context = onIdleTraceContext?() {
+                IdleLatencyTrace.begin("island_wake", original: eventTimestamp,
+                                       context: context, receivedNS: callbackNS)
+                IdleLatencyTrace.point("handler_entered")
+                tracingWake = true
             }
+            #endif
+            model.track(pointer: point, rest: restFrame, awake: islandFrame)
+            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            if tracingWake, model.isAwake {
+                IdleLatencyTrace.point("view_dispatch_done")
+                IdleLatencyTrace.firstFrameOpportunity(in: island.contentView)
+            }
+            #endif
         }
         guard NSEvent.pressedMouseButtons == 0 else { return }
         let ignores = island.frame.contains(point) && !capsuleFrame.contains(point)
