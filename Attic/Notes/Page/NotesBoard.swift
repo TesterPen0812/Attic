@@ -402,7 +402,7 @@ struct NotesLayoutSwitch: View {
     /// bottom bar's 260 ms fold; Reduce Motion at once. Only this switch:
     /// the others' markers travel on the pop spring.
     static func selectionAnimation(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : TasksDesignMetrics.fold(reduceMotion: false)
+        reduceMotion ? nil : AtticPanelChromeMetrics.fold(reduceMotion: false)
     }
 
     private func choose(_ layout: NotesLibraryLayout) {

@@ -261,7 +261,7 @@ struct PanelSharedBottomBar: View {
         let look = chrome.bar(for: page)
         let actions = chrome.barActions(for: page)
         let side = AtticControlSize.headerControl
-        let gap = TasksDesignMetrics.footerGap
+        let gap = AtticPanelChromeMetrics.footerGap
         let folded = look.folded
         // A task page's own controls arrive at once. Its shared glass must
         // leave at once too; opacity outside a glass group cannot hide it.
@@ -312,7 +312,7 @@ struct PanelSharedBottomBar: View {
                 .frame(maxWidth: folded ? .infinity : side, alignment: .trailing)
             }
         }
-        .animation(TasksDesignMetrics.fold(reduceMotion: design.reduceMotion), value: folded)
+        .animation(AtticPanelChromeMetrics.fold(reduceMotion: design.reduceMotion), value: folded)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: todayShown(look)),
                    value: todayShown(look))
         .frame(height: side)

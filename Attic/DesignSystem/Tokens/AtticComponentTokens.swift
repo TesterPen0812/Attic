@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// Spacing and transition rules shared by the panel's page chrome.
+/// Feature-specific row, tile and group measurements stay with each page.
+enum AtticPanelChromeMetrics {
+    static let headerGap: CGFloat = 5
+    static let footerGap: CGFloat = 5
+
+    static func curve(_ duration: Double) -> Animation {
+        .timingCurve(0.3, 0.7, 0.2, 1, duration: duration)
+    }
+
+    static func fold(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
+    }
+}
+
 // Per-component measurements: every size, gap, stroke, shadow and fixed
 // colour a component draws with lives here, typed and documented, so no
 // component carries a visual literal of its own. The shared scales (spacing,

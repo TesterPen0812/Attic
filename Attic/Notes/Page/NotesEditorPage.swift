@@ -422,7 +422,7 @@ struct NotesEditorPage: View {
 
     /// What the top row's search button takes from the scrolled-away
     /// title's room: the button and its gap to the page switch.
-    static let headerTitleReserve: CGFloat = AtticControlSize.headerControl + TasksDesignMetrics.headerGap
+    static let headerTitleReserve: CGFloat = AtticControlSize.headerControl + AtticPanelChromeMetrics.headerGap
 
     // MARK: Top row
 

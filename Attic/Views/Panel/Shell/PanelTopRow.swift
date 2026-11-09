@@ -21,7 +21,7 @@ import SwiftUI
 enum PanelTopRowLayout {
     /// Between ••• and Search (Accepted 2026-11-05, "Header spacing": the
     /// bottom bar's gap, was 3).
-    static let gap: CGFloat = TasksDesignMetrics.headerGap
+    static let gap: CGFloat = AtticPanelChromeMetrics.headerGap
     /// Between the page's own switch and the top row's icons: twice that,
     /// so what navigates reads apart from what acts.
     static let switchGap: CGFloat = 2 * gap
@@ -71,7 +71,7 @@ enum PanelTopRowLayout {
     /// The search's open and close, as on Tasks: the design's ease (240 ms)
     /// in, a quick fade out; Reduce Motion a short ease.
     static func searchAnimation(shown: Bool, reduceMotion: Bool) -> Animation {
-        reduceMotion ? .easeOut(duration: 0.15) : (shown ? TasksDesignMetrics.curve(0.24) : .easeOut(duration: 0.12))
+        reduceMotion ? .easeOut(duration: 0.15) : (shown ? AtticPanelChromeMetrics.curve(0.24) : .easeOut(duration: 0.12))
     }
 
     /// The field grows from the button's place; the button fades.

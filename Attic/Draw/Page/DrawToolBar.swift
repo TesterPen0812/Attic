@@ -34,7 +34,7 @@ enum DrawPageMetrics {
     /// The canvas menu's card starts 12 px under the title capsule.
     static let menuGap: CGFloat = 6
 
-    static func fold(_ reduceMotion: Bool) -> Animation { TasksDesignMetrics.fold(reduceMotion: reduceMotion) }
+    static func fold(_ reduceMotion: Bool) -> Animation { AtticPanelChromeMetrics.fold(reduceMotion: reduceMotion) }
 
     /// D4 removes the menu's search row. The list keeps both card insets
     /// and stops at the panel's bottom inset, with one pixel of grace.
@@ -187,7 +187,7 @@ struct DrawToolBar: View {
 
     var body: some View {
         let m = DrawPageMetrics.self
-        let shape = Squircle(cornerRadius: AtticShape.controlRadius(height: m.capsule), exponent: TasksDesignMetrics.cornerExponent)
+        let shape = Squircle(cornerRadius: AtticShape.controlRadius(height: m.capsule), exponent: AtticControlShape.designExponent)
         let dark = design.mode == .dark
         HStack(spacing: m.cellGap) {
             ForEach([DrawTool.select, .pen, .eraser, .text], id: \.self) { tool in

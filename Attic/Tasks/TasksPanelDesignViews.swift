@@ -75,14 +75,14 @@ struct TasksGroupHeader: View {
 enum TasksDesignMetrics {
     /// The design's ease, `cubic-bezier(0.3, 0.7, 0.2, 1)`.
     static func curve(_ duration: Double) -> Animation {
-        .timingCurve(0.3, 0.7, 0.2, 1, duration: duration)
+        AtticPanelChromeMetrics.curve(duration)
     }
 
     /// The bottom bar's fold, as the footer's tabs folded for the add
     /// field (pd-combined): the design's ease at 260 ms; Reduce Motion a
     /// 150 ms fade.
     static func fold(reduceMotion: Bool) -> Animation {
-        reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
+        AtticPanelChromeMetrics.fold(reduceMotion: reduceMotion)
     }
 
     // Group header: 22 px text on a 28 px line, gap 8 px. Its padding was
@@ -120,10 +120,10 @@ enum TasksDesignMetrics {
     static let innerRadius: CGFloat = 14
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
-    static let headerGap: CGFloat = 5
+    static let headerGap: CGFloat = AtticPanelChromeMetrics.headerGap
 
     // Bottom bar: gap 10 px; its controls are the top row's 27 pt capsules.
-    static let footerGap: CGFloat = 5
+    static let footerGap: CGFloat = AtticPanelChromeMetrics.footerGap
     static let footerRadius: CGFloat = AtticRadius.header
 
     /// The list starts 6 under the header (Accepted 2026-11-05, "Header

@@ -120,7 +120,7 @@ enum CalendarDesign {
     /// search's motion: it opens in 240 ms and leaves in 120 ms).
     static func searchAnimation(opening: Bool, reduceMotion: Bool) -> Animation {
         if reduceMotion { return .easeOut(duration: 0.15) }
-        return opening ? TasksDesignMetrics.curve(0.24) : .easeOut(duration: 0.12)
+        return opening ? AtticPanelChromeMetrics.curve(0.24) : .easeOut(duration: 0.12)
     }
 }
 
