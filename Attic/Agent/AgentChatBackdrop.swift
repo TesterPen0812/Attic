@@ -17,6 +17,8 @@ struct AgentChatBackdrop: NSViewRepresentable {
     /// Reduce Transparency, or no blur available: the tint alone, near solid.
     var solid: Bool
     var onEscape: @MainActor () -> Void
+    /// Told when a wipe starts, so the colour over the blur can follow it.
+    var onWipe: @MainActor (AgentChatWipe?) -> Void = { _ in }
     var didMake: @MainActor (AgentChatBackdropView) -> Void = { _ in }
 
     func makeNSView(context: Context) -> AgentChatBackdropView {
@@ -27,11 +29,48 @@ struct AgentChatBackdrop: NSViewRepresentable {
 
     func updateNSView(_ view: AgentChatBackdropView, context: Context) {
         view.onEscape = onEscape
+        view.onWipe = onWipe
         view.configure(tint: tint, solid: solid)
         view.setShown(shown, origin: origin, fades: fades)
     }
 
     static func dismantleNSView(_ view: AgentChatBackdropView, coordinator: ()) { view.stopWatchingKeys() }
+}
+
+/// One open or close of the blur, shared by what moves with it: the blur and
+/// tint here, and the colour the alive layer draws over them. The circle has a
+/// soft rim (`feather` of its radius), which grows and shrinks with it.
+struct AgentChatWipe: Equatable {
+    /// The part of the circle's radius that fades out to its edge.
+    static let feather: CGFloat = 0.24
+
+    var shown: Bool
+    var start: Date
+    var origin: CGPoint
+    /// The furthest corner from the origin: where the solid part must end up.
+    var reach: CGFloat
+    /// From `from` to the end, as a fraction of the full radius.
+    var from: CGFloat
+    var duration: Double
+    var curve: (x1: Double, y1: Double, x2: Double, y2: Double)
+
+    /// The circle's radius when fully open, rim included.
+    var fullRadius: CGFloat { reach / (1 - Self.feather) }
+    static func smallest(reach: CGFloat) -> CGFloat { 0.5 / (reach / (1 - feather)) }
+
+    /// The circle's scale at `date`: the wipe's curve, as Core Animation runs it.
+    func scale(at date: Date) -> CGFloat {
+        let t = duration > 0 ? date.timeIntervalSince(start) / duration : 1
+        let to: CGFloat = shown ? 1 : Self.smallest(reach: reach)
+        return from + (to - from) * CGFloat(AgentEase.curve(curve.x1, curve.y1, curve.x2, curve.y2, t))
+    }
+
+    func isRunning(at date: Date) -> Bool { date.timeIntervalSince(start) < duration }
+
+    /// Equatable by the wipe's identity: the tuple holds only its curve.
+    static func == (a: AgentChatWipe, b: AgentChatWipe) -> Bool {
+        a.shown == b.shown && a.start == b.start && a.origin == b.origin && a.reach == b.reach && a.from == b.from
+    }
 }
 
 final class AgentChatBackdropView: NSView {
@@ -42,6 +81,7 @@ final class AgentChatBackdropView: NSView {
     static let saturation: CGFloat = 1.3
 
     var onEscape: @MainActor () -> Void = {}
+    var onWipe: @MainActor (AgentChatWipe?) -> Void = { _ in }
     private let backdrop: CALayer?
     private let tintLayer = CALayer()
     private var isShown: Bool?
@@ -123,6 +163,7 @@ final class AgentChatBackdropView: NSView {
         isShown = shown
         let layers = [backdrop, tintLayer].compactMap { $0 }
         if fades {
+            onWipe(nil)
             for layer in layers {
                 layer.mask = nil
                 let fade = CABasicAnimation(keyPath: "opacity")
@@ -135,29 +176,40 @@ final class AgentChatBackdropView: NSView {
             return
         }
         let reach = hypot(max(origin.x, bounds.width - origin.x), max(origin.y, bounds.height - origin.y)) + 2
-        let small = Self.circle(at: origin, radius: 0.5)
-        let large = Self.circle(at: origin, radius: reach)
         let timing = shown ? Self.opening : Self.closing
+        let small = AgentChatWipe.smallest(reach: reach)
+        let wipe = AgentChatWipe(shown: shown, start: Date(), origin: origin, reach: reach, from: shown || first ? small : 1,
+                                 duration: timing.duration,
+                                 curve: (Double(timing.x1), Double(timing.y1), Double(timing.x2), Double(timing.y2)))
+        onWipe(wipe)
+        let radius = wipe.fullRadius
         for layer in layers {
-            let mask = (layer.mask as? CAShapeLayer) ?? CAShapeLayer()
-            mask.frame = bounds
-            mask.fillColor = NSColor.black.cgColor
-            layer.mask = mask
-            let wipe = CABasicAnimation(keyPath: "path")
-            wipe.fromValue = shown || first ? small : large
-            wipe.toValue = shown ? large : small
-            wipe.duration = timing.duration
-            wipe.timingFunction = CAMediaTimingFunction(controlPoints: timing.x1, timing.y1, timing.x2, timing.y2)
+            let mask = (layer.mask as? CAGradientLayer) ?? Self.softMask()
+            let animation = CABasicAnimation(keyPath: "transform.scale")
+            animation.fromValue = wipe.from
+            animation.toValue = shown ? 1 : small
+            animation.duration = timing.duration
+            animation.timingFunction = CAMediaTimingFunction(controlPoints: timing.x1, timing.y1, timing.x2, timing.y2)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            mask.path = shown ? large : small
+            mask.bounds = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2)
+            mask.position = origin
+            mask.transform = CATransform3DMakeScale(shown ? 1 : small, shown ? 1 : small, 1)
             CATransaction.commit()
-            mask.add(wipe, forKey: "wipe")
+            layer.mask = mask
+            mask.add(animation, forKey: "wipe")
         }
     }
 
-    private static func circle(at centre: CGPoint, radius: CGFloat) -> CGPath {
-        CGPath(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2), transform: nil)
+    /// A round mask with a soft rim, so the wipe's edge never slices through text.
+    private static func softMask() -> CAGradientLayer {
+        let mask = CAGradientLayer()
+        mask.type = .radial
+        mask.startPoint = CGPoint(x: 0.5, y: 0.5)
+        mask.endPoint = CGPoint(x: 1, y: 1)
+        mask.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
+        mask.locations = [0, NSNumber(value: Double(1 - AgentChatWipe.feather)), 1]
+        return mask
     }
 
     private func watchKeys() {

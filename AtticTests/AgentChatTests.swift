@@ -1052,6 +1052,69 @@ final class AgentChatFXTests: XCTestCase {
         XCTAssertEqual(landed, 1, "Going home lands nothing on the week")
     }
 
+    func testOpeningDrawsNoRingAcrossTheComposerAndLeavesNothingBehind() {
+        let fx = AgentChatFX()
+        fx.composerFrame = CGRect(x: 10, y: 480, width: 300, height: 62)
+        fx.emptyThread = true
+        fx.open(at: CGPoint(x: 250, y: 520))
+        XCTAssertEqual(fx.ringCount, 0, "No ring over the composer as it grows")
+        run(fx, seconds: AgentChatBackdropView.opening.duration + 0.05)
+        XCTAssertEqual(fx.liveCount, 0, "The opening's stars end with the wipe")
+        run(fx, seconds: 0.3)
+        XCTAssertEqual(fx.liveCount, 0, "Nothing rises in the first second")
+    }
+
+    func testTheShimmerNeverLosesItsLine() throws {
+        // The glass behind the line in the owner's recording, and the 3:1
+        // floor WCAG sets for text that only has to stay legible.
+        let glass = (r: 0.76, g: 0.76, b: 0.79)
+        func channel(_ value: Double) -> Double { value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4) }
+        func luminance(_ r: Double, _ g: Double, _ b: Double) -> Double {
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        }
+        func contrast(_ color: Color) throws -> Double {
+            let srgb = try XCTUnwrap(NSColor(color).usingColorSpace(.sRGB))
+            let a = luminance(Double(srgb.redComponent), Double(srgb.greenComponent), Double(srgb.blueComponent))
+            let b = luminance(glass.r, glass.g, glass.b)
+            return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+        }
+        let ink = Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255)
+        let highlight = AgentIris.shimmer(over: ink)
+        XCTAssertGreaterThanOrEqual(try contrast(highlight.blue), 3)
+        XCTAssertGreaterThanOrEqual(try contrast(highlight.pink), 3)
+    }
+
+    func testBackdropWipesWithASoftEdgeOnBothLayers() throws {
+        let view = AgentChatBackdropView()
+        view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
+        view.layout()
+        view.setShown(true, origin: CGPoint(x: 280, y: 530), fades: false)
+        let layers = try XCTUnwrap(view.layer?.sublayers)
+        XCTAssertFalse(layers.isEmpty)
+        for layer in layers {
+            let mask = try XCTUnwrap(layer.mask as? CAGradientLayer, "A hard path edge slices through text")
+            XCTAssertEqual(mask.type, .radial)
+            let wipe = try XCTUnwrap(mask.animation(forKey: "wipe"))
+            XCTAssertEqual(wipe.duration, AgentChatBackdropView.opening.duration, accuracy: 0.001)
+        }
+    }
+
+    func testTheWipeFollowsItsCurveFromTheStar() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        let reach: CGFloat = 400
+        let timing = AgentChatBackdropView.opening
+        let small = AgentChatWipe.smallest(reach: reach)
+        let wipe = AgentChatWipe(shown: true, start: start, origin: CGPoint(x: 280, y: 530), reach: reach, from: small,
+                                 duration: timing.duration,
+                                 curve: (Double(timing.x1), Double(timing.y1), Double(timing.x2), Double(timing.y2)))
+        XCTAssertEqual(wipe.scale(at: start), small, accuracy: 0.001)
+        let half = wipe.scale(at: start.addingTimeInterval(timing.duration / 2))
+        XCTAssertEqual(half, small + (1 - small) * CGFloat(AgentEase.curve(0.3, 0.7, 0.2, 1, 0.5)), accuracy: 0.01)
+        XCTAssertEqual(wipe.scale(at: start.addingTimeInterval(timing.duration)), 1, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(wipe.fullRadius * (1 - AgentChatWipe.feather), reach - 0.5,
+                                    "Fully open, the solid part reaches every corner")
+    }
+
     func testClearLiveDropsLeftovers() {
         let fx = AgentChatFX()
         fx.dust(CGRect(x: 0, y: 0, width: 100, height: 20))

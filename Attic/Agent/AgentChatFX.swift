@@ -88,6 +88,10 @@ final class AgentChatFX: ObservableObject {
     var weekSlots: [WeekSlot: CGRect] = [:]
     var composerFrame: CGRect?
     var askedFrame: CGRect?
+    /// Where the current exchange starts, in the stage's space.
+    var turnTop: CGFloat?
+    /// The blur's current wipe; the colour follows it.
+    var wipe: AgentChatWipe? { didSet { if wipe != oldValue { wake() } } }
     var paragraphFrames: [Int: CGRect] = [:]
     let word = AgentWordProbe()
 
@@ -399,6 +403,7 @@ final class AgentChatFX: ObservableObject {
         }
         let busy = acting || needsYou || spark.on || landing || emptyThread || !particles.isEmpty || !rings.isEmpty
             || !flights.isEmpty || !scans.isEmpty || abs(energy - energyGoal) > 0.01 || flash > 0.01
+            || wipe?.isRunning(at: date) == true
         if !busy, !isIdle { DispatchQueue.main.async { [weak self] in self?.isIdle = true } }
     }
 
@@ -576,20 +581,34 @@ final class AgentChatFX: ObservableObject {
     }
 
     /// The soft glow that rises from the bottom while the agent works.
-    func drawAura(in context: inout GraphicsContext, size: CGSize) {
+    func drawAura(in context: inout GraphicsContext, size: CGSize, at date: Date) {
         let e = min(1.25, energy + flash)
         let blobs: [(Double, Double, Double, Double, Double)] = [
             (0.18, 0.9, 0.7, 0.5, 0), (0.52, 0.98, 0.5, 0.8, 2), (0.84, 0.9, 0.9, 0.4, 4), (0.4, 0.8, 0.6, 0.6, 5.2)
         ]
-        for (index, blob) in blobs.enumerated() {
-            let (bx, by, sx, sy, phase) = blob
-            let x = size.width * (bx + 0.2 * sin(time * sx * 0.8 + phase))
-            let y = size.height * (by + 0.08 - 0.3 * e * (0.55 + 0.45 * sin(time * sy * 0.5 + phase)))
-            let radius = size.width * (0.34 + 0.34 * e)
-            let colour = AgentIris.all[index]
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
-                Gradient(colors: [colour.opacity(0.3 * min(1, e + 0.12)), colour.opacity(0)]),
-                center: CGPoint(x: x, y: y), startRadius: 0, endRadius: radius))
+        // Alive means a wipe is on its way: no colour before it starts.
+        guard let wipe else { return }
+        let clip: AgentChatWipe? = wipe.isRunning(at: date) || !wipe.shown ? wipe : nil
+        context.drawLayer { layer in
+            for (index, blob) in blobs.enumerated() {
+                let (bx, by, sx, sy, phase) = blob
+                let x = size.width * (bx + 0.2 * sin(time * sx * 0.8 + phase))
+                let y = size.height * (by + 0.08 - 0.3 * e * (0.55 + 0.45 * sin(time * sy * 0.5 + phase)))
+                let radius = size.width * (0.34 + 0.34 * e)
+                let colour = AgentIris.all[index]
+                layer.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
+                    Gradient(colors: [colour.opacity(0.3 * min(1, e + 0.12)), colour.opacity(0)]),
+                    center: CGPoint(x: x, y: y), startRadius: 0, endRadius: radius))
+            }
+            // The colour opens with the blur: the same circle, the same rim.
+            guard let clip else { return }
+            let radius = clip.fullRadius * clip.scale(at: date)
+            layer.blendMode = .destinationIn
+            layer.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
+                Gradient(stops: [.init(color: .black, location: 0),
+                                 .init(color: .black, location: 1 - AgentChatWipe.feather),
+                                 .init(color: .clear, location: 1)]),
+                center: clip.origin, startRadius: 0, endRadius: max(0.5, radius)))
         }
     }
 }
@@ -617,8 +636,7 @@ struct AgentChatAuraLayer: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: fx.isIdle)) { timeline in
             Canvas { context, size in
-                _ = timeline.date
-                fx.drawAura(in: &context, size: size)
+                fx.drawAura(in: &context, size: size, at: timeline.date)
             }
         }
         .allowsHitTesting(false)

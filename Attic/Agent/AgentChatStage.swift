@@ -141,7 +141,8 @@ struct AgentChatStage: View {
         #endif
         ZStack(alignment: .topTrailing) {
             AgentChatBackdrop(shown: shown, origin: star, tint: tint, fades: !alive, solid: solid,
-                              onEscape: { model.close() }, didMake: { view in DispatchQueue.main.async { backdropView = view } })
+                              onEscape: { model.close() }, onWipe: { [fx] in fx.wipe = $0 },
+                              didMake: { view in DispatchQueue.main.async { backdropView = view } })
                 .overlay { Color.clear.contentShape(Rectangle()).onTapGesture { model.close() } }
                 .accessibilityHidden(true)
             if alive { AgentChatAuraLayer(fx: fx).opacity(shown ? 1 : 0).animation(.easeOut(duration: 0.3), value: shown) }
