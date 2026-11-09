@@ -766,18 +766,7 @@ final class NotesLibraryModel: ObservableObject {
     /// Today "09:40", this week "Mon", then "12 Sep" (and the year when it
     /// is not this year).
     static func time(_ date: Date, now: Date, calendar: Calendar) -> String {
-        let today = calendar.startOfDay(for: now)
-        var style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone)
-        if date >= today {
-            style = style.hour().minute()
-        } else if let weekStart = calendar.date(byAdding: .day, value: -6, to: today), date >= weekStart {
-            style = style.weekday(.abbreviated)
-        } else if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-            style = style.day().month(.abbreviated)
-        } else {
-            style = style.day().month(.abbreviated).year()
-        }
-        return date.formatted(style)
+        AtticRelativeDateFormatting.editTime(date, now: now, calendar: calendar)
     }
 }
 
