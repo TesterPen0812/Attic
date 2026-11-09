@@ -18,7 +18,7 @@ struct AtticApp: App {
                 Button("Try Again") { AppCoordinator.retryStartup() }
                     .accessibilityIdentifier("attic.startup.retry")
                 Divider()
-                Button("Quit Attic") { NSApp.terminate(nil) }
+                Button("Quit Attic") { AppQuitRequestGate.shared.request { NSApp.terminate(nil) } }
                     .keyboardShortcut("q", modifiers: .command)
             }
         }

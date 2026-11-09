@@ -589,7 +589,9 @@ struct TasksPage: View {
     /// card replaced the add bar there), or the add bar.
     private func focusNewTaskStop() {
         if panelComposer != nil {
-            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
+            tabTarget.request(.plus)
+            tabTarget.queueControlFocus(PanelPlusFocusID(), for: .plus, in: model.tab,
+                                        model: model, requests: focusRequests)
         } else {
             addBarFocused = true
         }
@@ -1064,7 +1066,7 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
-            DispatchQueue.main.async { focusRequests.focus(button) }
+            tabTarget.queueControlFocus(button, for: stop, in: tab, model: model, requests: focusRequests)
         case let .row(id):
             searchFocused = false
             addBarFocused = false
@@ -1090,7 +1092,7 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
-            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
+            tabTarget.queueControlFocus(PanelPlusFocusID(), for: stop, in: tab, model: model, requests: focusRequests)
         }
     }
 
@@ -5310,6 +5312,18 @@ final class TasksTabTarget {
 
     func isCurrent(_ stop: TasksTabStop, generation: UInt64) -> Bool {
         self.generation == generation && self.stop == stop
+    }
+
+    /// The focusable controls use the main queue so they can arm after the
+    /// current field resigns. The pending handoff belongs to this Tab move.
+    func queueControlFocus(_ target: AnyHashable, for stop: TasksTabStop, in tab: TasksTab,
+                           model: TasksPageModel, requests: AtticFocusRequests) {
+        let requestedGeneration = generation
+        DispatchQueue.main.async {
+            guard self.isCurrent(stop, generation: requestedGeneration),
+                  model.tab == tab, model.isPageShown else { return }
+            requests.focus(target)
+        }
     }
 }
 

@@ -51,6 +51,7 @@ final class TaskFilesSliceTests: XCTestCase {
     override func tearDown() async throws {
         AgentWorkspaceCall.beforePreparing = nil
         TaskAttachmentMigration.interruption = nil
+        TaskAttachmentMigration.testPauseBeforeMove = nil
         for presenter in presenters where presenter.lease != nil { _ = await presenter.close() }
         presenters.removeAll()
         windows.forEach { $0.close() }
@@ -1025,5 +1026,43 @@ extension TaskFilesSliceTests {
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NotePendingEdit>()).filter { $0.id == proposalID }.isEmpty)
         XCTAssertNotNil(tasks.task(withID: childID))
         XCTAssertNil(try ownNote(rootID))
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testFix18ManualMoveDuringLaunchDoesNotRestoreOldReversalWarning() async throws {
+        let one = try legacyTask("First", shown: await legacyFiles(["first.txt"]))
+        let two = try legacyTask("Second", shown: await legacyFiles(["second.txt"]))
+        let reversedID = [one, two].min { $0.uuidString < $1.uuidString }!
+        let nextID = [one, two].max { $0.uuidString < $1.uuidString }!
+        // Seed without an explicit-move Undo receipt: reversal intentionally
+        // refuses while such a receipt still owns the original bytes.
+        guard case .migrated = await TaskAttachmentMigration.migrate(rootID: reversedID,
+            coordinator: coordinator, files: tasks.taskImageFiles) else {
+            return XCTFail("fixture migration must succeed")
+        }
+        let reversed = await tasks.fileMigration.reverse(reversedID, tasks: tasks)
+        XCTAssertEqual(reversed, .reversed)
+
+        var reachedSecondFamily = false
+        var manualMove: TaskAttachmentMigration.Outcome?
+        TaskAttachmentMigration.testPauseBeforeMove = { [self] root in
+            guard root == nextID, !reachedSecondFamily else { return }
+            reachedSecondFamily = true
+            // The first family has already been recorded as reversed by the
+            // launch sweep. While another family is being read, the person
+            // chooses Move into Note on that first family's Earlier files.
+            manualMove = await tasks.fileMigration.moveIntoNote(reversedID, tasks: tasks, notes: notes)
+        }
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        TaskAttachmentMigration.testPauseBeforeMove = nil
+        XCTAssertTrue(reachedSecondFamily)
+        guard case .migrated? = manualMove else {
+            return XCTFail("manual move must complete while the sweep is pending; got \(String(describing: manualMove))")
+        }
+        let status = tasks.fileMigration.status(of: reversedID)
+        XCTAssertEqual(status.kind, .migrated)
+        XCTAssertNil(status.refusal, "an old launch refusal must not reappear after a successful manual move")
     }
 }

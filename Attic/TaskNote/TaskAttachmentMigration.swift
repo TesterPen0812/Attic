@@ -128,6 +128,9 @@ enum TaskAttachmentMigration {
     /// as a kill at that point would leave it (nothing after the boundary
     /// runs); the store is then reopened and launch recovery runs.
     static var interruption: ((String) throws -> Void)?
+    /// Tests may hold one family's launch migration while a different family
+    /// completes a user-initiated move, without blocking the main actor.
+    static var testPauseBeforeMove: ((UUID) async -> Void)?
     #endif
 
     private static func boundary(_ point: String) throws {
@@ -511,6 +514,9 @@ enum TaskAttachmentMigration {
             }
             defer { leases.forEach { $0.release() } }
             try boundary("M2-bytes")
+            #if DEBUG
+            await testPauseBeforeMove?(rootID)
+            #endif
             let bytes = Dictionary(uniqueKeysWithValues: staged.map { ($0.id, $0) })
             // The note after: shown files appended at the end in stored
             // order (images inline, other files as file blocks); removals

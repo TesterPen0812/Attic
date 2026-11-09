@@ -171,6 +171,20 @@ final class PanelPullOutTests: XCTestCase {
 /// The pull-out with real panels in the invisible test host.
 @MainActor
 final class PanelPullOutHostedTests: XCTestCase {
+    private final class HeldCalendarLoad: CalendarEventWriter {
+        var gate: CheckedContinuation<Void, Never>?
+        var lastError: CalendarEventWriteError? { nil }
+        func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
+        func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent? {
+            await withCheckedContinuation { gate = $0 }
+            return nil
+        }
+        func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
+        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func openInCalendar(_ occurrenceID: String) async throws { throw CalendarEventWriteError.openFailed }
+    }
+
     func testPullOutAndDockInPublishNoStateDuringViewUpdates() throws {
         try withRig { rig in
             if ProcessInfo.processInfo.environment["ATTIC_F7_STACKS"] == "1" {
@@ -393,6 +407,39 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(until: { rig.pullOut.panel(for: .calendar) == nil })
             XCTAssertNil(rig.pullOut.panel(for: .calendar))
             XCTAssertEqual(backend.events.values.first?.draft.title, "Uncommitted")
+        }
+    }
+
+    func testFix18CalendarDockWaitingForWriterDoesNotOverrideLaterDrag() throws {
+        try withRig { rig in
+            try pull(.calendar, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .calendar))
+            let writer = HeldCalendarLoad()
+            let rows = CalendarEventRowState(makeWriter: { writer })
+            floating.calendarEventRowsOverrideForTesting = rows
+            let start = Date(timeIntervalSince1970: 1_793_361_600)
+            let event = CalendarEvent(id: "held", title: "Held", start: start,
+                end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+                calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+            Task { await rows.toggle(event) }
+            spin(until: { writer.gate != nil && rows.busy })
+            let gate = try XCTUnwrap(writer.gate)
+            XCTAssertTrue(rig.pullOut.dockIn(.calendar))
+            spin(0.05)
+
+            // The same real window receives another drag while docking awaits its editor.
+            let away = floating.visibleFrame.offsetBy(dx: -65, dy: -40)
+            floating.hostingViewForTesting.onWindowDragBegan?()
+            let changed = try XCTUnwrap(floating.hostingViewForTesting.onWindowDragChanged)
+            let moved = changed(away, CGPoint(x: away.midX, y: away.midY))
+            floating.setFrame(moved)
+            floating.hostingViewForTesting.onWindowDragEnded?(moved,
+                CGPoint(x: moved.midX, y: moved.midY), .zero, .zero)
+            gate.resume()
+            spin(0.6)
+            XCTAssertTrue(rig.pullOut.panel(for: .calendar) === floating,
+                "the older docking continuation cannot close a subsequently dragged panel")
+            XCTAssertEqual(rig.pullOut.state.record(.calendar)?.frame, moved)
         }
     }
 

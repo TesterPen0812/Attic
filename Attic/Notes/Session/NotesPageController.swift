@@ -284,6 +284,7 @@ final class NotesPageController: ObservableObject {
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
+    private var boundedIOWarningOwners: [String: UUID] = [:]
     @Published private(set) var workspaceRecoveryIssues: [WorkspaceOperationCoordinator.RecoveryIssue] = []
     private var damagedRecoveryWarnings = Set<String>()
     /// Moves on each `present()`: the page puts the keyboard back in the
@@ -716,7 +717,11 @@ final class NotesPageController: ObservableObject {
     private func performBoundedUserIO<T: Sendable>(completedAction: Bool = false, _ action: @escaping @MainActor () async -> T) async -> T? {
         let message = completedAction ? "Attachment data is still being read."
             : "Attachment data is still being read. Try again when loading finishes."
+        let request = UUID()
+        boundedIOWarningOwners[message] = request
         func clearWarning() {
+            guard boundedIOWarningOwners[message] == request else { return }
+            boundedIOWarningOwners[message] = nil
             recoveryWarnings.removeAll { $0 == message }
             for session in cache.values where session.notice == message { session.notice = nil }
         }
