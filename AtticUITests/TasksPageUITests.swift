@@ -496,11 +496,18 @@ final class TasksPageUITests: XCTestCase {
     /// or typed, on its button (never in the text), with a clear ×; the Tag
     /// button opens the tag list.
     func testTheStripShowsPickedValuesOnItsButtons() throws {
+        // The standalone preview launches with the add field focused.
+        // Escape folds it into +; clicking + opens it again, then typing
+        // reveals the strip (Accepted 2026-10-29 "Top row and bottom bar").
+        if addBar.exists { app.typeKey(.escape, modifierFlags: []) }
+        let plus = window.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 5))
+        plus.click()
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         let date = window.buttons["composer-date"]
         let tag = window.buttons["composer-tag"]
         let priority = window.buttons["composer-priority"]
-        XCTAssertFalse(date.exists, "no strip while the bar is empty")
+        XCTAssertFalse(date.exists, "the empty strip is absent from the accessibility tree")
         addBar.click()
         addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
@@ -635,23 +642,28 @@ final class TasksPageUITests: XCTestCase {
     /// P2-04: a row Tab reached drew nothing while Return edited it, and
     /// Tab went on into the hidden rows of the pages kept beside Now).
     func testEveryTabStopShowsWhereTheKeyboardIs() throws {
-        let titles = ["Finalize launch checklist", "Ship appearance PR", "Email beta testers", "Book dentist", "Call the plumber"]
+        // Accepted 2026-10-29 "Top row and bottom bar": Escape folds the
+        // preview's initially focused add field into +.
+        let titles = ["Finalize launch checklist", "Book dentist", "Email beta testers", "Ship appearance PR", "Call the plumber"]
+        if addBar.exists { app.typeKey(.escape, modifierFlags: []) }
         // The pointer over the header, so no row is hovered.
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01)).hover()
         RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         let origin = window.frame.origin
         func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         let rows = titles.map { local(row($0).frame) }
-        let bar = local(addBar.frame).insetBy(dx: -12, dy: -48)
+        let footer = window.buttons["tasks-new-task"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 3), "idle footer shows +")
+        let bar = local(footer.frame).insetBy(dx: -12, dy: -48)
         let before = try windowBitmap()
         var stops: [String] = []
-        var previous = "add bar"
+        var previous = "+"
         for _ in 0..<(titles.count + 4) {
             app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
             var stop: String
-            if (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true {
-                stop = "add bar"
+            if (footer.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+                stop = "+"
             } else {
                 let after = try windowBitmap()
                 let lit = titles.indices.filter { changedPixels(before, after, in: rows[$0], excluding: nil) > 30 }
@@ -665,7 +677,7 @@ final class TasksPageUITests: XCTestCase {
             }
             stops.append(stop)
             if stop == "nothing" {
-                XCTAssertEqual(previous, "add bar", "the keyboard rests where nothing shows it only on leaving the add bar (\(stops))")
+                XCTAssertEqual(previous, "+", "the keyboard rests where nothing shows it only on leaving + (\(stops))")
             }
             previous = stop
         }
