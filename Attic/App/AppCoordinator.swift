@@ -996,6 +996,14 @@ final class AppCoordinator: ObservableObject {
             // monitor's log (`ATTIC_FRAME_MONITOR`).
             if ProcessInfo.processInfo.environment["ATTIC_PAGE_BENCH"] == "1",
                Bundle.main.bundleIdentifier?.hasPrefix("com.taha.Attic.preview.") == true {
+                // First SIGINFO reveals Tasks; then all directed page pairs,
+                // returning to Tasks for another lap.
+                // Opt-in only: the original sequential bench remains unchanged.
+                let allPairs: [PanelPage] = [.notes, .tasks, .calendar, .tasks,
+                                             .canvas, .notes, .calendar, .notes,
+                                             .canvas, .calendar, .canvas, .tasks]
+                let measuresPairs = ProcessInfo.processInfo.environment["ATTIC_PAGE_BENCH_ALL_PAIRS"] == "1"
+                var pairIndex = 0
                 signal(SIGINFO, SIG_IGN)
                 let source = DispatchSource.makeSignalSource(signal: SIGINFO, queue: .main)
                 source.setEventHandler { [weak self] in
@@ -1003,9 +1011,26 @@ final class AppCoordinator: ObservableObject {
                         guard let self else { return }
                         let pages = PanelPage.allCases
                         let index = pages.firstIndex(of: PanelPage(self.uiState.selectedSection)) ?? 0
-                        let next = pages[(index + 1) % pages.count]
+                        let next: PanelPage
+                        if measuresPairs {
+                            // The first signal reveals Tasks. Every later
+                            // signal switches to one of the twelve targets,
+                            // including the next lap's Tasks -> Notes.
+                            next = pairIndex == 0 ? .tasks : allPairs[(pairIndex - 1) % allPairs.count]
+                            pairIndex += 1
+                        } else {
+                            next = pages[(index + 1) % pages.count]
+                        }
                         print(String(format: "ATTIC_PAGE_SWITCH %.4f %@", CACurrentMediaTime(), next.rawValue))
-                        self.hoverMonitor.revealForPerformanceProbe(section: next.section)
+                        if measuresPairs && self.panelController.isPanelVisible {
+                            // The actual Tall-island click route, including
+                            // Notes' leave checkpoint. The reveal probe below
+                            // would refresh the store and show the panel on
+                            // every switch, inflating the measured stall.
+                            self.uiState.island.click(next)
+                        } else {
+                            self.hoverMonitor.revealForPerformanceProbe(section: next.section)
+                        }
                     }
                 }
                 source.resume()

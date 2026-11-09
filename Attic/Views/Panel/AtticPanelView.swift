@@ -116,6 +116,12 @@ struct AtticPanelView: View {
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
                         pageHost(page)
+                            .onAppear {
+                                PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
+                            }
+                            .onChange(of: page == currentPage) { _, shown in
+                                if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)") }
+                            }
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
