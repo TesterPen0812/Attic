@@ -5,6 +5,133 @@ import XCTest
 
 @MainActor
 final class AgentHelperLaunchTests: XCTestCase {
+    #if DEBUG
+    private func fixtureDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticLaunchFixture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        return directory
+    }
+
+    private func fakeCLI(_ name: String, in directory: URL, body: String) throws -> URL {
+        let file = directory.appendingPathComponent(name)
+        try ("#!/bin/sh\n" + body).write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+        return file
+    }
+
+    private func until(_ type: String, from helper: AgentHelperClient) async -> AgentHelperFrame? {
+        let timeout = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(35))
+            if !Task.isCancelled { helper.stop() }
+        }
+        defer { timeout.cancel() }
+        for await frame in helper.events where frame.type == type { return frame }
+        return nil
+    }
+
+    private func configure(_ helper: AgentHelperClient, claude: [URL] = [], codex: [URL] = []) async {
+        helper.configureTestCLIs(claude: claude.map(\.path), codex: codex.map(\.path))
+        let ready = await until("testCLIsReady", from: helper)
+        XCTAssertNotNil(ready, "The real signed helper must accept fixtures only from its unit-test host")
+    }
+
+    func testRealHelperGrantsAtticToolsToNoninteractiveClaude() async throws {
+        let directory = try fixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = directory.appendingPathComponent("claude-arguments.txt")
+        let fake = try fakeCLI("claude", in: directory, body: """
+        if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" > '\(log.path)'
+        printf 'PATH_SET=%s\\n' "${PATH:+yes}" >> '\(log.path)'
+        granted=no
+        prior=
+        for arg in "$@"; do
+            if [ "$prior" = "--allowedTools" ] && [ "$arg" = "mcp__attic" ]; then granted=yes; fi
+            prior="$arg"
+        done
+        if [ "$granted" != yes ]; then
+            printf 'mcp__attic__list_tasks is not allowed\\n' >&2
+            exit 7
+        fi
+        printf '{"type":"result","is_error":false}\\n'
+        """)
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        await configure(helper, claude: [fake])
+        helper.startBackend("claude", instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                            mcpToken: String(repeating: "x", count: 40), sessionID: nil)
+        let exit = await until("exited", from: helper)
+        XCTAssertEqual(exit?.status, 0, "Without --allowedTools mcp__attic the fake CLI refuses the real helper's launch")
+        let recorded = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(recorded.contains("--allowedTools\nmcp__attic\n"))
+        XCTAssertTrue(recorded.contains("--strict-mcp-config\n"))
+        XCTAssertTrue(recorded.contains("PATH_SET=yes"), "The child must receive a controlled environment")
+    }
+
+    func testRealHelperReportsBrokenCodexConfigurationInsteadOfSignedOut() async throws {
+        let directory = try fixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = directory.appendingPathComponent("codex-status.txt")
+        let broken = try fakeCLI("codex", in: directory, body: """
+        if [ "$1" = "login" ] && [ "$2" = "status" ]; then
+            printf '%s\\n' "$@" > '\(log.path)'
+            printf 'PATH_SET=%s\\n' "${PATH:+yes}" >> '\(log.path)'
+            printf 'Error loading configuration: ~/.codex/config.toml:151:1: invalid type: map, expected a boolean\\n' >&2
+            exit 1
+        fi
+        exit 91
+        """)
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        await configure(helper, codex: [broken])
+        helper.probe()
+        let availability = await until("availability", from: helper)
+        XCTAssertEqual(availability?.codexStatus, "update")
+        XCTAssertEqual(availability?.codexIssue, broken.path)
+        XCTAssertEqual(availability?.codexSignedIn, false)
+        helper.startBackend("codex", instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                            mcpToken: String(repeating: "x", count: 40), sessionID: nil)
+        let failed = await until("failed", from: helper)
+        XCTAssertTrue(failed?.message?.contains(broken.path) == true)
+        XCTAssertTrue(failed?.message?.contains("Update Codex") == true)
+        XCTAssertFalse(failed?.message?.contains("Sign in") == true)
+        XCTAssertEqual(try String(contentsOf: log, encoding: .utf8), "login\nstatus\nPATH_SET=yes\n")
+    }
+
+    func testRealHelperChoosesWorkingVerifiedCandidateAfterBrokenOne() async throws {
+        let directory = try fixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let record = directory.appendingPathComponent("selected-codex.txt")
+        let broken = try fakeCLI("codex-broken", in: directory, body: """
+        printf 'Error loading configuration: ~/.codex/config.toml:151:1: invalid type: map, expected a boolean\\n' >&2
+        exit 1
+        """)
+        let working = try fakeCLI("codex-working", in: directory, body: """
+        if [ "$1" = "login" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" > '\(record.path)'
+        printf 'TOKEN_SET=%s\\n' "${ATTIC_RUN_MCP_TOKEN:+yes}" >> '\(record.path)'
+        """)
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        await configure(helper, codex: [broken, working])
+        helper.probe()
+        let availability = await until("availability", from: helper)
+        XCTAssertEqual(availability?.codexStatus, "ready")
+        guard availability?.codexStatus == "ready" else { return }
+        helper.startBackend("codex", instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                            mcpToken: String(repeating: "x", count: 40), sessionID: nil)
+        let exit = await until("exited", from: helper)
+        XCTAssertEqual(exit?.status, 0)
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        XCTAssertTrue(recorded.contains("app-server\n--strict-config\n"))
+        XCTAssertTrue(recorded.contains("TOKEN_SET=yes"))
+    }
+    #endif
+
     private func forgeConnection(port: UInt16, token: String) -> Int32 {
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return -1 }
