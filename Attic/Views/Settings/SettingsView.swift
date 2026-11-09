@@ -133,7 +133,12 @@ struct SettingsAdaptiveScroll<Content: View>: View {
 
     var body: some View {
         let needsScroll = SettingsWindowLayout.needsContentScroll(size)
-        ScrollView([.horizontal, .vertical]) {
+        // Only an unusually narrow work area needs horizontal scrolling.
+        // Keeping that axis at normal widths lets a focused Appearance
+        // control shift the whole sidebar sideways during a theme change.
+        let axes: Axis.Set = size.width < SettingsWindowLayout.minimumContentSize.width
+            ? [.horizontal, .vertical] : .vertical
+        ScrollView(axes) {
             content()
                 // A minimum alone lets the unbounded horizontal scroll axis
                 // size the content past the window even when scrolling is off.
