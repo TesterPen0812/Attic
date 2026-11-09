@@ -24,7 +24,7 @@ struct AtticText: View {
     /// the letters in the primary ink (the Done search, owner item 17).
     var highlights: [Range<String.Index>] = []
     /// A colour of its own for this role (the Tasks panel design's greys,
-    /// `TasksPanelDesign.tone`); the role still sets its floor, and the
+    /// `AtticSurfaceInk.tone`); the role still sets its floor, and the
     /// appearance check judges this colour against it.
     private(set) var colour: AtticRGBA?
 

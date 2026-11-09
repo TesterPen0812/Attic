@@ -21,7 +21,7 @@ struct CalendarMonthTitle: View {
                     .foregroundStyle(tokens.ink(.heading).color)
                 Text(verbatim: title.year)
                     .font(.system(size: CalendarDesign.pillFont).monospacedDigit())
-                    .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
             }
             .lineLimit(1)
             .minimumScaleFactor(0.8)

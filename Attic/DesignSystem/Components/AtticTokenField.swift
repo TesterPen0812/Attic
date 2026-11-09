@@ -193,8 +193,8 @@ struct AtticTokenField: NSViewRepresentable {
             font: style.nsFont,
             text: NSColor(tokens.color(isEnabled ? ink : .disabledText)),
             piece: NSColor(tokens.color(isEnabled ? pieceInk : .disabledText)),
-            // "!!" in the rows' see-through orange (`TasksPanelDesign.vivid`).
-            high: NSColor(isEnabled ? TasksPanelDesign.vivid(tokens.ink(.priorityMark), tokens: tokens).color
+            // "!!" in the rows' see-through orange (`AtticSurfaceInk.vivid`).
+            high: NSColor(isEnabled ? AtticSurfaceInk.vivid(tokens.ink(.priorityMark), tokens: tokens).color
                                     : tokens.color(.disabledText)),
             caret: NSColor(tokens.color(.heading)),
             reduceMotion: design.reduceMotion
@@ -965,7 +965,7 @@ struct AtticChipText: View {
                                 .accessibilityHidden(true)
                         }
                         AtticText(verbatim: segment.text, style: .listBody, ink: ink, allowsOverlap: true)
-                            .colour(ink == .priorityMark ? TasksPanelDesign.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens) : nil)
+                            .colour(ink == .priorityMark ? AtticSurfaceInk.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens) : nil)
                     }
                 } else if segment.text.allSatisfy(\.isWhitespace) {
                     // Only space: nothing to read, so nothing to check.

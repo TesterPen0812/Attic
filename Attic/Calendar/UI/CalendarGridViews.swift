@@ -14,8 +14,8 @@ struct CalendarWeekdayRow: View {
 
     var body: some View {
         let tokens = design.tokens
-        let weekday = TasksPanelDesign.toneInk(.date, tokens: tokens).color
-        let weekend = TasksPanelDesign.toneInk(.meta, tokens: tokens).color.opacity(0.75)
+        let weekday = AtticSurfaceInk.toneInk(.date, tokens: tokens).color
+        let weekend = AtticSurfaceInk.toneInk(.meta, tokens: tokens).color.opacity(0.75)
         HStack(spacing: CalendarDesign.keyGap) {
             ForEach(Array(Self.letters().enumerated()), id: \.offset) { index, letter in
                 Text(verbatim: letter)
@@ -73,8 +73,8 @@ struct CalendarKey: View {
 
     static func numberColour(_ number: CalendarKeyNumber, style: CalendarKeyStyle = .selected, tokens: AtticColorTokens) -> AtticRGBA {
         switch number {
-        case .red: TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
-        case .grey: TasksPanelDesign.toneInk(.meta, tokens: tokens)
+        case .red: AtticSurfaceInk.vivid(CalendarDesign.red, tokens: tokens)
+        case .grey: AtticSurfaceInk.toneInk(.meta, tokens: tokens)
         case .ink: tokens.ink(.heading)
         case .white: style == .selectedToday ? AtticRGBA(red: 1, green: 1, blue: 1) : tokens.ink(.onInverse)
         }
@@ -127,8 +127,8 @@ struct CalendarDayMarksView: View {
                     .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
             }
             if marks.hasOpenTasks {
-                let ring = isPast ? TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
-                    : TasksPanelDesign.toneInk(.meta, tokens: tokens)
+                let ring = isPast ? AtticSurfaceInk.vivid(CalendarDesign.red, tokens: tokens)
+                    : AtticSurfaceInk.toneInk(.meta, tokens: tokens)
                 Circle().strokeBorder(ring.color, lineWidth: CalendarDesign.ringWidth)
                     .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
             }

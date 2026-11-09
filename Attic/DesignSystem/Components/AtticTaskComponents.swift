@@ -1267,7 +1267,7 @@ struct AtticPriorityMark: View {
         switch priority {
         case .high:
             AtticText(verbatim: "!!", style: .priorityMark, ink: disabled ? .disabledText : .priorityMark)
-                .colour(disabled ? nil : TasksPanelDesign.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens))
+                .colour(disabled ? nil : AtticSurfaceInk.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens))
                 .fixedSize()
                 .accessibilityHidden(true)
         case .medium:
@@ -1712,7 +1712,7 @@ struct AtticRowOpenButton: View {
                 Squircle(cornerRadius: AtticShape.controlRadius(height: m.size), exponent: AtticShape.controlExponent)
                     .fill(tokens.ink(.heading).withAlpha(hovered || forced == .hover ? m.hoverFill : m.fill).color)
                 AtticRowOpenChevron()
-                    .stroke(TasksPanelDesign.toneInk(.groupHeader, tokens: tokens).color,
+                    .stroke(AtticSurfaceInk.toneInk(.groupHeader, tokens: tokens).color,
                             style: StrokeStyle(lineWidth: m.chevronLine, lineCap: .round, lineJoin: .round))
                     .frame(width: m.chevronWidth, height: m.chevronHeight)
             }
@@ -1852,7 +1852,7 @@ struct AtticRowMeta {
 struct AtticDueText: View {
     let due: AtticTaskRowModel.Due
     var disabled = false
-    /// A Tasks panel row: the design's date grey (`TasksDesignTone.date`).
+    /// A Tasks panel row: the design's date grey (`AtticPanelTone.date`).
     var panelDesign = false
 
     @Environment(\.atticDesign) private var design
@@ -1863,10 +1863,10 @@ struct AtticDueText: View {
         switch due.tone {
         case .overdue:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .dueText)
-                .colour(panelDesign && !disabled ? TasksPanelDesign.vivid(design.tokens.ink(.dueText), tokens: design.tokens) : nil)
+                .colour(panelDesign && !disabled ? AtticSurfaceInk.vivid(design.tokens.ink(.dueText), tokens: design.tokens) : nil)
         case .today, .quiet:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
-                .colour(panelDesign && !disabled ? TasksPanelDesign.toneInk(.date, tokens: design.tokens) : nil)
+                .colour(panelDesign && !disabled ? AtticSurfaceInk.toneInk(.date, tokens: design.tokens) : nil)
         }
     }
 }
@@ -1897,8 +1897,8 @@ struct AtticTaskDetails: View {
     var body: some View {
         let m = AtticTaskRowMetrics.self
         let text: AtticInk = disabled ? .disabledText : .helper
-        // The design's meta grey (`TasksDesignTone.meta`).
-        let tone = disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens)
+        // The design's meta grey (`AtticPanelTone.meta`).
+        let tone = disabled ? nil : AtticSurfaceInk.toneInk(.meta, tokens: design.tokens)
         let icon: AtticInk = disabled ? .disabledIcon : .icon
         HStack(spacing: m.detailsItemSpacing) {
             if model.inWindow {
@@ -2058,7 +2058,7 @@ private struct AtticDetailsCountButton: View {
         let m = AtticSubtaskChecklistMetrics.self
         let radius = AtticRadius.control(height: m.height)
         let hover = !disabled && (forced == .hover || hovered)
-        let metaInk = TasksPanelDesign.toneInk(.meta, tokens: design.tokens,
+        let metaInk = AtticSurfaceInk.toneInk(.meta, tokens: design.tokens,
             overlays: hover ? [design.tokens.hover, design.tokens.chipHover] : [])
         Button(action: action) {
             HStack(spacing: m.iconGap) {
@@ -2738,7 +2738,7 @@ struct AtticTagLabel: View {
         let hue = colouring.hue(for: name)
         let fill = Self.fill(hovered: hovered, disabled: disabled, tokens: tokens)
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
-            .colour(disabled ? nil : TasksPanelDesign.tagInk(hue, tokens: tokens))
+            .colour(disabled ? nil : AtticSurfaceInk.tagInk(hue, tokens: tokens))
             .background(
                 Squircle(cornerRadius: .greatestFiniteMagnitude, exponent: AtticShape.controlExponent)
                     .fill(fill.color)

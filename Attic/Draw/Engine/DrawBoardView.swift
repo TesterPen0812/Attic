@@ -984,7 +984,7 @@ struct DrawDots {
     /// The dot's ink on the board's surface. Solid (and glass made solid by
     /// Reduce Transparency) keeps the working file's black, or white, at
     /// 0.13. Glass and Frosted take the panel's own ink made see-through, as
-    /// the greys on glass do (`TasksPanelDesign.toneInk`), at the alpha
+    /// the greys on glass do (`AtticSurfaceInk.toneInk`), at the alpha
     /// that keeps, over each desktop the glass is judged on (black, mid grey,
     /// white), at least the contrast the working file's dot has on the solid
     /// panel: as readable wherever the panel sits.
@@ -996,7 +996,7 @@ struct DrawDots {
         if let cached = inks[key] { return cached }
         let tokens = context.tokens
         var value = drawn
-        if TasksPanelDesign.seeThrough(tokens) {
+        if AtticSurfaceInk.seeThrough(tokens) {
             var solid = context
             solid.surface = .solid
             let target = drawn.contrast(on: solid.tokens.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop))

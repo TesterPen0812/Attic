@@ -252,7 +252,7 @@ struct ComposerCard: View {
                     titleFocused = true
                 } label: {
                     AtticIcon(systemName: Self.symbol(kind), size: 10.5, weight: .medium, ink: .glyph)
-                        .colour(selected ? design.tokens.ink(.heading) : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+                        .colour(selected ? design.tokens.ink(.heading) : AtticSurfaceInk.toneInk(.meta, tokens: design.tokens))
                         .frame(width: ComposerMetrics.kindButton, height: ComposerMetrics.kindButton)
                         .background {
                             if selected {
@@ -342,14 +342,14 @@ struct ComposerCard: View {
 
     @ViewBuilder
     private func mark(_ kind: ComposerKind) -> some View {
-        let grey = TasksPanelDesign.toneInk(.meta, tokens: design.tokens).color
+        let grey = AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color
         switch kind {
         case .task:
             Circle().strokeBorder(grey, lineWidth: 0.9).frame(width: 12.7, height: 12.7)
         case .event:
             Circle().fill(model.selectedCalendar.map { Self.colour($0.colour) } ?? grey).frame(width: 7, height: 7)
         case .note:
-            AtticIcon(systemName: "doc", size: 12, ink: .glyph).colour(TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
+            AtticIcon(systemName: "doc", size: 12, ink: .glyph).colour(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens))
         }
     }
 
@@ -427,7 +427,7 @@ struct ComposerCard: View {
         TextField(String(localized: "Notes"), text: $model.writing, axis: .vertical)
             .textFieldStyle(.plain)
             .font(AtticTextStyle.composerWriting.font)
-            .foregroundStyle(TasksPanelDesign.toneInk(.nextEventTime, tokens: design.tokens).color)
+            .foregroundStyle(AtticSurfaceInk.toneInk(.nextEventTime, tokens: design.tokens).color)
             .lineLimit(1...ComposerMetrics.writingMaxLines)
             .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
             .focused($writingFocused)
@@ -487,7 +487,7 @@ struct ComposerCard: View {
                             chip(.priority, systemName: "exclamationmark",
                                  label: values.priority.map(\.composerTitle) ?? String(localized: "Priority"),
                                  set: values.priority != nil, showsLabel: values.priority != nil,
-                                 colour: values.priority == .high ? TasksPanelDesign.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
+                                 colour: values.priority == .high ? AtticSurfaceInk.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
                                 .fixedSize()
                             tagsChip(values, showsLabel: !values.tags.isEmpty)
                         }
@@ -577,7 +577,7 @@ struct ComposerCard: View {
         let label = tags.first.map { "#" + $0 + (tags.count > 1 ? " +\(tags.count - 1)" : "") } ?? String(localized: "Tags")
         let hue = tags.first.map { model.tasks.library.tagColours.palette.hue(for: $0) }
         return chip(.tags, systemName: "number", label: label, set: !tags.isEmpty, showsLabel: showsLabel,
-                    colour: hue.map { TasksPanelDesign.tagInk($0, tokens: design.tokens) })
+                    colour: hue.map { AtticSurfaceInk.tagInk($0, tokens: design.tokens) })
             .fixedSize()
     }
 
@@ -613,7 +613,7 @@ struct ComposerCard: View {
 
     private func chip(_ id: Chip, systemName: String?, dot: Color? = nil, label: String, set: Bool,
                       showsLabel: Bool = true, colour: AtticRGBA? = nil) -> some View {
-        let muted = TasksPanelDesign.toneInk(.meta, tokens: design.tokens)
+        let muted = AtticSurfaceInk.toneInk(.meta, tokens: design.tokens)
         let ink = set ? design.tokens.ink(.heading) : muted
         return Button {
             if id == .pin { model.pinned.toggle(); return }

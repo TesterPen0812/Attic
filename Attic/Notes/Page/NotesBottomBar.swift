@@ -272,8 +272,7 @@ struct NotesTagBarPill: View {
         let tokens = design.tokens
         let shape = Squircle(cornerRadius: m.pillRadius, exponent: AtticControlShape.designExponent)
         let ink = tag.map {
-            TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)),
-                                                               dark: design.mode == .dark).text, tokens: tokens).color
+            AtticSurfaceInk.colouredTagText(colouring.hue(for: $0), dark: design.mode == .dark, tokens: tokens).color
         } ?? tokens.color(.heading)
         Button(action: action) {
             Text(verbatim: title)
