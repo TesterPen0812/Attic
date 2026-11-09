@@ -24,6 +24,7 @@ private final class HelperService {
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
     private var backend = ""
+    private var claudeConfigURL: URL?
     private let maximumLineSize = 2_000_000
     private var startingCLI = false
     private var stopping = false
@@ -292,10 +293,14 @@ private final class HelperService {
             let mcp: [String: Any] = ["mcpServers": ["attic": ["type": "http", "url": server,
                            "headers": ["Authorization": "Bearer \(mcpToken)"]]]]
             guard let data = try? JSONSerialization.data(withJSONObject: mcp),
-                  let config = String(data: data, encoding: .utf8) else { return }
+                  let config = try? Self.privateMCPConfig(data) else {
+                send(["type": "failed", "message": "Attic could not prepare the agent tools."])
+                return
+            }
+            claudeConfigURL = config
             var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
                         "--verbose", "--include-partial-messages", "--restricted", "--tools", "",
-                        "--strict-mcp-config", "--disable-slash-commands", "--mcp-config", config,
+                        "--strict-mcp-config", "--disable-slash-commands", "--mcp-config", config.path,
                         "--system-prompt", prompt]
             if let session = message["sessionID"] as? String, !session.isEmpty {
                 args += ["--resume", session]
@@ -335,6 +340,7 @@ private final class HelperService {
         do {
             try process.run()
         } catch {
+            cleanupClaudeConfig()
             send(["type": "failed", "message": "Could not start \(name)."])
             return
         }
@@ -380,6 +386,7 @@ private final class HelperService {
 
     private func finishedCLI(status: Int32) {
         guard !stopping else { return }
+        cleanupClaudeConfig()
         let name = backend
         cliOutput?.fileHandleForReading.readabilityHandler = nil
         cliError?.fileHandleForReading.readabilityHandler = nil
@@ -417,16 +424,58 @@ private final class HelperService {
         // Never waitUntilExit on the transport queue. Interrupt, terminate,
         // then force kill on a worker with finite escalation windows.
         guard let cli, cli.isRunning else {
+            cleanupClaudeConfig()
             exit(0)
         }
+        let config = claudeConfigURL
+        claudeConfigURL = nil
         Self.signal(cli, SIGINT)
         DispatchQueue.global(qos: .utility).async {
             if !Self.waitForExit(cli, seconds: 0.5) { Self.signal(cli, SIGTERM) }
             if !Self.waitForExit(cli, seconds: 1.5) { Self.signal(cli, SIGKILL) }
             if Self.waitForExit(cli, seconds: 1) { cli.waitUntilExit() }
             else { DispatchQueue.global(qos: .utility).async { cli.waitUntilExit() } }
+            Self.removeMCPConfig(config)
             exit(0)
         }
+    }
+
+    /// Claude reads the MCP configuration from a private file. The bearer is
+    /// never included in process arguments, diagnostic messages or logs.
+    private static func privateMCPConfig(_ data: Data) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticMCP-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        let file = folder.appendingPathComponent("mcp.json")
+        let fd = Darwin.open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else {
+            try? FileManager.default.removeItem(at: folder)
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            guard fchmod(fd, 0o600) == 0 else { throw CocoaError(.fileWriteNoPermission) }
+            try handle.write(contentsOf: data)
+            try handle.close()
+            return file
+        } catch {
+            try? handle.close()
+            removeMCPConfig(file)
+            throw error
+        }
+    }
+
+    private func cleanupClaudeConfig() {
+        let file = claudeConfigURL
+        claudeConfigURL = nil
+        Self.removeMCPConfig(file)
+    }
+
+    private static func removeMCPConfig(_ file: URL?) {
+        guard let file else { return }
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     private func send(_ message: [String: Any]) {
