@@ -271,6 +271,16 @@ final class AgentHelperClient {
         portWaiter = nil
         helloWaiter?.resume(throwing: error)
         helloWaiter = nil
+        // An authenticated helper can crash without sending an exit frame.
+        // Closing the stream releases the runner and Chat's Working state.
+        if authenticated && !isStopped {
+            isStopped = true
+            connection?.cancel()
+            connection = nil
+            listener?.cancel()
+            listener = nil
+            continuation.finish()
+        }
     }
 
     private func makeLaunchInvitation(port: UInt16) throws {

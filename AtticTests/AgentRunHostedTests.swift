@@ -147,6 +147,22 @@ final class AgentRunHostedTests: XCTestCase {
         XCTAssertTrue(events.last.map { if case .failed = $0 { return true }; return false } ?? false)
     }
 
+    func testUnexpectedHelperStreamEndFinishesRunAndReleasesWorkingState() async {
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journalURL())
+        _ = runner.send("Start", watching: false)
+        await wait { helper.inputs.count == 1 }
+        helper.disconnect()
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertTrue(helper.stopped)
+        XCTAssertTrue(tools.closed)
+        XCTAssertTrue(runner.threadSnapshot().events.contains { event in
+            if case let .failed(reason) = event { return reason.contains("disconnected") }
+            return false
+        })
+    }
+
     func testStopWaitsForCommitReceiptBeforePublishingTerminalEvent() async {
         let helper = FakeRunHelper()
         let tools = FakeRunTools()
@@ -383,6 +399,7 @@ private final class FakeRunHelper: AgentHelperTransmitting {
         onInput?(line, self)
     }
     func emitLine(_ line: String) { continuation.yield(AgentHelperFrame(["type": "line", "line": line])) }
+    func disconnect() { continuation.finish() }
     func interrupt() {}
     func stop() { stopped = true; continuation.finish() }
 }
