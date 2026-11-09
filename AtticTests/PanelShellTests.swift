@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -8,6 +9,50 @@ import XCTest
 /// the agent's `show` tool.
 @MainActor
 final class PanelShellTests: XCTestCase {
+    func testSwitchDoesNotPublishUnchangedTransientEditingState() {
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        for page in PanelPage.allCases where page != .tasks { ui.prepareBuiltPage(page) }
+        var unnecessaryUpdates: [String] = []
+        var shellUpdates = 0
+        let observers: [AnyCancellable] = [
+            ui.objectWillChange.sink { shellUpdates += 1 },
+            ui.$isComposerPresented.dropFirst().sink { _ in unnecessaryUpdates.append("composer") },
+            ui.$editingTaskID.dropFirst().sink { _ in unnecessaryUpdates.append("editing") },
+            ui.$confirmingTaskDeletionID.dropFirst().sink { _ in unnecessaryUpdates.append("delete") },
+            ui.$confirmingTaskCompletionID.dropFirst().sink { _ in unnecessaryUpdates.append("complete") },
+            ui.$isCanvasConfirmationPresented.dropFirst().sink { _ in unnecessaryUpdates.append("canvas confirmation") }
+        ]
+        defer { _ = observers }
+
+        ui.switchPage(to: .notes, motion: .instant)
+        XCTAssertTrue(unnecessaryUpdates.isEmpty,
+                      "switching ordinary pages must not invalidate untouched editing and confirmation views: \(unnecessaryUpdates)")
+        XCTAssertEqual(shellUpdates, 1, "a warmed, idle page switch changes only selectedSection on the shell")
+    }
+
+    func testSwitchStillClearsLiveTransientEditingState() {
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        ui.isComposerPresented = true
+        ui.editingTaskID = UUID()
+        ui.editingDraftTitle = "Editing"
+        ui.confirmingTaskDeletionID = UUID()
+        ui.confirmingTaskCompletionID = UUID()
+        ui.isCanvasConfirmationPresented = true
+        ui.setInteractionLock(.quickEntryFocus, isActive: true)
+
+        ui.switchPage(to: .notes, motion: .instant)
+
+        XCTAssertFalse(ui.isComposerPresented)
+        XCTAssertNil(ui.editingTaskID)
+        XCTAssertEqual(ui.editingDraftTitle, "")
+        XCTAssertNil(ui.confirmingTaskDeletionID)
+        XCTAssertNil(ui.confirmingTaskCompletionID)
+        XCTAssertFalse(ui.isCanvasConfirmationPresented)
+        XCTAssertFalse(ui.interactionLockReasons.contains(.quickEntryFocus))
+    }
+
     func testBugs4HidingLegacyIndicatorsDoesNotReflowTheDocumentColumn() throws {
         let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
         scroll.scrollerStyle = .legacy

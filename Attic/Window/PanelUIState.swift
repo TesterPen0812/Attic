@@ -383,15 +383,15 @@ final class PanelUIState: ObservableObject {
             pages.insert(PanelPage(section))
             if pages != builtPages { builtPages = pages }
         }
-        managedInteractionLocks.remove(.quickEntryFocus)
-        managedInteractionLocks.remove(.notesEditorFocus)
-        managedInteractionLocks.remove(.notesPopover)
-        isComposerPresented = false
-        editingTaskID = nil
-        editingDraftTitle = ""
-        confirmingTaskDeletionID = nil
-        confirmingTaskCompletionID = nil
-        isCanvasConfirmationPresented = false
+        setInteractionLock(.quickEntryFocus, isActive: false)
+        setInteractionLock(.notesEditorFocus, isActive: false)
+        setInteractionLock(.notesPopover, isActive: false)
+        if isComposerPresented { isComposerPresented = false }
+        if editingTaskID != nil { editingTaskID = nil }
+        if !editingDraftTitle.isEmpty { editingDraftTitle = "" }
+        if confirmingTaskDeletionID != nil { confirmingTaskDeletionID = nil }
+        if confirmingTaskCompletionID != nil { confirmingTaskCompletionID = nil }
+        if isCanvasConfirmationPresented { isCanvasConfirmationPresented = false }
         PerformanceSignposts.noteInput("page-selection-publish-begin")
         selectedSection = section
         PerformanceSignposts.noteInput("page-selection-publish-end")
