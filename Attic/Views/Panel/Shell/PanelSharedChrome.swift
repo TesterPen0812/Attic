@@ -417,7 +417,7 @@ private struct PanelSharedTopControlsObserver: View {
 
     var body: some View {
         let look = chrome.topRow(for: page)
-        let searching = state.isSearching(page)
+        let searching = state.isAway(page)
         let covered = chrome.covered.contains(page)
         HStack(spacing: PanelTopRowLayout.gap) {
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,

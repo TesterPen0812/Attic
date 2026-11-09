@@ -831,6 +831,7 @@ final class AgentChatHostedTests: XCTestCase {
     private var model: AgentChatModel!
     private var runner: FakeRunner!
     private var chrome: PanelSharedChrome!
+    private var topRow: PanelTopRowState!
     private var window: NSWindow!
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
@@ -841,6 +842,7 @@ final class AgentChatHostedTests: XCTestCase {
         runner = FakeRunner()
         model.connect(runner)
         chrome = PanelSharedChrome()
+        topRow = PanelTopRowState()
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         let root = ZStack(alignment: .bottom) {
             PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout, agentChat: model)
@@ -849,6 +851,7 @@ final class AgentChatHostedTests: XCTestCase {
         }
         .frame(width: 340, height: 560)
         .environment(\.panelSharedChrome, chrome)
+        .environment(\.panelTopRowState, topRow)
         .atticDesign(.default)
         window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
                           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -906,6 +909,18 @@ final class AgentChatHostedTests: XCTestCase {
         spin(0.7)
         XCTAssertFalse(AgentChatStage.isMounted)
         XCTAssertFalse(chrome.plusHandedOver)
+    }
+
+    func testTheTopRowFoldsAwayWhileTheChatIsOpen() {
+        XCTAssertFalse(topRow.isAway(.tasks))
+        model.open()
+        spin(0.15)
+        XCTAssertTrue(topRow.chatOver, "The old controls must not show through the blur")
+        XCTAssertTrue(topRow.isAway(.tasks))
+        model.close()
+        spin(0.7)
+        XCTAssertFalse(topRow.chatOver)
+        XCTAssertFalse(topRow.isAway(.tasks))
     }
 
     func testPanelHidingRemovesTheStageAtOnce() {

@@ -65,6 +65,7 @@ struct AgentChatHost: View {
     let selectPage: (PanelPage) -> Void
     let setTyping: (Bool) -> Void
 
+    @Environment(\.panelTopRowState) private var topRow
     @State private var mounted = false
     /// Held here so Undo can still run a step's motion after a close and reopen.
     @StateObject private var fx = AgentChatFX()
@@ -79,6 +80,7 @@ struct AgentChatHost: View {
         .onAppear { model.openPage = { [selectPage] in selectPage($0.panelPage) } }
         .onChange(of: bar.isChatOpen, initial: true) { _, open in
             if chrome.plusHandedOver != open, !room.isOpen { chrome.plusHandedOver = open }
+            if topRow?.chatOver != open { topRow?.chatOver = open }
             if open {
                 mounted = true
             } else if model.closedAtOnce {
@@ -86,6 +88,7 @@ struct AgentChatHost: View {
                 setTyping(false)
             }
         }
+        .onDisappear { if topRow?.chatOver == true { topRow?.chatOver = false } }
         .onChange(of: page) { _, now in model.pageChanged(to: AgentPage(now)) }
         .onChange(of: room.isOpen) { _, open in if open { model.close() } }
     }
