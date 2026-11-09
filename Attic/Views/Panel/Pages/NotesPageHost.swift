@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The document editor is the only Notes page. A task's page opened from
@@ -6,13 +7,21 @@ struct NotesPageHost: View {
     @ObservedObject var noteStore: NoteStore
     let taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
-    @ObservedObject var uiState: PanelUIState
+    let uiState: PanelUIState
     let layout: PanelPageLayout
     let hasRestoredSession: Bool
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+    @State private var routeStateRevision = 0
 
     var body: some View {
-        content.onAppear(perform: installTaskNoteHooks)
+        let _ = routeStateRevision
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.notesHost?()
+        #endif
+        content
+            .onAppear(perform: installTaskNoteHooks)
+            .onReceive(uiState.$openTaskNoteID.dropFirst()) { _ in routeStateRevision &+= 1 }
+            .onReceive(uiState.$taskNoteOrigin.dropFirst()) { _ in routeStateRevision &+= 1 }
     }
 
     @ViewBuilder
