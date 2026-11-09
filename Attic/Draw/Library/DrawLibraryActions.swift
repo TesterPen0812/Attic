@@ -8,6 +8,8 @@ struct DrawLibraryActions {
     private let makeCanvas: @MainActor (_ name: String?) -> Void
     private let revealObject: @MainActor (_ canvasID: UUID, _ objectID: UUID) -> Void
     private let closeMenu: @MainActor () -> Void
+    /// Refresh the board title as soon as a rename saves or is abandoned.
+    private let canvasChangedAction: @MainActor () -> Void
     /// Job 3: Export… and Copy as Image stay greyed while these are nil.
     let export: (@MainActor (_ canvasID: UUID) -> Void)?
     let copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)?
@@ -22,6 +24,7 @@ struct DrawLibraryActions {
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
          reveal: @escaping @MainActor (_ canvasID: UUID, _ objectID: UUID) -> Void,
          close: @escaping @MainActor () -> Void,
+         canvasChanged: @escaping @MainActor () -> Void = {},
          export: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true },
@@ -30,6 +33,7 @@ struct DrawLibraryActions {
         makeCanvas = newCanvas
         revealObject = reveal
         closeMenu = close
+        canvasChangedAction = canvasChanged
         self.export = export
         self.copyAsImage = copyAsImage
         self.hasContent = hasContent
@@ -44,4 +48,5 @@ struct DrawLibraryActions {
     @MainActor func reveal(_ canvasID: UUID, _ objectID: UUID) { revealObject(canvasID, objectID) }
     /// Closes the canvas menu (the capsule shows the name again).
     @MainActor func close() { closeMenu() }
+    @MainActor func canvasChanged() { canvasChangedAction() }
 }
