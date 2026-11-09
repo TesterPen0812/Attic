@@ -18,7 +18,7 @@ struct AgentTarget: Sendable, Equatable, Codable {
 }
 
 enum AgentStepState: Sendable, Equatable {
-    case running, done, failed(String)
+    case running, done, partial(String), failed(String)
 }
 
 /// How a step changes what's on screen, so the view can pick its motion.

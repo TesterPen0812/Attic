@@ -568,7 +568,15 @@ final class AgentChatModel: ObservableObject {
         if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             updateWeek { $0.read = true }
         }
-        guard step.state == .done, Self.changesSomething(step.kind) else { return }
+        if case let .partial(reason) = step.state {
+            entries.append(AgentChatEntry(.note(reason)))
+        }
+        let committed: Bool
+        switch step.state {
+        case .done, .partial: committed = true
+        case .running, .failed: committed = false
+        }
+        guard committed, Self.changesSomething(step.kind) else { return }
         let here = currentPage()
         for target in step.targets {
             if target.page != here { dots.insert(target.page) }

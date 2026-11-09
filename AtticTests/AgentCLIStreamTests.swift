@@ -39,6 +39,36 @@ final class AgentCLIStreamTests: XCTestCase {
         XCTAssertNotNil(forbidden.failure)
     }
 
+    func testPartialBatchStreamPreservesCommittedTargetsAndErrors() throws {
+        let saved = UUID()
+        let envelope: [String: Any] = [
+            "status": "partial", "message": "1 of 2 operations failed",
+            "step": ["title": "Create tasks", "kind": "create", "state": "done",
+                     "targets": [["page": "tasks", "item_id": saved.uuidString, "title": "Saved task"]]],
+            "data": ["results": [
+                ["index": 0, "status": "done"],
+                ["index": 1, "status": "failed", "error": "Missing title"]
+            ]]
+        ]
+        let resultText = String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+        var claude = AgentCLIStreamDecoder(backend: .claude, instructions: "Attic", workingDirectory: "/tmp")
+        _ = claude.beginTurn("Create two tasks")
+        _ = claude.accept(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"partial","name":"mcp__attic__create_tasks"}]}}"#)
+        let finishedLine = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "type": "user", "message": ["content": [[
+                "type": "tool_result", "tool_use_id": "partial", "content": resultText
+            ]]]
+        ]), as: UTF8.self)
+        let step = try XCTUnwrap(claude.accept(finishedLine).events.compactMap { event -> AgentStep? in
+            if case let .stepFinished(value) = event { return value }
+            return nil
+        }.first)
+        XCTAssertEqual(step.targets.first?.itemID, saved)
+        if case let .partial(reason) = step.state {
+            XCTAssertTrue(reason.contains("Missing title"))
+        } else { XCTFail("Partial success should be distinct from total failure") }
+    }
+
     func testCodexHandshakeStreamingAndParallelTools() throws {
         var stream = AgentCLIStreamDecoder(backend: .codex, instructions: "Attic", workingDirectory: "/tmp")
         let first = stream.beginTurn("Two tools")

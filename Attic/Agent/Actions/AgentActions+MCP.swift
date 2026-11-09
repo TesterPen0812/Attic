@@ -209,9 +209,14 @@ final class AgentActionsMCP {
                 output["message"] = "\(failed) of \(count) operations failed; inspect data.results for individual errors. Successful changes remain undoable."
             }
         }
-        if case let .failed(reason) = value.step.state {
+        switch value.step.state {
+        case let .partial(reason):
+            output["status"] = "partial"
+            output["message"] = reason
+        case let .failed(reason):
             output["status"] = "failed"
             output["error"] = reason
+        case .running, .done: break
         }
         if let changeSet = value.changeSet {
             output["change_set"] = [
@@ -240,6 +245,7 @@ final class AgentActionsMCP {
         switch step.state {
         case .running: output["state"] = "running"
         case .done: output["state"] = "done"
+        case let .partial(reason): output["state"] = "partial"; output["reason"] = reason
         case let .failed(reason): output["state"] = "failed"; output["reason"] = reason
         }
         return output

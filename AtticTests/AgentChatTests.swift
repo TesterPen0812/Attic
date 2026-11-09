@@ -267,6 +267,24 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(runner.resolved.isEmpty)
     }
 
+    func testPartialBatchKeepsSuccessfulTargetsAndShowsIndividualErrors() async {
+        page = .notes
+        await start("Create two tasks")
+        let success = tasks(["Saved task"])
+        var batch = step(.create, targets: success, title: "Create tasks")
+        await emit(.stepStarted(batch))
+        batch.state = .partial("1 of 2 operations failed. Item 2: Missing title.")
+        await emit(.stepFinished(batch), .changes(AgentChangeSet(
+            id: UUID(), title: "Create tasks", pages: [.tasks], count: 1)))
+        XCTAssertEqual(changes?.items.map(\.title), ["Saved task"])
+        XCTAssertEqual(changes?.steps, [batch.id])
+        XCTAssertTrue(model.dots.contains(.tasks), "The successful task must light its page")
+        XCTAssertTrue(model.entries.contains { entry in
+            if case let .note(message) = entry.content { return message.contains("Missing title") }
+            return false
+        }, "The failed item's explanation must remain visible")
+    }
+
     // MARK: The thread
 
     func testWaitingShowsNothingUntilTheFirstTextOrStep() async {

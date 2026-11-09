@@ -216,9 +216,20 @@ extension AgentActions {
                                         "count": operations.count]
         response[name == "create_tasks" ? "created" : "updated"] = successes
         let text = try Self.json(response)
+        let failureCount = operations.count - successes
+        let failures = results.compactMap { result -> String? in
+            guard result["status"] as? String == "failed" else { return nil }
+            let index = (result["index"] as? Int ?? 0) + 1
+            return "Item \(index): \(result["error"] as? String ?? "Unknown error")"
+        }
+        let state: AgentStepState = successes == 0
+            ? .failed("All task operations failed; see results.")
+            : failureCount > 0
+                ? .partial("\(failureCount) of \(operations.count) operations failed. \(failures.joined(separator: " "))")
+                : .done
         let step = AgentStep(id: UUID(), title: name == "create_tasks" ? "Create tasks" : "Update tasks",
                              kind: name == "create_tasks" ? .create : .update,
-                             targets: targets, state: successes == 0 ? .failed("All task operations failed; see results.") : .done)
+                             targets: targets, state: state)
         return (text, step)
     }
 

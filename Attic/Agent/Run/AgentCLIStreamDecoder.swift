@@ -314,10 +314,18 @@ struct AgentCLIStreamDecoder {
                                        containerID: container)
                 }
             }
-            if let state = details["state"] as? String, state == "failed" {
+            if details["state"] as? String == "partial" || action["status"] as? String == "partial" {
+                let failures = ((action["data"] as? [String: Any])?["results"] as? [[String: Any]] ?? [])
+                    .compactMap { row -> String? in
+                        guard row["status"] as? String == "failed" else { return nil }
+                        let number = (row["index"] as? Int ?? 0) + 1
+                        return "Item \(number): \(row["error"] as? String ?? "Unknown error")"
+                    }
+                let message = details["reason"] as? String ?? action["message"] as? String ?? "Some operations failed."
+                step.state = .partial(failures.isEmpty || failures.allSatisfy { message.contains($0) }
+                    ? message : message + " " + failures.joined(separator: " "))
+            } else if let state = details["state"] as? String, state == "failed" {
                 step.state = .failed(details["reason"] as? String ?? "The tool returned an error.")
-            } else if action["status"] as? String == "partial" {
-                step.state = .failed(action["message"] as? String ?? "Some operations failed.")
             } else if action["status"] as? String == "failed" {
                 step.state = .failed(action["message"] as? String ?? "The tool returned an error.")
             } else {
