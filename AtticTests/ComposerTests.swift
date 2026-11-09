@@ -1107,6 +1107,33 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(ComposerGrow.anchor(layout: layout), PanelSharedBottomBar.plusInsets(layout: layout))
     }
 
+    /// RC-7: the visible surface still travels from + to full size while the
+    /// editor receives the final-size layout proposal at every progress step.
+    func testGrowingComposerKeepsEditorLayoutStable() {
+        let card = CGSize(width: ComposerMetrics.width, height: 130)
+        for progress: CGFloat in [0.2, 0.5, 0.8] {
+            var editorSize = CGSize.zero
+            var surfaceSize = CGSize.zero
+            let root = Color.clear
+                .onGeometryChange(for: CGSize.self, of: \.size) { editorSize = $0 }
+                .modifier(ComposerGrowFrame(progress: progress, card: card, drawn: true))
+                .onGeometryChange(for: CGSize.self, of: \.size) { surfaceSize = $0 }
+            let host = NSHostingView(rootView: root)
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: card),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertEqual(editorSize.width, card.width, accuracy: 0.5)
+            XCTAssertEqual(editorSize.height, card.height, accuracy: 0.5)
+            let expected = ComposerGrow.geometry(progress: progress, card: card).size
+            XCTAssertEqual(surfaceSize.width, expected.width, accuracy: 0.5)
+            XCTAssertEqual(surfaceSize.height, expected.height, accuracy: 0.5)
+            window.close()
+        }
+    }
+
     /// Review B-2: in the panel, Tab after the last row reaches the shown
     /// "+", never the add bar or its strip that the panel no longer draws.
     func testInThePanelTabReachesThePlusNotTheAddBar() {
