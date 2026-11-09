@@ -19,6 +19,65 @@ final class DrawSaveMetrics {
     }
 }
 
+/// One atomic sidecar next to the owning SwiftData store. Failed Draw edits
+/// and their exact attempted physical before/after evidence survive a crash.
+/// In-memory containers never use this file.
+@MainActor
+final class DrawRecoveryJournal {
+    struct Record: Codable {
+        var edits: [DrawStore.Pending]
+        var proof: Data?
+        /// The previous head committed and this queued edit was not submitted.
+        var unattempted = false
+    }
+
+    private struct Archive: Codable {
+        var version = 1
+        var records: [UUID: Record] = [:]
+    }
+
+    enum Failure: LocalizedError {
+        case damaged
+        var errorDescription: String? {
+            "The saved Draw recovery checkpoint could not be read. Its files have been preserved for review."
+        }
+    }
+
+    private let fileURL: URL
+    private var archive = Archive()
+    private(set) var issue: String?
+    var records: [UUID: Record] { archive.records }
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            let decoded = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: fileURL))
+            guard decoded.version == 1, decoded.records.values.allSatisfy({ !$0.edits.isEmpty }) else {
+                throw Failure.damaged
+            }
+            archive = decoded
+        } catch {
+            // Never replace an unreadable checkpoint with an empty one.
+            issue = Failure.damaged.localizedDescription
+        }
+    }
+
+    func update(_ id: UUID, edits: [DrawStore.Pending]?, proof: Data?, unattempted: Bool = false) throws {
+        guard issue == nil else { throw Failure.damaged }
+        var updated = archive
+        if let edits, !edits.isEmpty {
+            updated.records[id] = Record(edits: edits, proof: proof, unattempted: unattempted)
+        } else {
+            updated.records[id] = nil
+        }
+        let data = try JSONEncoder().encode(updated)
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: fileURL, options: .atomic)
+        archive = updated
+    }
+}
+
 @MainActor
 final class DrawPersistentStore: DrawStore {
     let metrics: DrawSaveMetrics
@@ -31,7 +90,13 @@ final class DrawPersistentStore: DrawStore {
         let metrics = DrawSaveMetrics()
         self.metrics = metrics
         self.container = container
-        super.init(repository: DrawSwiftDataRepository(container: container, metrics: metrics, save: save), now: now)
+        let recovery = container.configurations.first(where: { !$0.isStoredInMemoryOnly }).map {
+            DrawRecoveryJournal(fileURL: $0.url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"))
+        }
+        super.init(
+            repository: DrawSwiftDataRepository(container: container, metrics: metrics, save: save, recovery: recovery),
+            now: now, recovery: recovery
+        )
     }
 }
 
@@ -43,6 +108,7 @@ final class DrawSwiftDataRepository: DrawRepository {
     private let container: ModelContainer
     private let metrics: DrawSaveMetrics
     private let save: (ModelContext) throws -> Void
+    private let recovery: DrawRecoveryJournal?
     private var attempts: [UUID: Attempt] = [:]
 
     private struct Scope {
@@ -51,16 +117,25 @@ final class DrawSwiftDataRepository: DrawRepository {
         var payloads: [DrawPayloadRecord]
         var thumbnails: [DrawPayloadRecord]
     }
-    private struct Physical: Equatable {
+    private struct Physical: Codable, Equatable {
         var canvases: [Data]
         var objects: [Data]
         var payloads: [Data]
         var thumbnails: [Data]
     }
-    private struct Attempt { var change: DrawChange; var before: Physical; var after: Physical }
+    private struct Attempt: Codable { var change: DrawChange; var before: Physical; var after: Physical }
 
-    init(container: ModelContainer, metrics: DrawSaveMetrics, save: @escaping (ModelContext) throws -> Void) {
-        self.container = container; self.metrics = metrics; self.save = save
+    init(container: ModelContainer, metrics: DrawSaveMetrics, save: @escaping (ModelContext) throws -> Void,
+         recovery: DrawRecoveryJournal? = nil) {
+        self.container = container; self.metrics = metrics; self.save = save; self.recovery = recovery
+        if let recovery {
+            for (id, record) in recovery.records {
+                guard let bytes = record.proof,
+                      let attempt = try? JSONDecoder().decode(Attempt.self, from: bytes),
+                      attempt.change.canvasID == id else { continue }
+                attempts[id] = attempt
+            }
+        }
     }
     private func context() -> ModelContext {
         let context = ModelContext(container)
@@ -126,7 +201,14 @@ final class DrawSwiftDataRepository: DrawRepository {
             // Include every physical replica and expected absence. This snapshot
             // is made from the staging context, before its single model save.
             let after = try physical(self.scope(change, in: context, countRows: false), countBytes: false)
-            attempts[change.canvasID] = Attempt(change: change, before: before, after: after)
+            let attempt = Attempt(change: change, before: before, after: after)
+            attempts[change.canvasID] = attempt
+            // The intended edit, exact physical before and expected after
+            // must all be on disk before SwiftData is allowed to commit.
+            if let recovery, let queued = recovery.records[change.canvasID]?.edits {
+                try recovery.update(change.canvasID, edits: queued,
+                                    proof: try JSONEncoder().encode(attempt))
+            }
             metrics.saveAttempts += 1
             do {
                 try save(context)
@@ -143,6 +225,10 @@ final class DrawSwiftDataRepository: DrawRepository {
     }
 
     func discardAttempt(for id: UUID) { attempts[id] = nil }
+
+    func recoveryProof(for id: UUID) -> Data? {
+        attempts[id].flatMap { try? JSONEncoder().encode($0) }
+    }
 
     /// Deleted object rows only, decoded from their headers (never their
     /// payloads), with their canvases' metadata (never their thumbnails).

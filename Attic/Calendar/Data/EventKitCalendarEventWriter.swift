@@ -12,7 +12,7 @@ private final class CalendarEventWriteWorker: @unchecked Sendable {
     init(makeCore: @escaping () throws -> CalendarEventTransactions) { self.makeCore = makeCore }
 
     func perform<T: Sendable>(_ work: @escaping @Sendable (CalendarEventTransactions) throws -> T) async
-        -> (Result<T, CalendarEventWriteError>, notify: Bool) {
+        -> (Result<T, CalendarEventWriteError>, notify: Bool, recoveries: [CalendarOwnershipRecord.Recovery]) {
         await withCheckedContinuation { continuation in
             Self.queue.async { [self] in
                 do {
@@ -22,9 +22,9 @@ private final class CalendarEventWriteWorker: @unchecked Sendable {
                     let result: Result<T, CalendarEventWriteError>
                     do { result = .success(try work(transaction)) }
                     catch { result = .failure(Self.typed(error)) }
-                    continuation.resume(returning: (result, transaction.takeNotification()))
+                    continuation.resume(returning: (result, transaction.takeNotification(), transaction.takeRecoveries()))
                 } catch {
-                    continuation.resume(returning: (.failure(Self.typed(error)), false))
+                    continuation.resume(returning: (.failure(Self.typed(error)), false, []))
                 }
             }
         }
@@ -132,11 +132,33 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
     }
 
     private func reporting<T: Sendable>(_ work: @escaping @Sendable (CalendarEventTransactions) throws -> T) async throws -> T {
-        let (result, notify) = await worker.perform(work)
+        let (result, notify, recoveries) = await worker.perform(work)
+        if let undoRoute {
+            for recovery in recoveries { recordRecovery(recovery, route: undoRoute) }
+        }
         if notify { center.post(name: .EKEventStoreChanged, object: self) }
         switch result {
         case let .success(value): lastError = nil; return value
         case let .failure(error): lastError = error; throw error
+        }
+    }
+
+    private func recordRecovery(_ recovery: CalendarOwnershipRecord.Recovery, route: UndoRoute) {
+        let id = recovery.id
+        switch (recovery.before, recovery.after) {
+        case (nil, let after?):
+            record("Create Event", route: route,
+                   undo: { try $0.remove(id, expecting: after.draft) },
+                   redo: { _ = try $0.insert(id, draft: after.draft) })
+        case (let before?, let after?):
+            record("Edit Event", route: route,
+                   undo: { _ = try $0.update(id, draft: before.draft, expecting: after.draft) },
+                   redo: { _ = try $0.update(id, draft: after.draft, expecting: before.draft) })
+        case (let before?, nil):
+            record("Delete Event", route: route,
+                   undo: { _ = try $0.insert(id, draft: before.draft) },
+                   redo: { try $0.remove(id, expecting: before.draft) })
+        case (nil, nil): break
         }
     }
 
@@ -233,7 +255,7 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
     }
 
     private func reporting<T>(_ work: () throws -> T) throws -> T {
-        defer { postChanges() }
+        defer { publishRecoveries(); postChanges() }
         do {
             let value = try work()
             lastError = nil
@@ -242,6 +264,31 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             let typed = error as? CalendarEventWriteError ?? .saveFailed(error.localizedDescription)
             lastError = typed
             throw typed
+        }
+    }
+
+    private func publishRecoveries() {
+        let recovered = core.takeRecoveries()
+        guard let undoRoute else { return }
+        for recovery in recovered {
+            let id = recovery.id
+            let step: UndoStep
+            switch (recovery.before, recovery.after) {
+            case (nil, let after?):
+                step = UndoStep(name: "Create Event",
+                    undoOutcome: { [self] in replay { try core.remove(id, expecting: after.draft) } },
+                    redoOutcome: { [self] in replay { _ = try core.insert(id, draft: after.draft) } })
+            case (let before?, let after?):
+                step = UndoStep(name: "Edit Event",
+                    undoOutcome: { [self] in replay { _ = try core.update(id, draft: before.draft, expecting: after.draft) } },
+                    redoOutcome: { [self] in replay { _ = try core.update(id, draft: after.draft, expecting: before.draft) } })
+            case (let before?, nil):
+                step = UndoStep(name: "Delete Event",
+                    undoOutcome: { [self] in replay { _ = try core.insert(id, draft: before.draft) } },
+                    redoOutcome: { [self] in replay { try core.remove(id, expecting: before.draft) } })
+            case (nil, nil): continue
+            }
+            undoRoute.record(step, in: .calendar)
         }
     }
 
@@ -267,6 +314,7 @@ final class CalendarEventTransactions {
     private let store: CalendarEventWriteStore
     private let record: CalendarOwnershipRecord
     private var notificationNeeded = false
+    private var recovered: [CalendarOwnershipRecord.Recovery] = []
     var isFakeBacked: Bool { store is FakeCalendarEventWriteStore }
 
     init(store: CalendarEventWriteStore, record: CalendarOwnershipRecord) {
@@ -279,8 +327,13 @@ final class CalendarEventTransactions {
         return notificationNeeded
     }
 
+    func takeRecoveries() -> [CalendarOwnershipRecord.Recovery] {
+        defer { recovered.removeAll() }
+        return recovered
+    }
+
     func writableCalendars() throws -> [CalendarWriteCalendar] {
-        try requireAccess()
+        try begin()
         return store.calendars().filter(\.isWritable)
     }
 
@@ -306,9 +359,18 @@ final class CalendarEventTransactions {
         guard store.accessState == .granted else { throw CalendarEventWriteError.accessDenied }
     }
 
-    private func begin() throws {
+    private func begin(write: Bool = false) throws {
         try requireAccess()
-        try record.reload(using: store)
+        let recovery = try record.reload(using: store)
+        if let recovery {
+            recovered.append(recovery)
+            if !store.postsChangeNotifications { notificationNeeded = true }
+        }
+        // Do not let a retried Create stage a duplicate while the previous
+        // committed event is held, or in the same request that resolves it.
+        if write && (record.hasPendingTransition || recovery != nil) {
+            throw CalendarEventWriteError.saveFailed("A previous Calendar write is awaiting verification or review.")
+        }
     }
 
     private func requireWritable(_ calendarID: String) throws {
@@ -346,7 +408,7 @@ final class CalendarEventTransactions {
     }
 
     func insert(_ id: UUID, draft: CalendarEventDraft) throws -> CalendarOwnedEvent {
-        try begin()
+        try begin(write: true)
         guard record.entries[id] == nil else { throw CalendarEventWriteError.eventChanged }
         let draft = draft.roundedToMinutes
         try validate(draft)
@@ -356,7 +418,7 @@ final class CalendarEventTransactions {
     }
 
     func update(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft) throws -> CalendarOwnedEvent {
-        try begin()
+        try begin(write: true)
         let previous = try editable(id)
         guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
         // Only newly created events use minute rounding. An edit may retain
@@ -368,7 +430,7 @@ final class CalendarEventTransactions {
     }
 
     func remove(_ id: UUID, expecting: CalendarEventDraft) throws {
-        try begin()
+        try begin(write: true)
         let previous = try editable(id)
         guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
         try transaction(id, before: previous) {
@@ -380,6 +442,7 @@ final class CalendarEventTransactions {
     private func transaction(_ id: UUID, before: CalendarWriteSnapshot?,
                              stage: () throws -> CalendarWriteSnapshot?) throws {
         var attemptedCommit = false
+        var commitConfirmed = false
         do {
             let after = try stage()
             try record.prepare(id: id, before: before, after: after)
@@ -390,8 +453,19 @@ final class CalendarEventTransactions {
             if let after { try requireWritable(after.draft.calendarID) }
             attemptedCommit = true
             try store.commit()
+            commitConfirmed = true
+            let resolution = record.resolve(using: store, commitConfirmed: true)
+            if !store.postsChangeNotifications { notificationNeeded = true }
+            guard resolution.landed else {
+                throw CalendarEventWriteError.saveFailed("Calendar has not verified the write; it is held for recovery.")
+            }
         } catch {
             store.rollback()
+            if !attemptedCommit {
+                try record.abortUncommitted()
+                throw error
+            }
+            if commitConfirmed { throw error }
             // A thrown commit may already have landed. Use the same committed
             // state reconciliation as relaunch, retaining any verified creation.
             let resolution = record.resolve(using: store)
@@ -401,8 +475,6 @@ final class CalendarEventTransactions {
             if attemptedCommit && resolution.landed { return }
             throw error
         }
-        record.resolve(using: store)
-        if !store.postsChangeNotifications { notificationNeeded = true }
     }
 
     private func owned(_ id: UUID, _ snapshot: CalendarWriteSnapshot) -> CalendarOwnedEvent {

@@ -13,6 +13,9 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     var assignsEventIdentifiersOnCommit = false
     var normalizesOnCommit = false
     var landsThenThrowsOnCommit = false
+    /// Simulates a separate EventKit reader missing a committed event.
+    var withholdReadsAfterCommit = false
+    var readsWithheld = false
     var postsChangeNotifications = false
     var notificationCenter = NotificationCenter.default
     private(set) var lastStagedDraft: CalendarEventDraft?
@@ -27,7 +30,8 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
 
     func calendars() -> [CalendarWriteCalendar] { availableCalendars }
     func event(identifier: String) -> CalendarWriteSnapshot? {
-        events[identifier] ?? events.values.first { $0.itemIdentifier == identifier }
+        if readsWithheld { return nil }
+        return events[identifier] ?? events.values.first { $0.itemIdentifier == identifier }
     }
 
     func stageCreate(_ draft: CalendarEventDraft) throws -> CalendarWriteSnapshot {
@@ -79,6 +83,7 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
         }
         staged = nil
         commits += 1
+        if withholdReadsAfterCommit { readsWithheld = true }
         if postsChangeNotifications { notificationCenter.post(name: .EKEventStoreChanged, object: self) }
         if landsThenThrowsOnCommit { throw CalendarEventWriteError.saveFailed("Commit landed before error.") }
     }

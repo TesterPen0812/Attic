@@ -179,6 +179,7 @@ protocol DrawStoreProtocol: AnyObject {
     var lastDelta: DrawDelta? { get }
     var pendingEdits: [UUID: DrawPendingEdit] { get }
     var hasUnsettledEdits: Bool { get }
+    var recoveryIssue: String? { get }
     func library(deleted: Bool) throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
     func create(name: String?) -> DrawCanvas
@@ -199,6 +200,10 @@ protocol DrawStoreProtocol: AnyObject {
     func reconcile(on id: UUID) -> DrawSaveResult
     func canUndo(on id: UUID) -> Bool
     func canRedo(on id: UUID) -> Bool
+    /// Stable identity of the top history step; a foreign Draw edit must not
+    /// be consumed by Recently Deleted's grouped Undo.
+    func undoStepID(on id: UUID) -> UUID?
+    func redoStepID(on id: UUID) -> UUID?
     func undo(on id: UUID) -> DrawSaveResult
     func redo(on id: UUID) -> DrawSaveResult
     func duplicate(_ id: UUID, name: String?) throws -> DrawCanvas?

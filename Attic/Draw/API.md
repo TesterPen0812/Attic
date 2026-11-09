@@ -100,6 +100,15 @@ Thrown saves use a fresh read of all affected physical replicas: exact before
 means Retry, exact after publishes once, mixed/unreadable remains held. There
 is no automatic overwrite/discard of a held draft. A normal failed edit stays
 visible through `open`/`pendingEdits`, while `library` describes durable data.
+For disk-backed stores, an atomic `DrawRecovery-v1.json` checkpoint beside the
+SwiftData store holds pending changes (including original image bytes), queued
+edits and a physical before/after proof before each attempted database commit.
+On launch, the store reads fresh physical rows and reconciles the first pending
+save; a proven commit is retired, a proven noncommit can Retry, and an ambiguous
+outcome remains held. Recovered drafts are reachable from `library`, even if
+their first save never created a database row. An unreadable checkpoint is
+preserved and blocks edits, permanent deletion, and normal Quit until it can be inspected. The checkpoint
+does not persist ordinary session Undo history. In-memory stores have no sidecar.
 
 This API never accesses old `Canvas*` rows. `AtticDraw.isEnabled` (on unless
 `AtticDraw.enabled` is false in defaults, read at launch) makes Draw the Canvas

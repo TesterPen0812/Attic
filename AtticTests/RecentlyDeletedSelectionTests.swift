@@ -131,6 +131,160 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
     // MARK: - Restore Selected
 
+    func testDrawOnlyRestoreSelectedIsOneUndoAcrossCanvasesAndDeletedImage() throws {
+        let fixture = try makeFixture()
+        let draw = DrawInMemoryStore()
+        let first = draw.create(name: "First drawing")
+        let second = draw.create(name: "Second drawing")
+        let imageBoard = draw.create(name: "Image board")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("first"))]), on: first.id).isSaved)
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("second"))]), on: second.id).isSaved)
+        let image = DrawObject(content: .image(DrawImage(original: Data([1, 2, 3]), pixelWidth: 1, pixelHeight: 1)))
+        XCTAssertTrue(draw.perform(.put([image]), on: imageBoard.id).isSaved)
+        XCTAssertTrue(draw.perform(.remove([image.id]), on: imageBoard.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: first.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: second.id).isSaved)
+
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        XCTAssertEqual(model.entries.count, 3)
+        model.selectAll()
+        model.restoreSelected()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(model.canUndo, "Draw-only Restore Selected must offer one Undo")
+
+        model.undo()
+        XCTAssertEqual(model.entries.count, 3, "one Undo puts both canvases and the image back")
+        XCTAssertTrue(try draw.open(first.id).canvas.deletedAt != nil)
+        XCTAssertTrue(try draw.open(second.id).canvas.deletedAt != nil)
+        XCTAssertEqual(try draw.deletedImages(in: imageBoard.id).map(\.id), [image.id])
+        XCTAssertTrue(fixture.library.undo.redo(in: .library))
+        model.reload()
+        XCTAssertTrue(model.entries.isEmpty, "one Redo restores every Draw item")
+    }
+
+    func testMixedDrawAndNoteRestoreUndoRedoAsOneStep() throws {
+        let fixture = try makeFixture()
+        let draw = DrawInMemoryStore()
+        let board = draw.create(name: "Drawing")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("drawing"))]), on: board.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: board.id).isSaved)
+        let note = try XCTUnwrap(fixture.notes.create(title: "Notes"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.note, note.id)))
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        model.selectAll()
+        model.restoreSelected()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+
+        model.undo()
+        XCTAssertEqual(Set(model.entries.map(\.title)), ["Drawing", "Notes"])
+        XCTAssertNil(fixture.notes.note(withID: note.id))
+        XCTAssertNotNil(try draw.open(board.id).canvas.deletedAt)
+        XCTAssertTrue(fixture.library.undo.redo(in: .library))
+        model.reload()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+        XCTAssertNil(try draw.open(board.id).canvas.deletedAt)
+    }
+
+    func testMixedUndoFinishesAfterDrawFailureIsRetried() throws {
+        let fixture = try makeFixture()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var failNextDrawSave = false
+        let draw = DrawPersistentStore(container: container, save: { context in
+            if failNextDrawSave {
+                failNextDrawSave = false
+                throw NSError(domain: "Draw undo failure", code: 1)
+            }
+            try context.save()
+        })
+        let board = draw.create(name: "Drawing")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("drawing"))]), on: board.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: board.id).isSaved)
+        let note = try XCTUnwrap(fixture.notes.create(title: "Notes"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.note, note.id)))
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        model.selectAll()
+        model.restoreSelected()
+
+        failNextDrawSave = true
+        model.undo()
+        XCTAssertEqual(model.message?.tone, .error)
+        XCTAssertTrue(model.canUndo, "the grouped Undo remains retryable")
+        XCTAssertNotNil(fixture.notes.note(withID: note.id), "compensate the confirmed library Undo")
+        XCTAssertTrue(draw.retry(on: board.id).isSaved, "finish the failed Draw operation")
+
+        model.undo()
+        XCTAssertNil(fixture.notes.note(withID: note.id), "finish the same group after Draw settled")
+        XCTAssertNotNil(try draw.open(board.id).canvas.deletedAt)
+        XCTAssertTrue(fixture.library.undo.redo(in: .library))
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+        XCTAssertNil(try draw.open(board.id).canvas.deletedAt)
+    }
+
+    func testRecentlyDeletedUndoDoesNotUndoALaterDrawEdit() throws {
+        let fixture = try makeFixture()
+        let draw = DrawInMemoryStore()
+        let board = draw.create(name: "Original")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("content"))]), on: board.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: board.id).isSaved)
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        model.restore(try XCTUnwrap(model.entries.first))
+        XCTAssertTrue(model.canUndo)
+        XCTAssertTrue(draw.perform(.rename("Later change"), on: board.id).isSaved)
+
+        model.undo()
+        XCTAssertNil(try draw.open(board.id).canvas.deletedAt, "Undo must not target a different Draw step")
+        XCTAssertEqual(try draw.open(board.id).canvas.name, "Later change")
+        XCTAssertTrue(model.canUndo, "the composite step must remain retryable")
+
+        XCTAssertTrue(draw.undo(on: board.id).isSaved)
+        model.undo()
+        XCTAssertNotNil(try draw.open(board.id).canvas.deletedAt)
+    }
+
+    func testMixedRestoreWithOneFailedDrawSaveUndoesOnlyConfirmedRestores() throws {
+        let fixture = try makeFixture()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var rejectRestore = false
+        var restoresAttempted = 0
+        let draw = DrawPersistentStore(container: container, save: { context in
+            if rejectRestore {
+                restoresAttempted += 1
+                if restoresAttempted == 2 { throw NSError(domain: "Draw restore test", code: 1) }
+            }
+            try context.save()
+        })
+        let first = draw.create(name: "First")
+        let second = draw.create(name: "Second")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("one"))]), on: first.id).isSaved)
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("two"))]), on: second.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: first.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: second.id).isSaved)
+        let note = try XCTUnwrap(fixture.notes.create(title: "Notes"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.note, note.id)))
+
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        model.selectAll()
+        rejectRestore = true
+        model.restoreSelected()
+        XCTAssertEqual(model.message?.tone, .error)
+        XCTAssertTrue(model.canUndo)
+        XCTAssertEqual(try draw.library(deleted: false).filter { [first.id, second.id].contains($0.id) }.count, 1)
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+
+        rejectRestore = false
+        model.undo()
+        XCTAssertNil(fixture.notes.note(withID: note.id))
+        XCTAssertEqual(try draw.library(deleted: true).filter { [first.id, second.id].contains($0.id) }.count, 2,
+                       "the successful Draw restore goes back; the refused one was never included")
+    }
+
     func testUnrelatedStepNamedRestoreDoesNotEnableRecentlyDeletedUndo() throws {
         let fixture = try makeFixture()
         let model = model(fixture)

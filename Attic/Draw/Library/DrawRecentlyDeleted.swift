@@ -13,6 +13,17 @@ struct DrawDeletedItem: Equatable, Sendable {
 /// `restoreObjects`, and removed for good through `purge`.
 @MainActor
 enum DrawRecentlyDeleted {
+    struct RestoreAction {
+        let canvasID: UUID
+        let historyStepID: UUID
+    }
+
+    struct RestoreResult {
+        var restored: Int
+        var failure: String?
+        var actions: [RestoreAction]
+    }
+
     static func entries(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> [RecentlyDeletedEntry] {
         guard let store else { return [] }
         let canvases = ((try? store.library(deleted: true)) ?? []).compactMap { canvas -> RecentlyDeletedEntry? in
@@ -66,18 +77,31 @@ enum DrawRecentlyDeleted {
     /// Puts them back, one store command per canvas. Returns how many came
     /// back and the reason for the first that could not, if any.
     static func restore(_ items: [DrawDeletedItem], store: (any DrawStoreProtocol)?) -> (restored: Int, failure: String?) {
-        guard let store else { return (0, String(localized: "Draw isn’t available.")) }
+        let result = restoreTracked(items, store: store)
+        return (result.restored, result.failure)
+    }
+
+    /// Successful Draw commands carry their exact Undo identity into the
+    /// one-step Recently Deleted history, including multiple canvases.
+    static func restoreTracked(_ items: [DrawDeletedItem], store: (any DrawStoreProtocol)?) -> RestoreResult {
+        guard let store else { return RestoreResult(restored: 0, failure: String(localized: "Draw isn’t available."), actions: []) }
         var restored = 0
         var failure: String?
-        func settle(_ result: DrawSaveResult, count: Int) {
+        var actions: [RestoreAction] = []
+        func settle(_ result: DrawSaveResult, canvasID: UUID, count: Int) {
             switch result {
-            case .saved, .unchanged: restored += count
+            case .saved:
+                restored += count
+                if let stepID = store.undoStepID(on: canvasID) {
+                    actions.append(RestoreAction(canvasID: canvasID, historyStepID: stepID))
+                }
+            case .unchanged: restored += count
             case let .retry(message), let .held(message): failure = failure ?? message
             }
         }
         var seen = Set<UUID>()
         for item in items where item.objectID == nil && seen.insert(item.canvasID).inserted {
-            settle(store.perform(.restoreCanvas, on: item.canvasID), count: 1)
+            settle(store.perform(.restoreCanvas, on: item.canvasID), canvasID: item.canvasID, count: 1)
         }
         var images: [UUID: [UUID]] = [:]
         var order: [UUID] = []
@@ -88,8 +112,91 @@ enum DrawRecentlyDeleted {
         }
         for canvasID in order {
             let ids = images[canvasID] ?? []
-            settle(store.perform(.restoreObjects(ids), on: canvasID), count: ids.count)
+            settle(store.perform(.restoreObjects(ids), on: canvasID), canvasID: canvasID, count: ids.count)
         }
-        return (restored, failure)
+        return RestoreResult(restored: restored, failure: failure, actions: actions)
+    }
+}
+
+/// A mixed Restore Selected is one library-history step. Individual saved
+/// Draw steps retain their own per-canvas history; the token check prevents
+/// undoing unrelated Draw edits made after the restore. A failed member
+/// compensates previously applied members and keeps this group retryable.
+@MainActor
+enum RecentlyDeletedRestoreUndo {
+    private enum MemberResult {
+        case changed
+        case alreadyApplied
+        case failed
+    }
+
+    private struct Member {
+        let undo: @MainActor () -> MemberResult
+        let redo: @MainActor () -> MemberResult
+    }
+
+    static func make(drawStore: (any DrawStoreProtocol)?, actions: [DrawRecentlyDeleted.RestoreAction],
+                     librarySteps: [UndoStep], restored: Int) -> UndoStep? {
+        guard !actions.isEmpty || !librarySteps.isEmpty else { return nil }
+        if actions.isEmpty, librarySteps.count == 1 { return librarySteps[0] }
+
+        var members: [Member] = []
+        if let drawStore {
+            for action in actions {
+                members.append(Member(
+                    undo: {
+                        guard drawStore.pendingEdits[action.canvasID] == nil else { return .failed }
+                        if drawStore.redoStepID(on: action.canvasID) == action.historyStepID {
+                            return .alreadyApplied // A previously failed Undo settled through Retry.
+                        }
+                        guard drawStore.undoStepID(on: action.canvasID) == action.historyStepID else { return .failed }
+                        return drawStore.undo(on: action.canvasID).isSaved ? .changed : .failed
+                    },
+                    redo: {
+                        guard drawStore.pendingEdits[action.canvasID] == nil else { return .failed }
+                        if drawStore.undoStepID(on: action.canvasID) == action.historyStepID {
+                            return .alreadyApplied
+                        }
+                        guard drawStore.redoStepID(on: action.canvasID) == action.historyStepID else { return .failed }
+                        return drawStore.redo(on: action.canvasID).isSaved ? .changed : .failed
+                    }
+                ))
+            }
+        }
+        members += librarySteps.map { step in Member(
+            undo: { step.undo() == .applied ? .changed : .failed },
+            redo: { step.redo() == .applied ? .changed : .failed }
+        ) }
+        let drawRefs = Set(actions.map { AtticItemRef(.canvas, $0.canvasID) })
+
+        func replay(undo: Bool) -> UndoOutcome {
+            let ordered = undo ? Array(members.reversed()) : members
+            var changed: [Member] = []
+            for member in ordered {
+                let outcome = undo ? member.undo() : member.redo()
+                switch outcome {
+                case .changed:
+                    changed.append(member)
+                case .alreadyApplied:
+                    continue
+                case .failed:
+                    // Compensate only changes made in this replay; a Draw step
+                    // settled before this attempt must not be reversed here.
+                    for previous in changed.reversed() {
+                        _ = undo ? previous.redo() : previous.undo()
+                    }
+                    return .failed
+                }
+            }
+            return .applied
+        }
+
+        return UndoStep(
+            name: RecentlyDeletedPresentation.restoreTitle(count: restored),
+            lifecycle: .restore,
+            items: { drawRefs.union(librarySteps.reduce(into: Set<AtticItemRef>()) { $0.formUnion($1.affectedItems()) }) },
+            undoOutcome: { replay(undo: true) },
+            redoOutcome: { replay(undo: false) }
+        )
     }
 }

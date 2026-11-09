@@ -270,6 +270,8 @@ final class RecentlyDeletedModel: ObservableObject {
     private var observation: AnyCancellable?
     /// The Draw store, while Draw is enabled (nil otherwise).
     private let draw: @MainActor () -> (any DrawStoreProtocol)?
+    private let drawOnlyUndo = UndoRoute()
+    private var restoreUndo: UndoRoute { library?.undo ?? drawOnlyUndo }
 
     init(library: AtticLibrary?, now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent,
          draw: @escaping @MainActor () -> (any DrawStoreProtocol)? = { DrawLibraryHub.activeStore }) {
@@ -363,7 +365,7 @@ final class RecentlyDeletedModel: ObservableObject {
     /// ⌘Z on the page undoes only a restore made here (the library history
     /// also holds other steps, such as an agent's settings change).
     var canUndo: Bool {
-        library?.undo.undoLifecycle(in: .library) == .restore
+        restoreUndo.undoLifecycle(in: .library) == .restore
     }
 
     /// Starts following the stores (the page appeared).
@@ -422,7 +424,12 @@ final class RecentlyDeletedModel: ObservableObject {
 
     func restore(_ entry: RecentlyDeletedEntry) {
         if case let .draw(item) = entry.source {
-            let report = DrawRecentlyDeleted.restore([item], store: draw())
+            let store = draw()
+            let report = DrawRecentlyDeleted.restoreTracked([item], store: store)
+            if let step = RecentlyDeletedRestoreUndo.make(drawStore: store, actions: report.actions,
+                                                          librarySteps: [], restored: report.restored) {
+                restoreUndo.record(step, in: .library)
+            }
             message = report.failure.map {
                 Message(text: String(localized: "“\(entry.title)” couldn’t be restored: \($0)"), tone: .error)
             }
@@ -453,16 +460,27 @@ final class RecentlyDeletedModel: ObservableObject {
         // Draw's rows go back through the Draw store; the rest as one step.
         let drawn = targets.compactMap { if case let .draw(item) = $0.source { item } else { nil } }
         let others = targets.filter { if case .draw = $0.source { false } else { true } }
-        let drawReport = drawn.isEmpty ? (restored: 0, failure: nil) : DrawRecentlyDeleted.restore(drawn, store: draw())
+        let store = draw()
+        let drawReport = drawn.isEmpty
+            ? DrawRecentlyDeleted.RestoreResult(restored: 0, failure: nil, actions: [])
+            : DrawRecentlyDeleted.restoreTracked(drawn, store: store)
         var restored = drawReport.restored
         var failures = drawReport.failure.map { [$0] } ?? []
+        var librarySteps: [UndoStep] = []
         if let library, !others.isEmpty {
-            let report = library.restoreRecentlyDeleted(
-                items: others.compactMap { if case let .item(item) = $0.source { item.ref } else { nil } },
-                attachments: others.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
-            )
+            var report = AtticLibrary.RestoreReport()
+            librarySteps = library.undo.capturingSteps {
+                report = library.restoreRecentlyDeleted(
+                    items: others.compactMap { if case let .item(item) = $0.source { item.ref } else { nil } },
+                    attachments: others.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
+                )
+            }
             restored += report.restored
             failures += report.failures.map(\.message)
+        }
+        if let step = RecentlyDeletedRestoreUndo.make(drawStore: store, actions: drawReport.actions,
+                                                      librarySteps: librarySteps, restored: restored) {
+            restoreUndo.record(step, in: .library)
         }
         message = failures.first.map { reason in
             Message(text: RecentlyDeletedPresentation.restoreFailure(count: failures.count, reason: reason), tone: .error)
@@ -542,8 +560,16 @@ final class RecentlyDeletedModel: ObservableObject {
     /// ⌘Z on the page: undoes the last restore (it goes back to Recently
     /// Deleted).
     func undo() {
-        guard let library, canUndo, library.undo.undo(in: .library) else { return }
-        message = nil
+        guard canUndo else { return }
+        switch restoreUndo.undoStep(in: .library) {
+        case .applied:
+            message = nil
+        case .failed:
+            message = Message(text: String(localized: "Some restored items couldn’t be sent back. Check them before trying Undo again."),
+                              tone: .error)
+        case .obsolete, nil:
+            return
+        }
         reload()
     }
 
