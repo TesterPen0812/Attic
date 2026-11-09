@@ -230,11 +230,20 @@ final class ComposerModel: ObservableObject {
     /// The last close was at once (a page switch), not the fold back into
     /// "+".
     private(set) var closedAtOnce = false
+    /// An immediate close can also arrive after an outside press already
+    /// started folding. The overlay must still interrupt that in-flight fold.
+    @Published private(set) var interruptFoldRequest = 0
 
     /// `atOnce`: gone in the same frame, whole (a page switch: the card
     /// never comes apart over the moving pages, Accepted 2026-11-04, #9).
     func close(atOnce: Bool = false) {
-        guard isOpen else { return }
+        guard isOpen else {
+            if atOnce {
+                closedAtOnce = true
+                interruptFoldRequest &+= 1
+            }
+            return
+        }
         draftGeneration += 1
         closedAtOnce = atOnce
         isOpen = false
