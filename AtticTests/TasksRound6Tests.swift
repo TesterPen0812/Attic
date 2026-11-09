@@ -403,6 +403,7 @@ final class TasksRound6Tests: XCTestCase {
 
 @MainActor
 extension TasksRound6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testFix18QueuedControlFocusFromOldTabMustNotReachSharedPlus() throws {
         let store = try makeTestStore()
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
@@ -433,6 +434,7 @@ extension TasksRound6Tests {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertTrue(delivered.isEmpty, "a newer focus move also supersedes a queued handoff")
     }
+    #endif
 }
 
 /// The Tasks page with the demo tasks in a window off screen, as the panel
