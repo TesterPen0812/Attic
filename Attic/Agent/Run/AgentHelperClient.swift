@@ -400,6 +400,9 @@ final class AgentHelperClient {
               let launched, SecCodeCheckValidity(launched, SecCSFlags(), nil) == errSecSuccess else {
             return false
         }
+        var launchedStatic: SecStaticCode?
+        guard SecCodeCopyStaticCode(launched, SecCSFlags(), &launchedStatic) == errSecSuccess,
+              let launchedStatic else { return false }
         var expected: SecStaticCode?
         guard SecStaticCodeCreateWithPath(helperURL as CFURL, SecCSFlags(), &expected) == errSecSuccess,
               let expected, SecStaticCodeCheckValidity(expected, SecCSFlags(), nil) == errSecSuccess else {
@@ -408,7 +411,7 @@ final class AgentHelperClient {
         var actualInfo: CFDictionary?
         var expectedInfo: CFDictionary?
         let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
-        guard SecCodeCopySigningInformation(launched, flags, &actualInfo) == errSecSuccess,
+        guard SecCodeCopySigningInformation(launchedStatic, flags, &actualInfo) == errSecSuccess,
               SecCodeCopySigningInformation(expected, flags, &expectedInfo) == errSecSuccess,
               let actual = actualInfo as? [String: Any], let bundled = expectedInfo as? [String: Any],
               let actualHash = actual[kSecCodeInfoUnique as String] as? Data,
