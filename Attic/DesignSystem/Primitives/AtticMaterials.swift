@@ -201,6 +201,8 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     let cornerRadius: CGFloat
     let state: AtticControlState
     let interactive: Bool
+    /// A button of the panel's rows, which takes the Edge light on Glass.
+    var edgeLight = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -251,6 +253,19 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             // itself and ignores an opacity set on them from outside.
             .opacity(away ? 0 : 1)
             .glassEffect(glass, in: shape)
+            .overlay {
+                if edgeLight, !design.increaseContrast,
+                   let light = AtticGlassModel.edgeLight(dark: design.mode == .dark, surface: design.effectiveSurface) {
+                    ZStack {
+                        shape.strokeBorder(LinearGradient(stops: light.stops.map { .init(color: .white.opacity($0.opacity), location: $0.location) },
+                                                          startPoint: .topLeading, endPoint: .bottomTrailing),
+                                           lineWidth: light.lineWidth)
+                        shape.stroke(light.hairline.color, lineWidth: light.hairlineWidth)
+                    }
+                    .opacity(away ? 0 : 1)
+                    .allowsHitTesting(false)
+                }
+            }
             .overlay {
                 if design.increaseContrast {
                     shape.inset(by: AtticHairline.widthIncreased / 2)
@@ -480,8 +495,9 @@ extension View {
 
 extension View {
     /// The raised material in a control's shape (see `AtticRaisedMaterialModifier`).
-    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true) -> some View {
-        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
+    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true,
+                             edgeLight: Bool = false) -> some View {
+        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive, edgeLight: edgeLight))
     }
 
     /// A group of plain labels on the top line (Now · Backlog · Done, All
@@ -498,7 +514,7 @@ extension View {
         return environment(\.atticPageTabsOnGlass, true)
             .padding(.horizontal, AtticTopGlassMetrics.capsulePadding)
             .frame(height: height)
-            .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
+            .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false, edgeLight: true)
     }
 }
 

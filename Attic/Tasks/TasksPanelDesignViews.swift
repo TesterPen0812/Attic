@@ -288,7 +288,7 @@ struct TasksTopTabs: View {
         }
         .padding(M.inset)
         .frame(height: AtticControlSize.headerControl)
-        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false, edgeLight: true))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
         // Marker, cells, name and capsule on the one spring.
         .animation(AtticSelectionMarker.travel(reduceMotion: design.reduceMotion), value: selection)

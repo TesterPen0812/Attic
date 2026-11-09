@@ -1086,11 +1086,121 @@ final class NotesFormatControlsTests: XCTestCase {
                                     "narrowing suggestions must also keep the header clear")
     }
 
+    private func openLink(on text: String, in controls: NoteFormatControls, _ engine: NoteEditorEngine,
+                          _ textView: NoteEditorTextView, typing query: String) {
+        engine.linkableNotes = {
+            ["Destinations list", "Destinations archive", "Destinations plan", "Destinations map"]
+                .map { .init(id: UUID(), title: $0) }
+        }
+        textView.setSelectedRange(range(text, textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertTrue(controls.linkInBar, "the selection uses the in-place link field")
+        controls.cardModel.linkText = query
+        controls.refresh()
+        spin()
+    }
+
+    private func typeLink(_ query: String, in controls: NoteFormatControls) {
+        controls.cardModel.linkText = query
+        controls.refresh()
+        spin()
+    }
+
+    /// Option B (Planning, 9 Nov): where a list above the field would reach
+    /// the top row, the field sits under the line and the list opens down
+    /// out of it. The line and the field stay still whatever the matches.
+    func testLinkFieldSitsUnderTheFirstLineAndItsListOpensDown() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let topInset: CGFloat = 60
+        let doc = NoteDocument(blocks: [.text("Title"), .text("Destinations on the first line"),
+                                        .text("Text under the field"), .text("Further content")])
+        let (controls, engine, textView) = make(doc, topInset: topInset)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        // At rest a note sits scrolled to its top, under the header's inset.
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: -topInset))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin()
+        let clearTop = textView.visibleRect.minY + max(0, topInset - AtticNoteMetrics.titleTopGap)
+        let lineRange = range("Destinations on the first line", textView)
+        func rect(_ text: String) throws -> NSRect {
+            try XCTUnwrap(engine.rect(for: NSRange(location: range(text, textView).location, length: 1)))
+        }
+        let lineAtRest = try rect("Destinations on the first line")
+        openLink(on: "Destinations on the first line", in: controls, engine, textView, typing: "Destinations list")
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 1)
+        let field = controls.barFrame
+        let one = controls.linkSuggestionsFrame
+        let lineOpen = try rect("Destinations on the first line")
+        XCTAssertEqual(lineOpen.minY, lineAtRest.minY, accuracy: 1, "the line being linked stays still")
+        XCTAssertGreaterThanOrEqual(field.minY, lineOpen.maxY, "the field sits under the line (field \(field), line \(lineOpen))")
+        XCTAssertGreaterThanOrEqual(field.minY, clearTop - 1, "the field clears the pin and •••")
+        XCTAssertGreaterThanOrEqual(one.minY, field.maxY - 1, "the list opens down out of the field (list \(one), field \(field))")
+        let belowOne = try rect("Text under the field")
+        XCTAssertGreaterThanOrEqual(belowOne.minY, one.maxY - 1, "text under the field moves clear of the list")
+
+        typeLink("Destinations", in: controls)
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 4)
+        XCTAssertEqual(controls.barFrame.minY, field.minY, accuracy: 1, "the field does not move with the matches")
+        XCTAssertEqual(try rect("Destinations on the first line").minY, lineAtRest.minY, accuracy: 1)
+        let four = controls.linkSuggestionsFrame
+        XCTAssertEqual(four.minY, one.minY, accuracy: 1, "more matches grow the list downward only")
+        XCTAssertEqual(try rect("Text under the field").minY - belowOne.minY, 3 * 23, accuracy: 1, "only the text below moves")
+
+        let selected = textView.selectedRange()
+        controls.cancelCard()
+        spin()
+        XCTAssertEqual(try rect("Text under the field").minY, belowOne.minY - one.height - AtticNoteFormatMetrics.barHeight - 2 * AtticNoteFormatMetrics.barGap,
+                       accuracy: 1, "closing gives the room back")
+        XCTAssertNil(engine.linkSuggestionGap)
+        XCTAssertEqual(selected.location, lineRange.location)
+    }
+
+    /// The rule is the geometry, not the line's number: a line deep in a
+    /// note, scrolled up to the top row, opens down too.
+    func testALineScrolledToTheTopRowOpensItsListDown() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let topInset: CGFloat = 60
+        let doc = NoteDocument(blocks: (0..<60).map { .text($0 == 30 ? "Destinations deep in the note" : "Further body line \($0)") })
+        let (controls, engine, textView) = make(doc, topInset: topInset)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        let target = range("Destinations deep in the note", textView)
+        let line = try XCTUnwrap(engine.rect(for: NSRange(location: target.location, length: 1)))
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: line.minY - topInset))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin()
+        openLink(on: "Destinations deep in the note", in: controls, engine, textView, typing: "Destinations")
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 4)
+        XCTAssertGreaterThanOrEqual(controls.linkSuggestionsFrame.minY, controls.barFrame.maxY - 1,
+                                    "list \(controls.linkSuggestionsFrame), field \(controls.barFrame)")
+    }
+
+    /// A line further down doesn't change: its list still sits above.
+    func testALinkFieldFurtherDownKeepsItsListAbove() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let doc = NoteDocument(blocks: (0..<16).map { .text($0 == 10 ? "Destinations further down" : "Further body line \($0)") })
+        let (controls, engine, textView) = make(doc, topInset: 60)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        openLink(on: "Destinations further down", in: controls, engine, textView, typing: "Destinations")
+        XCTAssertEqual(controls.cardModel.linkSuggestions.count, 4)
+        XCTAssertLessThanOrEqual(controls.linkSuggestionsFrame.maxY, controls.barFrame.minY + 1,
+                                 "list \(controls.linkSuggestionsFrame), field \(controls.barFrame)")
+        XCTAssertFalse(controls.formatModel.barBelow)
+    }
+
     func testAuditB6SuggestionsMakeRoomAboveTheSelectionAndRestoreTheText() {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticTransparencySeam.systemOverride = nil }
-        let (controls, engine, textView) = make()
+        // Far enough down that the longest list above the field clears the top.
+        let (controls, engine, textView) = make(NoteDocument(blocks: (0..<10).map { .text("Earlier line \($0)") } + Self.sample.blocks))
         engine.linkableNotes = { [.init(id: UUID(), title: "Annual planning"), .init(id: UUID(), title: "Annual review")] }
         let selection = range("Student pricing", textView)
         textView.setSelectedRange(selection)
