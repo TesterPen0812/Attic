@@ -216,6 +216,43 @@ struct CalendarDateTile: View {
     }
 }
 
+/// Where an event row is drawn: the agenda's row, or the Day view's block
+/// on the hours or its one-line all-day row. Opening and editing are the
+/// same in all three.
+enum CalendarEventRowStyle: Equatable {
+    case agenda
+    case dayAllDay
+    case dayBlock(showsMeta: Bool, isOver: Bool, paddingY: CGFloat)
+
+    /// The row's sizes, from the agenda's or the Day drawing's.
+    fileprivate var metrics: CalendarEventRowMetrics {
+        switch self {
+        case .agenda, .dayAllDay:
+            CalendarEventRowMetrics()
+        case let .dayBlock(_, _, paddingY):
+            CalendarEventRowMetrics(dot: CalendarDayDesign.blockDot,
+                                    dotCentre: CalendarDayDesign.blockPaddingX + CalendarDayDesign.blockDot / 2,
+                                    textX: CalendarDayDesign.blockTextX, trailing: CalendarDayDesign.blockPaddingX,
+                                    paddingY: paddingY, titleFont: CalendarDayDesign.blockTitleFont,
+                                    titleLine: CalendarDayDesign.blockTitleLine, metaFont: CalendarDayDesign.blockMetaFont,
+                                    metaLine: CalendarDayDesign.blockMetaLine, metaTop: 0)
+        }
+    }
+}
+
+private struct CalendarEventRowMetrics {
+    var dot = CalendarDesign.eventDot
+    var dotCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
+    var textX = TasksDesignMetrics.textX
+    var trailing = TasksDesignMetrics.rowPaddingX
+    var paddingY = CalendarDesign.eventPaddingY
+    var titleFont = CalendarDesign.eventTitleFont
+    var titleLine = CalendarDesign.eventLine
+    var metaFont = CalendarDesign.eventMetaFont
+    var metaLine = CalendarDesign.eventLine
+    var metaTop = CalendarDesign.eventMetaTop
+}
+
 /// An event: a dot in the calendar's colour where a task's ring sits, the
 /// title, then the time range and the location. Past events are grey.
 struct CalendarEventRow: View {
@@ -223,12 +260,17 @@ struct CalendarEventRow: View {
     let day: DueDay
     let today: DueDay
     @ObservedObject var rows = CalendarEventRowState()
+    var style = CalendarEventRowStyle.agenda
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var headFocused: Bool
 
     private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
+    private var metrics: CalendarEventRowMetrics { style.metrics }
+    private var isBlock: Bool { if case .dayBlock = style { true } else { false } }
+    /// The Day view's rows inset their open fill as a Tasks row's is.
+    private var fillInset: CGFloat { style == .dayAllDay ? AtticLayout.rowHighlightInset : 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -256,16 +298,18 @@ struct CalendarEventRow: View {
             }
             if isOpen {
                 details
-                    .padding(.leading, TasksDesignMetrics.textX)
-                    .padding(.trailing, TasksDesignMetrics.rowPaddingX)
-                    .padding(.bottom, 8)
+                    .padding(.leading, metrics.textX)
+                    .padding(.trailing, metrics.trailing)
+                    .padding(.bottom, isBlock ? metrics.paddingY : 8)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .background {
-            if isOpen {
+            // A block on the hours has its own surface.
+            if isOpen, !isBlock {
                 Squircle(cornerRadius: CalendarDesign.eventRadius)
                     .fill(design.tokens.ink(.heading).withAlpha(0.045).color)
+                    .padding(.horizontal, fillInset)
             }
         }
         .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: isOpen)
@@ -278,52 +322,108 @@ struct CalendarEventRow: View {
 
     private func toggleRow() { Task { await rows.toggle(event, on: day) } }
 
+    private var isPast: Bool {
+        if case let .dayBlock(_, isOver, _) = style { return isOver }
+        return day < today || (day == today && !event.isAllDay && event.end <= Date())
+    }
+
     private var summary: some View {
         let tokens = design.tokens
-        let past = day < today || (day == today && !event.isAllDay && event.end <= Date())
-        let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
+        let past = isPast
+        let metrics = self.metrics
         return ZStack(alignment: .topLeading) {
             Circle()
                 .fill(event.colour.rgba.color)
-                .frame(width: CalendarDesign.eventDot, height: CalendarDesign.eventDot)
+                .frame(width: dotSize, height: dotSize)
                 .opacity(past ? 0.45 : 1)
-                .padding(.leading, ringCentre - CalendarDesign.eventDot / 2)
-                .padding(.top, CalendarDesign.eventPaddingY + (CalendarDesign.eventLine - CalendarDesign.eventDot) / 2)
-            VStack(alignment: .leading, spacing: CalendarDesign.eventMetaTop) {
-                Text(verbatim: event.title)
-                    .font(.system(size: CalendarDesign.eventTitleFont, weight: .medium))
-                    .opacity(isOpen && rows.canEdit ? 0 : 1)
-                    .foregroundStyle(past ? AtticSurfaceInk.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
-                    .lineSpacing(CalendarDesign.eventLine - CalendarDesign.eventTitleFont * 1.2)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 7) {
-                    Text(verbatim: Self.timeText(event))
-                        .foregroundStyle(AtticSurfaceInk.toneInk(past ? .meta : .groupHeader, tokens: tokens).color)
-                        .layoutPriority(1)
-                    if let location = event.location, !location.isEmpty {
-                        Text(verbatim: location)
-                            .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
-                            .truncationMode(.tail)
-                    }
-                }
-                .font(.system(size: CalendarDesign.eventMetaFont).monospacedDigit())
-                .lineLimit(1)
-                .frame(height: CalendarDesign.eventLine)
-                .opacity(isOpen && rows.canEdit && !event.isAllDay ? 0 : 1)
+                .padding(.leading, metrics.dotCentre - dotSize / 2)
+                .padding(.top, metrics.paddingY + (metrics.titleLine - dotSize) / 2)
+            VStack(alignment: .leading, spacing: metrics.metaTop) {
+                title(past: past, tokens: tokens)
+                if showsMeta { meta(past: past, tokens: tokens) }
             }
-            .padding(.leading, TasksDesignMetrics.textX)
-            .padding(.trailing, TasksDesignMetrics.rowPaddingX)
-            .padding(.vertical, CalendarDesign.eventPaddingY)
+            .padding(.leading, metrics.textX)
+            .padding(.trailing, metrics.trailing)
+            .padding(.vertical, metrics.paddingY)
+            if style == .dayAllDay {
+                Text(verbatim: String(localized: "All day"))
+                    .font(.system(size: CalendarDayDesign.allDayLabelFont))
+                    .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
+                    .frame(height: metrics.titleLine)
+                    .padding(.vertical, metrics.paddingY)
+                    .padding(.trailing, metrics.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: isBlock && !isOpen ? CGFloat.infinity : nil, alignment: .topLeading)
         .contentShape(Rectangle())
     }
 
+    private var dotSize: CGFloat { style == .dayAllDay ? CalendarDayDesign.allDayDot : metrics.dot }
+
+    private var showsMeta: Bool {
+        switch style {
+        case .agenda: true
+        case .dayAllDay: false
+        case let .dayBlock(showsMeta, _, _): showsMeta
+        }
+    }
+
+    @ViewBuilder
+    private func title(past: Bool, tokens: AtticColorTokens) -> some View {
+        let text = Text(verbatim: event.title)
+            .font(.system(size: metrics.titleFont, weight: .medium))
+            .opacity(isOpen && rows.canEdit ? 0 : 1)
+            .foregroundStyle(past ? AtticSurfaceInk.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
+        if style == .agenda {
+            text
+                .lineSpacing(CalendarDesign.eventLine - CalendarDesign.eventTitleFont * 1.2)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            // The Day drawing's single line; the all-day label keeps clear.
+            text
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: metrics.titleLine)
+                .padding(.trailing, style == .dayAllDay ? CalendarDayDesign.allDayLabelReserve : 0)
+        }
+    }
+
+    @ViewBuilder
+    private func meta(past: Bool, tokens: AtticColorTokens) -> some View {
+        if isBlock {
+            // The drawing's one string: "10:00–11:00 · Room".
+            let location = event.location.flatMap { $0.isEmpty ? nil : " · " + $0 } ?? ""
+            Text(verbatim: Self.timeText(event) + location)
+                .font(.system(size: metrics.metaFont).monospacedDigit())
+                .foregroundStyle(AtticSurfaceInk.toneInk(past ? .meta : .groupHeader, tokens: tokens).color)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: metrics.metaLine)
+                .opacity(isOpen && rows.canEdit && !event.isAllDay ? 0 : 1)
+        } else {
+            HStack(spacing: 7) {
+                Text(verbatim: Self.timeText(event))
+                    .foregroundStyle(AtticSurfaceInk.toneInk(past ? .meta : .groupHeader, tokens: tokens).color)
+                    .layoutPriority(1)
+                if let location = event.location, !location.isEmpty {
+                    Text(verbatim: location)
+                        .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
+                        .truncationMode(.tail)
+                }
+            }
+            .font(.system(size: metrics.metaFont).monospacedDigit())
+            .lineLimit(1)
+            .frame(height: metrics.metaLine)
+            .opacity(isOpen && rows.canEdit && !event.isAllDay ? 0 : 1)
+        }
+    }
+
     private var editableHead: some View {
-        VStack(alignment: .leading, spacing: CalendarDesign.eventMetaTop) {
+        VStack(alignment: .leading, spacing: metrics.metaTop) {
             TextField("Title", text: $rows.title)
-                .font(.system(size: CalendarDesign.eventTitleFont, weight: .medium))
-                .frame(height: CalendarDesign.eventLine)
+                .font(.system(size: metrics.titleFont, weight: .medium))
+                .frame(height: metrics.titleLine)
                 .accessibilityIdentifier("calendar-event-title-\(event.id)")
             if let owned = rows.owned, !owned.draft.isAllDay {
                 HStack(spacing: 0) {
@@ -334,15 +434,15 @@ struct CalendarEventRow: View {
                     Spacer(minLength: 0)
                     if let location = event.location { Text(verbatim: location).lineLimit(1) }
                 }
-                .font(.system(size: CalendarDesign.eventMetaFont).monospacedDigit())
-                .frame(height: CalendarDesign.eventLine)
+                .font(.system(size: metrics.metaFont).monospacedDigit())
+                .frame(height: metrics.metaLine)
             }
         }
         .textFieldStyle(.plain)
         .foregroundStyle(design.tokens.ink(.heading).color)
-        .padding(.leading, TasksDesignMetrics.textX)
-        .padding(.trailing, TasksDesignMetrics.rowPaddingX)
-        .padding(.vertical, CalendarDesign.eventPaddingY)
+        .padding(.leading, metrics.textX)
+        .padding(.trailing, metrics.trailing)
+        .padding(.vertical, metrics.paddingY)
         .onSubmit { Task { await rows.close() } }
     }
 
