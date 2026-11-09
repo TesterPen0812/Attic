@@ -244,8 +244,8 @@ struct ComposerCard: View {
             : titleFieldHeight
     }
 
-    /// Tab and ⇧Tab stay inside the card (A4): the title and the writing
-    /// line take turns.
+    /// Return from Writing to Title; forward Tab continues through the
+    /// card's chips and Create (fix16-4).
     private func moveKeyboard(toWriting: Bool) {
         keyboardStop = nil
         if toWriting {
