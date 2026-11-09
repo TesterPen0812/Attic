@@ -20,6 +20,7 @@ final class ComposerTests: XCTestCase {
     private var openedNotes: [UUID] = []
     private var openedEvents: [CalendarOwnedEvent] = []
     private var toasts: [String] = []
+    private var failureNotices: [String] = []
     private var toastUndos: [@MainActor () -> CommandOutcome] = []
     private var windows: [NSWindow] = []
     private final class Switch { var on = false }
@@ -56,7 +57,8 @@ final class ComposerTests: XCTestCase {
             openTaskPage: { [unowned self] in opened.append($0) },
             openNote: { [unowned self] in openedNotes.append($0) },
             openEvent: { [unowned self] in openedEvents.append($0) },
-            toast: { [unowned self] message, undo in toasts.append(message); toastUndos.append(undo) }))
+            toast: { [unowned self] message, undo in toasts.append(message); toastUndos.append(undo) },
+            eventFailure: { [unowned self] message in failureNotices.append(message) }))
     }
 
     override func tearDown() {
@@ -180,6 +182,113 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(page.addBar.text, "Edited event")
         XCTAssertEqual(model.writing, "Edited notes")
         XCTAssertTrue(events.events.isEmpty)
+    }
+
+    func testAHeldEventFailureAfterReopeningAsTaskNotifiesAndRecoversOriginalEvent() async throws {
+        let suite = "ComposerFailedEvent.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        let (staged, release) = try holdEventWrite(failing: true)
+        defer { release.signal() }
+
+        let selected = day(3)
+        model.open(on: .calendar(selected: selected))
+        await model.loadCalendars()
+        type("Original event 2pm")
+        model.writing = "Original notes"
+        model.eventLength = 90
+        model.calendarID = "work"
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        model.close()
+        model.open(on: .tasks(.now))
+        type("Replacement task")
+        model.writing = "Different notes"
+        release.signal()
+
+        await XCTAssertFalseAsync(await submission.value)
+        XCTAssertTrue(failureNotices.contains { $0.contains("Couldn’t save event") },
+                      "a failed closed/reopened event must be announced")
+        XCTAssertEqual(page.addBar.text, "Replacement task", "the new task is untouched")
+        XCTAssertEqual(model.writing, "Different notes")
+        XCTAssertTrue(events.events.isEmpty, "failure rolls back the event")
+        XCTAssertEqual(drafts.loadFailedEvents().map(\.title), ["Original event 2pm"])
+
+        await XCTAssertTrueAsync(await model.create())
+        model.close()
+        model.open(on: .calendar(selected: today))
+        XCTAssertEqual(model.kind, .event)
+        XCTAssertEqual(page.addBar.text, "Original event 2pm")
+        XCTAssertEqual(model.writing, "Original notes")
+        XCTAssertEqual(model.values.day, selected)
+        XCTAssertEqual(model.eventLength, 90)
+        XCTAssertEqual(model.calendarID, "work")
+        XCTAssertTrue(model.failed, "the recovered event clearly remains unsaved")
+        XCTAssertEqual(drafts.loadFailedEvents().map(\.title), ["Original event 2pm"],
+                       "reopening is not a durable save; recovery stays backed up")
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertTrue(drafts.loadFailedEvents().isEmpty, "durable retry consumes the recovery backup")
+        XCTAssertEqual(events.events.values.first?.draft.title, "Original event")
+    }
+
+    func testAHeldEventFailureAfterCloseSurvivesAComposerRelaunch() async throws {
+        let suite = "ComposerFailedEvent.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        let (staged, release) = try holdEventWrite(failing: true)
+        defer { release.signal() }
+        model.open(on: .calendar(selected: day(2)))
+        await model.loadCalendars()
+        type("Still mine")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        model.close()
+        release.signal()
+        await XCTAssertFalseAsync(await submission.value)
+        XCTAssertTrue(failureNotices.contains { $0.contains("Couldn’t save event") })
+
+        // An app restart reconstructs the composer using its saved drafts.
+        let fixed = now
+        let freshPage = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
+        let restarted = ComposerModel(tasks: freshPage, services: ComposerServices(drafts: drafts))
+        restarted.open(on: .calendar(selected: today))
+        XCTAssertEqual(freshPage.addBar.text, "Still mine")
+        XCTAssertEqual(restarted.values.day, day(2))
+        XCTAssertTrue(restarted.failed)
+        restarted.close()
+        let lastPage = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
+        let stillRecoverable = ComposerModel(tasks: lastPage, services: ComposerServices(drafts: drafts))
+        stillRecoverable.open(on: .calendar(selected: today))
+        XCTAssertEqual(stillRecoverable.values.day, day(2), "closing without saving keeps the original date")
+        XCTAssertTrue(stillRecoverable.failed)
+    }
+
+    func testFailedEventRecoveryRemembersTypedDateOverEarlierPickedDay() async throws {
+        let suite = "ComposerFailedEvent.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        let (staged, release) = try holdEventWrite(failing: true)
+        defer { release.signal() }
+        model.open(on: .calendar(selected: day(3)))
+        await model.loadCalendars()
+        type("Appointment tomorrow 2pm")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        model.close()
+        release.signal()
+        await XCTAssertFalseAsync(await submission.value)
+        XCTAssertEqual(drafts.loadFailedEvents().first?.day, day(1), "the typed day wins before submission")
+
+        model.open(on: .calendar(selected: today))
+        XCTAssertEqual(model.values.day, day(1))
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertEqual(events.events.values.first?.draft.start, day(1).startDate(in: clock)?.addingTimeInterval(14 * 3600))
     }
 
     func testAHeldEventWriteThatSucceedsAfterTheDraftChangesShowsNoFailure() async throws {
@@ -566,6 +675,8 @@ final class ComposerTests: XCTestCase {
     }
 
     func testAFailedEventWriteKeepsTheDraft() async {
+        let failureToast = PanelToastCenter()
+        model.services.eventFailure = { [failureToast] message in failureToast.showFailure(message) }
         model.services.makeWriter = { throw CalendarEventWriteError.accessDenied }
         model.open(on: .calendar(selected: today))
         await model.loadCalendars()
@@ -574,6 +685,10 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(model.isOpen)
         XCTAssertTrue(model.failed)
         XCTAssertEqual(page.addBar.text, "Standup 9am")
+        XCTAssertEqual(failureToast.current?.isFailure, true, "Calendar reports the red failure toast")
+        XCTAssertEqual(failureToast.current?.actionTitle, "OK")
+        XCTAssertFalse(failureToast.current?.answersUndoKey ?? true, "the failed save did not create an Undo step")
+        XCTAssertFalse(failureToast.hasPendingDismissalForTesting, "failure persists for acknowledgement")
     }
 
     // MARK: Quick note

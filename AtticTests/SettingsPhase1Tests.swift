@@ -90,6 +90,34 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(Set(entries.map(\.id)).count, entries.count, "every entry has its own identity")
     }
 
+    func testRecentlyDeletedSectionsCacheReusesLargeSearchAndInvalidatesOnQueryAndEntries() {
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        let summaries = (0..<4_000).map { index in
+            DeletedItemSummary(ref: AtticItemRef(index.isMultiple(of: 2) ? .task : .note, UUID()),
+                               title: index.isMultiple(of: 3) ? "Find this \(index)" : "Other \(index)",
+                               deletedAt: now.addingTimeInterval(-Double(index)),
+                               includedCount: 0, retentionStart: now)
+        }
+        var entries = RecentlyDeletedPresentation.entries(items: summaries, attachments: [],
+                                                           ownerTitle: { _ in nil }, now: now, calendar: calendar)
+        var cache = RecentlyDeletedSectionsCache()
+
+        let matches = cache.sections(entries, revision: 1, query: "find")
+        XCTAssertEqual(matches.flatMap(\.entries).count, 1_334)
+        for _ in 0..<25 {
+            XCTAssertEqual(cache.sections(entries, revision: 1, query: "find"), matches)
+        }
+        XCTAssertEqual(cache.filterPasses, 1, "26 requests over 4,000 entries perform one filter/sort pass")
+
+        XCTAssertEqual(cache.sections(entries, revision: 1, query: "other").flatMap(\.entries).count, 2_666)
+        XCTAssertEqual(cache.filterPasses, 2, "changing the query forces one fresh pass")
+        entries.removeLast()
+        XCTAssertEqual(cache.sections(entries, revision: 2, query: "other").flatMap(\.entries).count, 2_666)
+        XCTAssertEqual(cache.filterPasses, 3, "changing the entries revision invalidates a matching query")
+        XCTAssertEqual(cache.sections(entries, revision: 2, query: "find").flatMap(\.entries).count, 1_333)
+        XCTAssertEqual(cache.filterPasses, 4)
+    }
+
     // MARK: - Model
 
     func testModelListsRestoresAndUndoesARestore() throws {

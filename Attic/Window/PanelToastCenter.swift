@@ -52,6 +52,17 @@ final class PanelToastCenter: ObservableObject {
         return toast
     }
 
+    /// An already failed write: use the same persistent red toast that a
+    /// failed Undo shows, without implying that an Undo step was created.
+    @discardableResult
+    func showFailure(_ message: String) -> Toast {
+        let toast = Toast(message: message, actionTitle: String(localized: "OK"),
+                          isFailure: true, answersUndoKey: false)
+        present(toast, action: nil)
+        AccessibilityNotification.Announcement(message).post()
+        return toast
+    }
+
     /// An action that cannot fail (a page's own bookkeeping).
     @discardableResult
     func show(_ message: String, actionTitle: String = String(localized: "Undo"), answersUndoKey: Bool = true,
