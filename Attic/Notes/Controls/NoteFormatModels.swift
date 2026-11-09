@@ -526,6 +526,7 @@ final class NoteFormatCardModel: ObservableObject {
             refreshLinkSuggestions()
         }
     }
+    static let maxLinkSuggestions = 4
     @Published var linkSuggestions: [NoteLinkCandidate] = []
     @Published var linkSuggestionIndex = 0
     var noteCandidates: (() -> [NoteLinkCandidate])?
@@ -539,7 +540,7 @@ final class NoteFormatCardModel: ObservableObject {
         } != nil
         let next: [NoteLinkCandidate]
         if case .link = card, !query.isEmpty, !web, !query.contains("://") {
-            next = Array((noteCandidates?() ?? []).filter { $0.title.localizedStandardContains(query) }.prefix(4))
+            next = Array((noteCandidates?() ?? []).filter { $0.title.localizedStandardContains(query) }.prefix(Self.maxLinkSuggestions))
         } else { next = [] }
         guard next != linkSuggestions else { return }
         linkSuggestions = next

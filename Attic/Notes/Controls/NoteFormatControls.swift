@@ -30,7 +30,15 @@ final class NoteFormatControls: NSObject {
     private let hintHost: NoteSlashHintLabel
     private let addressHost: AtticOverlayHostingView
     private let linkSuggestionsHost: AtticOverlayHostingView
+    /// The height of the suggestion list showing beside the link field.
     private var linkRoom: CGFloat = 0
+    /// The gap the text currently holds open for the field and its list.
+    private var linkGap: CGFloat = 0
+    /// Set when the field opens where a list above it would reach the top
+    /// row (Planning, 9 Nov, B): the field sits under the line, the list
+    /// opens down out of it, and only the text below moves. It holds until
+    /// the field closes, so typing never moves the field.
+    private var linkOpensDown = false
     /// The part of the link's layout gap left visible so suggestions clear
     /// the header; reversed when the list shrinks or closes.
     private var linkRoomViewportLift: CGFloat = 0
@@ -211,6 +219,7 @@ final class NoteFormatControls: NSObject {
     }
 
     func invalidate() {
+        linkOpensDown = false
         setLinkSuggestionRoom(0)
         engine.linkSuggestionGap = nil
         cardModel.onLinkSuggestionsChange = nil
@@ -388,7 +397,9 @@ final class NoteFormatControls: NSObject {
     }
 
     private func layoutDidChange() {
-        if formatModel.barShown { placeBar() }
+        // Opening the link's room re-lays the text out; its positions mean
+        // nothing until it ends, and a miss here would close the field.
+        if formatModel.barShown, !changingLinkRoom { placeBar() }
         if slashModel.shown { placeSlashList() }
         if cardModel.card != nil, !linkInBar { placeCard() }
         if hintShown { updateHint() }
@@ -566,7 +577,10 @@ final class NoteFormatControls: NSObject {
         let width = barWidth > 0 ? barWidth : Self.barWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
         var y = first.minY - m.barGap - m.barHeight
         var below = false
-        if y < usable.minY {
+        if linkOpensDown, let bottom = linkLineBottom(selection) {
+            y = bottom + m.barGap
+            below = true
+        } else if y < usable.minY {
             guard last.maxY + m.barGap + m.barHeight <= usable.maxY else { return nil }
             y = last.maxY + m.barGap
             below = true
@@ -1093,12 +1107,18 @@ final class NoteFormatControls: NSObject {
         barAnchor = cell == nil ? range : nil
         barCellAnchor = cell
         barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
+        linkOpensDown = cell == nil && linkListWouldReachTopRow(over: range)
         guard placeBar(animated: formatModel.barShown) else {
+            linkOpensDown = false
             barAnchor = nil
             barCellAnchor = nil
             return false
         }
         linkInBar = true
+        if linkOpensDown {
+            setLinkSuggestionRoom(linkListHeight)
+            placeBar()
+        }
         barAwaitsRoom = false
         let rest = barNaturalWidths[barWidthKey] ?? barWidth
         if formatModel.barRestWidth != rest { formatModel.barRestWidth = rest }
@@ -1112,10 +1132,39 @@ final class NoteFormatControls: NSObject {
         return true
     }
 
+    private static func linkListHeight(count: Int) -> CGFloat {
+        count == 0 ? 0 : CGFloat(count) * 23 + 2
+    }
+
+    private var linkListHeight: CGFloat { Self.linkListHeight(count: cardModel.linkSuggestions.count) }
+
+    /// The bottom of the paragraph that holds the end of `range`, in the
+    /// text view. Fragment room can only open between paragraphs, so a
+    /// field under the line goes under the paragraph's last line.
+    private func linkLineBottom(_ range: NSRange) -> CGFloat? {
+        guard range.length > 0, NSMaxRange(range) <= engine.textStorage.length else { return nil }
+        var start = 0, end = 0, contentsEnd = 0
+        (engine.textStorage.string as NSString).getParagraphStart(
+            &start, end: &end, contentsEnd: &contentsEnd,
+            for: NSRange(location: NSMaxRange(range) - 1, length: 0))
+        return engine.rect(for: NSRange(location: max(start, contentsEnd - 1), length: 1))?.maxY
+    }
+
+    /// Measured against the longest list, because the field's side can't
+    /// change as matches arrive. With no room below for the field and that
+    /// list, it keeps today's side.
+    private func linkListWouldReachTopRow(over range: NSRange) -> Bool {
+        guard let first = engine.rect(for: NSRange(location: range.location, length: 1)),
+              let bottom = linkLineBottom(range) else { return false }
+        let m = AtticNoteFormatMetrics.self
+        let list = Self.linkListHeight(count: NoteFormatCardModel.maxLinkSuggestions)
+        guard first.minY - m.barGap - m.barHeight - list < usableRect().minY else { return false }
+        return bottom + m.barGap + m.barHeight + list <= usableRect(overBottomRow: true).maxY
+    }
+
     private func updateLinkSuggestions() {
         guard cardModel.card != nil else { return }
-        let height = cardModel.linkSuggestions.isEmpty ? 0 : CGFloat(cardModel.linkSuggestions.count) * 23 + 2
-        setLinkSuggestionRoom(height)
+        setLinkSuggestionRoom(linkListHeight)
         if !linkInBar { placeCard(); return }
         placeBar()
         placeLinkSuggestions()
@@ -1127,7 +1176,7 @@ final class NoteFormatControls: NSObject {
             return
         }
         let room = AtticNoteFormatMetrics.shadowRoom
-        placeOverlay(linkSuggestionsHost, rect: NSRect(x: cover.minX, y: cover.minY - linkRoom,
+        placeOverlay(linkSuggestionsHost, rect: NSRect(x: cover.minX, y: linkOpensDown ? cover.maxY : cover.minY - linkRoom,
             width: cover.width, height: linkRoom).insetBy(dx: -room, dy: -room))
         linkSuggestionsHost.isHidden = false
     }
@@ -1135,7 +1184,9 @@ final class NoteFormatControls: NSObject {
     /// Presentation-only TextKit fragment margin: no attributed text, document
     /// bytes, edit generation or Undo entry changes when suggestions appear.
     private func setLinkSuggestionRoom(_ height: CGFloat) {
-        guard !changingLinkRoom, height != linkRoom, let textView, let scrollView else { return }
+        let m = AtticNoteFormatMetrics.self
+        let gap = linkOpensDown ? height + m.barHeight + 2 * m.barGap : height
+        guard !changingLinkRoom, gap != linkGap, let textView, let scrollView else { return }
         changingLinkRoom = true
         defer { changingLinkRoom = false }
         let anchor = cellLinkTarget.flatMap { engine.tableAttachment(id: $0.tableID)?.1 }
@@ -1143,8 +1194,9 @@ final class NoteFormatControls: NSObject {
         guard anchor.location < engine.textStorage.length else {
             // A replacement/import may remove the captured target while its
             // field is open. Dismissal still retires all presentation state.
-            if height == 0 {
+            if gap == 0 {
                 linkRoom = 0
+                linkGap = 0
                 linkRoomViewportLift = 0
                 engine.linkSuggestionGap = nil
                 if let minimum = linkRoomMinimum { textView.minSize = minimum }
@@ -1156,10 +1208,20 @@ final class NoteFormatControls: NSObject {
         let before = textView.firstRect(forCharacterRange: anchor, actualRange: nil)
         if linkRoomMinimum == nil { linkRoomMinimum = textView.minSize }
         linkRoom = height
-        let paragraph = (engine.textStorage.string as NSString).paragraphRange(for: NSRange(location: anchor.location, length: 0))
-        engine.linkSuggestionGap = height > 0 ? (paragraph.location, height) : nil
-        if height > 0 {
-            textView.minSize.height = max(linkRoomMinimum?.height ?? 0, scrollView.contentView.bounds.height + height)
+        linkGap = gap
+        let string = engine.textStorage.string as NSString
+        // Above the field the room opens before the line; under it, the
+        // next paragraph takes it, so the line itself stays where it is.
+        // The note's last paragraph has nothing below to move.
+        var paragraph: NSRange? = string.paragraphRange(for: NSRange(location: anchor.location, length: 0))
+        if linkOpensDown {
+            let end = string.paragraphRange(for: NSRange(location: max(anchor.location, NSMaxRange(anchor) - 1), length: 0)).upperBound
+            paragraph = end < string.length ? string.paragraphRange(for: NSRange(location: end, length: 0)) : nil
+        }
+        let previousGap = engine.linkSuggestionGap?.offset
+        engine.linkSuggestionGap = gap > 0 ? paragraph.map { ($0.location, gap) } : nil
+        if gap > 0 {
+            textView.minSize.height = max(linkRoomMinimum?.height ?? 0, scrollView.contentView.bounds.height + gap)
             textView.setFrameSize(NSSize(width: textView.frame.width, height: max(textView.frame.height, textView.minSize.height)))
         } else if let minimum = linkRoomMinimum {
             textView.minSize = minimum
@@ -1168,9 +1230,15 @@ final class NoteFormatControls: NSObject {
         // The displayed paragraph's fragment type/margins changed. Invalidate
         // its presentation element as well as layout; layout invalidation alone
         // reuses a previously plain NSTextLayoutFragment with zero margins.
-        engine.textStorage.edited(.editedAttributes, range: paragraph, changeInLength: 0)
-        engine.invalidateLayout(NSRange(location: 0, length: engine.textStorage.length))
-        if let range = engine.textRange(for: anchor) { engine.layoutManager?.ensureLayout(for: range) }
+        if let previousGap, previousGap < string.length, previousGap != paragraph?.location {
+            engine.textStorage.edited(.editedAttributes, range: string.paragraphRange(for: NSRange(location: previousGap, length: 0)), changeInLength: 0)
+        }
+        if let paragraph { engine.textStorage.edited(.editedAttributes, range: paragraph, changeInLength: 0) }
+        // Room that opens after the line leaves the layout above it alone.
+        let changedFrom = [previousGap, paragraph?.location].compactMap { $0 }.min() ?? anchor.location
+        let invalidFrom = changedFrom > anchor.location ? changedFrom : 0
+        engine.invalidateLayout(NSRange(location: invalidFrom, length: engine.textStorage.length - invalidFrom))
+        if let range = engine.textRange(for: paragraph.map { anchor.union($0) } ?? anchor) { engine.layoutManager?.ensureLayout(for: range) }
         textView.layoutSubtreeIfNeeded()
         if let target = cellLinkTarget, let table = engine.tableAttachment(id: target.tableID)?.0.hostedView,
            let rects = engine.cellTextRects(target.range, in: table, textView: textView) {
@@ -1184,7 +1252,7 @@ final class NoteFormatControls: NSObject {
         // the pinned controls. Let just enough of the gap move the text down.
         let oldLift = linkRoomViewportLift
         let neededLift: CGFloat
-        if height > 0, linkInBar, let barCover {
+        if height > 0, linkInBar, !linkOpensDown, let barCover {
             // The viewport's top follows the scroll correction `delta`;
             // compare against that destination, not its old position.
             neededLift = max(0, usableRect().minY + delta + height - (barCover.minY - oldLift))
@@ -1194,11 +1262,12 @@ final class NoteFormatControls: NSObject {
         linkRoomViewportLift = neededLift
         let currentOrigin = scrollView.contentView.bounds.origin
         scrollView.contentView.scroll(to: CGPoint(x: currentOrigin.x, y: currentOrigin.y + delta - (neededLift - oldLift)))
-        if height == 0 { textView.sizeToFit() }
+        if gap == 0 { textView.sizeToFit() }
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func closeLinkField() {
+        linkOpensDown = false
         setLinkSuggestionRoom(0)
         linkSuggestionsHost.isHidden = true
         guard linkInBar else { return }
