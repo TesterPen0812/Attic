@@ -83,7 +83,7 @@ final class AgentHelperClient {
     #if DEBUG
     // Hosted tests can connect a forged peer before Launch Services opens the
     // genuine helper, exercising the authentication boundary deterministically.
-    var onInvitationReadyForTests: ((UInt16, String) -> Void)?
+    var onInvitationReadyForTests: ((UInt16, String, String) -> Void)?
     #endif
 
     var launchAppIsTerminated: Bool? { application?.isTerminated }
@@ -142,7 +142,7 @@ final class AgentHelperClient {
         }
         catch { stop(); throw error }
         #if DEBUG
-        onInvitationReadyForTests?(port, token)
+        onInvitationReadyForTests?(port, token, identityPath?.path ?? "")
         #endif
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
@@ -167,6 +167,12 @@ final class AgentHelperClient {
                     self.logger.info("Opening bundled agent helper")
                     self.application = try await NSWorkspace.shared.openApplication(at: self.helperURL,
                                                                                    configuration: configuration)
+                    if let verifiedPID = self.verifiedHelperPID,
+                       self.application?.processIdentifier != verifiedPID {
+                        self.logger.error("Launch Services returned a different helper process")
+                        self.fail(AgentHelperConnectionError.authentication)
+                        return
+                    }
                     self.authorizeIdentityPeers()
                     self.logger.info("Launch Services returned helper process")
                 } catch {
@@ -380,17 +386,35 @@ final class AgentHelperClient {
     }
 
     private func authorizeIdentityPeers() {
-        guard !isStopped, let appPID = application?.processIdentifier else { return }
+        guard !isStopped else { return }
         let peers = pendingIdentityPeers
         pendingIdentityPeers.removeAll()
         for peer in peers {
             defer { _ = Darwin.close(peer.fd) }
-            guard peer.pid == appPID, helperSignatureMatches(pid: peer.pid),
+            // Launch Services can leave openApplication suspended until the
+            // helper finishes this handshake. Verify the kernel-attested PID
+            // against the exact bundled executable and signature immediately.
+            // Once Launch Services returns, also check its reported PID.
+            guard (application == nil || peer.pid == application?.processIdentifier),
+                  helperExecutableMatches(pid: peer.pid), helperSignatureMatches(pid: peer.pid),
                   verifiedHelperPID == nil else { continue }
             let bytes = Array(helperProof.utf8)
             let written = bytes.withUnsafeBytes { Darwin.write(peer.fd, $0.baseAddress, $0.count) }
             if written == bytes.count { verifiedHelperPID = peer.pid }
         }
+    }
+
+    private func helperExecutableMatches(pid: pid_t) -> Bool {
+        guard let expected = Bundle(url: helperURL)?.executableURL else { return false }
+        // macOS libproc defines PROC_PIDPATHINFO_MAXSIZE as 4 * MAXPATHLEN
+        // (4096); the C macro is not exported through Swift's Darwin module.
+        var path = [CChar](repeating: 0, count: 4_096)
+        let length = path.withUnsafeMutableBufferPointer { buffer in
+            proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
+        }
+        guard length > 0 else { return false }
+        let launched = URL(fileURLWithPath: String(cString: path)).resolvingSymlinksInPath().standardizedFileURL
+        return launched == expected.resolvingSymlinksInPath().standardizedFileURL
     }
 
     private func helperSignatureMatches(pid: pid_t) -> Bool {

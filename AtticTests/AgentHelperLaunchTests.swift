@@ -30,6 +30,27 @@ final class AgentHelperLaunchTests: XCTestCase {
         return fd
     }
 
+    private func forgeIdentityConnection(socketPath: String) -> Int32 {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return -1 }
+        let bytes = socketPath.utf8CString.map { UInt8(bitPattern: $0) }
+        var address = sockaddr_un()
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+            _ = Darwin.close(fd)
+            return -1
+        }
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else { _ = Darwin.close(fd); return -1 }
+        return fd
+    }
+
     private func verifyForgedPeerDoesNotPreventRealHelper(stolenToken: Bool) async throws {
         let helper = try AgentHelperClient()
         var fakeFD: Int32 = -1
@@ -37,7 +58,7 @@ final class AgentHelperLaunchTests: XCTestCase {
             if fakeFD >= 0 { _ = Darwin.close(fakeFD) }
             helper.stop()
         }
-        helper.onInvitationReadyForTests = { [self] port, token in
+        helper.onInvitationReadyForTests = { [self] port, token, _ in
             fakeFD = forgeConnection(port: port, token: stolenToken ? token : "wrong-token")
         }
         try await helper.start()
@@ -57,6 +78,37 @@ final class AgentHelperLaunchTests: XCTestCase {
 
     func testStolenTicketTokenAloneCannotImpersonateSignedHelper() async throws {
         try await verifyForgedPeerDoesNotPreventRealHelper(stolenToken: true)
+    }
+
+    func testUntrustedUnixPeerCannotClaimHelperProof() async throws {
+        let helper = try AgentHelperClient()
+        var fakeFD: Int32 = -1
+        defer {
+            if fakeFD >= 0 { _ = Darwin.close(fakeFD) }
+            helper.stop()
+        }
+        helper.onInvitationReadyForTests = { [self] _, _, socketPath in
+            fakeFD = forgeIdentityConnection(socketPath: socketPath)
+        }
+        try await helper.start()
+        XCTAssertGreaterThanOrEqual(fakeFD, 0)
+        // The socket can be connected by the test host, but only the signed
+        // bundled executable may receive the proof or occupy the helper slot.
+        if fakeFD >= 0 {
+            var timeout = timeval(tv_sec: 1, tv_usec: 0)
+            _ = Darwin.setsockopt(fakeFD, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                                  socklen_t(MemoryLayout<timeval>.size))
+            var byte: UInt8 = 0
+            let count = Darwin.read(fakeFD, &byte, 1)
+            XCTAssertLessThanOrEqual(count, 0, "A different executable must never receive the identity proof")
+        }
+        helper.discoverInstalledBackends()
+        for await frame in helper.events where frame.type == "availability" {
+            XCTAssertNotNil(frame.claudeInstalled)
+            XCTAssertNotNil(frame.codexInstalled)
+            return
+        }
+        XCTFail("A forged Unix peer prevented the legitimate signed helper from connecting")
     }
 
     func testInstalledBackendDiscoveryDoesNotRunSignInChecks() async throws {
