@@ -7,6 +7,31 @@ import XCTest
 /// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
+
+    /// R-04: time the complete command through the page model, including
+    /// its synchronous durable family save *before* the visual hold starts.
+    func testR04CompletionToVisualHoldOnRealisticStore() throws {
+        let store = try seedStore(parents: 250, childrenPerParent: 2)
+        var services = TasksPageServices()
+        services.doneHold = .seconds(30)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let parents = Array(store.tasks.filter { $0.parentID == nil }.prefix(12))
+        XCTAssertEqual(parents.count, 12)
+        _ = model.sections(for: .now)
+        var samples: [Double] = []
+        for parent in parents {
+            let start = ContinuousClock.now
+            let outcome = model.complete(parent.id)
+            let duration = start.duration(to: .now).components
+            samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+            XCTAssertTrue(outcome.isApplied)
+            XCTAssertNotNil(model.held[parent.id], "A successful save must enter visual hold")
+            XCTAssertEqual(store.task(withID: parent.id)?.status, .done)
+        }
+        let ordered = samples.sorted()
+        print("GAP_R04 total_tasks=750 samples_ms=\(samples) median_ms=\(ordered[ordered.count / 2]) max_ms=\(ordered.last!)")
+    }
+
     private func seedStore(parents: Int, childrenPerParent: Int, attachmentsPerTask: Int = 0) throws -> TaskStore {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
