@@ -15,6 +15,10 @@ struct AgentHelperFrame: Sendable {
     let codexInstalled: Bool?
     let claudeSignedIn: Bool?
     let codexSignedIn: Bool?
+    let claudeStatus: String?
+    let codexStatus: String?
+    let claudeIssue: String?
+    let codexIssue: String?
 
     init(_ frame: [String: Any]) {
         type = frame["type"] as? String ?? ""
@@ -26,6 +30,10 @@ struct AgentHelperFrame: Sendable {
         codexInstalled = frame["codex"] as? Bool
         claudeSignedIn = frame["claudeSignedIn"] as? Bool
         codexSignedIn = frame["codexSignedIn"] as? Bool
+        claudeStatus = frame["claudeStatus"] as? String
+        codexStatus = frame["codexStatus"] as? String
+        claudeIssue = frame["claudeIssue"] as? String
+        codexIssue = frame["codexIssue"] as? String
     }
 }
 
@@ -193,6 +201,12 @@ final class AgentHelperClient {
     func probe() { send(["type": "probe"]) }
 
     func discoverInstalledBackends() { send(["type": "discover"]) }
+
+    #if DEBUG
+    func configureTestCLIs(claude: [String], codex: [String]) {
+        send(["type": "testCLIs", "claude": claude, "codex": codex])
+    }
+    #endif
 
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
                       mcpToken: String, sessionID: String?) {

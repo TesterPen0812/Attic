@@ -7,7 +7,7 @@ struct AgentAccessSettingsView: View {
 
     @State private var didCopyAgentSetupPrompt = false
     @State private var didCopyEndpoint = false
-    @State private var installedBackends: Set<AgentBackend>?
+    @State private var backendStatuses: [AgentBackend: String]?
     @State private var didCheckBackends = false
 
     var body: some View {
@@ -84,15 +84,24 @@ struct AgentAccessSettingsView: View {
             }
         }
         .task {
-            installedBackends = await AgentBackendDiscovery.installed()
+            backendStatuses = await AgentBackendDiscovery.statuses()
             didCheckBackends = true
         }
     }
 
     private func backendLabel(_ backend: AgentBackend) -> String {
         guard didCheckBackends else { return backend.title }
-        guard let installedBackends else { return "\(backend.title) · Unavailable" }
-        return "\(backend.title) · \(installedBackends.contains(backend) ? "Installed" : "Not installed")"
+        guard let status = backendStatuses?[backend] else { return "\(backend.title) · Unavailable" }
+        let label: String
+        switch status {
+        case "ready": label = "Ready"
+        case "missing": label = "Not installed"
+        case "signedOut": label = "Sign in"
+        case "update": label = "Update needed"
+        case "timedOut": label = "Check timed out"
+        default: label = "Unavailable"
+        }
+        return "\(backend.title) · \(label)"
     }
 
     private var endpoint: String {
