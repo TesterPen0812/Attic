@@ -211,6 +211,31 @@ enum AtticGlassModel {
     static func contrastEdge(dark: Bool) -> AtticRGBA {
         dark ? .white(0.35) : .black(0.30)
     }
+
+    /// The Edge light on a raised glass button (Planning, 2 Nov for Light,
+    /// 9 Nov D2 for Dark): a rim lit at the top-left and bottom-right,
+    /// clear between, and a hairline on the edge. Glass only; Solid and
+    /// Frosted draw neither.
+    static func edgeLight(dark: Bool, surface: AtticPanelSurfaceTreatment.Kind) -> AtticEdgeLight? {
+        guard surface == .glass else { return nil }
+        return AtticEdgeLight(lineWidth: 1.5, topLeading: dark ? 0.55 : 1, bottomTrailing: dark ? 0.47 : 0.85, fade: 0.35,
+                              hairlineWidth: 0.5, hairline: .black(0.14))
+    }
+}
+
+/// A white rim's strength along the control's top-left to bottom-right
+/// diagonal: `fade` is how far along each edge it has gone to nothing.
+struct AtticEdgeLight: Equatable {
+    let lineWidth: CGFloat
+    let topLeading: Double
+    let bottomTrailing: Double
+    let fade: Double
+    let hairlineWidth: CGFloat
+    let hairline: AtticRGBA
+
+    var stops: [(opacity: Double, location: CGFloat)] {
+        [(topLeading, 0), (0, fade), (0, 1 - fade), (bottomTrailing, 1)]
+    }
 }
 
 /// Every resolved colour for one `AtticDesignContext`.

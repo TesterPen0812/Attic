@@ -992,3 +992,25 @@ extension AtticDesignSystemTests {
     }
     #endif
 }
+
+final class AtticEdgeLightTokenTests: XCTestCase {
+    func testGlassButtonsCarryTheEdgeLightInBothModes() throws {
+        let light = try XCTUnwrap(AtticGlassModel.edgeLight(dark: false, surface: .glass))
+        XCTAssertEqual(light.stops.map(\.opacity), [1, 0, 0, 0.85])
+        let dark = try XCTUnwrap(AtticGlassModel.edgeLight(dark: true, surface: .glass))
+        XCTAssertEqual(dark.stops.map(\.opacity), [0.55, 0, 0, 0.47])
+        for rim in [light, dark] {
+            XCTAssertEqual(rim.lineWidth, 1.5)
+            XCTAssertEqual(rim.stops.map(\.location), [0, 0.35, 0.65, 1])
+            XCTAssertEqual(rim.hairlineWidth, 0.5)
+            XCTAssertEqual(rim.hairline, .black(0.14))
+        }
+    }
+
+    func testOtherSurfacesDrawNoEdgeLight() {
+        for surface: AtticPanelSurfaceTreatment.Kind in [.solid, .frosted] {
+            XCTAssertNil(AtticGlassModel.edgeLight(dark: false, surface: surface))
+            XCTAssertNil(AtticGlassModel.edgeLight(dark: true, surface: surface))
+        }
+    }
+}

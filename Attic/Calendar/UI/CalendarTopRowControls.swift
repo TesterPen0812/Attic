@@ -95,7 +95,7 @@ struct CalendarMonthArrows: View {
         }
         .padding(AtticPageButtonMetrics.inset)
         .frame(height: AtticControlSize.headerControl)
-        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false, edgeLight: true))
         .atticDesignCorners()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("calendar-navigation")

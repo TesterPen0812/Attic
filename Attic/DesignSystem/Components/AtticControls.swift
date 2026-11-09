@@ -56,7 +56,7 @@ private struct AtticRaisedButtonBody: View {
             } else {
                 configuration.label
                     .environment(\.atticControlState, state)
-                    .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
+                    .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled, edgeLight: true)
             }
         }
             .atticFocusRing(state == .focused, cornerRadius: cornerRadius)
@@ -574,7 +574,7 @@ private struct AtticPageButtonSurface: ViewModifier {
         if flat {
             content.atticFlatSurface(cornerRadius: cornerRadius)
         } else {
-            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true, edgeLight: true)
         }
     }
 }
@@ -1317,7 +1317,7 @@ struct AtticSearchFieldBacking: ViewModifier {
     func body(content: Content) -> some View {
         let radius = radius ?? AtticRadius.control(height: height)
         if floating {
-            content.atticRaisedMaterial(cornerRadius: radius, interactive: false)
+            content.atticRaisedMaterial(cornerRadius: radius, interactive: false, edgeLight: true)
         } else {
             content.background(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent).fill(design.tokens.recessed.color))
         }
@@ -1500,7 +1500,7 @@ private struct AtticSmallButtonGlass: ViewModifier {
 
     func body(content: Content) -> some View {
         if floating {
-            content.atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled)
+            content.atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled, edgeLight: true)
         } else {
             content
         }
