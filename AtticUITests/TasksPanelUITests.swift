@@ -14,8 +14,6 @@ final class TasksPanelUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
-        // testAHiddenTasksPageTakesNoKeysClicksOrVoiceOver uses the old Canvas page.
-        app.launchArguments += ["-AtticDraw.enabled", "NO"]
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 5))
@@ -205,12 +203,13 @@ final class TasksPanelUITests: XCTestCase {
 
     // MARK: - A page kept built behind another
 
-    /// Tasks stays built behind Canvas: while hidden it takes no clicks, no
+    /// Tasks stays built behind Draw: while hidden it takes no clicks, no
     /// keys and is not read by VoiceOver; back on Tasks, nothing changed.
     func testAHiddenTasksPageTakesNoKeysClicksOrVoiceOver() throws {
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        addBar.click()
-        app.typeText("Kept draft")
+        // Accepted 2026-11-03 "The '+' card takes over the bar's row":
+        // the typed draft is kept when switching away from Tasks.
+        openCard()
+        cardTitle.typeText("Kept draft")
         // Where the circle is, fixed to the panel (the row leaves the
         // accessibility tree once Tasks is hidden).
         let panel = app.dialogs.firstMatch
@@ -218,14 +217,12 @@ final class TasksPanelUITests: XCTestCase {
         let circlePoint = panel.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: rowFrame.minX + 24 - panel.frame.minX, dy: rowFrame.minY + 16 - panel.frame.minY))
 
-        app.typeKey("3", modifierFlags: .command)
-        XCTAssertTrue(app.descendants(matching: .any)["canvas-surface"].waitForExistence(timeout: 5))
-        // The select tool: a click on empty canvas then changes nothing.
-        let selectTool = app.buttons["canvas-tool-select"]
-        XCTAssertTrue(selectTool.waitForExistence(timeout: 3))
-        selectTool.click()
+        // Accepted 2026-10-29 "Rules, no drawing needed": the four
+        // pages are Tasks, Notes, Calendar, Draw (⌘4, not ⌘3).
+        app.typeKey("4", modifierFlags: .command)
+        waitFor(app.buttons["panel-section-canvas"].isSelected, "on Draw")
         waitFor(!row("Book dentist").exists, "VoiceOver does not read the hidden Tasks page")
-        XCTAssertFalse(addBar.exists, "nor its add bar")
+        XCTAssertFalse(cardTitle.exists, "nor its composer")
 
         circlePoint.click()                       // where the hidden circle is
         app.typeKey("9", modifierFlags: [])       // a key the hidden field must not take
@@ -234,12 +231,13 @@ final class TasksPanelUITests: XCTestCase {
         waitFor(app.buttons["panel-section-tasks"].isSelected, "⌘1 shows Tasks again")
         waitFor(row("Book dentist").exists, "Tasks shows again")
         XCTAssertTrue(row("Book dentist").label.contains("to do"), "the click did not reach the hidden circle")
-        XCTAssertEqual(addBar.value as? String, "Kept draft", "the key did not reach the hidden add bar")
+        openCard()
+        XCTAssertEqual(cardTitle.value as? String, "Kept draft", "the key did not reach the hidden draft")
     }
 }
 
 /// The empty states, in the real panel over the caught-up seed: nothing
-/// open, six tasks finished today, Later empty
+/// open, six tasks finished today in Done, Backlog empty
 /// (`ATTIC_UI_TEST_SEED=caughtup`).
 final class TasksEmptyStateUITests: XCTestCase {
     private var app: XCUIApplication!

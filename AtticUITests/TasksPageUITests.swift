@@ -733,20 +733,22 @@ final class TasksPageUITests: XCTestCase {
         window.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title + ","))
     }
 
-    /// ⇧⌘I opens the task's whole menu, every command with its key; a
-    /// command chosen there runs (Move Down, then Duplicate).
+    /// Accepted 2026-10-30 "Tasks: going into a task's page": ⇧⌘I now
+    /// opens the page in the full panel. The standalone preview has no
+    /// task-page host, so exercise the same menu through the row's context
+    /// action (Move Down within No date, then Duplicate).
     func testShiftCommandIOpensTheTasksActions() throws {
-        select("Email beta testers")
-        app.typeKey("i", modifierFlags: [.command, .shift])
+        select("Ship appearance PR")
+        row("Ship appearance PR").rightClick()
         let more = menuItem("More")
-        XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
+        XCTAssertTrue(more.waitForExistence(timeout: 3), "right-click opens the task's actions")
         // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Copy and
         // Duplicate sit inside More.
         for title in ["Complete", "Start Working", "Edit Title", "Add Subtask", "Date", "Tags", "Priority", "Move to Backlog",
                       "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
-        XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
+        XCTAssertLessThan(row("Ship appearance PR").frame.minY, row("Call the plumber").frame.minY, "above Call in No date at first")
         // The rarer reorder commands sit under More (follow-up part 2, L5;
         // Show Files went with the files list, Accepted 2026-11-01).
         openItem("More").hover()
@@ -755,15 +757,15 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(openItem("Move Up").exists && !openItem("Show Files").exists, "and Move Up, with no Show Files")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
-        waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,
-                "Move Down moved it one place down")
-        select("Email beta testers")
-        app.typeKey("i", modifierFlags: [.command, .shift])
+        waitFor(row("Ship appearance PR").exists && row("Ship appearance PR").frame.minY > row("Call the plumber").frame.minY,
+                "Move Down reordered within No date")
+        select("Ship appearance PR")
+        row("Ship appearance PR").rightClick()
         XCTAssertTrue(menuItem("More").waitForExistence(timeout: 3))
         openItem("More").hover()
         XCTAssertTrue(openItem("Duplicate").waitForExistence(timeout: 3), "More holds Duplicate")
         openItem("Duplicate").click()
-        waitFor(rows("Email beta testers").count == 2, "Duplicate from the menu makes a copy")
+        waitFor(rows("Ship appearance PR").count == 2, "Duplicate from the menu makes a copy")
         app.typeKey(.escape, modifierFlags: [])
     }
 

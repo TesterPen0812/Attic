@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 
 /// Round 13, in the real panel with the demo tasks (`ATTIC_UI_TEST_SEED=demo`):
-/// who owns the keyboard. Return in an open ⇧⌘I menu runs the highlighted
+/// who owns the keyboard. Return in an open row menu runs the highlighted
 /// item (a subtask focused by Tab is covered by the hosted tests, which
 /// press a real Tab). CI only: they
 /// need a signed-in window server.
@@ -61,19 +61,15 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "panel-error-message").firstMatch.exists)
     }
 
-    /// ⇧⌘I, eight ↓ to Add Subtask, Return: the subtask editor opens and the
+    /// Right-click, highlight Add Subtask, Return: the subtask editor opens and the
     /// parent's title editor does not.
     func testReturnInTheActionsMenuRunsTheHighlightedItem() throws {
         select("Book dentist")
-        app.typeKey("i", modifierFlags: [.command, .shift])
+        // Accepted 2026-10-30 "Tasks: going into a task's page": ⇧⌘I
+        // opens the task page. The row still exposes its actions on right-click.
+        row("Book dentist").rightClick()
         XCTAssertTrue(app.menuItems["Add Subtask"].waitForExistence(timeout: 3), "the actions menu opens")
-        // A person's pace: the menu highlights as each ↓ lands, and Return
-        // goes to the item that has the highlight (CI run 2 fired every key
-        // in 0.6 s and Return ran Edit Title).
-        for _ in 0..<8 {
-            app.typeKey(.downArrow, modifierFlags: [])
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
+        app.menuItems["Add Subtask"].hover()
         let beforeReturn = XCTAttachment(screenshot: app.screenshot())
         beforeReturn.name = "menu before Return"
         beforeReturn.lifetime = .keepAlways
