@@ -64,6 +64,7 @@ final class AgentHelperClient {
     private let helperURL: URL
     private var listener: NWListener?
     private var connection: NWConnection?
+    private var candidates: [ObjectIdentifier: NWConnection] = [:]
     private var application: NSRunningApplication?
     private var portWaiter: CheckedContinuation<UInt16, Error>?
     private var helloWaiter: CheckedContinuation<Void, Error>?
@@ -72,6 +73,12 @@ final class AgentHelperClient {
     private var authenticatedHelperPID: pid_t?
     private var isStopped = false
     private var invitationURL: URL?
+
+    #if DEBUG
+    // Hosted tests can connect a forged peer before Launch Services opens the
+    // genuine helper, exercising the authentication boundary deterministically.
+    var onInvitationReadyForTests: ((UInt16, String) -> Void)?
+    #endif
 
     var launchAppIsTerminated: Bool? { application?.isTerminated }
 
@@ -125,6 +132,9 @@ final class AgentHelperClient {
         }
         do { try makeLaunchInvitation(port: port) }
         catch { stop(); throw error }
+        #if DEBUG
+        onInvitationReadyForTests?(port, token)
+        #endif
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.addsToRecentItems = false
@@ -185,6 +195,8 @@ final class AgentHelperClient {
         send(["type": "stop"])
         connection?.cancel()
         connection = nil
+        for candidate in candidates.values { candidate.cancel() }
+        candidates.removeAll()
         listener?.cancel()
         listener = nil
         // Launch Services can return before a helper chooses its invitation.
@@ -206,15 +218,24 @@ final class AgentHelperClient {
     }
 
     private func accept(_ newConnection: NWConnection) {
-        guard connection == nil, !isStopped else { newConnection.cancel(); return }
-        connection = newConnection
+        // Unauthenticated sockets are disposable candidates, never the sole
+        // helper connection. A stray local caller cannot occupy the run slot.
+        guard !authenticated, !isStopped, candidates.count < 8 else { newConnection.cancel(); return }
+        let key = ObjectIdentifier(newConnection)
+        candidates[key] = newConnection
         newConnection.stateUpdateHandler = { [weak self] state in
             if case .failed = state {
-                Task { @MainActor [weak self] in self?.fail(AgentHelperConnectionError.disconnected) }
+                Task { @MainActor [weak self] in
+                    self?.connectionFailed(newConnection, error: AgentHelperConnectionError.disconnected)
+                }
             }
         }
         newConnection.start(queue: queue)
         receive(on: newConnection, pending: Data())
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            self?.dropCandidate(newConnection)
+        }
     }
 
     private func receive(on connection: NWConnection, pending: Data) {
@@ -223,7 +244,9 @@ final class AgentHelperClient {
             var buffer = pending
             if let bytes { buffer.append(bytes) }
             guard buffer.count < 2_000_000 else {
-                Task { @MainActor [weak self] in self?.fail(AgentHelperConnectionError.invalidFrame) }
+                Task { @MainActor [weak self] in
+                    self?.connectionFailed(connection, error: AgentHelperConnectionError.invalidFrame)
+                }
                 return
             }
             var frames = [[String: Any]]()
@@ -231,27 +254,36 @@ final class AgentHelperClient {
                 let line = Data(buffer[..<end])
                 buffer.removeSubrange(...end)
                 guard let frame = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                    Task { @MainActor [weak self] in self?.fail(AgentHelperConnectionError.invalidFrame) }
+                    Task { @MainActor [weak self] in
+                        self?.connectionFailed(connection, error: AgentHelperConnectionError.invalidFrame)
+                    }
                     return
                 }
                 frames.append(frame)
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                for frame in frames { self.received(frame) }
-                if complete || error != nil { self.fail(AgentHelperConnectionError.disconnected) }
+                for frame in frames { self.received(frame, on: connection) }
+                if complete || error != nil {
+                    self.connectionFailed(connection, error: AgentHelperConnectionError.disconnected)
+                }
             }
             if !complete && error == nil { self.receive(on: connection, pending: buffer) }
         }
     }
 
-    private func received(_ frame: [String: Any]) {
+    private func received(_ frame: [String: Any], on peer: NWConnection) {
         guard !isStopped else { return }
         if !authenticated {
+            guard candidates[ObjectIdentifier(peer)] != nil else { return }
             guard frame["type"] as? String == "hello", frame["token"] as? String == token else {
-                fail(AgentHelperConnectionError.authentication); return
+                dropCandidate(peer); return
             }
             authenticated = true
+            connection = peer
+            candidates[ObjectIdentifier(peer)] = nil
+            for candidate in candidates.values { candidate.cancel() }
+            candidates.removeAll()
             authenticatedHelperPID = frame["pid"] as? pid_t
             logger.info("Agent helper handshake succeeded")
             discardLaunchInvitation()
@@ -262,7 +294,19 @@ final class AgentHelperClient {
             listener = nil
             return
         }
+        guard connection === peer else { return }
         continuation.yield(AgentHelperFrame(frame))
+    }
+
+    private func dropCandidate(_ peer: NWConnection) {
+        guard candidates.removeValue(forKey: ObjectIdentifier(peer)) != nil else { return }
+        peer.cancel()
+    }
+
+    private func connectionFailed(_ peer: NWConnection, error: Error) {
+        if candidates[ObjectIdentifier(peer)] != nil { dropCandidate(peer) }
+        else if connection === peer { fail(error) }
+        else { peer.cancel() }
     }
 
     private func fail(_ error: Error) {
@@ -271,10 +315,11 @@ final class AgentHelperClient {
         portWaiter = nil
         helloWaiter?.resume(throwing: error)
         helloWaiter = nil
-        // An authenticated helper can crash without sending an exit frame.
-        // Closing the stream releases the runner and Chat's Working state.
-        if authenticated && !isStopped {
+        // A failed launch also releases the listener and untrusted peers.
+        if !isStopped {
             isStopped = true
+            for candidate in candidates.values { candidate.cancel() }
+            candidates.removeAll()
             connection?.cancel()
             connection = nil
             listener?.cancel()

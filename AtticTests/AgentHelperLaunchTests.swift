@@ -1,9 +1,60 @@
 import Foundation
+import Darwin
 import XCTest
 @testable import Attic
 
 @MainActor
 final class AgentHelperLaunchTests: XCTestCase {
+    private func forgeConnection(port: UInt16, token: String) -> Int32 {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return -1 }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else { _ = Darwin.close(fd); return -1 }
+        let hello = ["type": "hello", "token": token, "pid": Int(getpid())] as [String: Any]
+        guard let data = try? JSONSerialization.data(withJSONObject: hello) else {
+            _ = Darwin.close(fd)
+            return -1
+        }
+        let payload = data + Data([10])
+        let written = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        guard written == payload.count else { _ = Darwin.close(fd); return -1 }
+        return fd
+    }
+
+    private func verifyForgedPeerDoesNotPreventRealHelper(stolenToken: Bool) async throws {
+        let helper = try AgentHelperClient()
+        var fakeFD: Int32 = -1
+        defer {
+            if fakeFD >= 0 { _ = Darwin.close(fakeFD) }
+            helper.stop()
+        }
+        helper.onInvitationReadyForTests = { [self] port, token in
+            fakeFD = forgeConnection(port: port, token: stolenToken ? token : "wrong-token")
+        }
+        try await helper.start()
+        XCTAssertGreaterThanOrEqual(fakeFD, 0)
+        helper.probe()
+        for await frame in helper.events where frame.type == "availability" {
+            XCTAssertNotNil(frame.claudeInstalled)
+            XCTAssertNotNil(frame.codexInstalled)
+            return
+        }
+        XCTFail("The legitimate signed helper did not authenticate after a forged connection")
+    }
+
+    func testUntrustedLocalSocketCannotOccupyHelperConnection() async throws {
+        try await verifyForgedPeerDoesNotPreventRealHelper(stolenToken: false)
+    }
+
     /// Runs inside the sandboxed invisible AtticUnitTestHost. A real signed
     /// Launch Services helper must connect and authenticate without UI or a
     /// copied credential file; no model CLI is launched by this test.
