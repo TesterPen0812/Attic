@@ -87,7 +87,7 @@ struct AgentChatChange: Equatable, Identifiable {
 }
 
 struct AgentChatChanges: Equatable {
-    enum State: Equatable { case ready, undoing, undone }
+    enum State: Equatable { case ready, undoing, undone, recovered }
 
     var set: AgentChangeSet
     var items: [AgentChatChange]
@@ -267,6 +267,21 @@ final class AgentChatModel: ObservableObject {
             case "user": entries.append(AgentChatEntry(.asked(message.text)))
             case "assistant": if !message.text.isEmpty { appendText(message.text); closeReply() }
             case "tool", "error": entries.append(AgentChatEntry(.note(message.text)))
+            case "receipt":
+                if let set = message.changeSet {
+                    let targets = message.targets ?? []
+                    let items = targets.map { target in
+                        AgentChatChange(title: target.title ?? target.page.rawValue.capitalized,
+                                        detail: "Review")
+                    }
+                    let fallback = set.pages.sorted { $0.rawValue < $1.rawValue }.map {
+                        AgentChatChange(title: $0.rawValue.capitalized, detail: "Review")
+                    }
+                    entries.append(AgentChatEntry(.changes(AgentChatChanges(
+                        set: set, items: items.isEmpty ? fallback : items, steps: [], week: nil,
+                        state: .recovered))))
+                    entries.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
+                }
             default: break
             }
         }

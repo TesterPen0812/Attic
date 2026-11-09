@@ -256,6 +256,42 @@ final class AgentRunHostedTests: XCTestCase {
         XCTAssertEqual(undone, changeID)
     }
 
+    func testRelaunchRestoresReviewableCommittedReceipt() async {
+        let url = journalURL()
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let change = AgentChangeSet(id: UUID(), title: "Created tasks", pages: [.tasks], count: 1)
+        tools.change = change
+        let first = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: url,
+                                   undo: { _ in })
+        _ = first.send("Make a task", watching: false)
+        await wait { helper.inputs.count == 1 }
+        helper.emitLine(#"{"type":"result","is_error":false}"#)
+        await wait { !first.threadSnapshot().isRunning }
+
+        let reopened = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(reopened)
+        let receipts = chat.entries.compactMap { entry -> AgentChatChanges? in
+            if case let .changes(changes) = entry.content { return changes }
+            return nil
+        }
+        XCTAssertEqual(receipts.map(\.set), [change])
+        XCTAssertEqual(receipts.first?.state, .recovered, "History closures do not survive app relaunch")
+    }
+
+    func testRelaunchMarksInterruptedRunForReview() async {
+        let url = journalURL()
+        let first = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        _ = first.send("Still doing work", watching: false)
+        let restarted = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        XCTAssertTrue(restarted.threadSnapshot().entries.contains {
+            $0.role == "error" && $0.text.localizedCaseInsensitiveContains("interrupted")
+        })
+        first.cancel()
+    }
+
     func testCancelDuringHelperStartupStopsThePendingHelper() async {
         let helper = FakeRunHelper()
         helper.deferStart = true
