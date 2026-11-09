@@ -281,6 +281,7 @@ struct TasksPage: View {
             let page = motion.fadingOut == index ? 0 : motion.place(of: index) - motion.position
             return page * swipe.width
         }
+        model.rowPointer = pointer
         #if DEBUG
         pointer.keyboardControl = { [focusRequests] in focusRequests.current }
         pointer.keyboardControlRequests = focusRequests

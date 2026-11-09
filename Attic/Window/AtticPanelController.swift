@@ -2202,7 +2202,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Focus left in a field, and text typed in the add bar (kept in the
         // shell's TasksPageState), are not unsaved work; every other lock is.
         let keepsPages = uiState.interactionLockReasons
-            .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer])
+            .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer, .agentComposer])
         let importInFlight = canvasSession.imageImportProgress.map { $0.completedCount < $0.items.count } ?? false
         guard keepsPages.isEmpty,
               !noteDraft.isDirty,

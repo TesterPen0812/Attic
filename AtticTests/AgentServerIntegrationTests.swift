@@ -97,6 +97,110 @@ final class AgentServerIntegrationTests: XCTestCase {
         XCTAssertTrue(store.tasks.isEmpty)
     }
 
+    func testRunMCPBearerIsIsolatedFromExternalSettingsAndExpiresOnFinish() async throws {
+        let legacyToken = try AgentAccessTokenStore.generateToken()
+        let store = try makeTestStore()
+        let library = AtticLibrary(tasks: store)
+        let tasks = AgentTaskTools(store: store, library: library)
+        let actions = AgentActions(tasks: tasks)
+        let server = AgentServer(port: 0, bearerToken: legacyToken,
+                                 handler: MCPRequestHandler(tools: tasks, actions: actions))
+        defer { server.stop() }
+        XCTAssertEqual(server.state, .stopped)
+        let runToken = try server.beginAgentRun(title: "Work", watching: false)
+        let port = try await start(server)
+
+        let scoped = try await post(port, token: runToken, method: "tools/list")
+        XCTAssertEqual(scoped.status, 200)
+        let actionsList = try XCTUnwrap((scoped.json?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        XCTAssertTrue(actionsList.contains { $0["name"] as? String == "open_page" })
+        let deniedWhileOff = try await post(port, token: legacyToken, method: "tools/list")
+        XCTAssertEqual(deniedWhileOff.status, 401,
+                       "Starting a chat must not opt external agents into Settings access")
+
+        server.setExternalAccessEnabled(true)
+        let external = try await post(port, token: legacyToken, method: "tools/list")
+        XCTAssertEqual(external.status, 200)
+        let legacyList = try XCTUnwrap((external.json?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        XCTAssertFalse(legacyList.contains { $0["name"] as? String == "open_page" })
+        server.setExternalAccessEnabled(false)
+        let deniedAgain = try await post(port, token: legacyToken, method: "tools/list")
+        XCTAssertEqual(deniedAgain.status, 401)
+
+        let created = try await post(port, token: runToken, method: "tools/call", params: [
+            "name": "create_task", "arguments": ["title": "Via run bearer"]])
+        XCTAssertEqual(created.status, 200)
+        XCTAssertEqual((created.json?["result"] as? [String: Any])?["isError"] as? Bool, false)
+        XCTAssertEqual(store.tasks.count, 1)
+        let changeSet = try XCTUnwrap(server.runChangeSet(token: runToken))
+        XCTAssertEqual(changeSet.count, 1)
+
+        server.finishAgentRun(token: runToken)
+        XCTAssertEqual(server.state, .stopped)
+        let reversed = try await server.undoFinishedAgentChangeSet(id: changeSet.id)
+        XCTAssertEqual(reversed.undone, 1)
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testLiveChatToolBridgeReadsChangesApprovesAndUndoesOnItsBoundPort() async throws {
+        let store = try makeTestStore()
+        let library = AtticLibrary(tasks: store)
+        let tasks = AgentTaskTools(store: store, library: library)
+        let server = AgentServer(port: 0, bearerToken: try AgentAccessTokenStore.generateToken(),
+                                 handler: MCPRequestHandler(tools: tasks, actions: AgentActions(tasks: tasks)))
+        defer { server.stop() }
+        let bridge = AgentRunMCPServer.live(server: server)
+        let address = try await bridge.open(title: "Test chat", watching: false)
+        let port = try XCTUnwrap(server.boundPort)
+        XCTAssertEqual(address.url, "http://127.0.0.1:\(port)/mcp")
+
+        let read = try await post(port, token: address.token, method: "tools/call", params: [
+            "name": "list_tasks", "arguments": [:]])
+        XCTAssertEqual((read.json?["result"] as? [String: Any])?["isError"] as? Bool, false)
+        let created = try await post(port, token: address.token, method: "tools/call", params: [
+            "name": "create_task", "arguments": ["title": "Test-run task"]])
+        XCTAssertEqual((created.json?["result"] as? [String: Any])?["isError"] as? Bool, false)
+        let taskID = try XCTUnwrap(store.tasks.first?.id)
+        XCTAssertEqual(store.tasks.first?.title, "Test-run task")
+
+        let deleting = Task { try await post(port, token: address.token, method: "tools/call", params: [
+            "name": "delete_task", "arguments": ["id": taskID.uuidString]]) }
+        await eventually { bridge.pendingApprovals().count == 1 }
+        XCTAssertNotNil(store.task(withID: taskID), "Delete must await trusted owner approval")
+        let approval = try XCTUnwrap(bridge.pendingApprovals().first)
+        try await bridge.resolve(approval: approval.id, allow: true)
+        let deleted = try await deleting.value
+        XCTAssertEqual((deleted.json?["result"] as? [String: Any])?["isError"] as? Bool, false)
+        XCTAssertNil(store.task(withID: taskID))
+
+        let changes = try XCTUnwrap(bridge.changeSet())
+        XCTAssertEqual(changes.count, 2)
+        bridge.close()
+        XCTAssertEqual(server.state, .stopped)
+        let undo = try await server.undoFinishedAgentChangeSet(id: changes.id)
+        XCTAssertEqual(undo.undone, 2)
+        XCTAssertTrue(undo.failures.isEmpty)
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testChatOnlyRunNeverNeedsPersistentExternalCredential() async throws {
+        let store = try makeTestStore()
+        let tools = AgentTaskTools(store: store)
+        let actions = AgentActions(tasks: tools)
+        let server = AgentServer(port: 0, handler: MCPRequestHandler(tools: tools, actions: actions),
+                                 tokenProvider: { throw AgentAccessTokenStore.Failure.invalidCredential })
+        defer { server.stop() }
+        let token = try server.beginAgentRun(title: "Chat only", watching: false)
+        let port = try await start(server)
+        XCTAssertEqual(server.state, .running,
+                       "A chat run must work even when the persistent credential is unavailable")
+        let scoped = try await post(port, token: token, method: "tools/list")
+        XCTAssertEqual(scoped.status, 200)
+        XCTAssertTrue(server.pendingRunApprovals(token: token).isEmpty)
+        server.finishAgentRun(token: token)
+        XCTAssertEqual(server.state, .stopped)
+    }
+
     func testRealHTTPHandshakeToolDiscoveryAndReadOnlyCall() async throws {
         let token = try AgentAccessTokenStore.generateToken()
         let store = try makeTestStore()

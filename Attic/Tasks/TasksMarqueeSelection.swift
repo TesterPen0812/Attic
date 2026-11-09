@@ -74,7 +74,7 @@ final class TasksMarqueeSelection {
         return measured.map { MarqueeItem(id: $0.key, rect: $0.value) }
     }
 
-    private static func rowIDs(in model: TasksPageModel, tab: TasksTab) -> [UUID] {
+    static func rowIDs(in model: TasksPageModel, tab: TasksTab) -> [UUID] {
         // Done includes its paged archive and today's finished rows. The
         // Now/Later row source is empty there: treating that as no rows
         // would take normal row clicks and drag-out as empty-space drags.

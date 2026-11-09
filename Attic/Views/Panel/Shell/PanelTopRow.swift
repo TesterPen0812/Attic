@@ -88,6 +88,10 @@ enum PanelTopRowLayout {
 final class PanelTopRowState: ObservableObject {
     /// The pages whose search is open.
     @Published private(set) var searchingPages: Set<PanelPage> = []
+    /// The floating chat is open over the panel: the top row's controls fold
+    /// away, so they don't show through its blur as dead buttons beside the
+    /// chat's own (Accepted 2026-11-06: the panel blurs, controls float on it).
+    @Published var chatOver = false
 
     /// Each page's controls, from the panel's left and right edges.
     struct Footprint: Equatable {
@@ -146,6 +150,9 @@ final class PanelTopRowState: ObservableObject {
     }
 
     func isSearching(_ page: PanelPage) -> Bool { searchingPages.contains(page) }
+
+    /// The page's top-row controls are folded away: by its search or the chat.
+    func isAway(_ page: PanelPage) -> Bool { isSearching(page) || chatOver }
 
     /// The pages whose top row is dimmed (Draw's D6: during a stroke the
     /// shell's Pin, ••• and Search dim with the page's own controls).
@@ -399,6 +406,7 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                     .environment(\.panelTopRowPage, page)
             }
         }
+        .modifier(PanelTopRowChatFold(state: state, page: page))
         .frame(height: control)
         .padding(.top, layout.chromeInsets.top)
         .padding(.leading, layout.chromeInsets.leading)
@@ -522,6 +530,31 @@ struct PanelTopRowMoreButton: View {
             .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
             .accessibilityHint(String(localized: "Opens a menu"))
             .accessibilityIdentifier("panel-more-button")
+        }
+    }
+}
+
+/// A page's top row folds away while the chat floats over the panel. Only
+/// this observes the chat, so the row's own body gains no work.
+private struct PanelTopRowChatFold: ViewModifier {
+    let state: PanelTopRowState?
+    let page: PanelPage
+
+    func body(content: Content) -> some View {
+        if let state {
+            Observer(state: state, page: page) { content }
+        } else {
+            content
+        }
+    }
+
+    private struct Observer<Row: View>: View {
+        @ObservedObject var state: PanelTopRowState
+        let page: PanelPage
+        @ViewBuilder var row: () -> Row
+
+        var body: some View {
+            PanelControlFold(folded: state.chatOver, preservesUnfoldedAccessibility: page == .canvas, content: row)
         }
     }
 }

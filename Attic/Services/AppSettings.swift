@@ -86,6 +86,7 @@ final class AppSettings: ObservableObject {
         static let panelTintLength = AppearanceMigration.Key.tintLength
         static let appearance = AppearanceMigration.Key.appearance
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
+        static let inAppAgentBackend = "inAppAgentBackend"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
         static let panelCornerSize = "panelCornerSize"
@@ -199,6 +200,10 @@ final class AppSettings: ObservableObject {
 
     @Published var isAgentAccessEnabled: Bool {
         didSet { defaults.set(isAgentAccessEnabled, forKey: Key.isAgentAccessEnabled) }
+    }
+
+    @Published var inAppAgentBackend: AgentBackend {
+        didSet { defaults.set(inAppAgentBackend.rawValue, forKey: Key.inAppAgentBackend) }
     }
 
     /// The light haptic tick when a task is completed or a dragged item
@@ -411,6 +416,7 @@ final class AppSettings: ObservableObject {
             defaults.set(true, forKey: Key.hasAdoptedAgentAccessOptIn)
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
+        inAppAgentBackend = AgentBackend(rawValue: defaults.string(forKey: Key.inAppAgentBackend) ?? "") ?? .claude
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         nextEventInNow = (defaults.object(forKey: Key.nextEventInNow) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true

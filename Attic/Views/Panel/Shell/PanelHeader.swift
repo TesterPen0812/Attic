@@ -134,7 +134,7 @@ private struct PanelPinFoldObserver<Content: View>: View {
     @State private var gone = false
 
     var body: some View {
-        let searching = state.isSearching(page)
+        let searching = state.isAway(page)
         content()
             .environment(\.atticControlAway, away)
             .environment(\.atticControlGone, gone)
@@ -154,7 +154,7 @@ private struct PanelPinFoldObserver<Content: View>: View {
         guard searching != away else { return }
         if searching {
             withAnimation(animation(true)) { away = true } completion: {
-                if state.isSearching(page) { gone = true }
+                if state.isAway(page) { gone = true }
             }
         } else {
             // Glass first (without animation), then it fades back in.

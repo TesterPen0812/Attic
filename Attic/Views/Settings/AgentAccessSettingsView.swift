@@ -7,9 +7,20 @@ struct AgentAccessSettingsView: View {
 
     @State private var didCopyAgentSetupPrompt = false
     @State private var didCopyEndpoint = false
+    @State private var installedBackends: Set<AgentBackend>?
+    @State private var didCheckBackends = false
 
     var body: some View {
         SettingsPage(section: .agentAccess) {
+            SettingsGroup(title: String(localized: "In-app agent")) {
+                AtticPopUpRow(
+                    label: String(localized: "Agent"),
+                    choices: AgentBackend.allCases.map { ($0, backendLabel($0)) },
+                    selection: $settings.inAppAgentBackend,
+                    identifier: "setting-in-app-agent-backend"
+                )
+            }
+
             SettingsGroup(
                 title: String(localized: "Access"),
                 footnote: String(localized: "Local agents can read, create and update tasks and notes. Their deletes go to Recently Deleted, never permanently.")
@@ -72,6 +83,16 @@ struct AgentAccessSettingsView: View {
                 }
             }
         }
+        .task {
+            installedBackends = await AgentBackendDiscovery.installed()
+            didCheckBackends = true
+        }
+    }
+
+    private func backendLabel(_ backend: AgentBackend) -> String {
+        guard didCheckBackends else { return backend.title }
+        guard let installedBackends else { return "\(backend.title) · Unavailable" }
+        return "\(backend.title) · \(installedBackends.contains(backend) ? "Installed" : "Not installed")"
     }
 
     private var endpoint: String {

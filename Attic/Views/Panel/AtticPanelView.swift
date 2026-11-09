@@ -145,7 +145,7 @@ struct AtticPanelView: View {
             // The bottom bar every page shares (owner, 2026-10-31): drawn
             // once, so a page switch never moves, fades or rebuilds it.
             if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
-                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout)
+                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout, agentChat: uiState.agentChat)
             }
         }
         .overlay {
@@ -153,6 +153,17 @@ struct AtticPanelView: View {
             // while the bar's own pills and "+" fade out under it.
             if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
                 ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome, room: composerState.room)
+            }
+        }
+        .overlay {
+            // The floating agent chat, over the page and its bars. Closed, it
+            // is an empty view, whatever its run is doing.
+            if uiState.agentChat.isConnected, uiState.isPageContentLoaded {
+                AgentChatHost(bar: uiState.agentChat.bar, room: composerState.room, model: uiState.agentChat, layout: pageLayout,
+                              page: currentPage, chrome: sharedChrome,
+                              rows: { [tasksPageState] ids in tasksPageState.builtModel?.agentRowFrames(ids) ?? [] },
+                              selectPage: selectPage,
+                              setTyping: { [uiState] in uiState.setInteractionLock(.agentComposer, isActive: $0) })
             }
         }
         .overlay(alignment: .topLeading) {
