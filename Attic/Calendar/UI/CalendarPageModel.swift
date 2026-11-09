@@ -52,6 +52,8 @@ final class CalendarPageModel: ObservableObject {
     private var searchCacheComplete = true
     private var sourceGeneration = 0
     @Published private(set) var isLoadingEvents = false
+    /// The ••• menu's Day: the selected day by the clock (Accepted 2026-11-09).
+    @Published private(set) var isDayView = false
     private var eventRequest: DateInterval? {
         didSet { isLoadingEvents = eventRequest != nil }
     }
@@ -169,6 +171,18 @@ final class CalendarPageModel: ObservableObject {
     func shift(by n: Int, weekView: Bool) {
         select(CalendarMonthMath.shifted(snapshot.selected, by: n, weekView: weekView, today: snapshot.today, calendar: calendar))
     }
+
+    func setDayView(_ on: Bool) {
+        if isDayView != on { isDayView = on }
+    }
+
+    /// The Day view's ‹ ›: one day.
+    func shiftDay(by n: Int) {
+        select(CalendarMonthMath.adding(days: n, to: snapshot.selected, calendar: calendar))
+    }
+
+    /// The model's clock (a pinned one in tests).
+    var currentTime: Date { now() }
 
     /// Typing in the search: the agenda follows after `searchDelay`;
     /// clearing it (or ending the search) follows at once.

@@ -325,20 +325,23 @@ final class IslandTopRowRefineTests: XCTestCase {
         XCTAssertTrue(chrome.more(on: .tasks).isEmpty)
     }
 
-    func testCalendarOffersTheViewsItHas() {
-        var asked: [Bool] = [], today = 0
-        let commands = CalendarPage.moreCommands(isWeekView: true, isOnToday: false, setWeekView: { asked.append($0) },
+    func testCalendarOffersMonthWeekDayAndGoToToday() {
+        var asked: [CalendarViewMode] = [], today = 0
+        let commands = CalendarPage.moreCommands(view: .week, isOnToday: false, setView: { asked.append($0) },
                                                  goToToday: { today += 1 })
-        XCTAssertEqual(titles(commands), ["View", "Month", "Week", "Go to Today"], "no Day: the page has no such view")
+        XCTAssertEqual(titles(commands), ["View", "Month", "Week", "Day", "Go to Today"])
         XCTAssertEqual(commands[1].state, .off)
         XCTAssertEqual(commands[2].state, .on)
+        XCTAssertEqual(commands[3].state, .off)
         commands[1].action()
         commands[3].action()
-        XCTAssertEqual(asked, [false])
+        commands[4].action()
+        XCTAssertEqual(asked, [.month, .day])
         XCTAssertEqual(today, 1)
-        let onToday = CalendarPage.moreCommands(isWeekView: false, isOnToday: true, setWeekView: { _ in }, goToToday: {})
-        XCTAssertEqual(onToday[1].state, .on)
-        XCTAssertTrue(onToday[3].isDisabled)
+        let onDay = CalendarPage.moreCommands(view: .day, isOnToday: true, setView: { _ in }, goToToday: {})
+        XCTAssertEqual(onDay[3].state, .on)
+        XCTAssertEqual(onDay[2].state, .off)
+        XCTAssertTrue(onDay[4].isDisabled)
     }
 
     func testTheNotesListOffersItsLayoutsAndItsHistory() {

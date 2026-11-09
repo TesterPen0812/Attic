@@ -360,6 +360,12 @@ extension EnvironmentValues {
 }
 
 struct PanelResumeScrollKeeper: NSViewRepresentable {
+    /// Where a page about to mount its scroller wants it: the keeper would
+    /// otherwise put back the last offset it saved.
+    static func remember(_ y: CGFloat, key: String, in defaults: UserDefaults?) {
+        defaults?.set(Double(y), forKey: "AtticPanel.scroll." + key)
+    }
+
     let key: String
     var ready = true
     var navigationID = ""

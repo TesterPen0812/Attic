@@ -6,13 +6,16 @@ import SwiftUI
 struct CalendarMonthTitle: View {
     let month: CalendarMonth
     let isWeekView: Bool
+    /// The Day view's day: the title reads "Mon 5  October" and goes back
+    /// to Week.
+    var dayView: DueDay?
     let onToggleWeekView: () -> Void
 
     @Environment(\.atticDesign) private var design
 
     var body: some View {
         let tokens = design.tokens
-        let title = Self.monthTitle(month)
+        let title = dayView.map { Self.dayTitle($0) } ?? Self.monthTitle(month)
         Button(action: onToggleWeekView) {
             HStack(spacing: CalendarDesign.titleGap) {
                 Text(verbatim: title.month)
@@ -31,10 +34,18 @@ struct CalendarMonthTitle: View {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .atticOwnFocusRing(.rounded(radius: AtticRadius.header, height: AtticControlSize.headerControl))
-        .help(isWeekView ? String(localized: "Show month") : String(localized: "Show week only"))
+        .help(dayView != nil ? String(localized: "Show week") : isWeekView ? String(localized: "Show month") : String(localized: "Show week only"))
         .accessibilityLabel("\(title.month) \(title.year)")
-        .accessibilityValue(isWeekView ? String(localized: "Week") : String(localized: "Month"))
+        .accessibilityValue(dayView != nil ? String(localized: "Day") : isWeekView ? String(localized: "Week") : String(localized: "Month"))
         .accessibilityIdentifier("calendar-month-pill")
+    }
+
+    /// "Mon 5", "October": the short weekday and date, then the month.
+    static func dayTitle(_ day: DueDay, locale: Locale = .current) -> (month: String, year: String) {
+        let calendar = CalendarMonthMath.calendar()
+        let date = day.startDate(in: calendar) ?? Date()
+        return (TaskRowPresentation.format(date, template: "EEEd", calendar: calendar, locale: locale),
+                TaskRowPresentation.format(date, template: "LLLL", calendar: calendar, locale: locale))
     }
 
     /// "October", "2026": the month's stand-alone name and the year without
@@ -52,6 +63,7 @@ struct CalendarMonthTitle: View {
 /// 21 pt cells and 3 pt inset.
 struct CalendarMonthArrows: View {
     let isWeekView: Bool
+    var isDayView = false
     let onPrevious: () -> Void
     let onNext: () -> Void
     var todayShown = false
@@ -61,7 +73,7 @@ struct CalendarMonthArrows: View {
 
     var body: some View {
         HStack(spacing: CalendarDesign.arrowsGap) {
-            arrow("chevron.left", label: isWeekView ? "Previous week" : "Previous month", action: onPrevious)
+            arrow("chevron.left", label: isDayView ? "Previous day" : isWeekView ? "Previous week" : "Previous month", action: onPrevious)
                 .accessibilityIdentifier("calendar-previous")
             if todayShown {
                 Button(action: onToday) {
@@ -78,7 +90,7 @@ struct CalendarMonthArrows: View {
                 .accessibilityIdentifier("calendar-today")
                 .transition(.opacity)
             }
-            arrow("chevron.right", label: isWeekView ? "Next week" : "Next month", action: onNext)
+            arrow("chevron.right", label: isDayView ? "Next day" : isWeekView ? "Next week" : "Next month", action: onNext)
                 .accessibilityIdentifier("calendar-next")
         }
         .padding(AtticPageButtonMetrics.inset)

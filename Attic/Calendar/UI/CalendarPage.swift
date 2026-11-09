@@ -24,6 +24,7 @@ struct CalendarPage: View {
     private var isReallyVisible: Bool { isCurrent && panelIsVisible }
     @Environment(\.atticPanelToasts) private var toasts
     @Environment(\.panelComposer) private var composer
+    @Environment(\.panelResumeDefaults) private var resumeDefaults
     @State private var scrollPosition = ScrollPosition(y: 0)
     @State private var flags = ScrollFlags()
     @State private var searchOpen = false
@@ -53,8 +54,15 @@ struct CalendarPage: View {
             VStack(spacing: 0) {
                 Color.clear.frame(height: layout.headerBottom)
                 CalendarWeekdayRow()
-                GeometryReader { proxy in
-                    scroller(snapshot, viewport: proxy.size.height)
+                if showsDay {
+                    CalendarDayView(model: model, snapshot: snapshot, eventRows: model.eventRows, taskRows: model.taskRows,
+                                    taskActions: taskActions, focus: $taskFocus, focused: taskFocus,
+                                    isLive: isReallyVisible, isLoadingEvents: model.isLoadingEvents,
+                                    onSelectDay: { day in afterClosingEvent { model.select(day) } })
+                } else {
+                    GeometryReader { proxy in
+                        scroller(snapshot, viewport: proxy.size.height)
+                    }
                 }
             }
             topRow(snapshot)
@@ -197,12 +205,15 @@ struct CalendarPage: View {
     /// rest away and the field fills the row.
     private func topRow(_ snapshot: CalendarPageSnapshot) -> some View {
         PanelTopRow(page: .calendar, layout: layout, searchOpen: searchOpen, moreCommands: { moreCommands() }) {
-            CalendarMonthTitle(month: snapshot.month, isWeekView: flags.weekView,
-                               onToggleWeekView: { toggleWeekView(weekCount: snapshot.weeks.count) })
+            CalendarMonthTitle(month: snapshot.month, isWeekView: flags.weekView, dayView: showsDay ? snapshot.selected : nil,
+                               onToggleWeekView: {
+                                   if showsDay { afterClosingEvent { setView(.week) } }
+                                   else { toggleWeekView(weekCount: snapshot.weeks.count) }
+                               })
         } pageSwitch: {
-            CalendarMonthArrows(isWeekView: flags.weekView,
-                                onPrevious: { afterClosingEvent { model.shift(by: -1, weekView: flags.weekView) } },
-                                onNext: { afterClosingEvent { model.shift(by: 1, weekView: flags.weekView) } },
+            CalendarMonthArrows(isWeekView: flags.weekView, isDayView: showsDay,
+                                onPrevious: { afterClosingEvent { step(-1) } },
+                                onNext: { afterClosingEvent { step(1) } },
                                 todayShown: CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today),
                                 onToday: { afterClosingEvent(model.goToToday) })
         } search: {
@@ -230,29 +241,60 @@ struct CalendarPage: View {
         }
     }
 
-    /// ••• (Accepted 2026-11-05, "Page-specific options"): the views the
-    /// page has, as read when it opens, and going to today.
+    /// The Day view, unless a search has the page.
+    private var showsDay: Bool { model.isDayView && !searchOpen && !model.snapshot.isSearching }
+
+    private var currentView: CalendarViewMode { showsDay ? .day : flags.weekView ? .week : .month }
+
+    /// ‹ ›: a day in the Day view, otherwise a week or a month.
+    private func step(_ n: Int) {
+        if showsDay { model.shiftDay(by: n) }
+        else { model.shift(by: n, weekView: flags.weekView) }
+    }
+
+    /// ••• (Accepted 2026-11-05, "Page-specific options"; Day, 2026-11-09):
+    /// the views the page has, as read when it opens, and going to today.
     private func moreCommands() -> [AtticMenuCommand] {
         let snapshot = model.snapshot
-        return Self.moreCommands(isWeekView: flags.weekView, isOnToday: snapshot.selected == snapshot.today,
-                                 setWeekView: { week in
-                                     if week != flags.weekView { toggleWeekView(weekCount: model.snapshot.weeks.count) }
+        return Self.moreCommands(view: currentView, isOnToday: snapshot.selected == snapshot.today,
+                                 setView: { view in
+                                     // Leaving or entering Day replaces what an open event sits in.
+                                     if view == .day || model.isDayView { afterClosingEvent { setView(view) } }
+                                     else { setView(view) }
                                  },
                                  goToToday: { afterClosingEvent(model.goToToday) })
     }
 
-    /// Month and Week are the two views the grid has (the title folds one
-    /// into the other). There is no Day view: the agenda under the grid
-    /// lists every day, and offering Day would change nothing on screen.
-    static func moreCommands(isWeekView: Bool, isOnToday: Bool, setWeekView: @escaping (Bool) -> Void,
+    static func moreCommands(view: CalendarViewMode, isOnToday: Bool, setView: @escaping (CalendarViewMode) -> Void,
                              goToToday: @escaping () -> Void) -> [AtticMenuCommand] {
-        [
-            .header(String(localized: "View")),
-            AtticMenuCommand(verbatim: String(localized: "Month"), state: isWeekView ? .off : .on) { setWeekView(false) },
-            AtticMenuCommand(verbatim: String(localized: "Week"), state: isWeekView ? .on : .off) { setWeekView(true) },
-            AtticMenuCommand(verbatim: String(localized: "Go to Today"), shortcut: KeyboardShortcut("t", modifiers: .command),
-                             isDisabled: isOnToday, startsSection: true, action: goToToday)
+        var commands = [AtticMenuCommand.header(String(localized: "View"))]
+        let views: [(mode: CalendarViewMode, title: String)] = [
+            (.month, String(localized: "Month")), (.week, String(localized: "Week")), (.day, String(localized: "Day"))
         ]
+        for (mode, title) in views {
+            commands.append(AtticMenuCommand(verbatim: title, state: view == mode ? .on : .off) { setView(mode) })
+        }
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Go to Today"), shortcut: KeyboardShortcut("t", modifiers: .command),
+                                         isDisabled: isOnToday, startsSection: true, action: goToToday))
+        return commands
+    }
+
+    private func setView(_ view: CalendarViewMode) {
+        if view == .day {
+            model.setDayView(true)
+            return
+        }
+        let week = view == .week
+        guard model.isDayView else {
+            if week != flags.weekView { toggleWeekView(weekCount: model.snapshot.weeks.count) }
+            return
+        }
+        // The grid comes back already at the month or the week.
+        let target = week ? CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count) : 0
+        PanelResumeScrollKeeper.remember(target, key: "calendar", in: resumeDefaults)
+        flags = ScrollFlags(pinned: week, weekView: week)
+        scrollPosition.scrollTo(y: target)
+        model.setDayView(false)
     }
 
     private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {
@@ -261,6 +303,11 @@ struct CalendarPage: View {
 
     private func beginSearch() {
         afterClosingEvent {
+            // From Day, the agenda comes back folded to the week.
+            if model.isDayView {
+                PanelResumeScrollKeeper.remember(CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count),
+                                                 key: "calendar", in: resumeDefaults)
+            }
             searchOpen = true
             searchFocused = true
         }
@@ -316,6 +363,12 @@ struct CalendarPage: View {
         .padding(.horizontal, layout.chromeInsets.leading)
         .padding(.bottom, layout.chromeInsets.bottom)
     }
+}
+
+/// The views ••• offers. Month and Week are the two states of the grid (the
+/// title folds one into the other); Day replaces the grid with the hours.
+enum CalendarViewMode: Equatable {
+    case month, week, day
 }
 
 /// The agenda's mask, in the scrolled content: what lies under the selected

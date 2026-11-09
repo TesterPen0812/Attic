@@ -271,6 +271,238 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    // MARK: - Day view (Accepted 2026-11-09, Timeline)
+
+    private func timed(_ id: String, _ d: Int, _ start: (Int, Int), _ end: (Int, Int), month m: Int = 10) -> CalendarEvent {
+        CalendarEvent(id: id, title: "Event \(id)", start: date(2026, m, d, start.0, start.1), end: date(2026, m, d, end.0, end.1),
+                      isAllDay: false, location: nil, calendarTitle: "Home",
+                      colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9))
+    }
+
+    private func press(_ page: MountedPage, _ identifier: String, line: UInt = #line) throws {
+        let element = try XCTUnwrap(page.element(identifier), identifier, line: line)
+        XCTAssertTrue(element.accessibilityPerformPress?() ?? false, identifier, line: line)
+        page.settle(0.5)
+    }
+
+    private func withReducedMotion(_ body: () throws -> Void) rethrows {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try body()
+    }
+
+    func testDayViewReplacesTheGridWithTheHoursAndTheTitleReturnsToWeek() throws {
+        try withReducedMotion {
+            try withPage(events: [timed("a", 29, (14, 0), (15, 0))], height: 460) { page in
+                XCTAssertNil(page.element("calendar-day-scroll"), "Month is the page's first view")
+                page.model.setDayView(true)
+                page.settle(0.5)
+                XCTAssertNotNil(page.element("calendar-day-scroll"), "the hours")
+                XCTAssertNotNil(page.element("calendar-event-a"), "the event, on the hours")
+                XCTAssertTrue(page.tiles().isEmpty, "no agenda under the hours")
+                XCTAssertNotNil(page.element("calendar-day-2026-10-26"), "the selected week stays on top")
+                XCTAssertNil(page.element("calendar-day-2026-10-12"), "only that week")
+                let weekRow = try XCTUnwrap(page.frame("calendar-day-2026-10-29"))
+                let scroll = try XCTUnwrap(page.frame("calendar-day-scroll"))
+                XCTAssertGreaterThanOrEqual(weekRow.minY, scroll.maxY - 0.5, "the week is above the hours")
+
+                XCTAssertEqual(page.value("calendar-month-pill"), "Day")
+                try press(page, "calendar-month-pill")
+                XCTAssertFalse(page.model.isDayView, "the title goes back")
+                XCTAssertNil(page.element("calendar-day-scroll"))
+                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5,
+                               "to Week, not Month")
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week")
+            }
+        }
+    }
+
+    /// Leaving Day goes where it was asked, not to the offset the page last saved.
+    func testReturningFromDayIsNotUndoneByTheResumeKeeper() throws {
+        let suite = "CalendarDayResume-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        PanelResumeScrollKeeper.remember(0, key: "calendar", in: defaults)
+        try withReducedMotion {
+            try withPage(events: [], height: 460, resumeDefaults: defaults) { page in
+                page.model.setDayView(true)
+                page.settle(0.5)
+                try press(page, "calendar-month-pill")
+                page.settle(0.5)
+                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
+            }
+        }
+    }
+
+    func testDayArrowsMoveOneDayAcrossAMonthAndGoToTodayReturns() throws {
+        try withReducedMotion {
+            try withPage(events: [], height: 460) { page in
+                page.model.setDayView(true)
+                page.settle(0.5)
+                XCTAssertNotNil(page.element(label: "Next day"))
+                XCTAssertNotNil(page.element(label: "Previous day"))
+                try press(page, "calendar-next")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 30))
+                try press(page, "calendar-next")
+                try press(page, "calendar-next")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 11, 1), "over the month's end")
+                XCTAssertTrue(page.model.isDayView)
+                try press(page, "calendar-previous")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31))
+                try press(page, "calendar-today")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 29))
+            }
+        }
+    }
+
+    func testDayOpensAtNowOrJustBeforeTheFirstEvent() throws {
+        let hour = CalendarDayDesign.hourHeight
+        try withReducedMotion {
+            try withPage(events: [timed("a", 30, (9, 0), (10, 0)), timed("late", 1, (23, 0), (23, 30), month: 11)], height: 460) { page in
+                page.model.setDayView(true)
+                page.settle(0.5)
+                XCTAssertEqual(page.hoursOffset, 11 * hour, accuracy: 0.5, "today: an hour before noon")
+                page.model.shiftDay(by: 1)
+                page.settle(0.5)
+                XCTAssertEqual(page.hoursOffset, 8.5 * hour, accuracy: 0.5, "another day: half an hour before its first event")
+                page.model.shiftDay(by: 1)
+                page.settle(0.5)
+                XCTAssertEqual(page.hoursOffset, 8 * hour, accuracy: 0.5, "an empty day: the morning")
+                page.model.shiftDay(by: 1)
+                page.settle(0.5)
+                let scrollable = page.hoursOffset
+                XCTAssertGreaterThan(scrollable, 15 * hour, "a late event: at the end of the day")
+                XCTAssertLessThanOrEqual(scrollable, 24 * hour, "kept inside what scrolls")
+            }
+        }
+    }
+
+    func testAllDayEventsAndTasksSitBetweenTheWeekAndTheHours() throws {
+        let id = UUID()
+        let allDay = CalendarEvent(id: "all", title: "Holiday", start: date(2026, 10, 29), end: date(2026, 10, 30),
+                                   isAllDay: true, location: nil, calendarTitle: "Home",
+                                   colour: CalendarEventColour(red: 0.9, green: 0.4, blue: 0.2))
+        try withReducedMotion {
+            try withPage(events: [allDay, timed("t", 29, (13, 0), (14, 0))], seed: seedAgendaTask(id), height: 460) { page in
+                page.model.setDayView(true)
+                page.settle(0.5)
+                let top = try XCTUnwrap(page.frame("calendar-day-top"), "the tasks and all-day events")
+                let week = try XCTUnwrap(page.frame("calendar-day-2026-10-29"))
+                let scroll = try XCTUnwrap(page.frame("calendar-day-scroll"))
+                XCTAssertGreaterThanOrEqual(week.minY, top.maxY - 0.5, "under the week")
+                XCTAssertGreaterThanOrEqual(top.minY, scroll.maxY - 0.5, "above the hours")
+                let event = try XCTUnwrap(page.frame("calendar-event-all"))
+                let task = try XCTUnwrap(page.frame("calendar-task-\(id.uuidString)"))
+                XCTAssertTrue(top.insetBy(dx: -1, dy: -1).contains(CGPoint(x: event.midX, y: event.midY)), "the all-day event")
+                XCTAssertGreaterThanOrEqual(event.minY, task.maxY - 0.5, "all-day first, then tasks")
+                XCTAssertTrue(top.insetBy(dx: -1, dy: -1).contains(CGPoint(x: task.midX, y: task.midY)), "the task")
+                XCTAssertNotNil(page.element("calendar-event-t"), "the timed event stays on the hours")
+            }
+        }
+    }
+
+    func testOverlappingEventsSitSideBySideOnThePage() throws {
+        try withReducedMotion {
+            try withPage(events: [timed("a", 30, (9, 0), (11, 0)), timed("b", 30, (9, 30), (10, 30))], height: 460) { page in
+                page.model.select(day(2026, 10, 30))
+                page.model.setDayView(true)
+                page.settle(0.5)
+                let a = try XCTUnwrap(page.frame("calendar-event-a"))
+                let b = try XCTUnwrap(page.frame("calendar-event-b"))
+                XCTAssertLessThanOrEqual(a.maxX, b.minX + 0.5, "side by side")
+                XCTAssertEqual(a.width, b.width, accuracy: 1)
+            }
+        }
+    }
+
+    /// A click opens the event where it is; hours after it move down, and
+    /// nothing is covered.
+    func testClickingAnEventOpensItInPlaceAndLaterEventsMoveDown() throws {
+        try withReducedMotion {
+            try withPage(events: [timed("a", 30, (9, 0), (9, 30)), timed("b", 30, (9, 30), (10, 30))], height: 900) { page in
+                page.model.select(day(2026, 10, 30))
+                page.model.setDayView(true)
+                page.settle(0.5)
+                let closedB = try XCTUnwrap(page.frame("calendar-event-b"))
+                try press(page, "calendar-event-a")
+                XCTAssertEqual(page.model.eventRows.rowID, "a")
+                XCTAssertEqual(page.model.eventRows.rowDay, day(2026, 10, 30))
+                XCTAssertNotNil(page.element("calendar-event-duration-a"), "the read-only details, in place")
+                XCTAssertNotNil(page.element("calendar-event-open-a"), "another calendar's event opens in Calendar")
+                page.settle(0.5)
+                let openA = try XCTUnwrap(page.frame("calendar-event-a"))
+                let openB = try XCTUnwrap(page.frame("calendar-event-b"))
+                XCTAssertLessThan(openB.maxY, closedB.maxY - 5, "the next event moved down")
+                XCTAssertLessThanOrEqual(openB.maxY, openA.minY + 0.5, "and is not covered")
+            }
+        }
+    }
+
+    /// Selecting an event uses the page's edit path: the same writer, saved on close.
+    func testEditingAnEventInDayViewSavesThroughTheWriterOnClose() throws {
+        let backend = FakeCalendarEventWriteStore()
+        backend.availableCalendars = [CalendarWriteCalendar(id: "test", title: "Test",
+            colour: .init(red: 0.2, green: 0.5, blue: 0.9), sourceID: "fake", sourceTitle: "Fake", isWritable: true)]
+        let undo = UndoRoute()
+        let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(),
+            undoRoute: undo, notificationCenter: NotificationCenter())
+        let start = date(2026, 10, 30, 9)
+        let owned = try writer.create(CalendarEventDraft(title: "Original", start: start, length: 3600,
+                                                         calendarID: "test", timeZoneID: "Europe/London"))
+        let event = CalendarEvent(id: owned.occurrenceID, title: "Original", start: start, end: start.addingTimeInterval(3600),
+                                  isAllDay: false, location: nil, calendarTitle: "Test",
+                                  colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+        try withReducedMotion {
+            try withPage(events: [event], height: 900, makeWriter: { writer }) { page in
+                page.model.select(day(2026, 10, 30))
+                page.model.setDayView(true)
+                page.settle(0.5)
+                try press(page, "calendar-event-\(event.id)")
+                page.settle(0.5)
+                XCTAssertTrue(page.model.eventRows.canEdit, "Attic's own event edits in place")
+                XCTAssertNotNil(page.element("calendar-event-title-\(event.id)"))
+                page.model.eventRows.title = "Renamed"
+                page.settle(0.2)
+                try press(page, "calendar-next")
+                XCTAssertEqual(backend.events.values.first?.draft.title, "Renamed", "moving day saves the edit, as the page does")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31))
+            }
+        }
+    }
+
+    func testDayTimelineIsBuiltLazilyAndScrollingWithinAnHourDoesNotRebuildIt() throws {
+        try withReducedMotion {
+            try withPage(events: [timed("a", 30, (9, 0), (10, 0))], height: 460) { page in
+                page.model.select(day(2026, 10, 30))
+                page.model.setDayView(true)
+                page.settle(0.6)
+                XCTAssertLessThan(CalendarDayView.builtHours, 25, "only the hours near the view")
+                XCTAssertGreaterThan(CalendarDayView.builtHours, 6, "and enough to fill it")
+                let start = page.hoursOffset
+                let builds = CalendarDayView.timelineBuilds
+                let scroller = try XCTUnwrap(page.scroller)
+                scroller.contentView.scroll(to: NSPoint(x: 0, y: start + 4))
+                scroller.reflectScrolledClipView(scroller.contentView)
+                page.settle(0.3)
+                XCTAssertEqual(CalendarDayView.timelineBuilds, builds, "a scroll inside the hour changes nothing")
+                let quiet = CalendarDayView.timelineBuilds
+                page.settle(0.4)
+                XCTAssertEqual(CalendarDayView.timelineBuilds, quiet, "settles (no layout loop)")
+            }
+        }
+    }
+
+    func testDayLineTicksOnlyForTodayAndOnlyOnScreen() {
+        let today = day(2026, 10, 29)
+        XCTAssertTrue(CalendarDayView.ticks(day: today, today: today, isLive: true))
+        XCTAssertFalse(CalendarDayView.ticks(day: today, today: today, isLive: false), "a hidden panel does no clock work")
+        XCTAssertFalse(CalendarDayView.ticks(day: day(2026, 10, 30), today: today, isLive: true), "no line on another day")
+    }
+
     // MARK: - Folding (item 14, owner rec2 2026-10-31)
 
     /// While the agenda scrolls the grid away, every frame draws the selected
@@ -526,6 +758,19 @@ final class CalendarPageHostedTests: XCTestCase {
 
         var scroller: NSScrollView? { Self.scrollView(in: host) }
 
+        /// The Day view's hours: its tallest scroller.
+        var hoursOffset: CGFloat {
+            host.layoutSubtreeIfNeeded()
+            let hours = Self.scrollViews(in: host).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+            return hours?.contentView.bounds.origin.y ?? -1
+        }
+
+        /// An element's frame in window coordinates (y grows upward).
+        func frame(_ identifier: String) -> CGRect? {
+            guard let element = self.element(identifier) as? NSAccessibilityElementProtocol else { return nil }
+            return window.convertFromScreen(element.accessibilityFrame())
+        }
+
         /// The top of the scroller (where the grid starts), in the host's
         /// flipped coordinates.
         var scrollerTop: CGFloat? {
@@ -561,6 +806,11 @@ final class CalendarPageHostedTests: XCTestCase {
 
         func element(_ identifier: String) -> AnyObject? { matching(identifier).first }
 
+        func value(_ identifier: String) -> String? {
+            // SwiftUI's node answers the protocol's accessibilityValue().
+            (element(identifier) as? NSObject)?.perform(Selector(("accessibilityValue")))?.takeUnretainedValue() as? String
+        }
+
         func element(label: String) -> AnyObject? {
             host.layoutSubtreeIfNeeded()
             return Self.elements(host).first { ($0.accessibilityLabel?() ?? "") == label }
@@ -587,6 +837,10 @@ final class CalendarPageHostedTests: XCTestCase {
             return [root] + children.flatMap { elements($0 as AnyObject) }
         }
 
+        private static func scrollViews(in view: NSView) -> [NSScrollView] {
+            ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+        }
+
         private static func scrollView(in view: NSView) -> NSScrollView? {
             if let scroll = view as? NSScrollView, scroll.documentView != nil { return scroll }
             for sub in view.subviews { if let found = scrollView(in: sub) { return found } }
@@ -602,12 +856,15 @@ final class CalendarPageHostedTests: XCTestCase {
 
     private func withPage(events: [CalendarEvent], seed: (TaskStore) throws -> Void = { _ in },
                           taskActions: ((TaskStore) -> CalendarTaskRowActions)? = nil, keyWindow: Bool = false,
+                          height: CGFloat = 900, makeWriter: (() throws -> CalendarEventWriter)? = nil,
+                          resumeDefaults: UserDefaults? = nil,
                           _ body: (MountedPage) throws -> Void) throws {
         let store = try makeTestStore()
         try seed(store)
         let source = CalendarEventSourceStub(events: events)
-        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
-        let size = CGSize(width: 320, height: 900)
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) },
+                                      makeWriter: makeWriter)
+        let size = CGSize(width: 320, height: height)
         let layout = PanelPageLayout(cornerSize: 28, panelSize: size)
         var design = AtticDesignContext(mode: .light)
         design.reduceMotion = AtticMotionPreference.systemReduceMotionOverride ?? false
@@ -615,6 +872,7 @@ final class CalendarPageHostedTests: XCTestCase {
         let page = CalendarPage(model: model, layout: layout,
                                 taskActions: taskActions?(store) ?? CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
                                 onNewTask: { _ in })
+            .environment(\.panelResumeDefaults, resumeDefaults)
             .atticDesign(design)
             .frame(width: size.width, height: size.height)
         let window: NSWindow = keyWindow
