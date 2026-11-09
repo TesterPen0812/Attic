@@ -67,10 +67,10 @@ final class AgentShellTools {
 
     var definitions: [[String: Any]] { Self.definitions }
 
-    func handles(_ name: String) -> Bool { name == "show" }
+    func handles(_ name: String) -> Bool { definitions.contains { $0["name"] as? String == name } }
 
     func call(name: String, arguments: [String: Any]) throws -> String {
-        guard name == "show" else { throw AgentToolError.unknownTool(name) }
+        guard handles(name) else { throw AgentToolError.unknownTool(name) }
         let target = try Self.target(from: arguments)
         guard let presenter else {
             throw AgentToolError.storeFailure("Attic's panel is not available.")

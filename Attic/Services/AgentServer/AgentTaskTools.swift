@@ -21,6 +21,46 @@ enum AgentToolError: Error {
     }
 }
 
+@MainActor
+struct AgentToolRegistration {
+    enum Availability { case always, notes, workspace }
+    enum AsyncRoute { case none, workspace, wholeItem }
+
+    let definition: [String: Any]
+    let availability: Availability
+    let asyncRoute: AsyncRoute
+    let execute: ((AgentTaskTools, [String: Any]) throws -> String)?
+
+    var name: String { definition["name"] as? String ?? "" }
+
+    init(definition: [String: Any], availability: Availability = .always,
+         asyncRoute: AsyncRoute = .none, workspaceToken: Bool = false,
+         execute: ((AgentTaskTools, [String: Any]) throws -> String)? = nil) {
+        var declared = definition
+        if workspaceToken, var schema = declared["inputSchema"] as? [String: Any],
+           var properties = schema["properties"] as? [String: Any] {
+            properties["base_workspace_token"] = [
+                "type": "string",
+                "description": "Required for paired task/writing lifecycle changes: workspace_token from get_task_workspace or list_deleted with include_workspace_token: true."
+            ]
+            schema["properties"] = properties
+            declared["inputSchema"] = schema
+        }
+        self.definition = declared
+        self.availability = availability
+        self.asyncRoute = asyncRoute
+        self.execute = execute
+    }
+
+    func available(notes: Bool, workspace: Bool) -> Bool {
+        switch availability {
+        case .always: true
+        case .notes: notes
+        case .workspace: workspace
+        }
+    }
+}
+
 /// Executes MCP tool calls against the app's task store so agent edits follow
 /// the same rules (ordering, timestamps, cleanup) as edits made in the UI.
 @MainActor
@@ -50,8 +90,8 @@ final class AgentTaskTools {
         self.parser = parser
     }
 
-    static let taskDefinitions: [[String: Any]] = [
-        [
+    static let taskCommands: [AgentToolRegistration] = [
+        AgentToolRegistration(definition: [
             "name": "list_tasks",
             "title": "List Attic Tasks",
             "description": "Read main tasks and subtasks directly from Attic, in list order (in progress, to do, done, then backlog; manual order within each). Results include parent_id for subtasks; filter by parent_id to read a main task's steps, including completed ones. Optional filters combine: state (backlog is its own list), tag, due_before / due_after (inclusive days), text (in the title). Finished tasks from earlier days live in the Done log: add include_done_log to list them too (they carry done_logged_at).",
@@ -101,8 +141,8 @@ final class AgentTaskTools {
                 ],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.listTasks($1) }),
+        AgentToolRegistration(definition: [
             "name": "create_task",
             "title": "Create Attic Task",
             "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas. Optional tags, due date and priority. The title is used as given.",
@@ -147,8 +187,8 @@ final class AgentTaskTools {
                 "required": ["title"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.createTask($1) }),
+        AgentToolRegistration(definition: [
             "name": "update_task",
             "title": "Update Attic Task",
             "description": "Update a main task or subtask. Change title, status (state), priority, tags (replaces the list) or due date (null or an empty string clears it). backlog moves a task to Backlog; todo brings it back to Now. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual. A task in the Done log (include_done_log in list_tasks) comes back to Now as to do when its status is set to todo, inProgress or backlog.",
@@ -188,8 +228,8 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.updateTask($1) }),
+        AgentToolRegistration(definition: [
             "name": "delete_task",
             "title": "Delete Attic Task",
             "description": "Move a task AND all its subtasks to Recently Deleted, where they can be restored for 30 days (restore_item). A task in the Done log can be deleted too; restoring it puts it back in the log. Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
@@ -210,8 +250,8 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], asyncRoute: .wholeItem, workspaceToken: true, execute: { try $0.deleteTask($1) }),
+        AgentToolRegistration(definition: [
             "name": "duplicate_task",
             "title": "Duplicate Attic Task",
             "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags and due date, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Backlog task stays in Backlog, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
@@ -232,8 +272,8 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.duplicateTask($1) }),
+        AgentToolRegistration(definition: [
             "name": "move_subtask",
             "title": "Move Attic Subtask",
             "description": "Move a subtask to another main task, or make it a main task of its own, as the person's Move to Task… and Make Standalone Task do. It keeps its id, title, state, priority, tags, date and its own files; files attached to its old main task stay there. Moved, it goes to the end of the new task's subtasks; the new task must be an unfinished main task (not the subtask's own). Made standalone (parent_id null), it goes right below its old main task, in Backlog when that task is in Backlog. Subtasks stay one level deep: a task with subtasks never becomes a subtask. One undoable step. Returns the task.",
@@ -258,11 +298,11 @@ final class AgentTaskTools {
                 "required": ["id", "parent_id"],
                 "additionalProperties": false
             ]
-        ]
+        ], execute: { try $0.moveSubtask($1) })
     ]
 
-    static let noteDefinitions: [[String: Any]] = [
-        [
+    static let noteCommands: [AgentToolRegistration] = [
+        AgentToolRegistration(definition: [
             "name": "get_task_workspace",
             "title": "Read a Task's Workspace",
             "description": "One consistent read of a task and its own note (Phase 3): the task's fields, its subtasks by group (open in order, then done), the note's body as Markdown without its title line, and the tokens for the task, the note and their association. Edit the body with update_note (body only: a task's note has no title of its own; rename the task with update_task); subtasks change only through task operations.",
@@ -278,8 +318,8 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], availability: .notes, execute: { try $0.getTaskWorkspace($1) }),
+        AgentToolRegistration(definition: [
             "name": "list_notes",
             "title": "List Attic Notes",
             "description": "Read notes directly from Attic. Use this instead of opening the Attic app with Computer Use. Notes are returned newest first.",
@@ -294,8 +334,8 @@ final class AgentTaskTools {
                 "properties": ["include_workspace_token": ["type": "boolean", "description": "Include a workspace_token for guarded async workspace tools. Default false; ordinary listing reads loaded notes."]],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], availability: .notes, execute: { try $0.listNotes($1) }),
+        AgentToolRegistration(definition: [
             "name": "create_note",
             "title": "Create Attic Note",
             "description": "Create a note directly in Attic without using its graphical interface. Provide a body and an optional title; either a non-empty title or body is required.",
@@ -319,8 +359,8 @@ final class AgentTaskTools {
                 ],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], availability: .notes, execute: { try $0.createNote($1) }),
+        AgentToolRegistration(definition: [
             "name": "update_note",
             "title": "Update Attic Note",
             "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Tables read as an `<!-- attic:table id=… -->` line and a GFM pipe table: keep the token line; edit cell text, and add or remove whole rows or columns, in the pipe table; a pipe table without a token is a new table; removing a table's token and its rows deletes it. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
@@ -350,8 +390,8 @@ final class AgentTaskTools {
                 "required": ["id", "base_revision"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], availability: .notes, execute: { try $0.updateNote($1) }),
+        AgentToolRegistration(definition: [
             "name": "update_note_table",
             "title": "Edit a Table in an Attic Note",
             "description": "Edit one table in a note precisely, by the row, column and table ids list_notes returns under `tables`, without rewriting the body. Operations run in order, all or nothing: {\"op\":\"set_cell\",\"row_id\",\"column_id\",\"text\"}, {\"op\":\"insert_row\",\"after_row_id\" (null: first),\"cells\":[text…]}, {\"op\":\"insert_column\",\"after_column_id\" (null: first),\"cells\":[one per row],\"align\"}, {\"op\":\"delete_row\",\"row_id\"}, {\"op\":\"delete_column\",\"column_id\"}, {\"op\":\"set_header_row\",\"value\":bool}, {\"op\":\"set_alignment\",\"column_id\",\"align\":\"left|center|right\"}. Cells hold text and `[date:YYYY-MM-DD]` only. Pass the note's `revision` as `base_revision`. If the person has the note open, the change waits (status \"pending\").",
@@ -379,8 +419,8 @@ final class AgentTaskTools {
                 "required": ["id", "base_revision", "table_id", "operations"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], availability: .notes, execute: { try $0.updateNoteTable($1) }),
+        AgentToolRegistration(definition: [
             "name": "delete_note",
             "title": "Delete Attic Note",
             "description": "Move a note (with its attachments) to Recently Deleted, where it can be restored for 30 days (restore_item).",
@@ -405,7 +445,7 @@ final class AgentTaskTools {
                 "required": ["id", "base_revision"],
                 "additionalProperties": false
             ]
-        ]
+        ], availability: .notes, asyncRoute: .wholeItem, workspaceToken: true, execute: { try $0.deleteNote($1) })
     ]
 
     static let tagsSchema: [String: Any] = [
@@ -426,8 +466,8 @@ final class AgentTaskTools {
         "additionalProperties": false
     ]
 
-    static let libraryDefinitions: [[String: Any]] = [
-        [
+    static let libraryCommands: [AgentToolRegistration] = [
+        AgentToolRegistration(definition: [
             "name": "delete_item",
             "title": "Delete Attic Item",
             "description": "Move a task (with its subtasks), note or canvas to Recently Deleted. It stays restorable for 30 days with restore_item. Agents cannot delete anything permanently.",
@@ -450,8 +490,8 @@ final class AgentTaskTools {
                 "required": ["kind", "id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], asyncRoute: .wholeItem, workspaceToken: true, execute: { try $0.deleteItem($1) }),
+        AgentToolRegistration(definition: [
             "name": "restore_item",
             "title": "Restore Attic Item",
             "description": "Bring an item back from Recently Deleted to where it was, with its subtasks, attachments and links.",
@@ -470,8 +510,8 @@ final class AgentTaskTools {
                 "required": ["kind", "id"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], asyncRoute: .wholeItem, workspaceToken: true, execute: { try $0.restoreItem($1) }),
+        AgentToolRegistration(definition: [
             "name": "restore_items",
             "title": "Restore Several Attic Items",
             "description": "Bring several items back from Recently Deleted as one undoable step, as the person's Restore Selected does: each with its subtasks, attachments and links. Items that can't come back (a subtask whose main task is still deleted, unless it is in the same request) stay in Recently Deleted and are listed with the reason; the rest are restored. Nothing is ever deleted permanently.",
@@ -501,8 +541,8 @@ final class AgentTaskTools {
                 "required": ["items"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.restoreItems($1) }),
+        AgentToolRegistration(definition: [
             "name": "list_deleted",
             "title": "List Recently Deleted",
             "description": "List what is in Recently Deleted, newest first, with when each item will be removed for good.",
@@ -517,8 +557,8 @@ final class AgentTaskTools {
                 "properties": ["include_workspace_token": ["type": "boolean", "description": "Include workspace_token for note restore. Default false."]],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.listDeleted($1) }),
+        AgentToolRegistration(definition: [
             "name": "list_tags",
             "title": "List Attic Tags",
             "description": "List every tag in use on tasks, notes and canvases, with how many items carry it. Reuse existing spellings.",
@@ -533,8 +573,8 @@ final class AgentTaskTools {
                 "properties": [:] as [String: Any],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.listTags($1) }),
+        AgentToolRegistration(definition: [
             "name": "update_tags",
             "title": "Rename or Merge Attic Tags",
             "description": "Rename a tag on every item (action rename, from a tag), or merge several tags into one (action merge, from a list). Renaming onto an existing tag merges them.",
@@ -560,8 +600,8 @@ final class AgentTaskTools {
                 "required": ["action", "from", "to"],
                 "additionalProperties": false
             ]
-        ],
-        [
+        ], execute: { try $0.updateTags($1) }),
+        AgentToolRegistration(definition: [
             "name": "link",
             "title": "Link Attic Items",
             "description": "With target: link item to target (a card in a note, a canvas attached to a task, or a reference), then list item's links. Without target: list item's links and backlinks (what links to it).",
@@ -585,7 +625,7 @@ final class AgentTaskTools {
                 "required": ["item"],
                 "additionalProperties": false
             ]
-        ]
+        ], execute: { try $0.link($1) })
     ]
 
     /// The app's task-note sessions, for the asynchronous workspace tools
@@ -593,44 +633,34 @@ final class AgentTaskTools {
     /// app has no Notes page (tests, the preview): those tools are absent.
     var notesController: (() -> NotesPageController?)?
 
-    var definitions: [[String: Any]] {
-        let all = Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
-            + (settingsTools != nil ? AgentSettingsTools.definitions : [])
-            + (notesController != nil ? Self.workspaceDefinitions : [])
-        return all.map { definition in
-            guard let name = definition["name"] as? String,
-                  ["delete_task", "delete_note", "delete_item", "restore_item"].contains(name),
-                  var schema = definition["inputSchema"] as? [String: Any], var properties = schema["properties"] as? [String: Any] else { return definition }
-            properties["base_workspace_token"] = ["type": "string", "description": "Required for paired task/writing lifecycle changes: workspace_token from get_task_workspace or list_deleted with include_workspace_token: true."]
-            schema["properties"] = properties
-            var result = definition; result["inputSchema"] = schema
-            return result
+    static let workspaceCommands: [AgentToolRegistration] =
+        workspaceDefinitions.map {
+            AgentToolRegistration(definition: $0, availability: .workspace, asyncRoute: .workspace)
         }
+
+    static let registeredCommands: [AgentToolRegistration] =
+        taskCommands + noteCommands + libraryCommands + workspaceCommands
+
+    // Agent-run domain schemas share these task definitions with MCP registration.
+    static let taskDefinitions: [[String: Any]] = taskCommands.map(\.definition)
+
+    var definitions: [[String: Any]] {
+        let notes = noteStore != nil, workspace = notesController != nil
+        var declared = (Self.taskCommands + Self.noteCommands + Self.libraryCommands)
+            .filter { $0.available(notes: notes, workspace: workspace) }
+            .map(\.definition)
+        if settingsTools != nil { declared += AgentSettingsTools.definitions }
+        declared += Self.workspaceCommands.filter { $0.available(notes: notes, workspace: workspace) }
+            .map(\.definition)
+        return declared
     }
 
     func call(name: String, arguments: [String: Any]) throws -> String {
-        switch name {
-        case "list_tasks": try listTasks(arguments)
-        case "create_task": try createTask(arguments)
-        case "update_task": try updateTask(arguments)
-        case "delete_task": try deleteTask(arguments)
-        case "duplicate_task": try duplicateTask(arguments)
-        case "move_subtask": try moveSubtask(arguments)
-        case "list_notes": try listNotes(arguments)
-        case "get_task_workspace": try getTaskWorkspace(arguments)
-        case "create_note": try createNote(arguments)
-        case "update_note": try updateNote(arguments)
-        case "update_note_table": try updateNoteTable(arguments)
-        case "delete_note": try deleteNote(arguments)
-        case "delete_item": try deleteItem(arguments)
-        case "restore_item": try restoreItem(arguments)
-        case "restore_items": try restoreItems(arguments)
-        case "list_deleted": try listDeleted(arguments)
-        case "list_tags": try listTags(arguments)
-        case "update_tags": try updateTags(arguments)
-        case "link": try link(arguments)
-        default: try callSettingsTool(name, arguments)
+        if let command = Self.registeredCommands.first(where: { $0.name == name }) {
+            guard let execute = command.execute else { throw AgentToolError.unknownTool(name) }
+            return try execute(self, arguments)
         }
+        return try callSettingsTool(name, arguments)
     }
 
     private func callSettingsTool(_ name: String, _ arguments: [String: Any]) throws -> String {

@@ -145,6 +145,35 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(annotations["destructiveHint"] as? Bool, false)
     }
 
+    func testPublishedMCPCommandsHaveHandlersAndPreserveWorkspaceTokenSchemas() async throws {
+        let (_, noteHandler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        let listed = try decode(noteHandler.handle(body: body))
+        let result = try XCTUnwrap(listed["result"] as? [String: Any])
+        let definitions = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let names = definitions.compactMap { $0["name"] as? String }
+        XCTAssertEqual(Set(names).count, names.count, "tools/list must not advertise duplicate commands")
+        for name in names {
+            let request = try JSONSerialization.data(withJSONObject: [
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": name, "arguments": [:]]
+            ])
+            let response = try decode(await noteHandler.handleAsync(body: request))
+            XCTAssertNil(response["error"], "\(name) was advertised but could not be dispatched")
+            XCTAssertNotNil(response["result"], "\(name) should return a tool result or a tool error")
+        }
+        for name in ["delete_task", "delete_note", "delete_item", "restore_item"] {
+            let definition = try XCTUnwrap(definitions.first { $0["name"] as? String == name })
+            let schema = try XCTUnwrap(definition["inputSchema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let token = try XCTUnwrap(properties["base_workspace_token"] as? [String: Any])
+            XCTAssertEqual(token["type"] as? String, "string", "guarded writes still advertise the workspace token")
+        }
+        XCTAssertEqual(AgentTaskTools.asyncToolNames, Set([
+            "make_subtask", "make_note_checkbox", "make_task_from_note", "add_to_tasks", "remove_from_tasks",
+            "restore", "move_files_into_note", "delete_task", "delete_note", "delete_item", "restore_item"
+        ]))
+    }
+
     func testCreateTaskInsertsTaskWithPriorityAndStatus() throws {
         let payload = try callTool("create_task", arguments: [
             "title": "  Ship   the MCP server ",
