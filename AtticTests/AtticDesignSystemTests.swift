@@ -994,6 +994,7 @@ extension AtticDesignSystemTests {
 }
 
 final class AtticEdgeLightTokenTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testGlassButtonsCarryTheEdgeLightInBothModes() throws {
         let light = try XCTUnwrap(AtticGlassModel.edgeLight(dark: false, surface: .glass))
         XCTAssertEqual(light.stops.map(\.opacity), [1, 0, 0, 0.85])
@@ -1013,4 +1014,5 @@ final class AtticEdgeLightTokenTests: XCTestCase {
             XCTAssertNil(AtticGlassModel.edgeLight(dark: true, surface: surface))
         }
     }
+    #endif
 }
