@@ -191,11 +191,7 @@ struct AgentChatStage: View {
     }
 
     private func appeared() {
-        fx.clearLive()
-        guard alive else { return }
-        fx.addFlash(0.9)
-        fx.ring(star.x, star.y, radius: 85, duration: 0.7)
-        fx.burst(star.x, star.y, count: 20, speed: 130)
+        if alive { fx.open(at: star) } else { fx.clearLive() }
     }
 
     // MARK: The motion

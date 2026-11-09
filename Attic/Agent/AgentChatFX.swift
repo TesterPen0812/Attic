@@ -163,9 +163,22 @@ final class AgentChatFX: ObservableObject {
         wake()
     }
 
+    /// The chat has just opened from the ✦.
+    func open(at star: CGPoint) {
+        clearLive()
+        addFlash(0.9)
+        // No ring: it crossed the composer as the composer grew. The stars end
+        // with the wipe, and the first ember waits until they have gone.
+        burst(star.x, star.y, count: 20, speed: 130, life: 0.3...0.58)
+        ember = Self.firstEmber
+    }
+
+    private static let firstEmber = 1.2
+
     #if DEBUG
     /// Test seam: how much is alive.
     var liveCount: Int { particles.count + rings.count + flights.count + scans.count }
+    var ringCount: Int { rings.count }
     #endif
 
     // MARK: Spawning (design px halved)
@@ -181,11 +194,11 @@ final class AgentChatFX: ObservableObject {
                                   colour: irisColour, spin: rnd(-3, 3), rotation: rnd(0, 3)))
     }
 
-    func burst(_ x: CGFloat, _ y: CGFloat, count: Int = 18, speed: Double = 95) {
+    func burst(_ x: CGFloat, _ y: CGFloat, count: Int = 18, speed: Double = 95, life: ClosedRange<Double> = 0.45...0.9) {
         for index in 0..<count {
             let angle = Double(index) / Double(count) * 6.283 + rnd(-0.2, 0.2)
             let velocity = rnd(speed * 0.4, speed)
-            star(x, y, vx: cos(angle) * velocity, vy: sin(angle) * velocity, gravity: 30, life: rnd(0.45, 0.9), size: rnd(1.5, 4.5))
+            star(x, y, vx: cos(angle) * velocity, vy: sin(angle) * velocity, gravity: 30, life: rnd(life.lowerBound, life.upperBound), size: rnd(1.5, 4.5))
         }
         wake()
     }
