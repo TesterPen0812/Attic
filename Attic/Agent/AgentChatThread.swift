@@ -313,9 +313,10 @@ private struct AgentStepRow: View {
             TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                 let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.7) / 1.7
                 let start = -2.34 + 4.68 * (1 - phase)
+                let highlight = AgentIris.shimmer(over: ink)
                 Text(step.title).foregroundStyle(LinearGradient(
-                    stops: [.init(color: ink, location: 0.32), .init(color: AgentIris.blue, location: 0.46),
-                            .init(color: AgentIris.pink, location: 0.54), .init(color: ink, location: 0.68)],
+                    stops: [.init(color: ink, location: 0.32), .init(color: highlight.blue, location: 0.46),
+                            .init(color: highlight.pink, location: 0.54), .init(color: ink, location: 0.68)],
                     startPoint: UnitPoint(x: start, y: 0.5), endPoint: UnitPoint(x: start + 2.8, y: 0.5)))
             }
         } else {

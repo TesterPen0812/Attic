@@ -30,6 +30,12 @@ enum AgentIris {
     static let teal = Color(red: 90 / 255, green: 220 / 255, blue: 200 / 255)
     static let all = [blue, pink, amber, teal]
     static var underline: Gradient { Gradient(colors: [blue, pink, amber]) }
+    /// The two tints of the running line's sweep.
+    static func shimmer(over ink: Color) -> (blue: Color, pink: Color) {
+        // The pure iris on pale glass reads as the words fading away, so the
+        // sweep keeps most of the line's own ink.
+        (ink.mix(with: blue, by: 0.55), ink.mix(with: pink, by: 0.55))
+    }
     /// The spark's own fill (`ch-iris2`).
     static var spark: Gradient {
         Gradient(stops: [
