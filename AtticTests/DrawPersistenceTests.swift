@@ -67,6 +67,93 @@ final class DrawPersistenceTests: XCTestCase {
         XCTAssertEqual(try DrawPersistentStore(container: container).open(board.id).objects, [stroke])
     }
 
+    func testFailedDrawImageAndQueuedEditRecoverAfterDiskRelaunch() throws {
+        let root = try temporaryDirectory()
+        let image = DrawObject(content: .image(DrawImage(
+            original: Data((0...255).map(UInt8.init)), pixelWidth: 32, pixelHeight: 8
+        )))
+        var boardID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root), save: { _ in throw Injected() })
+            boardID = store.create(name: "Draft").id
+            guard case .retry = store.perform(.put([image]), on: boardID) else { return XCTFail("Expected failed save") }
+            guard case .retry = store.perform(.rename("Recovered"), on: boardID) else { return XCTFail("Expected queued edit") }
+            XCTAssertEqual(store.pendingEdits[boardID]?.count, 2)
+            XCTAssertEqual(try store.open(boardID).objects, [image])
+        }
+
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root))
+            XCTAssertTrue(store.hasUnsettledEdits, "relaunch must not discard the failed edit")
+            XCTAssertEqual(store.pendingEdits[boardID]?.count, 2)
+            XCTAssertEqual(try store.open(boardID).objects, [image], "the image's original bytes survive recovery")
+            XCTAssertEqual(try store.open(boardID).canvas.name, "Recovered")
+            XCTAssertTrue(try store.library().contains { $0.id == boardID }, "the recovery must be reachable")
+            XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<DrawCanvasRecord>()), 0)
+            XCTAssertTrue(store.retry(on: boardID).isSaved)
+            XCTAssertFalse(store.hasUnsettledEdits)
+        }
+        let finished = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try finished.open(boardID).objects, [image])
+        XCTAssertEqual(try finished.open(boardID).canvas.name, "Recovered")
+        XCTAssertFalse(finished.hasUnsettledEdits)
+    }
+
+    func testMixedDrawSaveStaysHeldAfterRelaunchUntilFreshPhysicalRowsProveIt() throws {
+        let root = try temporaryDirectory()
+        let persistentContainer = try container(at: root)
+        var mix = false
+        var boardID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: persistentContainer, save: { context in
+                try context.save()
+                if mix {
+                    let external = ModelContext(persistentContainer)
+                    external.autosaveEnabled = false
+                    try XCTUnwrap(external.fetch(FetchDescriptor<DrawCanvasRecord>()).first).name = "External conflict"
+                    try external.save()
+                    throw Injected()
+                }
+            })
+            boardID = store.create(name: "Before").id
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("saved"))]), on: boardID).isSaved)
+            mix = true
+            guard case .held = store.perform(.rename("After"), on: boardID) else { return XCTFail("Expected ambiguous hold") }
+        }
+
+        let recovered = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try recovered.open(boardID).canvas.name, "After")
+        guard case .held = recovered.pendingEdits[boardID]?.outcome else { return XCTFail("Recovered edit must stay held") }
+        guard case .held = recovered.retry(on: boardID) else { return XCTFail("Cannot overwrite mixed physical rows") }
+        let repair = ModelContext(recovered.container)
+        repair.autosaveEnabled = false
+        try XCTUnwrap(repair.fetch(FetchDescriptor<DrawCanvasRecord>()).first).name = "After"
+        try repair.save()
+        XCTAssertTrue(recovered.reconcile(on: boardID).isSaved)
+        XCTAssertFalse(recovered.hasUnsettledEdits)
+    }
+
+    func testUnreadableRecoveryCheckpointCannotPurgeDrawData() throws {
+        let root = try temporaryDirectory()
+        let original = DrawPersistentStore(container: try container(at: root))
+        let canvas = original.create(name: "Keep this drawing")
+        XCTAssertTrue(original.perform(.put([DrawObject(content: .text("keep"))]), on: canvas.id).isSaved)
+        XCTAssertTrue(original.perform(.deleteCanvas, on: canvas.id).isSaved)
+        let deletedAt = try XCTUnwrap(original.open(canvas.id).canvas.deletedAt)
+        let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
+        let unreadable = Data("{invalid recovery".utf8)
+        try unreadable.write(to: checkpoint, options: .atomic)
+
+        let relaunched = DrawPersistentStore(container: try container(at: root))
+        XCTAssertNotNil(relaunched.recoveryIssue)
+        XCTAssertTrue(relaunched.hasUnsettledEdits)
+        let purged = relaunched.purge([.canvas(canvas.id, deletedAt: deletedAt)])
+        XCTAssertEqual(purged.removed, 0, "unknown recovery ownership must block irreversible purges")
+        XCTAssertEqual(purged.kept, 1)
+        XCTAssertNotNil(try relaunched.open(canvas.id).canvas.deletedAt)
+        XCTAssertEqual(try Data(contentsOf: checkpoint), unreadable, "preserve the damaged checkpoint")
+    }
+
     func testThrowAfterSavePublishesExactAfterOnce() throws {
         let container = try container()
         let store = DrawPersistentStore(container: container, save: { context in

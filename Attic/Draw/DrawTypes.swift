@@ -179,6 +179,7 @@ protocol DrawStoreProtocol: AnyObject {
     var lastDelta: DrawDelta? { get }
     var pendingEdits: [UUID: DrawPendingEdit] { get }
     var hasUnsettledEdits: Bool { get }
+    var recoveryIssue: String? { get }
     func library(deleted: Bool) throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
     func create(name: String?) -> DrawCanvas
