@@ -275,10 +275,10 @@ struct AtticNoteRow: View {
     var body: some View {
         let tokens = design.tokens
         let hover = forced == .hover || hovered
-        let fill: AtticRGBA? = isSelected || isHighlighted ? tokens.selected : (hover ? tokens.hover : nil)
+        let highlight = tokens.rowHighlight(selected: isSelected || isHighlighted, hovered: hover)
         let showsActions = onShowActions != nil && (hover || isHighlighted || actionsFocused)
         ZStack(alignment: .topTrailing) {
-            openButton(fill: fill, hidesTime: showsActions)
+            openButton(highlight: highlight, hidesTime: showsActions)
             if let onShowActions {
                 actionsButton(action: onShowActions, shown: showsActions)
             }
@@ -315,12 +315,12 @@ struct AtticNoteRow: View {
     private static let actionsWidth: CGFloat = 26
     private static let actionsHeight: CGFloat = 20
 
-    private func openButton(fill: AtticRGBA?, hidesTime: Bool) -> some View {
+    private func openButton(highlight: AtticRowHighlightStyle?, hidesTime: Bool) -> some View {
         let m = AtticNoteMetrics.self
         return Button(action: onOpen) {
             ZStack(alignment: .topLeading) {
-                if let fill {
-                    AtticHighlight(fill: fill)
+                if let highlight {
+                    AtticRowHighlight(style: highlight)
                         .frame(height: AtticLayout.detailRowHighlightHeight)
                         .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
                         .padding(.top, (AtticLayout.detailRowPitch - AtticLayout.detailRowHighlightHeight) / 2)

@@ -1410,16 +1410,13 @@ struct AtticTaskRow: View {
         let hasTiles = attachmentTiles != nil && !done
         let pitch = d.height(twoLine: twoLine, tiles: hasTiles)
         let highlightHeight = pitch
-        let fill: AtticRGBA? = if state == .pressed {
-            tokens.pressed
+        let highlight: AtticRowHighlightStyle? = if state == .pressed {
+            .fill(tokens.pressed)
         } else if isSelected, showsFocusRing {
             // L2: the keyboard's row takes the lighter fill under its line.
-            tokens.hover
-        } else if isSelected {
-            tokens.selected
+            .fill(tokens.rowHover)
         } else {
-            // The design has no hover fill.
-            nil
+            tokens.rowHighlight(selected: isSelected, hovered: state == .hover, run: isSelected ? selectionRun : .single)
         }
         let disabled = state == .disabled
         let showsOpen = Self.showsOpenButton(hovered: hovered || forced == .hover, selected: isSelected,
@@ -1430,8 +1427,8 @@ struct AtticTaskRow: View {
 
         ZStack(alignment: .topLeading) {
             Group {
-                if let fill {
-                    AtticHighlight(fill: fill, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
+                if let highlight {
+                    AtticRowHighlight(style: highlight, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
                 }
                 if dropLabel != nil {
                     AtticDropOutline()

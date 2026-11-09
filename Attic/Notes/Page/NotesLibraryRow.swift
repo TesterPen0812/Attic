@@ -61,10 +61,10 @@ struct NotesLibraryRow: View {
     var body: some View {
         let tokens = design.tokens
         let hover = forced == .hover || hovered
-        let fill: AtticRGBA? = isSelected || isHighlighted ? tokens.selected : (hover ? tokens.hover : nil)
+        let highlight = tokens.rowHighlight(selected: isSelected || isHighlighted, hovered: hover)
         let showsActions = hover || isHighlighted || actionsFocused
         ZStack(alignment: .topTrailing) {
-            openButton(fill: fill, reservesActions: showsActions)
+            openButton(highlight: highlight, reservesActions: showsActions)
             actionsButton(shown: showsActions)
         }
         .frame(height: M.height)
@@ -73,7 +73,7 @@ struct NotesLibraryRow: View {
 
     private var row: AtticNoteRowModel { details.row }
 
-    private func openButton(fill: AtticRGBA?, reservesActions: Bool) -> some View {
+    private func openButton(highlight: AtticRowHighlightStyle?, reservesActions: Bool) -> some View {
         Button(action: onOpen) {
             HStack(alignment: .center, spacing: M.thumbnailToText) {
                 NoteThumbnailView(id: row.id, content: details.thumbnail, cache: thumbnails)
@@ -90,8 +90,8 @@ struct NotesLibraryRow: View {
             .padding(.horizontal, M.paddingX)
             .frame(maxWidth: .infinity, minHeight: M.height, maxHeight: M.height, alignment: .leading)
             .background {
-                if let fill {
-                    AtticHighlight(fill: fill, cornerRadius: M.radius, run: .single, joinOverlap: 0)
+                if let highlight {
+                    AtticRowHighlight(style: highlight, cornerRadius: M.radius, joinOverlap: 0)
                 }
             }
             .contentShape(Rectangle())
