@@ -44,8 +44,8 @@ struct CalendarMonthTitle: View {
     static func dayTitle(_ day: DueDay, locale: Locale = .current) -> (month: String, year: String) {
         let calendar = CalendarMonthMath.calendar()
         let date = day.startDate(in: calendar) ?? Date()
-        return (TaskRowPresentation.format(date, template: "EEEd", calendar: calendar, locale: locale),
-                TaskRowPresentation.format(date, template: "LLLL", calendar: calendar, locale: locale))
+        return (AtticDateFormatting.template(date, template: "EEEd", calendar: calendar, locale: locale),
+                AtticDateFormatting.template(date, template: "LLLL", calendar: calendar, locale: locale))
     }
 
     /// "October", "2026": the month's stand-alone name and the year without

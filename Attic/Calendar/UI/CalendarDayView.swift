@@ -234,7 +234,7 @@ private struct CalendarDayHourLine: View {
     var body: some View {
         let tokens = design.tokens
         HStack(spacing: CalendarDayDesign.labelGap) {
-            Text(verbatim: TaskRowPresentation.format(date, template: "jmm", calendar: calendar, locale: .current))
+            Text(verbatim: AtticDateFormatting.template(date, template: "jmm", calendar: calendar, locale: .current))
                 .font(.system(size: CalendarDayDesign.labelFont).monospacedDigit())
                 .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: tokens).color)
                 .lineLimit(1)
@@ -261,7 +261,7 @@ private struct CalendarDayNowLine: View {
     var body: some View {
         let red = TasksPanelDesign.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
         HStack(spacing: 0) {
-            Text(verbatim: TaskRowPresentation.format(date, template: "jmm", calendar: calendar, locale: .current))
+            Text(verbatim: AtticDateFormatting.template(date, template: "jmm", calendar: calendar, locale: .current))
                 .font(.system(size: CalendarDayDesign.nowLabelFont, weight: .semibold).monospacedDigit())
                 .foregroundStyle(red)
                 .lineLimit(1)
