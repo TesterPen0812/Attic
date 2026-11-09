@@ -263,15 +263,14 @@ final class TasksEmptyStateUITests: XCTestCase {
     }
 
     func testNowIsCaughtUpAndLaterIsEmpty() throws {
-        XCTAssertTrue(emptyLine("You’re caught up.").waitForExistence(timeout: 3), "Now says it is caught up")
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": finished
+        // items live in Done; the current design's empty Now is one line.
+        XCTAssertTrue(emptyLine("Nothing to do right now").waitForExistence(timeout: 3), "Now has its empty state")
         let completed = app.descendants(matching: .any)["tasks-completed-today"]
-        XCTAssertTrue(completed.exists, "with today's tasks one row below")
-        XCTAssertEqual(completed.label, "Completed today, 6")
-        XCTAssertEqual(completed.frame.minY - emptyLine("You’re caught up.").frame.minY, 34, accuracy: 10,
-                       "one row apart")
+        XCTAssertFalse(completed.exists, "Done tasks do not reappear under Now")
 
         app.buttons["tasks-page-backlog"].click()
-        XCTAssertTrue(emptyLine("Nothing in Backlog.").waitForExistence(timeout: 3), "Later says it is empty")
+        XCTAssertTrue(emptyLine("Nothing in Backlog").waitForExistence(timeout: 3), "Backlog says it is empty")
 
         app.buttons["tasks-page-done"].click()
         let finished = app.descendants(matching: .any)

@@ -6,10 +6,11 @@ import XCTest
 /// in-memory store with the demo tasks), and each test types, clicks and
 /// right-clicks, then reads what VoiceOver would read.
 ///
-/// Demo tasks on Now: Finalize launch checklist (in progress, High, today,
-/// 1 of 3 subtasks), Ship appearance PR (High, 2 of 4), Email beta testers
-/// (Medium), Book dentist (Low, tomorrow), Call the plumber; done today:
-/// Renew domain. Later: Try the paper sketch idea, Research note templates,
+/// Demo tasks on Now, grouped by date: Finalize launch checklist (in progress,
+/// High, today, 1 of 3 subtasks), Book dentist (Low, tomorrow), Email beta
+/// testers (Medium, +3 days), then Ship appearance PR (High, 2 of 4) and Call
+/// the plumber (No date). Done includes Renew domain and the Done log;
+/// Backlog: Try the paper sketch idea, Research note templates,
 /// Plan the spring trip. Done log: Send invoice and Water the plants
 /// (yesterday), Call the bank, Pay rent, Renew passport.
 final class TasksPageUITests: XCTestCase {
@@ -162,40 +163,31 @@ final class TasksPageUITests: XCTestCase {
 
     /// A click on the circle completes; a second click during the done
     /// hold brings it straight back; completed again, it holds its place,
-    /// then moves into "Completed today", whose disclosure shows it, and
-    /// its circle there restores it to Now.
+    /// then moves into Done, where its circle restores it to Now.
+    /// Accepted 2026-10-29 "Tasks: Later is the backlog": Now shows open
+    /// tasks only, while completed tasks live in Done.
     func testOneClickCompletesAndClickingAgainRestores() throws {
-        XCTAssertTrue(completedToday.waitForExistence(timeout: 3))
-        XCTAssertEqual(completedToday.label, "Completed today, 1")
-        XCTAssertEqual(completedToday.value as? String, "collapsed")
-
         circle("Book dentist").click()
         waitFor(label("Book dentist").contains(", done"), "a click completes")
         circle("Book dentist").click()
         waitFor(label("Book dentist").contains(", to do"), "a second click during the hold brings it back")
         RunLoop.current.run(until: Date().addingTimeInterval(1.6))
         XCTAssertTrue(row("Book dentist").exists, "restored, it stays in the list")
-        XCTAssertEqual(completedToday.label, "Completed today, 1")
-
         circle("Book dentist").click()
         waitFor(label("Book dentist").contains(", done"), "a click completes")
         XCTAssertTrue(row("Book dentist").exists, "the done row holds its place for a moment")
         waitFor(!row("Book dentist").exists, timeout: 4, "then it leaves the open tasks")
-        waitFor(completedToday.label == "Completed today, 2", "and is counted under Completed today")
-
-        completedToday.click()
-        waitFor((completedToday.value as? String) == "expanded", "the disclosure opens")
-        waitFor(row("Book dentist").exists, "it lists today's done tasks")
+        tab("done").click()
+        waitFor(row("Book dentist").exists, "Done lists the completed task")
         XCTAssertTrue(label("Book dentist").contains(", done"))
-        XCTAssertTrue(row("Renew domain").exists)
-
         circle("Book dentist").click()
-        waitFor(label("Book dentist").contains(", to do"), "its circle there restores it")
-        waitFor(completedToday.label == "Completed today, 1", "and it leaves Completed today")
-
-        completedToday.click()
-        waitFor(!row("Renew domain").exists, "a second click hides the done tasks again")
-        XCTAssertEqual(completedToday.value as? String, "collapsed")
+        waitFor(!row("Book dentist").exists, "restoring removes it from Done")
+        tab("now").click()
+        waitFor(label("Book dentist").contains(", to do"), "it returns to Now with its state restored")
+        // Due dates live in day headings rather than each dated row
+        // (Accepted 2026-10-29 "Tasks: Later is the backlog").
+        XCTAssertLessThan(row("Book dentist").frame.minY, row("Email beta testers").frame.minY,
+                          "restored task remains in Tomorrow ahead of the later due date")
     }
 
     /// ⇧Space starts and stops working; Space completes.
@@ -212,7 +204,9 @@ final class TasksPageUITests: XCTestCase {
     }
 
     func testKeyboardMovesAndEditsTheTitle() throws {
-        select("Ship appearance PR")
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": the arrow
+        // walks date groups in order, Book (Tomorrow) then Email (+3 days).
+        select("Book dentist")
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         // ↓ moved to Email beta testers: Return edits its title in place.
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
@@ -256,15 +250,17 @@ final class TasksPageUITests: XCTestCase {
     /// A real drag: the row lifts in place, the others slide apart, and it
     /// lands where it was dropped within its group.
     func testDraggingARowReordersItWithinItsGroup() throws {
-        XCTAssertLessThan(row("Ship appearance PR").frame.minY, row("Book dentist").frame.minY)
-        let from = row("Book dentist").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": only siblings
+        // in the same date group can be reordered. Both rows have No date.
+        XCTAssertLessThan(row("Ship appearance PR").frame.minY, row("Call the plumber").frame.minY)
+        let from = row("Call the plumber").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
         let to = row("Ship appearance PR").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.3))
         // An ordinary drag: no hold before it moves (owner fix 6).
         from.press(forDuration: 0.01, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0.1)
-        waitFor(row("Book dentist").frame.minY < row("Ship appearance PR").frame.minY, "Book dentist now sits above Ship appearance PR")
+        waitFor(row("Call the plumber").frame.minY < row("Ship appearance PR").frame.minY, "Call the plumber now sits above Ship appearance PR")
         // One step: ⌘Z puts it back.
         app.typeKey("z", modifierFlags: .command)
-        waitFor(row("Ship appearance PR").frame.minY < row("Book dentist").frame.minY, "⌘Z undoes the move")
+        waitFor(row("Ship appearance PR").frame.minY < row("Call the plumber").frame.minY, "⌘Z undoes the move")
     }
 
     // MARK: - Tabs, Later and Done
@@ -286,7 +282,17 @@ final class TasksPageUITests: XCTestCase {
         tab("done").click()
         waitFor(row("Send invoice").isHittable, "Done lists the Done log")
         XCTAssertTrue(tab("done").isSelected)
-        XCTAssertTrue(window.descendants(matching: .any)["Yesterday"].exists, "grouped by day")
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": the Done
+        // page uses dated day headings, rather than the old Yesterday label.
+        let formatter = DateFormatter()
+        formatter.calendar = .autoupdatingCurrent
+        formatter.locale = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("EEEdMMM")
+        let yesterday = try XCTUnwrap(Calendar.autoupdatingCurrent.date(byAdding: .day, value: -1, to: Date()))
+        let dayHeading = formatter.string(from: yesterday).replacingOccurrences(of: ",", with: "")
+        let heading = window.buttons.matching(NSPredicate(format: "label == %@", dayHeading)).firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 3), "Done groups tasks under the completed date")
+        XCTAssertLessThan(heading.frame.minY, row("Send invoice").frame.minY, "the date heading precedes its tasks")
 
         // "Show Details" on a Done log task opens its details, which offer
         // Restore to Now; the right-click menu restores too.
@@ -309,8 +315,8 @@ final class TasksPageUITests: XCTestCase {
     }
 
     /// Completing on Later: the row shows done in place, then leaves Later;
-    /// Now counts it under Completed today. Its circle there puts it back
-    /// on Later, where it came from.
+    /// Done lists it. Its circle there puts it back on Backlog, where it
+    /// came from (Accepted 2026-10-29 "Tasks: Later is the backlog").
     func testCompletingOnLaterHoldsThenLeaves() throws {
         tab("backlog").click()
         waitFor(row("Try the paper sketch idea").isHittable, "Later lists its tasks")
@@ -322,12 +328,10 @@ final class TasksPageUITests: XCTestCase {
         waitFor(label("Try the paper sketch idea").contains(", done"), "a click completes it on Later")
         waitFor(!row("Try the paper sketch idea").exists, timeout: 4, "then it leaves Later")
 
-        tab("now").click()
-        waitFor(completedToday.label == "Completed today, 2", "Now counts it as done today")
-        completedToday.click()
-        waitFor(row("Try the paper sketch idea").exists, "it is listed under Completed today")
+        tab("done").click()
+        waitFor(row("Try the paper sketch idea").exists, "it is listed in Done")
         circle("Try the paper sketch idea").click()
-        waitFor(!row("Try the paper sketch idea").exists, "restored, it leaves Now")
+        waitFor(!row("Try the paper sketch idea").exists, "restored, it leaves Done")
         tab("backlog").click()
         waitFor(row("Try the paper sketch idea").exists, "back on Later, where it came from")
     }
@@ -803,8 +807,11 @@ final class TasksPageUITests: XCTestCase {
         select("Pay rent")
         app.typeKey(.delete, modifierFlags: [])
         waitFor(!row("Pay rent").exists, "⌫ deletes it from the log")
-        let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Deleted")).firstMatch
+        // The notice uses sentence case ("Pay rent" deleted), and has a
+        // stable accessibility ID. Its title and undo action are retained.
+        let toast = window.descendants(matching: .any).matching(identifier: "panel-undo-toast").firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 3), "with an Undo toast")
+        XCTAssertTrue(toast.label.localizedCaseInsensitiveContains("deleted") && toast.label.contains("Pay rent"), toast.label)
         app.typeKey("z", modifierFlags: .command)
         waitFor(row("Pay rent").exists, "⌘Z puts it back in the log")
 
@@ -863,12 +870,23 @@ final class TasksPageUITests: XCTestCase {
         waitFor(!label("Call the plumber").contains("due"), "Remove Date takes it away")
     }
 
-    /// A row's date is a button (owner fix 5 C): it opens the same picker,
-    /// with Remove date.
+    /// A dated row in Backlog shows its due button (unlike Now's due-day
+    /// groups, where the heading already shows the date). Accepted 2026-11-05
+    /// "Backlog keeps dates, Calendar edits save on dismiss".
+    private func moveDatedTaskToBacklog() {
+        select("Book dentist")
+        app.typeKey("b", modifierFlags: .command)
+        waitFor(!row("Book dentist").exists, "⌘B moves the task out of Now")
+        tab("backlog").click()
+        waitFor(label("Book dentist").contains("due Tomorrow"), "Backlog preserves the date")
+    }
+
+    /// The visible date button opens the picker and Clear Date removes it.
     func testARowsDateOpensThePicker() throws {
-        // The date sits at the row's right end, on the title line.
-        let row = row("Book dentist")
-        row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
+        moveDatedTaskToBacklog()
+        let due = window.buttons.matching(NSPredicate(format: "label == %@", "Due Tomorrow")).firstMatch
+        XCTAssertTrue(due.waitForExistence(timeout: 3), "the dated Backlog row exposes its date control")
+        due.click()
         let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the picker offers Remove date")
         clickDropdownRow(remove)
@@ -963,8 +981,10 @@ final class TasksPageUITests: XCTestCase {
     /// field, and its keys are still its own, never the row's Delete,
     /// Complete, Start working or Move to Backlog.
     func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
-        let row = row("Book dentist")
-        row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
+        moveDatedTaskToBacklog()
+        let due = window.buttons.matching(NSPredicate(format: "label == %@", "Due Tomorrow")).firstMatch
+        XCTAssertTrue(due.waitForExistence(timeout: 3))
+        due.click()
         let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
         pressRowKeys()
@@ -1091,9 +1111,10 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertFalse(row("Call the plumber").isSelected, "nothing is lit on opening")
         select("Call the plumber")
         waitFor(row("Call the plumber").isSelected, "a click on the row selects it")
-        // The space between the last line of the list and the add bar.
-        XCTAssertTrue(completedToday.waitForExistence(timeout: 3))
-        let gapTop = completedToday.frame.maxY, gapBottom = addBar.frame.minY
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": Now has no
+        // Completed today disclosure. Click between its last No date row
+        // and the add bar (the standalone preview's own bottom control).
+        let gapTop = row("Call the plumber").frame.maxY, gapBottom = addBar.frame.minY
         XCTAssertGreaterThan(gapBottom - gapTop, 40, "the demo list leaves space under its last line")
         window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: window.frame.width / 2, dy: (gapTop + gapBottom) / 2 - window.frame.minY)).click()
