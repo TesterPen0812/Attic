@@ -86,6 +86,99 @@ final class Draw3PageTests: XCTestCase {
                             save: save)
     }
 
+    func testFailedRenameKeepsTypedNameAndRetryClosesOnlyAfterDurableSave() throws {
+        struct Injected: Error {}
+        var fail = false
+        let persistent = try persistentStore { context in
+            if fail { throw Injected() }
+            try context.save()
+        }
+        use(persistent)
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("Existing"))])).isSaved)
+        let original = model.canvasName
+
+        model.library.perform(.rename)
+        model.library.nameDraft = "Unsaved canvas name"
+        fail = true
+        model.library.commitRename()
+        XCTAssertTrue(model.library.isRenaming, "a failed save must keep the field open")
+        XCTAssertTrue(model.library.renameFailed, "the field offers the shared Not saved / Retry feedback")
+        XCTAssertEqual(model.library.nameDraft, "Unsaved canvas name")
+        XCTAssertEqual(model.canvasName, original, "the canvas cannot claim the unsaved name")
+        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, original)
+        model.newCanvas()
+        XCTAssertEqual(model.canvasID, id, "navigation waits while the failed title edit is unresolved")
+
+        fail = false
+        model.library.commitRename()
+        XCTAssertFalse(model.library.isRenaming, "Retry should close after a confirmed save")
+        XCTAssertFalse(model.library.renameFailed)
+        XCTAssertNil(persistent.pendingEdits[id])
+        XCTAssertEqual(model.canvasName, "Unsaved canvas name")
+
+        model.library.perform(.rename)
+        model.library.nameDraft = "Saved on first attempt"
+        model.library.commitRename()
+        XCTAssertFalse(model.library.isRenaming, "an ordinary successful rename closes immediately")
+        XCTAssertEqual(model.canvasName, "Saved on first attempt")
+        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, "Saved on first attempt")
+    }
+
+    func testEscapeAfterFailedRenameAbandonsThePendingName() throws {
+        struct Injected: Error {}
+        var fail = false
+        let persistent = try persistentStore { context in
+            if fail { throw Injected() }
+            try context.save()
+        }
+        use(persistent)
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("Existing"))])).isSaved)
+        let original = model.canvasName
+
+        model.library.perform(.rename)
+        model.library.nameDraft = "Abandoned name"
+        fail = true
+        model.library.commitRename()
+        XCTAssertNotNil(persistent.pendingEdits[id])
+
+        model.library.cancelRename()
+        XCTAssertFalse(model.library.isRenaming)
+        XCTAssertFalse(model.library.renameFailed)
+        XCTAssertEqual(model.library.nameDraft, original)
+        XCTAssertNil(persistent.pendingEdits[id], "Escape must not leave a rename that can save later")
+        XCTAssertEqual(model.canvasName, original)
+        XCTAssertEqual(try persistent.open(id).canvas.name, original)
+
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, original,
+                       "a later unrelated Retry must not apply the discarded name")
+    }
+
+    func testShellRetryAlsoClosesTheFailedRenameField() throws {
+        struct Injected: Error {}
+        var fail = false
+        let persistent = try persistentStore { context in
+            if fail { throw Injected() }
+            try context.save()
+        }
+        use(persistent)
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("Saved"))])).isSaved)
+        model.library.perform(.rename)
+        model.library.nameDraft = "Saved from notice"
+        fail = true
+        model.library.commitRename()
+        XCTAssertTrue(model.library.renameFailed)
+        fail = false
+        model.retrySave()
+        XCTAssertFalse(model.library.isRenaming)
+        XCTAssertNil(persistent.pendingEdits[id])
+        XCTAssertEqual(model.canvasName, "Saved from notice")
+    }
+
     private var stored: [DrawObject] { (try? store.open(model.canvasID!).objects) ?? [] }
 
     private func drag(_ points: [CGPoint], shift: Bool = false) {

@@ -98,7 +98,12 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// set, commits on Return or when the field loses focus, and cancels on
     /// Escape.
     @Published private(set) var isRenaming = false
+    /// Tasks' title pattern: keep the draft and show an in-place Retry until
+    /// the rename is durably saved, without presenting the draft as saved.
+    @Published private(set) var renameFailed = false
     @Published var nameDraft = ""
+    private var renameCanvasID: UUID?
+    private var nameBeforeRename: String?
 
     /// Where Delete posts its Undo toast (the panel's, from the view).
     weak var toasts: PanelToastCenter?
@@ -283,6 +288,9 @@ final class DrawLibraryMenuModel: ObservableObject {
         switch command {
         case .rename:
             nameDraft = canvas.name
+            nameBeforeRename = canvas.name
+            renameCanvasID = canvas.id
+            renameFailed = false
             isRenaming = true
             finish()
         case .tags:
@@ -354,15 +362,59 @@ final class DrawLibraryMenuModel: ObservableObject {
     // MARK: Rename
 
     func commitRename() {
-        guard isRenaming else { return }
-        isRenaming = false
+        guard isRenaming, let id = renameCanvasID, id == currentCanvasID,
+              let original = nameBeforeRename else { return }
         let name = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let canvas = currentCanvas, !name.isEmpty, name != canvas.name else { return }
-        _ = store.perform(.rename(name), on: canvas.id)
+        guard !name.isEmpty, name != original else { cancelRename(); return }
+
+        // Retrying the same draft must settle its pending write, never queue
+        // a second rename. If the text changed, discard the earlier failed
+        // rename first so a later Escape cannot accidentally save that name.
+        if renameFailed, let pending = store.pendingEdits[id], pending.canvas.name != name {
+            guard store.abandonPendingRename(on: id, named: pending.canvas.name, restoring: original) else { return }
+        }
+        let result: DrawSaveResult
+        if renameFailed, let pending = store.pendingEdits[id], pending.canvas.name == name {
+            if case .held = pending.outcome { result = store.reconcile(on: id) }
+            else { result = store.retry(on: id) }
+        } else {
+            result = store.perform(.rename(name), on: id)
+        }
+        switch result {
+        case .saved:
+            finishRename()
+        case .unchanged:
+            guard store.pendingEdits[id] == nil else { renameFailed = true; return }
+            finishRename()
+        case .retry, .held:
+            renameFailed = true
+        }
     }
 
     func cancelRename() {
+        guard isRenaming else { return }
+        if renameFailed, let id = renameCanvasID, let pending = store.pendingEdits[id] {
+            guard let original = nameBeforeRename,
+                  store.abandonPendingRename(on: id, named: pending.canvas.name, restoring: original) else { return }
+        }
+        nameDraft = currentCanvas?.name ?? nameBeforeRename ?? nameDraft
+        finishRename()
+    }
+
+    /// The shell's existing pending-save Retry also completes this editor if
+    /// its exact draft was saved, even when it was clicked outside the field.
+    func renameSavedByRetry(on id: UUID) {
+        guard isRenaming, renameFailed, renameCanvasID == id, store.pendingEdits[id] == nil,
+              currentCanvas?.name == nameDraft.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        finishRename()
+    }
+
+    private func finishRename() {
         isRenaming = false
+        renameFailed = false
+        renameCanvasID = nil
+        nameBeforeRename = nil
+        actions.canvasChanged()
     }
 
     // MARK: Tags

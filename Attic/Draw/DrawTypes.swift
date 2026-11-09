@@ -198,6 +198,9 @@ protocol DrawStoreProtocol: AnyObject {
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
     func retry(on id: UUID) -> DrawSaveResult
     func reconcile(on id: UUID) -> DrawSaveResult
+    /// Abandon the last failed rename only if its physical write did not commit.
+    /// Other queued edits, their recovery proof and their Undo history survive.
+    func abandonPendingRename(on id: UUID, named name: String, restoring original: String) -> Bool
     func canUndo(on id: UUID) -> Bool
     func canRedo(on id: UUID) -> Bool
     /// Stable identity of the top history step; a foreign Draw edit must not

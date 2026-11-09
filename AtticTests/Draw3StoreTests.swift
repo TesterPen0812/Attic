@@ -396,6 +396,35 @@ final class Draw3StoreTests: XCTestCase {
         })
     }
 
+    func testEscapeDropsOnlyTheQueuedRenameAndKeepsAnEarlierFailedDrawingEdit() throws {
+        let log = SaveLog(), container = try container()
+        log.fail = false
+        let store = flakyStore(log, container: container)
+        let canvas = store.create(name: "Original")
+        let first = stroke(), second = stroke()
+        XCTAssertTrue(store.perform(.put([first]), on: canvas.id).isSaved)
+        log.fail = true
+        guard case .retry = store.perform(.put([second]), on: canvas.id) else {
+            return XCTFail("The drawing save should be retryable")
+        }
+        XCTAssertFalse(store.perform(.rename("Discarded"), on: canvas.id).isSaved)
+        XCTAssertEqual(store.pendingEdits[canvas.id]?.count, 2)
+
+        XCTAssertTrue(store.abandonPendingRename(on: canvas.id, named: "Discarded", restoring: "Original"))
+        XCTAssertEqual(try store.open(canvas.id).canvas.name, "Original")
+        XCTAssertEqual(Set(try store.open(canvas.id).objects.map(\.id)), [first.id, second.id])
+        XCTAssertEqual(store.pendingEdits[canvas.id]?.count, 1, "the earlier failed drawing still needs Retry")
+
+        log.fail = false
+        XCTAssertTrue(store.retry(on: canvas.id).isSaved)
+        XCTAssertNil(store.pendingEdits[canvas.id])
+        let reopened = DrawPersistentStore(container: container)
+        XCTAssertEqual(try reopened.open(canvas.id).canvas.name, "Original", "the abandoned name cannot save later")
+        XCTAssertEqual(Set(try reopened.open(canvas.id).objects.map(\.id)), [first.id, second.id])
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved)
+        XCTAssertEqual(try store.open(canvas.id).objects.map(\.id), [first.id], "only saved edits enter Undo")
+    }
+
     func testAnEditAfterAFailedSaveQueuesAndRetrySavesBothInOrder() throws {
         let log = SaveLog(), container = try container()
         let store = flakyStore(log, container: container)

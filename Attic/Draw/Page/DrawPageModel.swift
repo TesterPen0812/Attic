@@ -229,6 +229,7 @@ final class DrawPageModel: ObservableObject {
                            newCanvas: { [weak self] in self?.newCanvas(name: $0) },
                            reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
                            close: { [weak self] in self?.closeFilter() },
+                           canvasChanged: { [weak self] in self?.syncExternalChanges() },
                            export: { [weak self] in self?.images.exportCanvas($0) },
                            copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
                            hasContent: { [weak self] in self?.hasContent($0) ?? false },
@@ -296,6 +297,7 @@ final class DrawPageModel: ObservableObject {
             let result: DrawSaveResult
             if case .held = edit.outcome { result = store.reconcile(on: id) } else { result = store.retry(on: id) }
             if id == canvasID { apply(result) }
+            library.renameSavedByRetry(on: id)
         }
         objectWillChange.send()
     }
@@ -515,6 +517,10 @@ final class DrawPageModel: ObservableObject {
     }
 
     func open(_ id: UUID) {
+        if id != canvasID, library.isRenaming {
+            library.commitRename()
+            guard !library.isRenaming else { return }
+        }
         finishLiveInput()
         endEditing()
         // The canvas being left gets its thumbnail now.
@@ -525,7 +531,7 @@ final class DrawPageModel: ObservableObject {
         store.activate(id)
         canvasID = id
         resumeDefaults?.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
-        canvasName = snapshot.canvas.name
+        canvasName = confirmedName(in: snapshot)
         library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
         // A prior session may have quit while its thumbnail renderer was
@@ -555,6 +561,10 @@ final class DrawPageModel: ObservableObject {
 
     /// "+": a new, empty canvas straight away (a draft until its first content).
     func newCanvas(name: String? = nil) {
+        if library.isRenaming {
+            library.commitRename()
+            guard !library.isRenaming else { return }
+        }
         let canvas = store.create(name: name)
         viewports[canvas.id] = DrawViewport()
         open(canvas.id)
@@ -565,6 +575,7 @@ final class DrawPageModel: ObservableObject {
     /// and select it.
     func reveal(canvasID id: UUID, objectID: UUID) {
         if canvasID != id { open(id) }
+        guard canvasID == id else { return }
         guard let target = object(objectID) else { return }
         let rect = viewport.screen(DrawGeometry.bounds(target))
         if !clearRect.contains(rect) {
@@ -927,9 +938,12 @@ final class DrawPageModel: ObservableObject {
     // MARK: Title filter (D4) and search
 
     func openFilter() {
+        if library.isRenaming {
+            library.commitRename()
+            guard !library.isRenaming else { return }
+        }
         endEditing()
         strip = nil
-        library.cancelRename()
         if !library.filter.isEmpty { library.filter = "" }
         isFiltering = true
     }
@@ -943,6 +957,10 @@ final class DrawPageModel: ObservableObject {
     }
 
     func openSearch() {
+        if library.isRenaming {
+            library.commitRename()
+            guard !library.isRenaming else { return }
+        }
         closeFilter()
         isSearching = true
     }
@@ -1178,10 +1196,18 @@ final class DrawPageModel: ObservableObject {
             if let next = try? store.library().first { open(next.id) } else { newCanvas() }
             return
         }
-        canvasName = snapshot.canvas.name
+        canvasName = confirmedName(in: snapshot)
         let fresh = snapshot.objects.filter { $0.deletedAt == nil }
         guard fresh != objects else { refreshHistory(); return }
         objects = fresh
         afterContentChange(replacingEditorText: editing != nil)
+    }
+
+    /// The store keeps an optimistic after-draft for recovery. While it is
+    /// unsettled, the title shown outside the editor must use saved metadata.
+    private func confirmedName(in snapshot: DrawSnapshot) -> String {
+        guard store.pendingEdits[snapshot.canvas.id] != nil else { return snapshot.canvas.name }
+        return ((try? store.library()) ?? []).first(where: { $0.id == snapshot.canvas.id })?.name
+            ?? snapshot.canvas.name // An unpublished canvas's chosen draft name has no saved row yet.
     }
 }

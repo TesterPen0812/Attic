@@ -317,6 +317,46 @@ class DrawStore: DrawStoreProtocol {
         return flush(id, head: .reconcile)
     }
 
+    /// Escape may discard an uncommitted rename, including one queued behind
+    /// another failed edit. First prove that an attempted head did not reach
+    /// any physical replica; a held/ambiguous outcome must remain recoverable.
+    func abandonPendingRename(on id: UUID, named name: String, restoring original: String) -> Bool {
+        guard recoveryIssue == nil, let edits = pending[id], let last = edits.last,
+              last.action == .edit, last.step.before.name == original, last.step.after.name == name,
+              last.step.change.objectsBefore.isEmpty, last.step.change.objectsAfter.isEmpty else { return false }
+        var renamed = last.step.before
+        renamed.name = name
+        renamed.updatedAt = last.step.after.updatedAt
+        guard renamed == last.step.after else { return false }
+
+        // Only the head can have been attempted. A queued tail is still a
+        // draft; an attempted head can be dropped only after read-back proof.
+        if edits.count == 1, recovery?.records[id]?.unattempted != true {
+            guard case .retry = repository.reconcile(last.step.change) else { return false }
+        }
+        let remaining = Array(edits.dropLast())
+        do {
+            try recovery?.update(id, edits: remaining.isEmpty ? nil : remaining,
+                                 proof: remaining.isEmpty ? nil : repository.recoveryProof(for: id),
+                                 unattempted: recovery?.records[id]?.unattempted ?? false)
+        } catch { return false }
+
+        states[id]?.canvas = last.step.before
+        states[id]?.persisted = last.step.beforePersisted
+        pending[id] = remaining.isEmpty ? nil : remaining
+        if let preceding = remaining.last, let outcome = pendingEdits[id]?.outcome {
+            pendingEdits[id] = DrawPendingEdit(canvas: preceding.step.after,
+                                               objects: states[id]?.snapshot.objects ?? [],
+                                               outcome: outcome, count: remaining.count)
+        } else {
+            pendingEdits[id] = nil
+            recoveredCanvasIDs.remove(id)
+            repository.discardAttempt(for: id)
+        }
+        revision &+= 1
+        return true
+    }
+
     func canUndo(on id: UUID) -> Bool {
         _ = revision; _ = pendingEdits
         return pending[id] == nil && !(histories[id]?.undo.isEmpty ?? true)

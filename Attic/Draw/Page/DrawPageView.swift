@@ -128,13 +128,19 @@ struct DrawTitleCapsule: View {
         let flat = design.effectiveControls != .liquidGlass
         Group {
             if library.isRenaming {
-                DrawTitleField(text: $library.nameDraft, placeholder: String(localized: "Canvas name"),
-                               label: String(localized: "Canvas name"), onReturn: library.commitRename,
-                               onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename)
-                    .frame(height: m.capsule)
-                    .padding(.horizontal, m.titlePadding.leading)
-                    .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
-                    .accessibilityIdentifier("draw-title-rename")
+                VStack(spacing: AtticSpacing.s4) {
+                    DrawTitleField(text: $library.nameDraft, placeholder: String(localized: "Canvas name"),
+                                   label: String(localized: "Canvas name"), onReturn: library.commitRename,
+                                   onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename)
+                        .frame(height: m.capsule)
+                        .padding(.horizontal, m.titlePadding.leading)
+                        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                        .accessibilityIdentifier("draw-title-rename")
+                    if library.renameFailed {
+                        AtticErrorLine(message: String(localized: "Not saved"), onRetry: library.commitRename)
+                            .accessibilityIdentifier("draw-title-rename-failure")
+                    }
+                }
             } else {
                 ZStack {
                     HStack(spacing: 5) {
