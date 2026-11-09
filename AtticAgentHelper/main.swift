@@ -4,6 +4,29 @@ import Darwin
 import os
 import Security
 
+private enum CLIStatus: String {
+    case ready, signedOut, update, timedOut, missing
+}
+
+private struct CLIAvailability {
+    let backend: String
+    let status: CLIStatus
+    let executable: String?
+
+    var message: String {
+        // The path identifies the install that failed, never a credential or
+        // anything from the CLI's authentication output.
+        let name = backend == "claude" ? "Claude Code" : "Codex"
+        switch status {
+        case .ready: return ""
+        case .missing: return "Install \(name) to use this agent."
+        case .signedOut: return "Sign in with \(name == "Codex" ? "codex login" : "claude auth login")."
+        case .update: return "\(name) cannot start (\(executable ?? "unknown install")). Update \(name)."
+        case .timedOut: return "\(name) sign-in check timed out (\(executable ?? "unknown install"))."
+        }
+    }
+}
+
 // This background app is deliberately outside the Attic app sandbox. Its only
 // interface is one authenticated loopback connection to its launching Attic.
 // It can locate and run one of two installed agent CLIs, relay JSON lines, and
@@ -24,10 +47,22 @@ private final class HelperService {
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
     private var backend = ""
+    private var runningCLIPath = ""
     private var claudeConfigURL: URL?
     private let maximumLineSize = 2_000_000
     private var startingCLI = false
     private var stopping = false
+
+    #if DEBUG
+    // Only a bundled, isolated test host can substitute scripts for signed
+    // CLIs. This interface does not exist in Release builds.
+    private var testCLIs: [String: [String]] = [:]
+    private var isTestHost: Bool {
+        let parent = Bundle.main.bundleURL.deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        return Bundle(url: parent)?.bundleIdentifier?.contains("UnitTestHost") == true
+    }
+    #endif
 
     init?(arguments: [String]) {
         // NSWorkspace drops argv from sandboxed callers. Some Launch Services
@@ -200,8 +235,8 @@ private final class HelperService {
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self else { return }
                 let env = self.loginEnvironment()
-                let claudeInstalled = self.find("claude", environment: env) != nil
-                let codexInstalled = self.find("codex", environment: env) != nil
+                let claudeInstalled = !self.candidates("claude", environment: env).isEmpty
+                let codexInstalled = !self.candidates("codex", environment: env).isEmpty
                 self.queue.async {
                     guard !self.stopping else { return }
                     self.send(["type": "availability", "claude": claudeInstalled,
@@ -213,23 +248,28 @@ private final class HelperService {
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self else { return }
                 let env = self.loginEnvironment()
-                let claude = self.find("claude", environment: env)
-                let codex = self.find("codex", environment: env)
-                let claudeLogin = claude.flatMap { self.isSignedIn("claude", executable: $0,
-                    environment: self.childEnvironment(env, backend: "claude")) }
-                let codexLogin = codex.flatMap { self.isSignedIn("codex", executable: $0,
-                    environment: self.childEnvironment(env, backend: "codex")) }
+                let claude = self.check("claude", environment: env)
+                let codex = self.check("codex", environment: env)
                 self.queue.async {
                     guard !self.stopping else { return }
-                    var response: [String: Any] = ["type": "availability", "claude": claude != nil,
-                        "codex": codex != nil, "claudeSignedIn": claudeLogin == true,
-                        "codexSignedIn": codexLogin == true]
-                    if claude != nil && claudeLogin == nil || codex != nil && codexLogin == nil {
-                        response["message"] = "Checking agent sign-in timed out. Try again."
-                    }
+                    var response: [String: Any] = ["type": "availability",
+                        "claude": claude.status != .missing, "codex": codex.status != .missing,
+                        "claudeSignedIn": claude.status == .ready, "codexSignedIn": codex.status == .ready,
+                        "claudeStatus": claude.status.rawValue, "codexStatus": codex.status.rawValue]
+                    if claude.status == .update || claude.status == .timedOut { response["claudeIssue"] = claude.executable }
+                    if codex.status == .update || codex.status == .timedOut { response["codexIssue"] = codex.executable }
                     self.send(response)
                 }
             }
+        #if DEBUG
+        case "testCLIs" where isTestHost:
+            // The real helper still authenticates via its signed Launch
+            // Services handshake; only the CLI executable check is replaced.
+            for name in ["claude", "codex"] {
+                if let paths = message[name] as? [String] { testCLIs[name] = paths }
+            }
+            send(["type": "testCLIsReady"])
+        #endif
         case "start":
             guard cli == nil, !startingCLI, let name = message["backend"] as? String,
                   name == "claude" || name == "codex" else { send(["type": "failed", "message": "Invalid agent request."]); return }
@@ -249,22 +289,12 @@ private final class HelperService {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let env = self.loginEnvironment()
-            let executable = self.find(name, environment: env)
-            // Only ask the installed CLI whether its own sign-in works. Never
-            // read its credentials, stdout or stderr for authentication data.
-            let signedIn = executable.flatMap { self.isSignedIn(name, executable: $0,
-                environment: self.childEnvironment(env, backend: name)) }
+            let selection = self.check(name, environment: env)
             self.queue.async {
                 self.startingCLI = false
                 guard !self.stopping else { return }
-                guard let executable else {
-                    self.send(["type": "failed", "message": "Install \(name == "claude" ? "Claude Code" : "Codex") to use this agent."])
-                    return
-                }
-                guard signedIn == true else {
-                    let login = name == "claude" ? "claude auth login" : "codex login"
-                    let message = signedIn == nil ? "The \(name) sign-in check timed out." : "Sign in with \(login)."
-                    self.send(["type": "failed", "message": message])
+                guard selection.status == .ready, let executable = selection.executable else {
+                    self.send(["type": "failed", "message": selection.message])
                     return
                 }
                 self.launchCLI(name: name, message: message, executable: executable,
@@ -285,7 +315,15 @@ private final class HelperService {
         }
 
         let process = Process()
+        #if DEBUG
+        let testCLI = isTestHost && testCLIs[name]?.contains(executable) == true
+        // macOS can prohibit direct execution of unsigned scripts inside an
+        // app sandbox. Run fixture scripts with the system shell in tests.
+        process.executableURL = URL(fileURLWithPath: testCLI ? "/bin/sh" : executable)
+        #else
+        let testCLI = false
         process.executableURL = URL(fileURLWithPath: executable)
+        #endif
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
         var environment = loginEnv
         let arguments: [String]
@@ -318,14 +356,19 @@ private final class HelperService {
             // not enter this agent's context. Disable native execution,
             // browser, app and customization tool capabilities in addition to
             // read-only sandboxing and an explicit never-approve thread.
-            guard bundledCodexHost(executable: executable) != nil else {
+            #if DEBUG
+            let testCodex = isTestHost && testCLIs["codex"]?.contains(executable) == true
+            #else
+            let testCodex = false
+            #endif
+            guard testCodex || bundledCodexHost(executable: executable) != nil else {
                 send(["type": "failed", "message": "Codex's tool host is missing. Update Codex to use Attic tools."])
                 return
             }
             environment["ATTIC_RUN_MCP_TOKEN"] = mcpToken
             // npm's launcher keeps its code-mode host inside the platform
             // package. Codex must be given that exact path to run MCP tools.
-            configureBundledCodexHost(executable: executable, environment: &environment)
+            if !testCodex { configureBundledCodexHost(executable: executable, environment: &environment) }
             // Codex's own MCP confirmation would be refused by this
             // noninteractive thread. Attic alone authorizes protected actions
             // through the trusted chat approval path.
@@ -334,7 +377,7 @@ private final class HelperService {
                 + ["shell_tool", "unified_exec", "browser_use", "computer_use", "apps",
                    "standalone_web_search", "hooks", "skill_search"].flatMap { ["--disable", $0] }
         }
-        process.arguments = arguments
+        process.arguments = testCLI ? [executable] + arguments : arguments
         process.environment = environment
         let input = Pipe()
         let output = Pipe()
@@ -346,11 +389,12 @@ private final class HelperService {
             try process.run()
         } catch {
             cleanupClaudeConfig()
-            send(["type": "failed", "message": "Could not start \(name)."])
+            send(["type": "failed", "message": "\(name == "claude" ? "Claude Code" : "Codex") cannot start (\(executable)). Update \(name == "claude" ? "Claude Code" : "Codex")."])
             return
         }
         self.cli = process
         self.backend = name
+        self.runningCLIPath = executable
         self.cliInput = input
         self.cliOutput = output
         self.cliError = error
@@ -403,7 +447,12 @@ private final class HelperService {
             let message = String(decoding: stderrBuffer, as: UTF8.self).lowercased()
             let needsLogin = message.contains("not logged in") || message.contains("authentication required") || message.contains("unauthorized")
             let login = name == "claude" ? "claude auth login" : "codex login"
-            send(["type": "failed", "message": needsLogin ? "Sign in with \(login)." : "\(name) exited with an error."])
+            let needsUpdate = message.contains("error loading configuration") ||
+                (message.contains("config.toml") && message.contains("invalid type"))
+            let failure = needsUpdate
+                ? CLIAvailability(backend: name, status: .update, executable: runningCLIPath).message
+                : needsLogin ? "Sign in with \(login)." : "\(name) exited with an error."
+            send(["type": "failed", "message": failure])
         }
         send(["type": "exited", "status": Int(status)])
     }
@@ -512,19 +561,27 @@ private final class HelperService {
         return environment
     }
 
-    private func find(_ name: String, environment: [String: String]) -> String? {
-        for folder in (environment["PATH"] ?? "").split(separator: ":") {
-            let path = URL(fileURLWithPath: String(folder)).appendingPathComponent(name).path
+    private func candidates(_ name: String, environment: [String: String]) -> [String] {
+        #if DEBUG
+        if isTestHost, let paths = testCLIs[name] { return paths }
+        #endif
+        var seen = Set<String>()
+        var paths = [String]()
+        var locations = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        if name == "codex" {
+            // OpenAI also ships a complete CLI inside its signed ChatGPT app.
+            // This binary is not necessarily on the login-shell PATH.
+            locations.append("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS")
+        }
+        for folder in locations {
+            let path = URL(fileURLWithPath: folder).appendingPathComponent(name).path
             guard FileManager.default.isExecutableFile(atPath: path) else { continue }
             guard let validated = Self.verifiedExecutable(name: name, at: URL(fileURLWithPath: path)) else {
                 continue
             }
-            if name != "codex" { return validated.path }
-            // Only a complete, signed installation can reach Attic tools.
-            // Skip standalone CLI builds without the companion MCP host.
-            if bundledCodexHost(executable: validated.path) != nil { return validated.path }
+            if seen.insert(validated.path).inserted { paths.append(validated.path) }
         }
-        return nil
+        return paths
     }
 
     /// Resolve wrappers to the signed vendor binary before even running an
@@ -587,6 +644,18 @@ private final class HelperService {
         let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
         let sibling = resolved.deletingLastPathComponent().appendingPathComponent("codex-code-mode-host")
         if Self.signedHost(sibling) { return sibling }
+        let embeddedApp = resolved.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        if embeddedApp.lastPathComponent == "CodexCLI.app",
+           embeddedApp.deletingLastPathComponent().lastPathComponent == "codex-cli",
+           embeddedApp.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Resources",
+           embeddedApp.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().lastPathComponent == "Contents",
+           embeddedApp.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "ChatGPT.app" {
+            let host = embeddedApp.deletingLastPathComponent().appendingPathComponent("bin/codex-code-mode-host")
+            if Self.signedHost(host) { return host }
+        }
         let packageRoot = resolved.deletingLastPathComponent().deletingLastPathComponent()
         #if arch(arm64)
         let platform = "codex-darwin-arm64/vendor/aarch64-apple-darwin"
@@ -621,15 +690,57 @@ private final class HelperService {
         environment["PATH"] = bundled.deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "")
     }
 
-    private func isSignedIn(_ name: String, executable: String, environment: [String: String]) -> Bool? {
+    private func check(_ name: String, environment: [String: String]) -> CLIAvailability {
+        let paths = candidates(name, environment: environment)
+        guard !paths.isEmpty else { return CLIAvailability(backend: name, status: .missing, executable: nil) }
+        let child = childEnvironment(environment, backend: name)
+        var best: CLIAvailability?
+        for path in paths {
+            #if DEBUG
+            let testCodex = isTestHost && testCLIs["codex"]?.contains(path) == true
+            #else
+            let testCodex = false
+            #endif
+            let result: CLIStatus = name == "codex" && !testCodex && bundledCodexHost(executable: path) == nil
+                ? .update : signInStatus(name, executable: path, environment: child)
+            if result == .ready { return CLIAvailability(backend: name, status: .ready, executable: path) }
+            // A CLI that can run but is signed out is a more useful choice
+            // than a broken install. Otherwise keep a specific failure.
+            if best == nil || result == .signedOut || (result == .update && best?.status == .timedOut) {
+                best = CLIAvailability(backend: name, status: result, executable: path)
+            }
+        }
+        return best ?? CLIAvailability(backend: name, status: .missing, executable: nil)
+    }
+
+    private func signInStatus(_ name: String, executable: String,
+                              environment: [String: String]) -> CLIStatus {
         let process = Process()
+        #if DEBUG
+        let testCLI = isTestHost && testCLIs[name]?.contains(executable) == true
+        process.executableURL = URL(fileURLWithPath: testCLI ? "/bin/sh" : executable)
+        #else
+        let testCLI = false
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = name == "claude" ? ["auth", "status"] : ["login", "status"]
+        #endif
+        let arguments = name == "claude" ? ["auth", "status"] : ["login", "status"]
+        process.arguments = testCLI ? [executable] + arguments : arguments
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard let result = Self.runBounded(process, output: nil, seconds: 6, maximumBytes: 0) else { return nil }
-        return result.status == 0
+        let error = Pipe()
+        process.standardError = error
+        // Look only for a config-load failure. Never inspect auth status
+        // output, log stderr, or pass CLI diagnostics to the app.
+        guard let result = Self.runBounded(process, output: error, seconds: 6, maximumBytes: 2048) else {
+            return process.processIdentifier == 0 ? .update : .timedOut
+        }
+        if result.status == 0 { return .ready }
+        let diagnostic = String(decoding: result.output, as: UTF8.self).lowercased()
+        if diagnostic.contains("error loading configuration") ||
+           diagnostic.contains("config.toml") && diagnostic.contains("invalid type") {
+            return .update
+        }
+        return result.status == 1 ? .signedOut : .update
     }
 
     /// Reads only bounded diagnostic-free bytes and imposes a deadline on the
