@@ -130,6 +130,23 @@ struct ComposerCard: View {
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
     private enum KeyboardStop: Hashable { case chip(Chip), create }
 
+    /// Read-only observation for hosted keyboard tests. It follows SwiftUI's
+    /// resolved focus, which the inactive XCTest host does not expose through AX.
+    enum KeyboardTarget: Equatable { case title, writing, chip(Chip), create, outside }
+    let onKeyboardTargetChange: ((KeyboardTarget) -> Void)?
+
+    private var keyboardTarget: KeyboardTarget {
+        if titleFocused { return .title }
+        if writingFocused { return .writing }
+        switch keyboardStop {
+        case .chip(let chip): return .chip(chip)
+        case .create: return .create
+        case nil: return .outside
+        }
+    }
+
+    private func reportKeyboardTarget() { onKeyboardTargetChange?(keyboardTarget) }
+
     private var keyboardStops: [KeyboardStop] {
         switch model.kind {
         case .task: [.chip(.date), .chip(.priority), .chip(.tags), .create]
@@ -143,10 +160,12 @@ struct ComposerCard: View {
     /// material itself so size and radius move together.
     let drawsChrome: Bool
 
-    init(model: ComposerModel, drawsChrome: Bool = true) {
+    init(model: ComposerModel, drawsChrome: Bool = true,
+         onKeyboardTargetChange: ((KeyboardTarget) -> Void)? = nil) {
         self.model = model
         self.title = model.title
         self.drawsChrome = drawsChrome
+        self.onKeyboardTargetChange = onKeyboardTargetChange
     }
 
     var body: some View {
@@ -174,7 +193,10 @@ struct ComposerCard: View {
         .modifier(ComposerChrome(drawn: drawsChrome))
         // Closing: still drawn for the shrink, but takes no input.
         .disabled(!model.isOpen)
-        .onAppear { if model.isOpen { titleFocused = true } }
+        .onAppear {
+            if model.isOpen { titleFocused = true }
+            reportKeyboardTarget()
+        }
         .onChange(of: model.isOpen) { _, isOpen in
             guard !isOpen else { return }
             open = nil
@@ -185,6 +207,9 @@ struct ComposerCard: View {
             keyboardStop = nil
         }
         .onChange(of: model.kind) { _, _ in open = nil; keyboardStop = nil }
+        .onChange(of: titleFocused) { _, _ in reportKeyboardTarget() }
+        .onChange(of: writingFocused) { _, _ in reportKeyboardTarget() }
+        .onChange(of: keyboardStop) { _, _ in reportKeyboardTarget() }
         .onChange(of: open) { _, newPicker in
             priorityPickGeneration &+= 1
             if newPicker != .priority { pickedPriority = nil }
@@ -252,7 +277,9 @@ struct ComposerCard: View {
             titleFocused = false
             writingFocused = true
         } else {
-            writingFocused = false
+            // The native responder handoff resigns the SwiftUI writing field.
+            // Clearing its FocusState here also schedules a SwiftUI defocus
+            // that can clear Title's newly installed first responder.
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
                 window.makeFirstResponder(field)

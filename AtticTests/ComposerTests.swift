@@ -830,10 +830,11 @@ final class ComposerTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func mountForKeys(on composerPage: ComposerPage) throws -> (NSWindow, NSView, NSTextView) {
+    private func mountForKeys(on composerPage: ComposerPage,
+                              onKeyboardTargetChange: ((ComposerCard.KeyboardTarget) -> Void)? = nil) throws -> (NSWindow, NSView, NSTextView) {
         try requireKeyWindowTests()
         model.open(on: composerPage)
-        let hosting = NSHostingView(rootView: ComposerCard(model: model))
+        let hosting = NSHostingView(rootView: ComposerCard(model: model, onKeyboardTargetChange: onKeyboardTargetChange))
         hosting.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
         let window = KeyWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -974,11 +975,8 @@ final class ComposerTests: XCTestCase {
     /// Accepted P4 (3 Nov): all of the card's chips and Create are keyboard
     /// reachable after the writing line. Reverse traversal returns to Title.
     func testTabAndShiftTabStayInsideTheCard() throws {
-        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-        let previous = NSApp.accessibilityAttributeValue(enhanced)
-        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
+        var target: ComposerCard.KeyboardTarget = .outside
+        let (window, hosting, field) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { target = $0 })
         typeKeys(field, "Call Sam")
         @MainActor func inWriting() -> Bool {
             guard let editor = window.firstResponder as? NSTextView, editor !== field else { return false }
@@ -1001,33 +999,43 @@ final class ComposerTests: XCTestCase {
             }
             spin(0.15)
         }
-        func focused(_ id: String) -> Bool {
-            func find(_ object: AnyObject) -> Bool {
-                guard let element = object as? NSAccessibilityProtocol else { return false }
-                if element.accessibilityIdentifier() == id && element.isAccessibilityFocused() { return true }
-                return (element.accessibilityChildren() ?? []).contains { find($0 as AnyObject) }
+        func focused(_ expected: ComposerCard.KeyboardTarget) -> Bool {
+            guard target == expected else { return false }
+            switch expected {
+            case .title: return window.firstResponder === field
+            case .writing: return inWriting()
+            case .chip, .create:
+                // SwiftUI's KeyViewProxy is the native first responder. AX
+                // focus in an inactive XCTest host reports false for every
+                // control, including the active writing field.
+                guard let responder = window.firstResponder as? NSView else { return false }
+                return responder.isDescendant(of: hosting) && responder !== field
+            case .outside: return false
             }
-            hosting.layoutSubtreeIfNeeded()
-            return find(hosting)
         }
         tab()
-        XCTAssertTrue(inWriting(), "Tab from the title goes to the writing line, not out of the card")
+        XCTAssertTrue(focused(.writing), "Tab from the title goes to the writing line, not out of the card")
         tab(back: true)
-        XCTAssertTrue(window.firstResponder === field, "⇧Tab from writing returns to Title")
+        XCTAssertTrue(focused(.title), "⇧Tab from writing returns to Title")
         tab()
-        XCTAssertTrue(inWriting())
-        for id in ["composer-chip-date", "composer-chip-priority", "composer-chip-tags", "composer-create"] {
+        XCTAssertTrue(focused(.writing))
+        for (stop, id) in [(ComposerCard.KeyboardTarget.chip(.date), "composer-chip-date"),
+                           (.chip(.priority), "composer-chip-priority"),
+                           (.chip(.tags), "composer-chip-tags"),
+                           (.create, "composer-create")] {
             tab()
-            XCTAssertTrue(focused(id), "Tab moves onto \(id) in P4 order")
+            XCTAssertTrue(focused(stop), "Tab moves onto \(id) in P4 order")
         }
-        for id in ["composer-chip-tags", "composer-chip-priority", "composer-chip-date"] {
+        for (stop, id) in [(ComposerCard.KeyboardTarget.chip(.tags), "composer-chip-tags"),
+                           (.chip(.priority), "composer-chip-priority"),
+                           (.chip(.date), "composer-chip-date")] {
             tab(back: true)
-            XCTAssertTrue(focused(id), "⇧Tab moves onto \(id) in reverse")
+            XCTAssertTrue(focused(stop), "⇧Tab moves onto \(id) in reverse")
         }
         tab(back: true)
-        XCTAssertTrue(inWriting(), "⇧Tab from Date returns to writing")
+        XCTAssertTrue(focused(.writing), "⇧Tab from Date returns to writing")
         tab(back: true)
-        XCTAssertTrue(window.firstResponder === field, "⇧Tab from writing returns to Title")
+        XCTAssertTrue(focused(.title), "⇧Tab from writing returns to Title")
         XCTAssertEqual(page.addBar.text, "Call Sam")
         XCTAssertTrue(liveTasks().isEmpty, "keyboard traversal does not submit the draft")
     }
