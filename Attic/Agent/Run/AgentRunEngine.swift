@@ -30,6 +30,7 @@ protocol AgentRunToolServing: AnyObject {
     func resolve(approval id: UUID, allow: Bool) async throws
     func changeSet() -> AgentChangeSet?
     func close()
+    func drain() async -> AgentChangeSet?
 }
 
 extension AgentRunToolServing {
@@ -39,6 +40,7 @@ extension AgentRunToolServing {
         throw AgentRunError.toolServer("Attic could not resolve the approval.")
     }
     func changeSet() -> AgentChangeSet? { nil }
+    func drain() async -> AgentChangeSet? { changeSet() }
 }
 
 /// The host provides closures for the *run-scoped* action server. The live
@@ -52,19 +54,22 @@ final class AgentRunMCPServer: AgentRunToolServing {
     private let answer: @MainActor (UUID, Bool) async throws -> Void
     private let changes: @MainActor () -> AgentChangeSet?
     private let end: @MainActor () -> Void
+    private let waitForChanges: @MainActor () async -> AgentChangeSet?
 
     init(begin: @escaping @MainActor (String, Bool) async throws -> AgentRunMCPAddress,
          watchingChanged: @escaping @MainActor (Bool) -> Void,
          approvals: @escaping @MainActor () -> [AgentApproval],
          answer: @escaping @MainActor (UUID, Bool) async throws -> Void,
          changes: @escaping @MainActor () -> AgentChangeSet?,
-         end: @escaping @MainActor () -> Void) {
+         end: @escaping @MainActor () -> Void,
+         drain: @escaping @MainActor () async -> AgentChangeSet?) {
         self.begin = begin
         self.watchingChanged = watchingChanged
         self.approvals = approvals
         self.answer = answer
         self.changes = changes
         self.end = end
+        waitForChanges = drain
     }
 
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress {
@@ -75,11 +80,13 @@ final class AgentRunMCPServer: AgentRunToolServing {
     func resolve(approval id: UUID, allow: Bool) async throws { try await answer(id, allow) }
     func changeSet() -> AgentChangeSet? { changes() }
     func close() { end() }
+    func drain() async -> AgentChangeSet? { await waitForChanges() }
 }
 
 @MainActor
 private final class LiveAgentRunToken {
     var value: String?
+    var finishedID: UUID?
 }
 
 extension AgentRunMCPServer {
@@ -90,6 +97,7 @@ extension AgentRunMCPServer {
         let current = LiveAgentRunToken()
         return AgentRunMCPServer(
             begin: { title, watching in
+                current.finishedID = nil
                 let token = try server.beginAgentRun(title: title, watching: watching)
                 current.value = token
                 do {
@@ -132,8 +140,12 @@ extension AgentRunMCPServer {
             end: {
                 if let token = current.value {
                     current.value = nil
-                    server.finishAgentRun(token: token)
+                    current.finishedID = server.finishAgentRun(token: token)
                 }
+            },
+            drain: {
+                guard let id = current.finishedID else { return nil }
+                return await server.drainedRunChangeSet(requestID: id)
             }
         )
     }

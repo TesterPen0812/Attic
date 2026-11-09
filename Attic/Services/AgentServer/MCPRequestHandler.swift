@@ -44,7 +44,12 @@ final class MCPRequestHandler {
         try runActions?.setWatching(watching, token: runToken)
     }
 
-    func finishAgentRun(token: String) { runActions?.finishRun(token: token) }
+    @discardableResult
+    func finishAgentRun(token: String) -> UUID? { runActions?.finishRun(token: token) }
+
+    func drainedRunChangeSet(requestID: UUID) async -> AgentChangeSet? {
+        await runActions?.drainedChangeSet(requestID: requestID)
+    }
 
     func finishAllAgentRuns() { runActions?.finishAllRuns() }
 

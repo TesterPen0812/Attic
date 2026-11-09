@@ -57,9 +57,15 @@ final class AgentActionsMCP {
         runs[token]?.watching = watching
     }
 
-    func finishRun(token: String) {
-        guard let run = runs.removeValue(forKey: token) else { return }
-        actions.cancelApprovals(for: run.requestID)
+    @discardableResult
+    func finishRun(token: String) -> UUID? {
+        guard let run = runs.removeValue(forKey: token) else { return nil }
+        actions.sealRequest(run.requestID)
+        return run.requestID
+    }
+
+    func drainedChangeSet(requestID: UUID) async -> AgentChangeSet? {
+        await actions.drainRequest(requestID)
     }
 
     func finishAllRuns() {
