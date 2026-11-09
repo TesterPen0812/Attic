@@ -68,6 +68,8 @@ struct ComposerServices {
     var openEvent: (CalendarOwnedEvent) -> Void = { _ in }
     /// A creation's notice and its Undo.
     var toast: (String, @escaping @MainActor () -> CommandOutcome) -> Void = { _, _ in }
+    /// A failed Calendar write whose card was dismissed or replaced.
+    var eventFailure: (String) -> Void = { _ in }
     /// Where a kept draft waits across a quit (A2); nil keeps it in memory only.
     var drafts: ComposerDraftStore? = nil
 }
@@ -80,6 +82,16 @@ struct ComposerDraftStore {
         var title: String
         var writing: String
         var kind: String
+    }
+
+    /// Failed submissions wait separately from the current card's kept draft,
+    /// so a later task or note cannot overwrite an event that never saved.
+    struct FailedEvent: Codable, Equatable {
+        var title: String
+        var writing: String
+        var day: DueDay?
+        var length: Int
+        var calendarID: String?
     }
 
     let defaults: UserDefaults
@@ -97,6 +109,18 @@ struct ComposerDraftStore {
         }
         guard load() != draft, let data = try? JSONEncoder().encode(draft) else { return }
         defaults.set(data, forKey: key)
+    }
+
+    func loadFailedEvents() -> [FailedEvent] {
+        guard let data = defaults.data(forKey: key + ".failedEvents") else { return [] }
+        return (try? JSONDecoder().decode([FailedEvent].self, from: data)) ?? []
+    }
+
+    func saveFailedEvents(_ events: [FailedEvent]) {
+        let storageKey = key + ".failedEvents"
+        guard !events.isEmpty else { defaults.removeObject(forKey: storageKey); return }
+        guard let data = try? JSONEncoder().encode(events) else { return }
+        defaults.set(data, forKey: storageKey)
     }
 }
 
@@ -132,12 +156,15 @@ final class ComposerModel: ObservableObject {
     private var calendarLoad: Task<[CalendarWriteCalendar], Never>?
     private var calendarLoadGeneration = 0
     private var draftGeneration = 0
+    private var failedEventDrafts: [ComposerDraftStore.FailedEvent] = []
+    private var recoveringFailedEvent: ComposerDraftStore.FailedEvent?
 
     static let lengths = [30, 60, 90, 120]
 
     init(tasks: TasksPageModel, services: ComposerServices = ComposerServices()) {
         self.tasks = tasks
         self.services = services
+        failedEventDrafts = services.drafts?.loadFailedEvents() ?? []
         restoreKeptDraft()
     }
 
@@ -183,9 +210,17 @@ final class ComposerModel: ObservableObject {
         }
         if !page.kinds.contains(kind) { kind = kind == .event ? .task : page.ownKind }
         if !page.kinds.contains(kind) { kind = .note }
+        if kind != .event { recoveringFailedEvent = nil }
+        let recovered = restoreFailedEventIfAvailable()
         fillCalendarDay()
         if kind == .event { requestCalendars() }
-        failed = false
+        failed = kind == .event && (recovered
+            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing }))
+        if !failedEventDrafts.isEmpty {
+            services.eventFailure(recovered
+                ? String(localized: "Couldn’t save event. Your draft is kept here for retry.")
+                : String(localized: "An event wasn’t saved. Open Calendar to retry the kept draft."))
+        }
         if !isOpen { returnFocus = NSApp.keyWindow?.firstResponder }
         isOpen = true
         focusRequest &+= 1
@@ -229,9 +264,17 @@ final class ComposerModel: ObservableObject {
         guard page.kinds.contains(newKind), newKind != kind else { return }
         kind = newKind
         draftGeneration += 1
+        if newKind != .event { recoveringFailedEvent = nil }
+        let recovered = restoreFailedEventIfAvailable()
         fillCalendarDay()
         if newKind == .event { requestCalendars() }
-        failed = false
+        failed = newKind == .event && (recovered
+            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing }))
+        if !failedEventDrafts.isEmpty {
+            services.eventFailure(recovered
+                ? String(localized: "Couldn’t save event. Your draft is kept here for retry.")
+                : String(localized: "An event wasn’t saved. Open Calendar to retry the kept draft."))
+        }
     }
 
     /// On Calendar a task or an event starts on the selected day, unless the
@@ -327,15 +370,35 @@ final class ComposerModel: ObservableObject {
         isCreating = true
         defer { isCreating = false }
         let generation = draftGeneration
+        // Resolve a typed date against a picked date exactly as createEvent
+        // does. Persisting the earlier pick would retry on the wrong day.
+        var normalized = tasks.addBar
+        normalized.typedReplacesPicks(parser: tasks.parser, caret: nil)
+        let submitted = ComposerDraftStore.FailedEvent(title: tasks.addBar.text, writing: writing,
+            day: normalized.parts(parser: tasks.parser).dueDay, length: eventLength, calendarID: calendarID)
         switch await createEvent(openingPage: openingPage, generation: generation) {
         case .notSubmitted:
             return false
         case .failed:
-            // The submitted event did not save: the card says so even when
-            // the draft was edited while it was saving, and keeps that draft.
-            guard generation == draftGeneration else { return false }
-            return finishCreation(false, openingPage: openingPage)
+            if !failedEventDrafts.contains(submitted) {
+                failedEventDrafts.append(submitted)
+                services.drafts?.saveFailedEvents(failedEventDrafts)
+            }
+            if generation == draftGeneration && isOpen && kind == .event {
+                failed = true
+                if tasks.addBar.text == submitted.title && writing == submitted.writing,
+                   eventLength == submitted.length, calendarID == submitted.calendarID,
+                   recoveringFailedEvent == nil {
+                    recoveringFailedEvent = submitted
+                }
+            }
+            services.eventFailure(String(localized: "Couldn’t save event. Your draft is kept; open Calendar to retry."))
+            return false
         case let .saved(current):
+            let recovered = recoveringFailedEvent
+            failedEventDrafts.removeAll { $0 == submitted || $0 == recovered }
+            services.drafts?.saveFailedEvents(failedEventDrafts)
+            recoveringFailedEvent = nil
             guard generation == draftGeneration, current else { return true }
             return finishCreation(true, openingPage: openingPage)
         }
@@ -344,6 +407,24 @@ final class ComposerModel: ObservableObject {
     /// What became of an event submission. `saved(current: false)`: it
     /// saved, but the card now holds a newer draft, which stays.
     private enum EventSubmission { case notSubmitted, failed, saved(current: Bool) }
+
+    /// When Calendar is opened with room for a draft, make the oldest failed
+    /// event editable again. Even a relaunched card with that event's words
+    /// recovers its original date, calendar and length from the saved proof.
+    private func restoreFailedEventIfAvailable() -> Bool {
+        guard kind == .event, case .calendar = page, let saved = failedEventDrafts.first,
+              !hasDraft || (tasks.addBar.text == saved.title && writing == saved.writing) else { return false }
+        var text = TaskAddBarText(text: saved.title)
+        text.picked.day = saved.day
+        tasks.addBar = text
+        writing = saved.writing
+        eventLength = saved.length
+        calendarID = saved.calendarID
+        // Keep the durable backup until a later create actually saves. A
+        // user may close this card, or quit, before retrying it.
+        recoveringFailedEvent = saved
+        return true
+    }
 
     /// Only Calendar needs to suspend. Native Return keeps its existing
     /// immediate task/note behavior and schedules an event's durable save.
@@ -418,7 +499,10 @@ final class ComposerModel: ObservableObject {
         // As for a task: a day typed last replaces the picked one, even with
         // its word still at the caret; a lone time keeps the picked day.
         var finished = tasks.addBar
-        if finished.typedReplacesPicks(parser: tasks.parser, caret: nil) { tasks.addBar = finished }
+        let unchangedRecoveredDay = recoveringFailedEvent.map {
+            $0.title == finished.text && $0.day == finished.picked.day
+        } ?? false
+        if !unchangedRecoveredDay && finished.typedReplacesPicks(parser: tasks.parser, caret: nil) { tasks.addBar = finished }
         let values = values
         let clock = tasks.services.calendar()
         let day = values.day ?? tasks.parser.today
@@ -474,6 +558,7 @@ final class ComposerModel: ObservableObject {
         title.clearDraft()
         writing = ""
         pinned = false
+        recoveringFailedEvent = nil
     }
 
     // MARK: Calendars

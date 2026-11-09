@@ -346,6 +346,9 @@ struct AtticPanelView: View {
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
             },
+            eventFailure: { [toasts] message in
+                toasts.showFailure(message)
+            },
             drafts: ComposerDraftStore(defaults: settings.userDefaults))
     }
 
