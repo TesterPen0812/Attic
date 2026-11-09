@@ -217,6 +217,24 @@ enum RecentlyDeletedPresentation {
     }
 }
 
+/// One filter/sort per (entries revision, search text). Pruning the selection
+/// and drawing the Settings list both read the same prepared sections.
+struct RecentlyDeletedSectionsCache {
+    private var revision: Int = -1
+    private var query = ""
+    private var prepared: [RecentlyDeletedPresentation.Section] = []
+    private(set) var filterPasses = 0
+
+    mutating func sections(_ entries: [RecentlyDeletedEntry], revision: Int, query: String) -> [RecentlyDeletedPresentation.Section] {
+        guard self.revision != revision || self.query != query else { return prepared }
+        prepared = RecentlyDeletedPresentation.sections(entries, query: query)
+        self.revision = revision
+        self.query = query
+        filterPasses &+= 1
+        return prepared
+    }
+}
+
 /// Recently Deleted as the Settings page sees it. It reads the store API
 /// only while the page is shown, follows the stores' changes then, and
 /// sends every change (restore, empty) through `AtticLibrary`, so a
@@ -247,11 +265,17 @@ final class RecentlyDeletedModel: ObservableObject {
     }
 
     @Published private(set) var entries: [RecentlyDeletedEntry] = [] {
-        didSet { pruneSelection() }
+        didSet {
+            entriesRevision &+= 1
+            refreshSectionsAndPrune()
+        }
     }
     @Published var query = "" {
-        didSet { if query != oldValue { pruneSelection() } }
+        didSet { if query != oldValue { refreshSectionsAndPrune() } }
     }
+    private var entriesRevision = 0
+    private var sectionsCache = RecentlyDeletedSectionsCache()
+    private var preparedSections: [RecentlyDeletedPresentation.Section] = []
     @Published private(set) var message: Message? {
         didSet { messageGeneration &+= 1 }
     }
@@ -283,7 +307,7 @@ final class RecentlyDeletedModel: ObservableObject {
     }
 
     var sections: [RecentlyDeletedPresentation.Section] {
-        RecentlyDeletedPresentation.sections(entries, query: query)
+        preparedSections
     }
 
     /// The listed entries, in the order the page shows them.
@@ -361,6 +385,11 @@ final class RecentlyDeletedModel: ObservableObject {
         if kept != selection { selection = kept }
         if let anchor = selectionAnchor, !listed.contains(anchor) { selectionAnchor = nil }
         if let cursor, !listed.contains(cursor) { self.cursor = nil }
+    }
+
+    private func refreshSectionsAndPrune() {
+        preparedSections = sectionsCache.sections(entries, revision: entriesRevision, query: query)
+        pruneSelection()
     }
 
     /// ⌘Z on the page undoes only a restore made here (the library history
