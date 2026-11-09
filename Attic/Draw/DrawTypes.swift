@@ -200,6 +200,10 @@ protocol DrawStoreProtocol: AnyObject {
     func reconcile(on id: UUID) -> DrawSaveResult
     func canUndo(on id: UUID) -> Bool
     func canRedo(on id: UUID) -> Bool
+    /// Stable identity of the top history step; a foreign Draw edit must not
+    /// be consumed by Recently Deleted's grouped Undo.
+    func undoStepID(on id: UUID) -> UUID?
+    func redoStepID(on id: UUID) -> UUID?
     func undo(on id: UUID) -> DrawSaveResult
     func redo(on id: UUID) -> DrawSaveResult
     func duplicate(_ id: UUID, name: String?) throws -> DrawCanvas?

@@ -35,13 +35,14 @@ class DrawStore: DrawStoreProtocol {
         }
     }
     struct Step: Codable {
+        var id = UUID()
         var change: DrawChange
         var before: DrawCanvas
         var after: DrawCanvas
         var beforePersisted: Bool
         var afterPersisted: Bool
         var reversed: Self {
-            Self(change: change.reversed, before: after, after: before,
+            Self(id: id, change: change.reversed, before: after, after: before,
                  beforePersisted: afterPersisted, afterPersisted: beforePersisted)
         }
     }
@@ -324,6 +325,9 @@ class DrawStore: DrawStoreProtocol {
         _ = revision; _ = pendingEdits
         return pending[id] == nil && !(histories[id]?.redo.isEmpty ?? true)
     }
+
+    func undoStepID(on id: UUID) -> UUID? { histories[id]?.undo.last?.id }
+    func redoStepID(on id: UUID) -> UUID? { histories[id]?.redo.last?.id }
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }
@@ -610,6 +614,26 @@ class DrawStore: DrawStoreProtocol {
             guard !image.original.isEmpty, image.pixelWidth > 0, image.pixelHeight > 0 else { throw DrawStoreError.invalidObject }
         default: break
         }
+    }
+}
+
+// History IDs were added after D-02 recovery checkpoints first shipped.
+// Existing pending edits have no ID, and must remain recoverable.
+extension DrawStore.Step {
+    private enum CodingKeys: String, CodingKey {
+        case id, change, before, after, beforePersisted, afterPersisted
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            change: try values.decode(DrawChange.self, forKey: .change),
+            before: try values.decode(DrawCanvas.self, forKey: .before),
+            after: try values.decode(DrawCanvas.self, forKey: .after),
+            beforePersisted: try values.decode(Bool.self, forKey: .beforePersisted),
+            afterPersisted: try values.decode(Bool.self, forKey: .afterPersisted)
+        )
     }
 }
 

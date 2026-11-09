@@ -154,6 +154,39 @@ final class DrawPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: checkpoint), unreadable, "preserve the damaged checkpoint")
     }
 
+    func testRecoveryCheckpointWithoutSessionHistoryIDsStillReopens() throws {
+        let root = try temporaryDirectory()
+        let object = DrawObject(content: .text("recover from older checkpoint"))
+        var canvasID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root), save: { _ in throw Injected() })
+            canvasID = store.create(name: "Draft").id
+            guard case .retry = store.perform(.put([object]), on: canvasID) else { return XCTFail("Expected failed save") }
+        }
+
+        // D-02 checkpoints precede D-04's in-session history identifiers.
+        // Removing that field simulates the existing on-disk format.
+        func withoutHistoryIDs(_ value: Any) -> Any {
+            if var object = value as? [String: Any] {
+                if object["beforePersisted"] != nil, object["afterPersisted"] != nil {
+                    object["id"] = nil
+                }
+                for (key, part) in object { object[key] = withoutHistoryIDs(part) }
+                return object
+            }
+            if let values = value as? [Any] { return values.map(withoutHistoryIDs) }
+            return value
+        }
+        let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
+        let archive = try JSONSerialization.jsonObject(with: Data(contentsOf: checkpoint))
+        try JSONSerialization.data(withJSONObject: withoutHistoryIDs(archive)).write(to: checkpoint, options: .atomic)
+
+        let relaunched = DrawPersistentStore(container: try container(at: root))
+        XCTAssertNil(relaunched.recoveryIssue, "D-04 must not invalidate D-02's recovery files")
+        XCTAssertTrue(relaunched.hasUnsettledEdits)
+        XCTAssertEqual(try relaunched.open(canvasID).objects, [object])
+    }
+
     func testThrowAfterSavePublishesExactAfterOnce() throws {
         let container = try container()
         let store = DrawPersistentStore(container: container, save: { context in
