@@ -218,6 +218,65 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 
     // MARK: Keyboard
 
+    private final class NoticeState: ObservableObject {
+        @Published var shown = false
+        var actions: [String] = []
+    }
+    private struct NoticeHarness: View {
+        @ObservedObject var state: NoticeState
+        @State private var text = "Unsaved writing"
+
+        var body: some View {
+            VStack {
+                TextField("Editor", text: $text)
+                if state.shown {
+                    AtticNotice(message: "Save failed", actionTitle: "Retry",
+                                onAction: { state.actions.append("retry") },
+                                onDismiss: { state.actions.append("dismiss") })
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    /// Inserting a notice registers neither action as an unsolicited focus
+    /// request: typing stays with the active editor.
+    private func shownR26Notice() throws -> (NSWindow, NoticeState) {
+        let state = NoticeState()
+        let (window, hosting) = host(NoticeHarness(state: state), size: CGSize(width: 360, height: 110), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextField }.first { $0.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let firstResponder = window.firstResponder
+        state.shown = true
+        spin()
+        XCTAssertIdentical(window.firstResponder, firstResponder, "A notice may not take the editor's keyboard on appear")
+        return (window, state)
+    }
+
+    func testR26NoticeInsertionKeepsTheEditorsKeyboardFocus() throws {
+        try requireKeyWindowTests()
+        let (_, state) = try shownR26Notice()
+        XCTAssertEqual(state.actions, [], "Showing the notice must never run either action")
+    }
+
+    /// Native Tab traverses button controls under Full Keyboard Access.
+    /// Leave the Air's input preference untouched; CI runs this in FKA mode.
+    func testR26NoticeActionsAreKeyboardReachableWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else {
+            throw XCTSkip("Native button Tab traversal requires Full Keyboard Access (CI or owner screen)")
+        }
+        let (window, state) = try shownR26Notice()
+        window.selectNextKeyView(nil)
+        spin()
+        key(window, " ", code: 49)
+        XCTAssertEqual(state.actions, ["retry"], "Tab then Space must activate Retry")
+        window.selectNextKeyView(nil)
+        spin()
+        key(window, " ", code: 49)
+        XCTAssertEqual(state.actions, ["retry", "dismiss"], "The next Tab then Space must activate Dismiss")
+    }
+
     /// Tab moves keyboard focus from row to row; the focused row draws the
     /// 2 pt accent ring (and only it), and answers the task keys with
     /// distinct commands.
