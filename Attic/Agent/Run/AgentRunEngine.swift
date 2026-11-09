@@ -166,6 +166,7 @@ enum AgentRunError: LocalizedError {
 private struct AgentRunArchive: Codable {
     var entries: [AgentThreadEntry] = []
     var sessions: [String: String] = [:]
+    var activeRun: UUID? = nil
 }
 
 /// Owned by the app coordinator, never by the chat view. All state, CLI
@@ -194,10 +195,12 @@ final class AgentRunEngine: AgentRunning {
     private var actionApprovalIDs = Set<UUID>()
     private var resolvingActionApprovalIDs = Set<UUID>()
     private var isRunning = false
+    private var ending = false
     private var watching = false
     private var activeReplyID: UUID?
     private var unflushedCharacters = 0
     private var currentEvents: [AgentEvent] = []
+    private var recordedTargets: [AgentTarget] = []
     private var subscribers: [UUID: AsyncStream<AgentEvent>.Continuation] = [:]
 
     init(
@@ -215,6 +218,12 @@ final class AgentRunEngine: AgentRunning {
         self.journalURL = resolvedJournalURL
         archive = (try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: resolvedJournalURL)))
             ?? AgentRunArchive()
+        if archive.activeRun != nil {
+            archive.activeRun = nil
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "error",
+                text: "An agent run was interrupted. Review its changes before continuing."))
+            _ = persist()
+        }
     }
 
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> {
@@ -229,14 +238,17 @@ final class AgentRunEngine: AgentRunning {
         activeReplyID = reply.id
         unflushedCharacters = 0
         currentEvents = []
+        recordedTargets = []
         actionApprovalIDs.removeAll()
         resolvingActionApprovalIDs.removeAll()
         isRunning = true
+        ending = false
         let runID = UUID()
         currentRunID = runID
+        archive.activeRun = runID
         let stream = addSubscriber(replay: false)
         guard persist() else {
-            finishWith(.failed("The agent thread could not be saved."))
+            endRun(.failed("The agent thread could not be saved."))
             return stream
         }
         work = Task { [weak self] in await self?.run(text, id: runID) }
@@ -255,8 +267,7 @@ final class AgentRunEngine: AgentRunning {
                 do { try await tools.resolve(approval: id, allow: allow) }
                 catch {
                     guard let self, self.currentRunID == runID else { return }
-                    self.shutdownTransport()
-                    self.finishWith(.failed("Attic could not resolve that approval."))
+                    self.endRun(.failed("Attic could not resolve that approval."))
                 }
             }
             return
@@ -275,11 +286,8 @@ final class AgentRunEngine: AgentRunning {
 
     func cancel() {
         guard isRunning else { return }
-        currentRunID = nil
-        work?.cancel()
         helper?.interrupt()
-        shutdownTransport()
-        finishWith(.failed("Agent request cancelled."))
+        endRun(.failed("Agent request cancelled."))
     }
 
     func observe() -> AsyncStream<AgentEvent> { addSubscriber(replay: true) }
@@ -293,16 +301,15 @@ final class AgentRunEngine: AgentRunning {
         archive = AgentRunArchive()
         currentEvents = []
         activeReplyID = nil
+        archive.activeRun = nil
         _ = persist()
     }
 
     /// Called on app termination. Closing the parent socket also causes the
     /// helper to terminate/reap the CLI before the helper exits.
     func shutdown() {
-        currentRunID = nil
-        work?.cancel()
-        shutdownTransport()
-        if isRunning { finishWith(.failed("The agent stopped.")) }
+        if isRunning { endRun(.failed("The agent stopped.")) }
+        else { shutdownTransport() }
     }
 
     private func run(_ prompt: String, id runID: UUID) async {
@@ -371,13 +378,11 @@ final class AgentRunEngine: AgentRunning {
                     transition.outbound.forEach(helper.writeLine)
                     for event in transition.events { emit(event) }
                     if let error = transition.failure {
-                        shutdownTransport()
-                        finishWith(.failed(error))
+                        endRun(.failed(error))
                         return
                     }
                     if transition.turnEnded {
-                        if undoChanges != nil, let set = tools.changeSet() { emit(.changes(set)) }
-                        finishTurn()
+                        endRun(.finished)
                         return
                     }
                 case "failed":
@@ -390,32 +395,40 @@ final class AgentRunEngine: AgentRunning {
             if isRunning { throw AgentRunError.toolServer("The agent helper disconnected.") }
         } catch is CancellationError {
             // cancel() owns the visible terminal state and tears down the CLI.
-            if currentRunID == runID { shutdownTransport() }
+            if currentRunID == runID { endRun(.failed("Agent request cancelled.")) }
         } catch {
             if currentRunID == runID, isRunning {
-                shutdownTransport()
-                finishWith(.failed(error.localizedDescription))
+                endRun(.failed(error.localizedDescription))
             }
         }
     }
 
-    private func finishTurn() {
-        emit(.finished)
-        shutdownTransport()
-        isRunning = false
+    /// Closing the bearer immediately rejects new calls. The already admitted
+    /// actions still own their commit receipts, so wait for the final journal
+    /// before publishing either success or failure to the chat.
+    private func endRun(_ terminal: AgentEvent) {
+        guard isRunning, !ending else { return }
+        ending = true
         currentRunID = nil
-        activeReplyID = nil
-        _ = persist()
-        completeSubscribers()
-        work = nil
+        work?.cancel()
+        let finishingTools = tools
+        shutdownTransport()
+        Task { [weak self] in
+            let changes = await finishingTools?.drain()
+            guard let self, self.ending else { return }
+            if self.undoChanges != nil, let changes { self.emit(.changes(changes)) }
+            self.finishWith(terminal)
+        }
     }
 
     private func finishWith(_ event: AgentEvent) {
         guard isRunning else { return }
         emit(event)
         isRunning = false
+        ending = false
         currentRunID = nil
         activeReplyID = nil
+        archive.activeRun = nil
         _ = persist()
         completeSubscribers()
         work = nil
@@ -444,6 +457,13 @@ final class AgentRunEngine: AgentRunning {
             }
         } else if case let .stepFinished(step) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "tool", text: step.title))
+            if step.kind != .read && step.kind != .openPage {
+                recordedTargets.append(contentsOf: step.targets)
+            }
+            _ = persist()
+        } else if case let .changes(set) = event {
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "receipt", text: "",
+                                                    changeSet: set, targets: recordedTargets))
             _ = persist()
         } else if case let .failed(message) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
