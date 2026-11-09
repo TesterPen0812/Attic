@@ -267,6 +267,22 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(runner.resolved.isEmpty)
     }
 
+    func testConcurrentApprovalsAreAnsweredExactlyOnceInArrivalOrder() async {
+        await start()
+        let first = AgentApproval(id: UUID(), title: "Delete first?", targets: [])
+        let second = AgentApproval(id: UUID(), title: "Delete second?", targets: [])
+        await emit(.approvalNeeded(first), .approvalNeeded(second), .approvalNeeded(first))
+        XCTAssertEqual(model.approval, first)
+        XCTAssertEqual(model.bar.state, .needsYou)
+        model.resolveApproval(allow: false)
+        XCTAssertEqual(model.approval, second)
+        XCTAssertEqual(model.bar.state, .needsYou)
+        model.resolveApproval(allow: true)
+        XCTAssertNil(model.approval)
+        XCTAssertEqual(runner.resolved.map { $0.0 }, [first.id, second.id])
+        XCTAssertEqual(runner.resolved.map { $0.1 }, [false, true])
+    }
+
     func testPartialBatchKeepsSuccessfulTargetsAndShowsIndividualErrors() async {
         page = .notes
         await start("Create two tasks")
