@@ -59,6 +59,21 @@ final class AgentHelperLaunchTests: XCTestCase {
         try await verifyForgedPeerDoesNotPreventRealHelper(stolenToken: true)
     }
 
+    func testInstalledBackendDiscoveryDoesNotRunSignInChecks() async throws {
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        helper.discoverInstalledBackends()
+        for await frame in helper.events where frame.type == "availability" {
+            XCTAssertNotNil(frame.claudeInstalled)
+            XCTAssertNotNil(frame.codexInstalled)
+            XCTAssertNil(frame.claudeSignedIn)
+            XCTAssertNil(frame.codexSignedIn)
+            return
+        }
+        XCTFail("Installed agent discovery did not answer")
+    }
+
     /// Runs inside the sandboxed invisible AtticUnitTestHost. A real signed
     /// Launch Services helper must connect and authenticate without UI or a
     /// copied credential file; no model CLI is launched by this test.

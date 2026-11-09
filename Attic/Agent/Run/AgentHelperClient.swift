@@ -186,6 +186,8 @@ final class AgentHelperClient {
 
     func probe() { send(["type": "probe"]) }
 
+    func discoverInstalledBackends() { send(["type": "discover"]) }
+
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
                       mcpToken: String, sessionID: String?) {
         var frame: [String: Any] = ["type": "start", "backend": backend,

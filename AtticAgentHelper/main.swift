@@ -25,6 +25,8 @@ private final class HelperService {
     private var stderrBuffer = Data()
     private var backend = ""
     private let maximumLineSize = 2_000_000
+    private var startingCLI = false
+    private var stopping = false
 
     init?(arguments: [String]) {
         // NSWorkspace drops argv from sandboxed callers. Some Launch Services
@@ -193,15 +195,42 @@ private final class HelperService {
             return
         }
         switch type {
+        case "discover":
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let env = self.loginEnvironment()
+                let claudeInstalled = self.find("claude", environment: env) != nil
+                let codexInstalled = self.find("codex", environment: env) != nil
+                self.queue.async {
+                    guard !self.stopping else { return }
+                    self.send(["type": "availability", "claude": claudeInstalled,
+                               "codex": codexInstalled])
+                }
+            }
         case "probe":
-            let env = loginEnvironment()
-            let claude = find("claude", environment: env)
-            let codex = find("codex", environment: env)
-            send(["type": "availability", "claude": claude != nil, "codex": codex != nil,
-                  "claudeSignedIn": claude.map { isSignedIn("claude", executable: $0, environment: env) } ?? false,
-                  "codexSignedIn": codex.map { isSignedIn("codex", executable: $0, environment: env) } ?? false])
+            // Login hooks and CLI auth probes must not stall the socket queue.
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let env = self.loginEnvironment()
+                let claude = self.find("claude", environment: env)
+                let codex = self.find("codex", environment: env)
+                let claudeLogin = claude.flatMap { self.isSignedIn("claude", executable: $0,
+                    environment: env) }
+                let codexLogin = codex.flatMap { self.isSignedIn("codex", executable: $0,
+                    environment: env) }
+                self.queue.async {
+                    guard !self.stopping else { return }
+                    var response: [String: Any] = ["type": "availability", "claude": claude != nil,
+                        "codex": codex != nil, "claudeSignedIn": claudeLogin == true,
+                        "codexSignedIn": codexLogin == true]
+                    if claude != nil && claudeLogin == nil || codex != nil && codexLogin == nil {
+                        response["message"] = "Checking agent sign-in timed out. Try again."
+                    }
+                    self.send(response)
+                }
+            }
         case "start":
-            guard cli == nil, let name = message["backend"] as? String,
+            guard cli == nil, !startingCLI, let name = message["backend"] as? String,
                   name == "claude" || name == "codex" else { send(["type": "failed", "message": "Invalid agent request."]); return }
             startCLI(name: name, message: message)
         case "input":
@@ -215,18 +244,36 @@ private final class HelperService {
     }
 
     private func startCLI(name: String, message: [String: Any]) {
-        let env = loginEnvironment()
-        guard let executable = find(name, environment: env) else {
-            send(["type": "failed", "message": "Install \(name == "claude" ? "Claude Code" : "Codex") to use this agent."])
-            return
+        startingCLI = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let env = self.loginEnvironment()
+            let executable = self.find(name, environment: env)
+            // Only ask the installed CLI whether its own sign-in works. Never
+            // read its credentials, stdout or stderr for authentication data.
+            let signedIn = executable.flatMap { self.isSignedIn(name, executable: $0,
+                environment: env) }
+            self.queue.async {
+                self.startingCLI = false
+                guard !self.stopping else { return }
+                guard let executable else {
+                    self.send(["type": "failed", "message": "Install \(name == "claude" ? "Claude Code" : "Codex") to use this agent."])
+                    return
+                }
+                guard signedIn == true else {
+                    let login = name == "claude" ? "claude auth login" : "codex login"
+                    let message = signedIn == nil ? "The \(name) sign-in check timed out." : "Sign in with \(login)."
+                    self.send(["type": "failed", "message": message])
+                    return
+                }
+                self.launchCLI(name: name, message: message, executable: executable,
+                               environment: env)
+            }
         }
-        // The owner signs in using the CLI itself. We never read auth files or
-        // collect credentials; only the exit status of its own status command.
-        guard isSignedIn(name, executable: executable, environment: env) else {
-            let login = name == "claude" ? "claude auth login" : "codex login"
-            send(["type": "failed", "message": "Sign in with \(login)."])
-            return
-        }
+    }
+
+    private func launchCLI(name: String, message: [String: Any], executable: String,
+                           environment loginEnv: [String: String]) {
         let prompt = message["instructions"] as? String ?? ""
         let server = message["mcpURL"] as? String ?? ""
         let mcpToken = message["mcpToken"] as? String ?? ""
@@ -239,7 +286,7 @@ private final class HelperService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
-        var environment = env
+        var environment = loginEnv
         let arguments: [String]
         if name == "claude" {
             let mcp: [String: Any] = ["mcpServers": ["attic": ["type": "http", "url": server,
@@ -385,12 +432,10 @@ private final class HelperService {
         process.standardError = FileHandle.nullDevice
         let output = Pipe()
         process.standardOutput = output
-        guard (try? process.run()) != nil else { return ProcessInfo.processInfo.environment }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return ProcessInfo.processInfo.environment }
+        guard let result = Self.runBounded(process, output: output, seconds: 4, maximumBytes: 262_144),
+              result.status == 0 else { return ProcessInfo.processInfo.environment }
         var environment: [String: String] = [:]
-        for entry in data.split(separator: 0) {
+        for entry in result.output.split(separator: 0) {
             guard let equals = entry.firstIndex(of: 61), let key = String(data: entry[..<equals], encoding: .utf8),
                   let value = String(data: entry[entry.index(after: equals)...], encoding: .utf8) else { continue }
             environment[key] = value
@@ -437,16 +482,78 @@ private final class HelperService {
         environment["PATH"] = bundled.deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "")
     }
 
-    private func isSignedIn(_ name: String, executable: String, environment: [String: String]) -> Bool {
+    private func isSignedIn(_ name: String, executable: String, environment: [String: String]) -> Bool? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = name == "claude" ? ["auth", "status"] : ["login", "status"]
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        guard let result = Self.runBounded(process, output: nil, seconds: 6, maximumBytes: 0) else { return nil }
+        return result.status == 0
+    }
+
+    /// Reads only bounded diagnostic-free bytes and imposes a deadline on the
+    /// entire process, including shell initialization and child termination.
+    /// This runs on a worker queue; the authenticated socket stays responsive.
+    private static func runBounded(_ process: Process, output: Pipe?, seconds: TimeInterval,
+                                   maximumBytes: Int) -> (status: Int32, output: Data)? {
+        guard (try? process.run()) != nil else { return nil }
+        let end = Date().addingTimeInterval(seconds)
+        let fd = output?.fileHandleForReading.fileDescriptor
+        if let fd {
+            let flags = Darwin.fcntl(fd, F_GETFL)
+            if flags >= 0 { _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
+        }
+        var bytes = Data()
+        var endedOutput = fd == nil
+        while Date() < end {
+            if let fd, !endedOutput {
+                var descriptor = pollfd(fd: fd, events: Int16(POLLIN | POLLHUP), revents: 0)
+                let ready = Darwin.poll(&descriptor, 1, 50)
+                if ready > 0 {
+                    var chunk = [UInt8](repeating: 0, count: 4096)
+                    let count = chunk.withUnsafeMutableBytes {
+                        Darwin.read(fd, $0.baseAddress, $0.count)
+                    }
+                    if count == 0 { endedOutput = true }
+                    else if count > 0 {
+                        guard bytes.count + count <= maximumBytes else { break }
+                        bytes.append(contentsOf: chunk.prefix(count))
+                    }
+                }
+            } else {
+                if !process.isRunning { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if !process.isRunning && endedOutput { break }
+        }
+        if !process.isRunning && endedOutput {
+            process.waitUntilExit()
+            return (process.terminationStatus, bytes)
+        }
+        // Even an account login hook may ignore SIGTERM. Reap without letting
+        // a stalled child hold the worker indefinitely.
+        if process.isRunning { signal(process, SIGTERM) }
+        if !waitForExit(process, seconds: 0.35) { signal(process, SIGKILL) }
+        if waitForExit(process, seconds: 0.5) { process.waitUntilExit() }
+        else { DispatchQueue.global(qos: .utility).async { process.waitUntilExit() } }
+        return nil
+    }
+
+    private static func signal(_ process: Process, _ value: Int32) {
+        let pid = process.processIdentifier
+        guard pid > 0, process.isRunning else { return }
+        // A child that established its own process group must be terminated
+        // together with descendants; never signal the helper's process group.
+        let target = Darwin.getpgid(pid) == pid ? -pid : pid
+        _ = Darwin.kill(target, value)
+    }
+
+    private static func waitForExit(_ process: Process, seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.025) }
+        return !process.isRunning
     }
 }
 

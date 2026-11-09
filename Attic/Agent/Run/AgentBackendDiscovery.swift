@@ -18,7 +18,9 @@ enum AgentBackendDiscovery {
             helper?.stop()
         }
         defer { timeout.cancel() }
-        helper.probe()
+        // Settings needs installation status, not a CLI login round trip.
+        // Slow keychain/network auth checks should not hide installed agents.
+        helper.discoverInstalledBackends()
         for await frame in helper.events where frame.type == "availability" {
             var found = Set<AgentBackend>()
             if frame.claudeInstalled == true { found.insert(.claude) }
