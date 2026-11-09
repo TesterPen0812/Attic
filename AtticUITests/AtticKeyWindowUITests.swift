@@ -41,7 +41,9 @@ final class AtticKeyWindowUITests: XCTestCase {
         func row(_ title: String) -> XCUIElement {
             app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         }
-        let email = row("Email beta testers"), dentist = row("Book dentist")
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": Now is
+        // grouped by due day, so Ship (No date) follows Email (+3 days).
+        let email = row("Email beta testers"), next = row("Ship appearance PR")
         XCTAssertTrue(email.waitForExistence(timeout: 5))
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         finder.activate()
@@ -57,7 +59,7 @@ final class AtticKeyWindowUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 3), .completed,
                        "and the task has the keyboard")
         email.typeKey(.downArrow, modifierFlags: [])
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: dentist)], timeout: 3), .completed,
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: next)], timeout: 3), .completed,
                        "↓ moves to the next task at once")
     }
 

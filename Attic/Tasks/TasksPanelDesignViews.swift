@@ -146,17 +146,26 @@ struct TasksFileTiles: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: TasksDesignMetrics.tileGap) {
                 ForEach(files) { file in
-                    if file.isImage {
-                        TasksImageTile(reference: file)
-                    } else {
-                        TasksFileTile(name: file.filename)
+                    Group {
+                        if file.isImage {
+                            TasksImageTile(reference: file)
+                        } else {
+                            TasksFileTile(name: file.filename)
+                        }
                     }
+                    // Tiles are the only file surface left on a task row
+                    // (Accepted 2026-11-01 "Task rows: no paperclip count").
+                    // Keep their individual drag and VoiceOver targets.
+                    .onDrag { TaskAttachmentDragItem(reference: file, files: .shared).itemProvider() }
+                    .atticRowControl()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(file.filename)
+                    .accessibilityIdentifier("task-attachment-tile-\(file.id.uuidString)")
                 }
             }
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(files.map(\.filename).joined(separator: ", "))
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -47,7 +47,7 @@ final class NotesHistoryImageUITests: XCTestCase {
 
 /// The Phase 2 Notes page in the real app (slice 2's main flows): a new
 /// note is kept when you leave and reopens where you left it; `#word` in
-/// the title becomes a tag (one ⌘Z undoes it); Delete Note shows All notes
+/// the title becomes a tag (one ⌘Z undoes it); Delete shows All notes
 /// with an Undo toast that brings the note back; All notes searches and
 /// opens a note. The document editor runs over the UI-test store (in memory).
 final class NotesPageUITests: XCTestCase {
@@ -98,6 +98,31 @@ final class NotesPageUITests: XCTestCase {
         noteText.click()
     }
 
+    /// Accepted 2026-11-03 "The '+' card takes over the bar's row": the
+    /// panel's New note + opens the composer. ⌘Return creates the note and
+    /// opens its editor, including its writing and parsed #tags.
+    private func composeNote(_ title: String, writing: String = "") {
+        // From an existing document, go back to the library first: the
+        // shared + is always present there and the previous note is saved.
+        if noteText.exists && !noteValue.isEmpty { showAllNotes() }
+        let plus = app.buttons["notes-new-note"]
+        require(plus, "the New note + button")
+        plus.click()
+        let titleField = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+        require(titleField, "the New note composer title")
+        titleField.click()
+        titleField.typeText(title)
+        if !writing.isEmpty {
+            let body = app.descendants(matching: .any).matching(identifier: "composer-writing").firstMatch
+            require(body, "the New note composer writing field")
+            body.click()
+            body.typeText(writing)
+        }
+        app.typeKey(.return, modifierFlags: .command)
+        let expected = title.replacingOccurrences(of: #"\s+#\w+\s*$"#, with: "", options: .regularExpression)
+        waitFor(noteText.exists && noteValue.hasPrefix(expected), "⌘Return created and opened the note (\(noteValue))")
+    }
+
     private func row(_ title: String) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title + ",")).firstMatch
     }
@@ -142,13 +167,13 @@ final class NotesPageUITests: XCTestCase {
     }
 
     func testDeletingANoteShowsAllNotesAndUndoBringsItBack() throws {
-        newNote()
-        app.typeText("Delete me\nNot really")
+        composeNote("Delete me", writing: "Not really")
         waitFor(noteValue == "Delete me\nNot really", "typed")
         let menu = app.buttons["notes-menu-button"]
         require(menu, "the ⋯ shows on a note with text")
         menu.click()
-        let delete = app.menuItems["Delete Note"]
+        // Accepted 2026-10-29 "Notes ••• menu names": Delete.
+        let delete = app.menuItems["Delete"]
         require(delete, "the note's menu opens")
         delete.click()
 
@@ -161,13 +186,10 @@ final class NotesPageUITests: XCTestCase {
     }
 
     func testAllNotesSearchesAndOpensANote() throws {
-        newNote()
-        app.typeText("Groceries\nOat milk")
+        composeNote("Groceries", writing: "Oat milk")
         waitFor(noteValue == "Groceries\nOat milk", "first note typed")
-        newNote()
-        app.typeText("Kyoto trip\nTemples")
+        composeNote("Kyoto trip", writing: "Temples")
         waitFor(noteValue == "Kyoto trip\nTemples", "second note typed")
-        newNote()
 
         showAllNotes()
         require(row("Groceries"), "the first note is listed")
@@ -188,14 +210,11 @@ final class NotesPageUITests: XCTestCase {
     }
 
     func testATagFiltersAllNotesAndASearchWithNoMatchesMakesTheNote() throws {
-        newNote()
-        app.typeText("Trip #kyoto ")
+        composeNote("Trip #kyoto ")
         let tag = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Tag kyoto")).firstMatch
         require(tag, "the title shorthand made the tag")
-        newNote()
-        app.typeText("Groceries\nOat milk")
+        composeNote("Groceries", writing: "Oat milk")
         waitFor(noteValue == "Groceries\nOat milk", "the untagged note typed")
-        newNote()
 
         showAllNotes()
         let tab = app.buttons["notes-library-tag-kyoto"]

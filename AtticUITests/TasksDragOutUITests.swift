@@ -53,7 +53,9 @@ final class TasksDragOutUITests: XCTestCase {
 
     func testADragOutEndedOverNothingLeavesThePageAsItWas() throws {
         XCTAssertEqual(state, "began 0 ended 0")
-        let order = ["Email beta testers", "Book dentist", "Call the plumber"].map { row($0).frame.minY }
+        // Accepted 2026-10-29 "Tasks: Later is the backlog": date groups
+        // put Tomorrow (Book) before the later date (Email) and No date.
+        let order = ["Book dentist", "Email beta testers", "Call the plumber"].map { row($0).frame.minY }
         XCTAssertEqual(order, order.sorted(), "the demo order")
         // Up and out of the window, to the menu bar (4 pt from the screen's
         // top), held there so the page hands the drag to AppKit.
@@ -74,7 +76,7 @@ final class TasksDragOutUITests: XCTestCase {
                           "the card starts home under the pointer that let it go (\(state))")
             print("O17-12 evidence: \(state)")
         }
-        let after = ["Email beta testers", "Book dentist", "Call the plumber"].map { row($0).frame.minY }
+        let after = ["Book dentist", "Email beta testers", "Call the plumber"].map { row($0).frame.minY }
         XCTAssertEqual(after, after.sorted(), "nothing moved")
         // The page goes on: a click selects a row.
         row("Call the plumber").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).click()

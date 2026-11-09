@@ -74,15 +74,17 @@ final class TasksRound12UITests: XCTestCase {
 
     // MARK: - Bug 3
 
-    /// Leaving for Notes or Canvas and coming back finds Tasks on the tab
+    /// Leaving for Notes or Draw and coming back finds Tasks on the tab
     /// it was left on.
     func testTheTasksTabSurvivesAVisitToNotesAndCanvas() throws {
         tab("backlog").click()
         waitFor(tab("backlog").isSelected, "Later is shown")
         app.typeKey("2", modifierFlags: .command)
         waitFor(app.buttons["panel-section-notes"].isSelected, "on Notes")
-        app.typeKey("3", modifierFlags: .command)
-        waitFor(app.buttons["panel-section-canvas"].isSelected, "on Canvas")
+        // Accepted 2026-10-29 "Rules, no drawing needed": ⌘3 is
+        // Calendar and ⌘4 is Draw (internal accessibility ID: canvas).
+        app.typeKey("4", modifierFlags: .command)
+        waitFor(app.buttons["panel-section-canvas"].isSelected, "on Draw")
         app.typeKey("1", modifierFlags: .command)
         waitFor(app.buttons["panel-section-tasks"].isSelected, "back on Tasks")
         waitFor(tab("backlog").isSelected, "Later is still the tab")
