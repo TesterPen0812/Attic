@@ -43,11 +43,16 @@ def one_touch(records):
     boundaries = [
         ("event_delivery", origin, input_ns),
         ("callback_to_handler", input_ns, stages.get("handler_entered") or stages.get("reveal_decision")),
+        ("handler_to_reveal_decision", stages.get("handler_entered"), stages.get("reveal_decision")),
+        ("reveal_to_view_dispatch", stages.get("reveal_decision"), stages.get("view_dispatch_done")),
         ("handler_to_down_return", stages.get("handler_entered"), stages.get("mouse_down_returned")),
         ("down_to_view_dispatch", stages.get("mouse_down_returned"), stages.get("view_dispatch_done")),
         ("view_to_commit_handoff", stages.get("view_dispatch_done"), stages.get("commit_handoff") or stages.get("transaction_flushed")),
+        ("view_to_transaction_flush", stages.get("view_dispatch_done"), stages.get("transaction_flushed")),
         ("handoff_to_frame_candidate", stages.get("commit_handoff") or stages.get("transaction_flushed"), candidate),
     ]
+    if first.get("kind") == "island_wake":
+        boundaries.append(("handler_to_view_dispatch", stages.get("handler_entered"), stages.get("view_dispatch_done")))
     for name, begin, end in boundaries:
         value = ms_between(begin, end)
         if value is not None:
@@ -60,6 +65,10 @@ def one_touch(records):
         if fired:
             parts["followup_late"] = ms_between(fired.get("dueNS"), fired["atNS"])
     parts = {k: v for k, v in parts.items() if v is not None}
+    # If no display-link callback arrived, an observed stage may itself prove
+    # a >500 ms delay. Ignore asynchronous memory records for that judgement.
+    observed = [r["atNS"] for r in records if r["event"] in ("stage", "span", "frame_candidate")]
+    observed_ms = ms_between(origin, max(observed)) if observed else None
     memory = [r for r in records if r["event"] == "memory" and r.get("memory")]
     memory.sort(key=lambda r: r["atNS"])
     pageins = None
@@ -71,6 +80,7 @@ def one_touch(records):
         "idle_ms": first.get("idleMS"),
         "hidden_ms": first.get("hiddenMS"),
         "total": ms_between(origin, candidate),
+        "observed_ms": observed_ms,
         "stages": parts,
         "released": first.get("released"),
         "nap_activity": first.get("napActivity"),
@@ -92,11 +102,13 @@ def report(touches):
         median = f"{statistics.median(totals):.2f}" if totals else "no candidate"
         print(f"{kind:18s} {label:6s} n={len(entries)} candidate_median_ms={median} "
               f"slowest_observed_stage={biggest[1]}:{biggest[0]:.2f}ms missing_frame={len(entries)-len(totals)}")
-    stalls = [item for item in touches if item["total"] is not None and item["total"] > 500]
-    print(f"\nStalls >500ms to frame candidate: {len(stalls)}")
+    stalls = [item for item in touches if (item["total"] if item["total"] is not None
+                                             else item["observed_ms"] or 0) > 500]
+    print(f"\nStalls >500ms to candidate or last recorded stage: {len(stalls)}")
     for item in stalls:
         print(f"run={item['run']} id={item['id']} kind={item['kind']} "
-              f"first={item['first']} total_ms={item['total']} idle_ms={item['idle_ms']} "
+              f"first={item['first']} candidate_ms={item['total']} observed_ms={item['observed_ms']} "
+              f"idle_ms={item['idle_ms']} "
               f"hidden_ms={item['hidden_ms']} released={item['released']} "
               f"nap_activity_requested={item['nap_activity']} app_nap_actual=unknown pageins={item['pageins']}")
         print("  stages_ms: " + ", ".join(f"{key}={value:.2f}" for key, value in sorted(item["stages"].items())))

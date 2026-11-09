@@ -4,7 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from summarize_first_touch import load, one_touch
+from summarize_first_touch import load, one_touch, report
+from contextlib import redirect_stdout
+from io import StringIO
 
 
 class FirstTouchSummaryTests(unittest.TestCase):
@@ -14,6 +16,8 @@ class FirstTouchSummaryTests(unittest.TestCase):
              "atNS": 10_000_000_000, "originNS": 9_995_000_000,
              "idleMS": 120_000, "firstAfterIdle": True, "released": True},
             {"version": 1, "run": "test", "id": 7, "event": "stage", "stage": "reveal_decision", "atNS": 10_230_000_000},
+            {"version": 1, "run": "test", "id": 7, "event": "stage", "stage": "handler_entered", "atNS": 10_001_000_000},
+            {"version": 1, "run": "test", "id": 7, "event": "stage", "stage": "view_dispatch_done", "atNS": 10_420_000_000},
             {"version": 1, "run": "test", "id": 7, "event": "span", "stage": "page_layout",
              "spanStartNS": 10_231_000_000, "atNS": 10_415_000_000},
             {"version": 1, "run": "test", "id": 7, "event": "frame_candidate", "atNS": 10_630_000_000},
@@ -28,7 +32,9 @@ class FirstTouchSummaryTests(unittest.TestCase):
             touch = one_touch(load(path)[0])
         self.assertEqual(touch["total"], 635)
         self.assertEqual(touch["stages"]["span:page_layout"], 184)
-        self.assertEqual(touch["stages"]["callback_to_handler"], 230)
+        self.assertEqual(touch["stages"]["callback_to_handler"], 1)
+        self.assertEqual(touch["stages"]["handler_to_reveal_decision"], 229)
+        self.assertEqual(touch["stages"]["reveal_to_view_dispatch"], 190)
         self.assertEqual(touch["pageins"], 10)
         self.assertTrue(touch["first"])
 
@@ -37,6 +43,20 @@ class FirstTouchSummaryTests(unittest.TestCase):
             path = Path(tmp) / "first-touch.jsonl"
             path.write_text('{"version":1,"id":1,"event":"input","atNS":1}\n{"event":')
             self.assertEqual(len(load(path)), 1)
+
+    def test_stall_without_a_frame_is_reported_as_observed_only(self):
+        touch = one_touch([
+            {"event": "input", "id": 2, "atNS": 2_000_000_000,
+             "kind": "panel_control", "firstAfterIdle": True},
+            {"event": "stage", "id": 2, "stage": "view_dispatch_done", "atNS": 2_601_000_000},
+        ])
+        self.assertIsNone(touch["total"])
+        self.assertEqual(touch["observed_ms"], 601)
+        output = StringIO()
+        with redirect_stdout(output):
+            report([touch])
+        self.assertIn("Stalls >500ms to candidate or last recorded stage: 1", output.getvalue())
+        self.assertIn("candidate_ms=None observed_ms=601", output.getvalue())
 
 
 if __name__ == "__main__":
