@@ -99,9 +99,15 @@ final class AgentServer: ObservableObject {
         try await handler.undoFinishedAgentChangeSet(id: id)
     }
 
-    func finishAgentRun(token: String) {
-        handler.finishAgentRun(token: token)
+    @discardableResult
+    func finishAgentRun(token: String) -> UUID? {
+        let requestID = handler.finishAgentRun(token: token)
         if !handler.hasActiveAgentRuns && !externalAccessEnabled { stop() }
+        return requestID
+    }
+
+    func drainedRunChangeSet(requestID: UUID) async -> AgentChangeSet? {
+        await handler.drainedRunChangeSet(requestID: requestID)
     }
 
     func setExternalAccessEnabled(_ enabled: Bool) {

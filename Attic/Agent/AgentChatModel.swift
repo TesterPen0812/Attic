@@ -87,7 +87,7 @@ struct AgentChatChange: Equatable, Identifiable {
 }
 
 struct AgentChatChanges: Equatable {
-    enum State: Equatable { case ready, undoing, undone }
+    enum State: Equatable { case ready, undoing, undone, recovered }
 
     var set: AgentChangeSet
     var items: [AgentChatChange]
@@ -226,6 +226,7 @@ final class AgentChatModel: ObservableObject {
 
     private var runner: AgentRunning?
     private var runTask: Task<Void, Never>?
+    private var queuedApprovals: [AgentApproval] = []
     private var progress: (done: Int, total: Int)?
     private var isRunning = false
     /// Finished while closed and not yet seen.
@@ -253,6 +254,8 @@ final class AgentChatModel: ObservableObject {
     func connect(_ runner: AgentRunning) {
         runTask?.cancel()
         self.runner = runner
+        approval = nil
+        queuedApprovals.removeAll()
         guard runner.retainsThread else { return }
         let snapshot = runner.threadSnapshot()
         // The active turn is replayed from real events. Its archived text and
@@ -267,6 +270,21 @@ final class AgentChatModel: ObservableObject {
             case "user": entries.append(AgentChatEntry(.asked(message.text)))
             case "assistant": if !message.text.isEmpty { appendText(message.text); closeReply() }
             case "tool", "error": entries.append(AgentChatEntry(.note(message.text)))
+            case "receipt":
+                if let set = message.changeSet {
+                    let targets = message.targets ?? []
+                    let items = targets.map { target in
+                        AgentChatChange(title: target.title ?? target.page.rawValue.capitalized,
+                                        detail: "Review")
+                    }
+                    let fallback = set.pages.sorted { $0.rawValue < $1.rawValue }.map {
+                        AgentChatChange(title: $0.rawValue.capitalized, detail: "Review")
+                    }
+                    entries.append(AgentChatEntry(.changes(AgentChatChanges(
+                        set: set, items: items.isEmpty ? fallback : items, steps: [], week: nil,
+                        state: .recovered))))
+                    entries.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
+                }
             default: break
             }
         }
@@ -331,6 +349,8 @@ final class AgentChatModel: ObservableObject {
         isRunning = true
         unread = false
         runChangeCount = 0
+        approval = nil
+        queuedApprovals.removeAll()
         progress = nil
         pendingItems = []
         pendingSteps = []
@@ -367,8 +387,8 @@ final class AgentChatModel: ObservableObject {
 
     func resolveApproval(allow: Bool) {
         guard let approval else { return }
-        self.approval = nil
-        phase = .acting
+        self.approval = queuedApprovals.isEmpty ? nil : queuedApprovals.removeFirst()
+        phase = self.approval == nil ? .acting : .needsYou
         if isOpen { effects.send(allow ? .approvalAllowed : .approvalDenied) }
         refreshBar()
         runner?.resolve(approval: approval.id, allow: allow)
@@ -383,6 +403,7 @@ final class AgentChatModel: ObservableObject {
         isRunning = false
         entries = []
         approval = nil
+        queuedApprovals.removeAll()
         phase = .idle
         progress = nil
         unread = false
@@ -473,7 +494,10 @@ final class AgentChatModel: ObservableObject {
             progress = (done, total)
             refreshBar()
         case let .approvalNeeded(request):
-            approval = request
+            guard approval?.id != request.id,
+                  !queuedApprovals.contains(where: { $0.id == request.id }) else { return }
+            if approval == nil { approval = request }
+            else { queuedApprovals.append(request) }
             phase = .needsYou
             refreshBar()
         case let .changes(set): changesArrived(set)
@@ -557,7 +581,15 @@ final class AgentChatModel: ObservableObject {
         if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             updateWeek { $0.read = true }
         }
-        guard step.state == .done, Self.changesSomething(step.kind) else { return }
+        if case let .partial(reason) = step.state {
+            entries.append(AgentChatEntry(.note(reason)))
+        }
+        let committed: Bool
+        switch step.state {
+        case .done, .partial: committed = true
+        case .running, .failed: committed = false
+        }
+        guard committed, Self.changesSomething(step.kind) else { return }
         let here = currentPage()
         for target in step.targets {
             if target.page != here { dots.insert(target.page) }
@@ -582,6 +614,7 @@ final class AgentChatModel: ObservableObject {
         closeReply()
         isRunning = false
         approval = nil
+        queuedApprovals.removeAll()
         phase = .idle
         for entry in entries {
             guard case var .step(step) = entry.content, step.state == .running else { continue }

@@ -2,12 +2,12 @@ import Foundation
 
 /// The seam between the agent's run and the chat view. The view reads events and
 /// calls these methods; it never reaches into tools or the model connection.
-enum AgentPage: String, Sendable, Equatable, CaseIterable {
+enum AgentPage: String, Sendable, Equatable, CaseIterable, Codable {
     case tasks, notes, calendar, draw
 }
 
 /// One thing a step touches, so the chat can animate the real row, note or event.
-struct AgentTarget: Sendable, Equatable {
+struct AgentTarget: Sendable, Equatable, Codable {
     var page: AgentPage
     var itemID: UUID? = nil
     var title: String? = nil
@@ -18,7 +18,7 @@ struct AgentTarget: Sendable, Equatable {
 }
 
 enum AgentStepState: Sendable, Equatable {
-    case running, done, failed(String)
+    case running, done, partial(String), failed(String)
 }
 
 /// How a step changes what's on screen, so the view can pick its motion.
@@ -41,7 +41,7 @@ struct AgentApproval: Identifiable, Sendable, Equatable {
 }
 
 /// Everything one request changed, undone as a whole.
-struct AgentChangeSet: Identifiable, Sendable, Equatable {
+struct AgentChangeSet: Identifiable, Sendable, Equatable, Codable {
     let id: UUID
     var title: String
     var pages: Set<AgentPage>
@@ -64,6 +64,9 @@ struct AgentThreadEntry: Identifiable, Sendable, Equatable, Codable {
     let id: UUID
     let role: String
     var text: String
+    /// Serialized commit receipt for review after process-local Undo expires.
+    var changeSet: AgentChangeSet? = nil
+    var targets: [AgentTarget]? = nil
 }
 
 struct AgentThreadSnapshot: Sendable, Equatable {

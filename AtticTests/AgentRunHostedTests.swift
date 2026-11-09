@@ -108,12 +108,79 @@ final class AgentRunHostedTests: XCTestCase {
         helper.emitLine(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Partial"}}}"#)
         await wait { runner.threadSnapshot().entries.last?.text == "Partial" }
         runner.cancel()
-        XCTAssertFalse(runner.threadSnapshot().isRunning)
+        await wait { !runner.threadSnapshot().isRunning }
         XCTAssertTrue(helper.stopped)
         XCTAssertTrue(tools.closed)
         XCTAssertTrue(runner.threadSnapshot().events.contains {
             if case let .failed(message) = $0 { return message.contains("cancelled") }; return false
         })
+    }
+
+    func testCancelKeepsCommittedUndoReceiptBeforeFailure() async {
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let change = AgentChangeSet(id: UUID(), title: "Saved task", pages: [.tasks], count: 1)
+        tools.change = change
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journalURL(),
+                                    undo: { _ in })
+        _ = runner.send("Create a task", watching: true)
+        await wait { helper.inputs.count == 1 }
+        runner.cancel()
+        await wait { !runner.threadSnapshot().isRunning }
+        let events = runner.threadSnapshot().events
+        XCTAssertEqual(events.suffix(2), [.changes(change), .failed("Agent request cancelled.")])
+    }
+
+    func testMalformedStreamKeepsCommittedUndoReceiptBeforeFailure() async {
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let change = AgentChangeSet(id: UUID(), title: "Saved note", pages: [.notes], count: 1)
+        tools.change = change
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journalURL(),
+                                    undo: { _ in })
+        _ = runner.send("Create a note", watching: true)
+        await wait { helper.inputs.count == 1 }
+        helper.emitLine("{broken json")
+        await wait { !runner.threadSnapshot().isRunning }
+        let events = runner.threadSnapshot().events
+        XCTAssertEqual(events.dropLast().last, .changes(change))
+        XCTAssertTrue(events.last.map { if case .failed = $0 { return true }; return false } ?? false)
+    }
+
+    func testUnexpectedHelperStreamEndFinishesRunAndReleasesWorkingState() async {
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journalURL())
+        _ = runner.send("Start", watching: false)
+        await wait { helper.inputs.count == 1 }
+        helper.disconnect()
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertTrue(helper.stopped)
+        XCTAssertTrue(tools.closed)
+        XCTAssertTrue(runner.threadSnapshot().events.contains { event in
+            if case let .failed(reason) = event { return reason.contains("disconnected") }
+            return false
+        })
+    }
+
+    func testStopWaitsForCommitReceiptBeforePublishingTerminalEvent() async {
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        let change = AgentChangeSet(id: UUID(), title: "Late calendar save", pages: [.calendar], count: 1)
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journalURL(),
+                                    undo: { _ in })
+        _ = runner.send("Create event", watching: true)
+        await wait { helper.inputs.count == 1 }
+        runner.cancel()
+        await wait { tools.closed }
+        XCTAssertTrue(runner.threadSnapshot().isRunning, "No terminal event while a write is in flight")
+        XCTAssertFalse(runner.threadSnapshot().events.contains { if case .failed = $0 { return true }; return false })
+        tools.change = change
+        tools.releaseDrain()
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertEqual(runner.threadSnapshot().events.suffix(2),
+                       [.changes(change), .failed("Agent request cancelled.")])
     }
 
     func testMissingOrSignedOutCLIFailsWithActionableMessage() async {
@@ -205,6 +272,42 @@ final class AgentRunHostedTests: XCTestCase {
         XCTAssertEqual(undone, changeID)
     }
 
+    func testRelaunchRestoresReviewableCommittedReceipt() async {
+        let url = journalURL()
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let change = AgentChangeSet(id: UUID(), title: "Created tasks", pages: [.tasks], count: 1)
+        tools.change = change
+        let first = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: url,
+                                   undo: { _ in })
+        _ = first.send("Make a task", watching: false)
+        await wait { helper.inputs.count == 1 }
+        helper.emitLine(#"{"type":"result","is_error":false}"#)
+        await wait { !first.threadSnapshot().isRunning }
+
+        let reopened = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(reopened)
+        let receipts = chat.entries.compactMap { entry -> AgentChatChanges? in
+            if case let .changes(changes) = entry.content { return changes }
+            return nil
+        }
+        XCTAssertEqual(receipts.map(\.set), [change])
+        XCTAssertEqual(receipts.first?.state, .recovered, "History closures do not survive app relaunch")
+    }
+
+    func testRelaunchMarksInterruptedRunForReview() async {
+        let url = journalURL()
+        let first = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        _ = first.send("Still doing work", watching: false)
+        let restarted = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: url)
+        XCTAssertTrue(restarted.threadSnapshot().entries.contains {
+            $0.role == "error" && $0.text.localizedCaseInsensitiveContains("interrupted")
+        })
+        first.cancel()
+    }
+
     func testCancelDuringHelperStartupStopsThePendingHelper() async {
         let helper = FakeRunHelper()
         helper.deferStart = true
@@ -215,7 +318,7 @@ final class AgentRunHostedTests: XCTestCase {
         runner.cancel()
         XCTAssertTrue(helper.stopped)
         XCTAssertTrue(tools.closed)
-        XCTAssertFalse(runner.threadSnapshot().isRunning)
+        await wait { !runner.threadSnapshot().isRunning }
         helper.completeStart()
     }
 
@@ -240,6 +343,8 @@ private final class FakeRunTools: AgentRunToolServing {
     var approval: AgentApproval?
     var change: AgentChangeSet?
     var resolved: [UUID: Bool] = [:]
+    var holdDrain = false
+    private var drainWaiter: CheckedContinuation<Void, Never>?
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress {
         watchingHistory.append(watching)
         return AgentRunMCPAddress(url: "http://127.0.0.1:4400/mcp", token: String(repeating: "a", count: 43))
@@ -252,6 +357,11 @@ private final class FakeRunTools: AgentRunToolServing {
     }
     func changeSet() -> AgentChangeSet? { change }
     func close() { closed = true }
+    func drain() async -> AgentChangeSet? {
+        if holdDrain { await withCheckedContinuation { drainWaiter = $0 } }
+        return change
+    }
+    func releaseDrain() { holdDrain = false; drainWaiter?.resume(); drainWaiter = nil }
 }
 
 @MainActor
@@ -289,6 +399,7 @@ private final class FakeRunHelper: AgentHelperTransmitting {
         onInput?(line, self)
     }
     func emitLine(_ line: String) { continuation.yield(AgentHelperFrame(["type": "line", "line": line])) }
+    func disconnect() { continuation.finish() }
     func interrupt() {}
     func stop() { stopped = true; continuation.finish() }
 }

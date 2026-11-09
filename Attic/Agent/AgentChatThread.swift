@@ -617,15 +617,20 @@ private struct AgentChangesRow: View {
                 .buttonStyle(.plain)
                 .disabled(undone)
                 if !undone {
-                    Button(action: undo) {
-                        Text("Undo").font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(design.tokens.ink(.heading).color)
-                            .padding(.horizontal, 8).frame(height: 20)
-                            .background(AgentChatFill.quiet(design), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    if changes.state == .recovered {
+                        Text("Review").font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+                    } else {
+                        Button(action: undo) {
+                            Text("Undo").font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(design.tokens.ink(.heading).color)
+                                .padding(.horizontal, 8).frame(height: 20)
+                                .background(AgentChatFill.quiet(design), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(changes.state != .ready)
+                        .accessibilityIdentifier("agent-chat-undo")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(changes.state != .ready)
-                    .accessibilityIdentifier("agent-chat-undo")
                 }
             }
             .frame(height: 28)

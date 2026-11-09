@@ -86,6 +86,8 @@ final class AgentActions {
     private var order: [UUID] = []
     private var approvals: [UUID: AwaitingApproval] = [:]
     private var activeCalls: [UUID: Int] = [:]
+    private var closedRequests = Set<UUID>()
+    private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     init(tasks: AgentTaskTools, calendarSource: (any CalendarEventSource)? = nil,
          calendarWriter: (any CalendarEventWriter)? = nil,
@@ -124,10 +126,13 @@ final class AgentActions {
 
     /// `watching` comes from the host run, never from the model's JSON.
     func call(name: String, arguments: [String: Any], watching: Bool, requestID: UUID) async throws -> AgentActionCall {
-        guard journals[requestID] != nil else { throw AgentActionsError.invalid("Unknown request.") }
+        try checkOpen(requestID)
+        activeCalls[requestID, default: 0] += 1
+        defer { callEnded(requestID) }
         try validate(name, arguments)
         let localArguments = try preparedArguments(name: name, arguments: arguments)
         let prepared = try await preparedCalendarArguments(name: name, arguments: localArguments)
+        try checkOpen(requestID)
         if AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
             let id = UUID()
             let targets = targetsForArguments(name, prepared)
@@ -135,19 +140,18 @@ final class AgentActions {
             approvals[id] = AwaitingApproval(name: name, arguments: prepared, watching: watching, requestID: requestID)
             return .approvalNeeded(approval)
         }
-        activeCalls[requestID, default: 0] += 1
-        defer { activeCalls[requestID, default: 0] -= 1 }
         return .performed(try await execute(name: name, arguments: prepared, watching: watching, requestID: requestID))
     }
 
     /// Only the trusted UI/runner can resolve the opaque ID issued by call().
     func resolve(approval id: UUID, allow: Bool) async throws -> AgentActionResult? {
-        guard let pending = approvals.removeValue(forKey: id) else {
+        guard let pending = approvals[id], !closedRequests.contains(pending.requestID) else {
             throw AgentActionsError.invalid("Approval expired or unknown.")
         }
+        approvals[id] = nil
         guard allow else { return nil }
         activeCalls[pending.requestID, default: 0] += 1
-        defer { activeCalls[pending.requestID, default: 0] -= 1 }
+        defer { callEnded(pending.requestID) }
         return try await execute(name: pending.name, arguments: pending.arguments,
                                  watching: pending.watching, requestID: pending.requestID)
     }
@@ -157,9 +161,39 @@ final class AgentActions {
         approvals = approvals.filter { $0.value.requestID != requestID }
     }
 
+    /// Revocation closes the admission gate at once. An action that already
+    /// entered an asynchronous store commit is allowed to finish journaling;
+    /// its receipt is drained before the runner publishes a terminal event.
+    func sealRequest(_ id: UUID) {
+        closedRequests.insert(id)
+        cancelApprovals(for: id)
+    }
+
+    func drainRequest(_ id: UUID) async -> AgentChangeSet? {
+        if (activeCalls[id] ?? 0) > 0 {
+            await withCheckedContinuation { idleWaiters[id, default: []].append($0) }
+        }
+        return changeSet(for: id)
+    }
+
+    private func checkOpen(_ id: UUID) throws {
+        guard journals[id] != nil, !closedRequests.contains(id) else {
+            throw AgentActionsError.invalid("This agent run has ended.")
+        }
+    }
+
+    private func callEnded(_ id: UUID) {
+        let remaining = (activeCalls[id] ?? 1) - 1
+        if remaining > 0 { activeCalls[id] = remaining; return }
+        activeCalls[id] = nil
+        let waiters = idleWaiters.removeValue(forKey: id) ?? []
+        waiters.forEach { $0.resume() }
+    }
+
     /// Failed calls keep previously committed steps in the same request.
     private func execute(name: String, arguments: [String: Any], watching: Bool,
                          requestID: UUID) async throws -> AgentActionResult {
+        try checkOpen(requestID)
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
