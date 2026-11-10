@@ -30,6 +30,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private var needsRaster = true
     private var dots = DrawDots()
     private(set) var editor: DrawTextEditorView?
+    private var appliedEditorPresentation: (zoom: CGFloat, dark: Bool)?
     /// Whether the scroll gesture under way began over the board's clear
     /// area (it pans and zooms) or over the top row or bar (it doesn't).
     private var scrollGestureIsOwn = true
@@ -360,10 +361,12 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawEditingChanged(replacingText: Bool) {
         guard let edit = model.editing else {
             if let editor {
+                let wasEditingFirstResponder = window?.firstResponder === editor
                 editor.owner = nil
                 editor.removeFromSuperview()
                 self.editor = nil
-                window?.makeFirstResponder(self)
+                appliedEditorPresentation = nil
+                if wasEditingFirstResponder { window?.makeFirstResponder(self) }
             }
             updateSelection()
             return
