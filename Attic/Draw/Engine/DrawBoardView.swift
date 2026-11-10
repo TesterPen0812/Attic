@@ -150,8 +150,18 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        refreshEditorAppearance()
         layoutLayers()
         requestRaster()
+    }
+
+    private func refreshEditorAppearance() {
+        guard let editor, let edit = model.editing else { return }
+        let zoom = model.viewport.zoom
+        let dark = isDark
+        if let applied = appliedEditorPresentation, applied.zoom == zoom, applied.dark == dark { return }
+        editor.apply(edit, zoom: zoom, palette: DrawPalette(dark: dark), replacingText: false)
+        appliedEditorPresentation = (zoom, dark)
     }
 
     private func layoutLayers() {
@@ -230,6 +240,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     func drawViewportChanged() {
+        refreshEditorAppearance()
         layoutLayers()
         requestRaster()
         queueCursorRefresh()
@@ -373,6 +384,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         }
         let editor = self.editor ?? makeEditor()
         editor.apply(edit, zoom: model.viewport.zoom, palette: DrawPalette(dark: isDark), replacingText: replacingText)
+        appliedEditorPresentation = (model.viewport.zoom, isDark)
         updateEditorFrame()
         if window?.firstResponder !== editor { window?.makeFirstResponder(editor) }
         updateSelection()
