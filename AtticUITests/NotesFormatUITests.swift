@@ -37,7 +37,12 @@ final class NotesFormatUITests: XCTestCase {
 
     private var noteText: XCUIElement { app.textViews["note-text"] }
     private var noteValue: String { (noteText.value as? String) ?? "" }
-    private func element(_ identifier: String) -> XCUIElement { app.descendants(matching: .any)[identifier] }
+    /// SwiftUI can expose the same identifier on more than one AX descendant
+    /// while an outgoing control is still mounted. Check the first matching
+    /// control and keep the interaction and state assertions below.
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 6, _ message: String,
                          file: StaticString = #filePath, line: UInt = #line) {
