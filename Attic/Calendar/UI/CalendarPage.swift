@@ -191,7 +191,7 @@ struct CalendarPage: View {
                 let offset = geometry.contentOffset.y + geometry.contentInsets.top
                 lastOffset.y = offset
                 return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
-                                   weekView: model.isWeekPicked
+                                   weekView: weekOnly
                                        || CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
             } action: { _, new in
                 if flags != new { flags = new }
@@ -386,26 +386,38 @@ struct CalendarPage: View {
         // above the agenda, so the agenda stays put across it.
         let above = CGFloat(max(0, count - 1)) * CalendarDesign.weekPitch
         let folded = CalendarMonthMath.weekViewOffset(weekCount: count)
-        flags.weekView = week || flags.weekView
         guard isReallyVisible, !showsDay else {
             weekOnly = week
+            flags = ScrollFlags(pinned: week, weekView: week)
             scrollPosition.scrollTo(y: week ? CalendarMonthMath.weekViewOffset(weekCount: 1) : 0)
             return
         }
         if week {
+            // The agenda keeps its place: at least folded, less the rows that go.
             let toWeek = {
                 guard model.isWeekPicked, !weekOnly else { return }
                 weekOnly = true
-                scrollPosition.scrollTo(y: max(0, lastOffset.y - above))
+                flags.weekView = true
+                scrollPosition.scrollTo(y: max(lastOffset.y, folded) - above)
             }
             if lastOffset.y >= folded - 2 || design.reduceMotion {
-                if lastOffset.y < folded - 2 { lastOffset.y = folded }
                 toWeek()
-            } else {
-                withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion),
-                              completionCriteria: .removed) {
-                    scrollPosition.scrollTo(y: folded)
-                } completion: { toWeek() }
+                return
+            }
+            // The fold's own motion first. A scroll animation reports no
+            // completion of its own, so the swap waits until the scroll has
+            // come to rest at the fold (a few still frames, 2 s at most).
+            withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                scrollPosition.scrollTo(y: folded)
+            }
+            Task { @MainActor in
+                var still = 0
+                for _ in 0..<120 where still < 3 {
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    guard model.isWeekPicked, !weekOnly else { return }
+                    still = abs(lastOffset.y - folded) < 0.25 ? still + 1 : 0
+                }
+                toWeek()
             }
         } else {
             weekOnly = false
