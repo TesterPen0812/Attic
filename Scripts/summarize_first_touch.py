@@ -32,18 +32,46 @@ def ms_between(start, end):
 
 def one_touch(records):
     first = next(r for r in records if r["event"] == "input")
-    stages = {r.get("stage"): r["atNS"] for r in records if r["event"] == "stage"}
-    spans = {r["stage"]: ms_between(r.get("spanStartNS"), r["atNS"])
-             for r in records if r["event"] == "span"}
     frames = [r["atNS"] for r in records if r["event"] == "frame_candidate"]
-    candidate = frames[0] if frames else None
+    candidate = min(frames) if frames else None
+    # A trace once stayed current after its first frame. Later untraced mouse
+    # downs wrote extra handler_entered records against the old touch. Keep
+    # the FIRST occurrence of each boundary, and never read beyond the frame.
+    stages = {}
+    spans = {}
+    for r in sorted(records, key=lambda r: r["atNS"]):
+        if candidate is not None and r["atNS"] > candidate:
+            continue
+        if r["event"] == "stage":
+            stages.setdefault(r.get("stage"), r["atNS"])
+        elif r["event"] == "span":
+            spans.setdefault(r["stage"], ms_between(r.get("spanStartNS"), r["atNS"]))
+    ups = sorted((r for r in records if r["event"] == "mouse_up"
+                  and (candidate is None or r["atNS"] <= candidate)), key=lambda r: r["atNS"])
+    mouse_up = ups[0] if ups else None
+    scheduled = next((r for r in sorted(records, key=lambda r: r["atNS"])
+                      if r.get("stage") == "followup_scheduled"
+                      and (candidate is None or r["atNS"] <= candidate)), None)
+    hotspot = next((r for r in records if r["event"] == "stage"
+                    and r.get("stage") == "hotspot_entered"), None)
     input_ns = first["atNS"]
     origin = first.get("originNS", input_ns)
+    up_origin = mouse_up.get("originNS", mouse_up["atNS"]) if mouse_up else None
+    # The synchronous AppKit/SwiftUI action delivery has returned by this
+    # boundary; an async action can continue afterwards. A native tracking
+    # loop can consume mouse-up inside mouseDown, returning on mouse-down.
+    action_return = stages.get("view_dispatch_done")
+    if up_origin is not None and (action_return is None or action_return < up_origin):
+        action_return = stages.get("mouse_down_returned")
+    if action_return is not None and up_origin is not None and action_return < up_origin:
+        action_return = None
     parts = {}
     boundaries = [
         ("event_delivery", origin, input_ns),
         ("callback_to_handler", input_ns, stages.get("handler_entered") or stages.get("reveal_decision")),
         ("handler_to_reveal_decision", stages.get("handler_entered"), stages.get("reveal_decision")),
+        ("approach_to_hotspot", stages.get("handler_entered"), stages.get("hotspot_entered")),
+        ("hotspot_to_reveal_decision", stages.get("hotspot_entered"), stages.get("reveal_decision")),
         ("reveal_to_view_dispatch", stages.get("reveal_decision"), stages.get("view_dispatch_done")),
         ("handler_to_down_return", stages.get("handler_entered"), stages.get("mouse_down_returned")),
         ("down_to_view_dispatch", stages.get("mouse_down_returned"), stages.get("view_dispatch_done")),
@@ -51,6 +79,24 @@ def one_touch(records):
         ("view_to_transaction_flush", stages.get("view_dispatch_done"), stages.get("transaction_flushed")),
         ("handoff_to_frame_candidate", stages.get("commit_handoff") or stages.get("transaction_flushed"), candidate),
     ]
+    if first.get("kind") == "corner_approach":
+        scheduled_at = scheduled["atNS"] if scheduled else None
+        boundaries.extend([
+            # The approach trace begins at 96 pt from the corner. The first
+            # reveal follow-up is scheduled only once the actual hotspot is
+            # reached; this pre-dwell interval includes pointer travel.
+            ("approach_to_hotspot_sample", stages.get("handler_entered"), scheduled_at),
+            ("hotspot_sample_to_reveal_decision", scheduled_at, stages.get("reveal_decision")),
+            ("hotspot_sample_to_followup_due", scheduled_at, scheduled.get("dueNS") if scheduled else None),
+        ])
+    if first.get("kind") in ("panel_control", "island_action"):
+        boundaries.extend([
+            ("press_duration", origin, up_origin),
+            ("mouse_up_delivery", up_origin, mouse_up["atNS"] if mouse_up else None),
+            ("mouse_up_to_action_return", up_origin, action_return),
+            ("action_return_to_frame_candidate", action_return, candidate),
+            ("mouse_up_to_frame_candidate", up_origin, candidate),
+        ])
     if first.get("kind") == "island_wake":
         boundaries.append(("handler_to_view_dispatch", stages.get("handler_entered"), stages.get("view_dispatch_done")))
     for name, begin, end in boundaries:
@@ -67,7 +113,9 @@ def one_touch(records):
     parts = {k: v for k, v in parts.items() if v is not None}
     # If no display-link callback arrived, an observed stage may itself prove
     # a >500 ms delay. Ignore asynchronous memory records for that judgement.
-    observed = [r["atNS"] for r in records if r["event"] in ("stage", "span", "frame_candidate")]
+    observed = [r["atNS"] for r in records
+                if r["event"] in ("stage", "span", "frame_candidate")
+                and (candidate is None or r["atNS"] <= candidate)]
     observed_ms = ms_between(origin, max(observed)) if observed else None
     memory = [r for r in records if r["event"] == "memory" and r.get("memory")]
     memory.sort(key=lambda r: r["atNS"])
@@ -84,6 +132,8 @@ def one_touch(records):
         "stages": parts,
         "released": first.get("released"),
         "nap_activity": first.get("napActivity"),
+        "configured_reveal_delay_ms": hotspot.get("revealDelayMS") if hotspot else None,
+        "mouse_up_recorded": mouse_up is not None,
         "pageins": pageins,
         "memory": [r["memory"] for r in memory],
         "id": first["id"],
@@ -102,6 +152,29 @@ def report(touches):
         median = f"{statistics.median(totals):.2f}" if totals else "no candidate"
         print(f"{kind:18s} {label:6s} n={len(entries)} candidate_median_ms={median} "
               f"slowest_observed_stage={biggest[1]}:{biggest[0]:.2f}ms missing_frame={len(entries)-len(totals)}")
+        if kind in ("panel_control", "island_action"):
+            for key in ("press_duration", "mouse_up_to_action_return", "action_return_to_frame_candidate",
+                        "mouse_up_to_frame_candidate"):
+                measured = [item["stages"][key] for item in entries if key in item["stages"]]
+                if measured:
+                    print(f"  {key}: median={statistics.median(measured):.2f}ms "
+                          f"worst={max(measured):.2f}ms n={len(measured)}")
+            if not any(item["mouse_up_recorded"] for item in entries):
+                print("  mouse-up unavailable in legacy log: down-to-action includes human press hold")
+        elif kind == "corner_approach":
+            configured = [item["configured_reveal_delay_ms"] for item in entries
+                          if item["configured_reveal_delay_ms"] is not None]
+            dwell = [item["stages"]["hotspot_to_reveal_decision"] for item in entries
+                     if "hotspot_to_reveal_decision" in item["stages"]]
+            if configured and dwell:
+                print(f"  configured_dwell_ms={statistics.median(configured):.0f} "
+                      f"hotspot_to_decision_median_ms={statistics.median(dwell):.2f}")
+            for key in ("approach_to_hotspot_sample", "hotspot_sample_to_followup_due",
+                        "hotspot_sample_to_reveal_decision"):
+                measured = [item["stages"][key] for item in entries if key in item["stages"]]
+                if measured:
+                    print(f"  {key}: median={statistics.median(measured):.2f}ms "
+                          f"worst={max(measured):.2f}ms n={len(measured)}")
     stalls = [item for item in touches if (item["total"] if item["total"] is not None
                                              else item["observed_ms"] or 0) > 500]
     print(f"\nStalls >500ms to candidate or last recorded stage: {len(stalls)}")
@@ -117,6 +190,7 @@ def report(touches):
                   f"resident={memory['residentBytes']} compressed={memory['compressedBytes']} "
                   f"valid={memory['valid']}")
     print("Notes: overlapping spans are not additive; resident and compressed are not subtracted from footprint.")
+    print("Mouse-up -> action return bounds synchronous event delivery, not an async action's completion.")
     print("CA commit and WindowServer/render-server time are unmeasured by this in-process log.")
 
 

@@ -58,6 +58,47 @@ class FirstTouchSummaryTests(unittest.TestCase):
         self.assertIn("Stalls >500ms to candidate or last recorded stage: 1", output.getvalue())
         self.assertIn("candidate_ms=None observed_ms=601", output.getvalue())
 
+    def test_unrelated_late_stage_cannot_replace_original_handler(self):
+        touch = one_touch([
+            {"event": "input", "id": 7, "atNS": 1_000_000_000, "kind": "panel_control"},
+            {"event": "stage", "id": 7, "stage": "handler_entered", "atNS": 1_000_010_000},
+            {"event": "stage", "id": 7, "stage": "view_dispatch_done", "atNS": 1_085_000_000},
+            {"event": "frame_candidate", "id": 7, "atNS": 1_100_000_000},
+            {"event": "stage", "id": 7, "stage": "handler_entered", "atNS": 1_980_000_000},
+        ])
+        self.assertEqual(touch["stages"]["callback_to_handler"], 0.01)
+        self.assertEqual(touch["total"], 100)
+
+    def test_mouse_up_separates_press_from_action_dispatch_and_frame(self):
+        touch = one_touch([
+            {"event": "input", "id": 3, "atNS": 1_010_000_000,
+             "originNS": 1_000_000_000, "kind": "panel_control"},
+            {"event": "stage", "id": 3, "stage": "handler_entered", "atNS": 1_011_000_000},
+            {"event": "mouse_up", "id": 3, "atNS": 1_132_000_000, "originNS": 1_120_000_000},
+            {"event": "stage", "id": 3, "stage": "view_dispatch_done", "atNS": 1_140_000_000},
+            {"event": "frame_candidate", "id": 3, "atNS": 1_175_000_000},
+        ])
+        self.assertEqual(touch["stages"]["press_duration"], 120)
+        self.assertEqual(touch["stages"]["mouse_up_delivery"], 12)
+        self.assertEqual(touch["stages"]["mouse_up_to_action_return"], 20)
+        self.assertEqual(touch["stages"]["action_return_to_frame_candidate"], 35)
+        self.assertEqual(touch["stages"]["mouse_up_to_frame_candidate"], 55)
+
+    def test_corner_approach_time_is_not_attributed_to_reveal_dwell(self):
+        touch = one_touch([
+            {"event": "input", "id": 1, "atNS": 1_000_000_000,
+             "kind": "corner_approach", "firstAfterIdle": True},
+            {"event": "stage", "id": 1, "stage": "handler_entered", "atNS": 1_002_000_000},
+            {"event": "stage", "id": 1, "stage": "followup_scheduled",
+             "atNS": 1_470_000_000, "dueNS": 1_690_000_000},
+            {"event": "stage", "id": 1, "stage": "reveal_decision", "atNS": 1_693_000_000},
+            {"event": "frame_candidate", "id": 1, "atNS": 1_725_000_000},
+        ])
+        self.assertEqual(touch["stages"]["handler_to_reveal_decision"], 691)
+        self.assertEqual(touch["stages"]["approach_to_hotspot_sample"], 468)
+        self.assertEqual(touch["stages"]["hotspot_sample_to_followup_due"], 220)
+        self.assertEqual(touch["stages"]["hotspot_sample_to_reveal_decision"], 223)
+
 
 if __name__ == "__main__":
     unittest.main()

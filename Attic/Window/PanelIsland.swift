@@ -1093,6 +1093,7 @@ final class PanelIslandWindow: NSPanel {
 
     private var pressing = false
     private var trackedRelease = false
+    private var tracingIdlePress = false
 
     override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
         let event = super.nextEvent(matching: mask)
@@ -1106,28 +1107,39 @@ final class PanelIslandWindow: NSPanel {
         return event
     }
     private func recordRelease(_ event: NSEvent?) {
-        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) { trackedRelease = true }
+        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            trackedRelease = true
+            if tracingIdlePress { IdleLatencyTrace.mouseUp(original: event.timestamp) }
+        }
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if AtticPanel.takesFirstPress(event.type), let context = onIdleTraceContext?() {
-            IdleLatencyTrace.begin("island_action", original: event.timestamp, context: context)
-        } else if AtticPanel.takesFirstPress(event.type)
-                    || [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
+        if AtticPanel.takesFirstPress(event.type) {
+            tracingIdlePress = false
+            if let context = onIdleTraceContext?() {
+                IdleLatencyTrace.begin("island_action", original: event.timestamp, context: context)
+                tracingIdlePress = true
+            } else {
+                IdleLatencyTrace.untracedInput()
+            }
+        } else if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            IdleLatencyTrace.mouseUp(original: event.timestamp)
+        } else if [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
             IdleLatencyTrace.untracedInput()
         }
         defer {
-            if AtticPanel.takesFirstPress(event.type) {
+            if tracingIdlePress, AtticPanel.takesFirstPress(event.type) {
                 IdleLatencyTrace.point("mouse_down_returned")
             }
-            if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("island_sendEvent_dispatched")
                 IdleLatencyTrace.point("view_dispatch_done")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+                tracingIdlePress = false
             }
         }
         if AtticPanel.takesFirstPress(event.type) {
-            IdleLatencyTrace.point("handler_entered")
+            if tracingIdlePress { IdleLatencyTrace.point("handler_entered") }
             pressing = true; trackedRelease = false
             (parent as? AtticPanel)?.beginFirstPress()
         }
@@ -1153,6 +1165,12 @@ final class PanelIslandWindow: NSPanel {
         default: break
         }
         super.sendEvent(event)
+        if tracingIdlePress, AtticPanel.takesFirstPress(event.type), trackedRelease {
+            IdleLatencyTrace.point("mouse_down_returned")
+            IdleLatencyTrace.point("view_dispatch_done")
+            IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+            tracingIdlePress = false
+        }
     }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { !TestPresentationPolicy.isInvisible && PanelActivation.shared.isActivationWindow(self) }

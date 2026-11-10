@@ -344,6 +344,7 @@ final class AtticPanel: NSPanel {
     private func recordTrackedRelease(_ event: NSEvent?) {
         if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
             trackingConsumedRelease = true
+            if tracingIdlePress { IdleLatencyTrace.mouseUp(original: event.timestamp) }
         }
     }
 
@@ -376,6 +377,8 @@ final class AtticPanel: NSPanel {
             } else {
                 IdleLatencyTrace.untracedInput()
             }
+        } else if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            IdleLatencyTrace.mouseUp(original: event.timestamp)
         } else if [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
             IdleLatencyTrace.untracedInput()
         }
@@ -401,7 +404,7 @@ final class AtticPanel: NSPanel {
         // first-press boundary also activates the app for native glass;
         // ordering and hover remain non-activating.
         if Self.takesFirstPress(event.type) {
-            IdleLatencyTrace.point("handler_entered")
+            if tracingIdlePress { IdleLatencyTrace.point("handler_entered") }
             beginFirstPress()
         }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
@@ -419,6 +422,14 @@ final class AtticPanel: NSPanel {
             // cards and bars included (2 Nov).
             if Self.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }
             super.sendEvent(event)
+            // Native AppKit tracking may consume mouse-up inside mouseDown,
+            // bypassing a separate sendEvent(.leftMouseUp) callback.
+            if tracingIdlePress, Self.takesFirstPress(event.type), trackingConsumedRelease {
+                IdleLatencyTrace.point("mouse_down_returned")
+                IdleLatencyTrace.point("view_dispatch_done")
+                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+                tracingIdlePress = false
+            }
             // A native tracking loop can dequeue mouse-up inside mouseDown.
             // Reconcile only after dispatch returns and all buttons are up;
             // late releases/moves must not finalise the same press twice.
