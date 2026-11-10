@@ -415,23 +415,33 @@ extension TasksRound6Tests {
         }
         defer { observer.cancel() }
 
+        // queueControlFocus enqueues onto the main dispatch queue. A fixed
+        // run-loop spin does not prove that the queued handoff was evaluated.
+        // The barrier runs after that handoff (including one rejected by its
+        // guards), so both the positive and negative assertions are definite.
+        func drainFocusQueue() {
+            let drained = expectation(description: "queued focus handoff evaluated")
+            DispatchQueue.main.async { drained.fulfill() }
+            wait(for: [drained], timeout: 0.05)
+        }
+
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainFocusQueue()
         XCTAssertEqual(delivered, [.now], "a current Tab handoff still reaches the Plus button")
         delivered.removeAll()
 
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
         model.select(tab: .done)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainFocusQueue()
         XCTAssertEqual(model.tab, .done)
         XCTAssertTrue(delivered.isEmpty, "the old Tab request must not focus the shared Plus on Done")
 
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .done, model: model, requests: requests)
         destination.cancel()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainFocusQueue()
         XCTAssertTrue(delivered.isEmpty, "a newer focus move also supersedes a queued handoff")
     }
     #endif
