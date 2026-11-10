@@ -32,7 +32,8 @@ enum AgentActionsError: Error, LocalizedError {
 enum AgentActionApprovalPolicy {
     static let names: Set<String> = [
         "delete_task", "delete_note", "delete_item", "make_note_checkbox",
-        "remove_from_tasks", "calendar_create", "calendar_update", "calendar_delete"
+        "remove_from_tasks", "calendar_create", "calendar_update", "calendar_delete",
+        "draw_delete_canvas"
     ]
 
     static func requiresApproval(_ name: String, arguments: [String: Any]) -> Bool {
@@ -68,6 +69,7 @@ enum AgentApprovalWords {
         case "calendar_create": return "Add \(subject ?? "this event") to Calendar?"
         case "calendar_update": return "Change \(subject ?? "this event") in Calendar?"
         case "calendar_delete": return "Delete \(subject ?? "this event") from Calendar?"
+        case "draw_delete_canvas": return phrase("Delete", "canvas")
         case "update_note_table":
             let deletions = (arguments["operations"] as? [[String: Any]] ?? [])
                 .compactMap { $0["op"] as? String }.filter { $0.hasPrefix("delete_") }
@@ -154,7 +156,7 @@ final class AgentActions {
     static func isReadOnlyAction(_ name: String) -> Bool {
         ["list_tasks", "get_task_workspace", "list_notes", "list_deleted", "list_tags",
          "get_settings", "search_items", "calendar_search", "calendar_read",
-         "calendar_list_calendars", "draw_list_canvases"].contains(name)
+         "calendar_list_calendars", "draw_list_canvases", "draw_read_canvas"].contains(name)
     }
 
     func setMode(_ mode: AgentChatMode, for requestID: UUID) throws {
@@ -501,7 +503,7 @@ final class AgentActions {
         name.hasPrefix("create_") || name.hasPrefix("update_") || name.hasPrefix("delete_") ||
         name.hasPrefix("duplicate_") || name.hasPrefix("move_") || name.hasPrefix("restore_") ||
         name == "link" || AgentTaskTools.asyncToolNames.contains(name) ||
-        name.hasPrefix("draw_add_")
+        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas"].contains(name)
     }
 
     private func noteSnapshot(for arguments: [String: Any]) -> (
@@ -535,6 +537,18 @@ final class AgentActions {
 
     private static func targetsFromResponse(_ text: String, name: String, arguments: [String: Any]) -> [AgentTarget] {
         let payload = ((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]) ?? [:]
+        if name.hasPrefix("draw_") {
+            let canvasID = ((payload["canvas_id"] ?? arguments["canvas_id"]) as? String)
+                .flatMap(UUID.init(uuidString:))
+            let objectID = ((payload["object_id"] ?? arguments["object_id"]) as? String)
+                .flatMap(UUID.init(uuidString:))
+            if let id = objectID ?? canvasID {
+                return [AgentTarget(page: .draw, itemID: id,
+                                    title: (payload["canvas_name"] ?? arguments["canvas_name"]) as? String,
+                                    containerID: canvasID)]
+            }
+            return []
+        }
         if name.hasPrefix("calendar_") {
             let id = ((payload["id"] ?? arguments["id"]) as? String).flatMap(UUID.init(uuidString:))
             let occurrence = (payload["occurrence_id"] ?? arguments["occurrence_id"]) as? String

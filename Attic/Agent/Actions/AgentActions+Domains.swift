@@ -55,6 +55,19 @@ extension AgentActions {
             definition("calendar_delete", "Delete an Attic-owned event by id or occurrence_id; the owner approves first.",
                        ["id": string, "occurrence_id": string]),
             definition("draw_list_canvases", "List live Draw canvases and their IDs.", [:]),
+            definition("draw_read_canvas", "Read a canvas's visible objects (up to 100), their IDs, text, types and frames. Image bytes and full stroke samples are omitted. Use object IDs when editing.", canvas),
+            definition("draw_edit_text", "Replace the text in an existing Draw text box. Pass its object_id and expected_text from draw_read_canvas; an intervening edit is refused. Undo restores the previous text.",
+                       canvas.merging(["object_id": string, "expected_text": string, "text": string]) { _, new in new },
+                       required: ["object_id", "expected_text", "text"]),
+            definition("draw_move_object", "Move an existing Draw object to absolute x/y coordinates in points. Supply its current expected_x/expected_y from draw_read_canvas to protect intervening owner edits. Undo restores the old position.",
+                       canvas.merging(["object_id": string, "x": number, "y": number,
+                                       "expected_x": number, "expected_y": number]) { _, new in new },
+                       required: ["object_id", "x", "y", "expected_x", "expected_y"]),
+            definition("draw_rename_canvas", "Rename an existing saved Draw canvas. Supply expected_name from draw_list_canvases so a newer owner rename cannot be overwritten. Undo restores the name.",
+                       canvas.merging(["name": string, "expected_name": string]) { _, new in new },
+                       required: ["name", "expected_name"]),
+            definition("draw_delete_canvas", "Move a saved Draw canvas to Recently Deleted. Requires the owner's approval and is undoable; permanent deletion is unavailable.",
+                       canvas),
             definition("draw_add_text", "Add a text box to an existing Draw canvas; geometry is in points.",
                        canvas.merging(frame.merging(style) { _, new in new }.merging(["text": string]) { _, new in new }) { _, new in new },
                        required: ["text", "x", "y"]),
@@ -302,6 +315,105 @@ extension AgentActions {
         }
         let canvasID = try Self.uuid(args["canvas_id"], "canvas_id")
         let snapshot = try draw.open(canvasID)
+        if name == "draw_read_canvas" {
+            let objects: [[String: Any]] = snapshot.objects.prefix(100).map { object in
+                var row: [String: Any] = [
+                    "id": object.id.uuidString, "x": object.frame.x, "y": object.frame.y,
+                    "width": object.frame.width, "height": object.frame.height,
+                    "z_index": object.zIndex, "colour": object.style.colour.rawValue,
+                    "size": object.style.size.rawValue, "corners": object.style.corners.rawValue
+                ]
+                switch object.content {
+                case let .text(text): row["kind"] = "text"; row["text"] = text
+                case let .shape(shape): row["kind"] = "shape"; row["shape"] = shape.rawValue
+                case let .stroke(points): row["kind"] = "stroke"; row["point_count"] = points.count
+                case let .image(image):
+                    row["kind"] = "image"
+                    row["pixel_width"] = image.pixelWidth
+                    row["pixel_height"] = image.pixelHeight
+                }
+                return row
+            }
+            let step = AgentStep(id: UUID(), title: "Read Draw canvas", kind: .read,
+                                 targets: [AgentTarget(page: .draw, itemID: canvasID,
+                                                       title: snapshot.canvas.name)], state: .done)
+            return (try Self.json(["canvas_id": canvasID.uuidString, "canvas_name": snapshot.canvas.name,
+                                   "objects": objects, "count": snapshot.objects.count,
+                                   "truncated": snapshot.objects.count > objects.count]), step, nil)
+        }
+        if name == "draw_edit_text" {
+            let objectID = try Self.uuid(args["object_id"], "object_id")
+            guard var existing = snapshot.objects.first(where: { $0.id == objectID }),
+                  case let .text(currentText) = existing.content else {
+                throw AgentActionsError.invalid("That text box is no longer on this canvas. Read the canvas again.")
+            }
+            guard let expected = args["expected_text"] as? String, expected == currentText else {
+                throw AgentActionsError.invalid("The text changed since it was read. Read the canvas again.")
+            }
+            guard let newText = args["text"] as? String, !newText.isEmpty else {
+                throw AgentActionsError.invalid("Draw text must be nonempty.")
+            }
+            guard newText != currentText else { throw AgentActionsError.invalid("That text is already up to date.") }
+            existing.content = .text(newText)
+            let save = draw.perform(.put([existing]), on: canvasID)
+            guard save.isSaved else { throw AgentActionsError.invalid("Draw text did not save: \(save)") }
+            let after = try draw.open(canvasID)
+            let step = AgentStep(id: UUID(), title: "Edit Draw text", kind: .update,
+                                 targets: [AgentTarget(page: .draw, itemID: objectID,
+                                                       title: snapshot.canvas.name, containerID: canvasID)], state: .done)
+            return (try Self.json(["object_id": objectID.uuidString, "canvas_id": canvasID.uuidString,
+                                   "text": newText]), step, after)
+        }
+        if name == "draw_move_object" {
+            let objectID = try Self.uuid(args["object_id"], "object_id")
+            guard let existing = snapshot.objects.first(where: { $0.id == objectID }) else {
+                throw AgentActionsError.invalid("That object is no longer on this canvas. Read the canvas again.")
+            }
+            let x = try Self.number(args["x"], "x"), y = try Self.number(args["y"], "y")
+            let expectedX = try Self.number(args["expected_x"], "expected_x")
+            let expectedY = try Self.number(args["expected_y"], "expected_y")
+            guard existing.frame.x == expectedX, existing.frame.y == expectedY else {
+                throw AgentActionsError.invalid("The object moved since it was read. Read the canvas again.")
+            }
+            guard x != expectedX || y != expectedY else {
+                throw AgentActionsError.invalid("The object is already at that position.")
+            }
+            let moved = existing.translated(by: DrawPoint(x: x - expectedX, y: y - expectedY), id: objectID)
+            let save = draw.perform(.put([moved]), on: canvasID)
+            guard save.isSaved else { throw AgentActionsError.invalid("Draw move did not save: \(save)") }
+            let after = try draw.open(canvasID)
+            let step = AgentStep(id: UUID(), title: "Move Draw object", kind: .move(toDay: nil),
+                                 targets: [AgentTarget(page: .draw, itemID: objectID,
+                                                       title: snapshot.canvas.name, containerID: canvasID)], state: .done)
+            return (try Self.json(["object_id": objectID.uuidString, "canvas_id": canvasID.uuidString,
+                                   "x": x, "y": y]), step, after)
+        }
+        if name == "draw_rename_canvas" || name == "draw_delete_canvas" {
+            let command: DrawCommand
+            let kind: AgentStepKind
+            if name == "draw_rename_canvas" {
+                guard let expected = args["expected_name"] as? String, expected == snapshot.canvas.name else {
+                    throw AgentActionsError.invalid("The canvas name changed. List canvases again.")
+                }
+                guard let newName = args["name"] as? String,
+                      !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw AgentActionsError.invalid("Provide a nonempty canvas name.")
+                }
+                command = .rename(newName)
+                kind = .update
+            } else {
+                command = .deleteCanvas
+                kind = .delete
+            }
+            let save = draw.perform(command, on: canvasID)
+            guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
+            let after = try draw.open(canvasID)
+            let step = AgentStep(id: UUID(), title: name == "draw_rename_canvas" ? "Rename Draw canvas" : "Delete Draw canvas",
+                                 kind: kind, targets: [AgentTarget(page: .draw, itemID: canvasID,
+                                                                   title: after.canvas.name)], state: .done)
+            return (try Self.json(["canvas_id": canvasID.uuidString, "canvas_name": after.canvas.name,
+                                   "deleted": after.canvas.deletedAt != nil]), step, after)
+        }
         let colour = try Self.enumValue(DrawColour.self, args["colour"], name: "colour", default: .ink)
         let size = try Self.enumValue(DrawSize.self, args["size"], name: "size", default: .medium)
         let corners = try Self.enumValue(DrawCorners.self, args["corners"], name: "corners", default: .square)
