@@ -1012,7 +1012,14 @@ struct TasksPage: View {
         guard event.type == .keyDown, event.keyCode == 48 else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard modifiers.isEmpty || modifiers == .shift,
-              model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              let window = pointer.view?.window, event.window === window else { return false }
+        return tabPressed(backward: modifiers == .shift)
+    }
+
+    /// NSTextView may consume Tab before the page's local key monitor sees it.
+    /// Both routes use the same visible-stop order and focus settlement.
+    private func tabPressed(backward: Bool) -> Bool {
+        guard model.isPageShown, let window = pointer.view?.window, window.isKeyWindow,
               !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
               model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
               metaPopover == nil, selectionPicker == nil, !composerPickerOpen, drag == nil else { return false }
@@ -1024,7 +1031,7 @@ struct TasksPage: View {
         if panelComposer?.isOpen() == true { return false }
         let stops = tabStops()
         let current = currentTabStop(in: stops)
-        guard let next = TasksTabOrder.next(after: current, in: stops, forward: modifiers.isEmpty) else { return false }
+        guard let next = TasksTabOrder.next(after: current, in: stops, forward: !backward) else { return false }
         focusTracker.noteKeyboardNavigation()
         moveKeyboard(to: next, from: current, in: stops)
         return true
@@ -3274,7 +3281,9 @@ struct TasksPage: View {
         TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, editor: addBarEditor,
                     showsStrip: model.pasteOffer == nil, dropTargeted: composerDropTargeted,
                     pickerOpen: $composerPickerOpen, leave: leaveAddBar,
-                    added: { _ in })
+                    added: { _ in }, tab: { backward in
+                        addBarFocused && tabPressed(backward: backward)
+                    })
     }
 
 
@@ -3526,6 +3535,7 @@ private struct TasksAddBar: View {
     @Binding var pickerOpen: Bool
     let leave: () -> Bool
     let added: (UUID) -> Void
+    let tab: (Bool) -> Bool
 
     @Environment(\.atticDesign) private var design
     @State private var datePresented = false
@@ -3669,7 +3679,8 @@ private struct TasksAddBar: View {
                             model.addComposerFiles(providers)
                             return true
                         },
-                        fileDragTargeted: { on in if fieldDropTargeted != on { fieldDropTargeted = on } }
+                        fileDragTargeted: { on in if fieldDropTargeted != on { fieldDropTargeted = on } },
+                        tab: tab
                     ),
                     editor: editor
                 ),
