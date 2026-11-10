@@ -20,9 +20,11 @@ struct AgentUndoReport {
 
 enum AgentActionsError: Error, LocalizedError {
     case invalid(String)
+    case refused(String)
     var errorDescription: String? {
-        if case let .invalid(message) = self { return message }
-        return nil
+        switch self {
+        case let .invalid(message), let .refused(message): return message
+        }
     }
 }
 
@@ -85,6 +87,7 @@ final class AgentActions {
     private(set) var journals: [UUID: Journal] = [:]
     private var order: [UUID] = []
     private var approvals: [UUID: AwaitingApproval] = [:]
+    private var requestModes: [UUID: AgentChatMode] = [:]
     private var activeCalls: [UUID: Int] = [:]
     private var closedRequests = Set<UUID>()
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -111,10 +114,38 @@ final class AgentActions {
         }.map(Self.runDefinition)
     }
 
+    /// Keep the allowlist closed: every current or future write tool must be
+    /// explicitly reviewed before Read only can offer or execute it.
+    static func isReadOnlyAction(_ name: String) -> Bool {
+        ["list_tasks", "get_task_workspace", "list_notes", "list_deleted", "list_tags",
+         "get_settings", "search_items", "calendar_search", "calendar_read",
+         "calendar_list_calendars", "draw_list_canvases"].contains(name)
+    }
+
+    func setMode(_ mode: AgentChatMode, for requestID: UUID) throws {
+        try checkOpen(requestID)
+        requestModes[requestID] = mode
+        if mode == .readOnly { cancelApprovals(for: requestID) }
+    }
+
+    func guardMode(_ name: String, requestID: UUID) throws {
+        if requestModes[requestID] == .readOnly && !Self.isReadOnlyAction(name) {
+            throw AgentActionsError.refused("Read only: \(name.replacingOccurrences(of: "_", with: " ")) would change something. Nothing was changed.")
+        }
+    }
+
+    func refusalStep(name: String, arguments: [String: Any], reason: String) -> AgentStep {
+        let targets = targetsForArguments(name, arguments)
+        let title = targets.compactMap(\.title).first ?? name.replacingOccurrences(of: "_", with: " ")
+        return AgentStep(id: UUID(), title: String(("Refused: \(title)").prefix(43)),
+                         kind: .read, targets: targets, state: .failed(reason))
+    }
+
     @discardableResult
     func beginRequest(title: String) -> UUID {
         let id = UUID()
         journals[id] = Journal(changeSet: AgentChangeSet(id: id, title: title, pages: [], count: 0))
+        requestModes[id] = .askFirst
         order.append(id)
         return id
     }
@@ -127,13 +158,15 @@ final class AgentActions {
     /// `watching` comes from the host run, never from the model's JSON.
     func call(name: String, arguments: [String: Any], watching: Bool, requestID: UUID) async throws -> AgentActionCall {
         try checkOpen(requestID)
+        try guardMode(name, requestID: requestID)
         activeCalls[requestID, default: 0] += 1
         defer { callEnded(requestID) }
         try validate(name, arguments)
         let localArguments = try preparedArguments(name: name, arguments: arguments)
         let prepared = try await preparedCalendarArguments(name: name, arguments: localArguments)
         try checkOpen(requestID)
-        if AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
+        try guardMode(name, requestID: requestID)
+        if requestModes[requestID] != .auto && AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
             let id = UUID()
             let targets = targetsForArguments(name, prepared)
             let approval = AgentApproval(id: id, title: "Allow \(name.replacingOccurrences(of: "_", with: " "))?", targets: targets)
@@ -150,6 +183,7 @@ final class AgentActions {
         }
         approvals[id] = nil
         guard allow else { return nil }
+        try guardMode(pending.name, requestID: pending.requestID)
         activeCalls[pending.requestID, default: 0] += 1
         defer { callEnded(pending.requestID) }
         return try await execute(name: pending.name, arguments: pending.arguments,
@@ -167,6 +201,7 @@ final class AgentActions {
     func sealRequest(_ id: UUID) {
         closedRequests.insert(id)
         cancelApprovals(for: id)
+        requestModes[id] = nil
     }
 
     func drainRequest(_ id: UUID) async -> AgentChangeSet? {
@@ -194,6 +229,7 @@ final class AgentActions {
     private func execute(name: String, arguments: [String: Any], watching: Bool,
                          requestID: UUID) async throws -> AgentActionResult {
         try checkOpen(requestID)
+        try guardMode(name, requestID: requestID)
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
@@ -215,7 +251,7 @@ final class AgentActions {
         } else if name == "search_items" {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
-            (text, step) = try await calendarAction(name, arguments)
+            (text, step) = try await calendarAction(name, arguments, requestID: requestID)
         } else if name.hasPrefix("draw_") {
             let result = try drawAction(name, arguments)
             text = result.0; step = result.1

@@ -44,6 +44,11 @@ final class MCPRequestHandler {
         try runActions?.setWatching(watching, token: runToken)
     }
 
+    func setMode(_ mode: AgentChatMode, runToken: String) throws {
+        guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
+        try runActions.setMode(mode, token: runToken)
+    }
+
     @discardableResult
     func finishAgentRun(token: String) -> UUID? { runActions?.finishRun(token: token) }
 
@@ -131,7 +136,7 @@ final class MCPRequestHandler {
             return errorResponse(id: NSNull(), code: -32600, message: "Invalid request id")
         }
         if method == "tools/list" {
-            return resultResponse(id: id, result: ["tools": runActions.definitions])
+            return resultResponse(id: id, result: ["tools": runActions.definitions(token: token)])
         }
         guard let params = message["params"] as? [String: Any],
               let name = params["name"] as? String else {

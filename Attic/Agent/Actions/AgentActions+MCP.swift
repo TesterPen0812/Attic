@@ -11,7 +11,7 @@ final class AgentActionsMCP {
         case waiting
         case resolving
         case completed(AgentActionResult)
-        case refused
+        case refused(String)
         case failed(String)
     }
 
@@ -25,6 +25,7 @@ final class AgentActionsMCP {
     private struct Run {
         let requestID: UUID
         var watching: Bool
+        var mode: AgentChatMode = .askFirst
         var pending: [UUID: Pending] = [:]
     }
 
@@ -45,6 +46,16 @@ final class AgentActionsMCP {
         ]]
     }
 
+    func definitions(token: String) -> [[String: Any]] {
+        guard let run = runs[token] else { return [] }
+        return run.mode == .readOnly
+            ? definitions.filter { def in
+                guard let name = def["name"] as? String else { return false }
+                return AgentActions.isReadOnlyAction(name) || name == "agent_approval_status"
+            }
+            : definitions
+    }
+
     /// Called only by the trusted app/run coordinator; never exposed as MCP.
     func beginRun(title: String, watching: Bool) -> String {
         let token = UUID().uuidString + UUID().uuidString
@@ -55,6 +66,21 @@ final class AgentActionsMCP {
     func setWatching(_ watching: Bool, token: String) throws {
         guard runs[token] != nil else { throw AgentActionsError.invalid("Unknown agent run.") }
         runs[token]?.watching = watching
+    }
+
+    func setMode(_ mode: AgentChatMode, token: String) throws {
+        guard let run = runs[token] else { throw AgentActionsError.invalid("Unknown agent run.") }
+        try actions.setMode(mode, for: run.requestID)
+        runs[token]?.mode = mode
+        if mode == .readOnly {
+            for id in run.pending.keys {
+                switch runs[token]?.pending[id]?.state {
+                case .waiting?, .resolving?:
+                    runs[token]?.pending[id]?.state = .refused("Read only: that action was refused. Nothing was changed.")
+                default: break
+                }
+            }
+        }
     }
 
     @discardableResult
@@ -124,8 +150,14 @@ final class AgentActionsMCP {
             return Self.status(pending)
         }
 
-        let outcome = try await actions.call(name: name, arguments: arguments, watching: run.watching,
-                                             requestID: run.requestID)
+        let outcome: AgentActionCall
+        do {
+            outcome = try await actions.call(name: name, arguments: arguments, watching: run.watching,
+                                              requestID: run.requestID)
+        } catch let AgentActionsError.refused(message) {
+            return ["status": "refused", "message": message,
+                    "step": Self.step(actions.refusalStep(name: name, arguments: arguments, reason: message))]
+        }
         guard runs[token]?.requestID == run.requestID else {
             throw AgentActionsError.invalid("Agent run ended before the action finished.")
         }
@@ -170,10 +202,14 @@ final class AgentActionsMCP {
             // An ended run cannot publish an old resolution to a new run.
             guard runs[token]?.pending[id] != nil else { return }
             if let result { runs[token]?.pending[id]?.state = .completed(result) }
-            else { runs[token]?.pending[id]?.state = .refused }
+            else { runs[token]?.pending[id]?.state = .refused("The owner refused this action.") }
         } catch {
             if runs[token]?.pending[id] != nil {
-                runs[token]?.pending[id]?.state = .failed(error.localizedDescription)
+                if runs[token]?.mode == .readOnly {
+                    runs[token]?.pending[id]?.state = .refused("Read only: that action was refused. Nothing was changed.")
+                } else {
+                    runs[token]?.pending[id]?.state = .failed(error.localizedDescription)
+                }
             }
             throw error
         }
@@ -189,8 +225,10 @@ final class AgentActionsMCP {
                     "poll_tool": "agent_approval_status",
                     "message": "Waiting for the owner. Call agent_approval_status with approval_id to poll."]
         case let .completed(result): return self.result(result)
-        case .refused: return ["status": "refused", "message": "The owner refused this action."]
-        case let .failed(message): return ["status": "failed", "message": message]
+        case let .refused(message):
+            return ["status": "refused", "message": message, "approval_title": pending.approval.title]
+        case let .failed(message):
+            return ["status": "failed", "message": message, "approval_title": pending.approval.title]
         }
     }
 

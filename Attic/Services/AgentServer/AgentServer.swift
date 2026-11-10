@@ -79,6 +79,10 @@ final class AgentServer: ObservableObject {
         try handler.setWatching(watching, runToken: token)
     }
 
+    func setRunMode(_ mode: AgentChatMode, token: String) throws {
+        try handler.setMode(mode, runToken: token)
+    }
+
     func pendingRunApprovals(token: String) -> [AgentApproval] {
         handler.runApprovals(token: token)
     }

@@ -188,7 +188,7 @@ extension AgentActions {
          "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
     }
 
-    func calendarAction(_ name: String, _ args: [String: Any]) async throws -> (String, AgentStep) {
+    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID) async throws -> (String, AgentStep) {
         func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget]) -> (String, AgentStep) {
             (text, AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
                              kind: kind, targets: targets, state: .done))
@@ -252,9 +252,13 @@ extension AgentActions {
                                            isAllDay: allDay,
                                            calendarID: calendarID, timeZoneID: zone, notes: args["notes"] as? String)
             let saved: CalendarOwnedEvent
-            if name == "calendar_create" { saved = try await writer.create(draft) }
+            if name == "calendar_create" {
+                try guardMode(name, requestID: requestID)
+                saved = try await writer.create(draft)
+            }
             else {
                 try await verifyCalendarBaseline(args, using: writer)
+                try guardMode(name, requestID: requestID)
                 saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft)
             }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
@@ -264,6 +268,7 @@ extension AgentActions {
             guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
             let id = try Self.uuid(args["id"], "id")
             try await verifyCalendarBaseline(args, using: writer)
+            try guardMode(name, requestID: requestID)
             try await writer.delete(id)
             return try result(Self.json(["deleted": id.uuidString, "status": "deleted",
                                          "title": args["_resolved_title"] ?? "",

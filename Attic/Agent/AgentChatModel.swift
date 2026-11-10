@@ -13,6 +13,14 @@ enum AgentChatMode: String, CaseIterable, Identifiable, Sendable {
         case .readOnly: String(localized: "Read only")
         }
     }
+
+    var description: String {
+        switch self {
+        case .auto: String(localized: "Just do it")
+        case .askFirst: String(localized: "Deletes and Calendar")
+        case .readOnly: String(localized: "Changes nothing")
+        }
+    }
 }
 
 /// What the ✦ button says while the chat is closed. Plain states: no thinking
@@ -202,7 +210,17 @@ final class AgentChatModel: ObservableObject {
     @Published private(set) var approval: AgentApproval?
     @Published private(set) var phase: AgentChatPhase = .idle
     @Published var draft = ""
-    @Published var mode: AgentChatMode = .askFirst
+    @Published var mode: AgentChatMode = .askFirst {
+        didSet {
+            runner?.setMode(mode)
+            if mode == .readOnly {
+                approval = nil
+                queuedApprovals.removeAll()
+                if phase == .needsYou { phase = .acting }
+                refreshBar()
+            }
+        }
+    }
 
     /// Bumped on every effect, so a view can follow them through `effects`.
     let effects = PassthroughSubject<AgentChatEffect, Never>()
@@ -254,6 +272,7 @@ final class AgentChatModel: ObservableObject {
     func connect(_ runner: AgentRunning) {
         runTask?.cancel()
         self.runner = runner
+        runner.setMode(mode)
         approval = nil
         queuedApprovals.removeAll()
         guard runner.retainsThread else { return }

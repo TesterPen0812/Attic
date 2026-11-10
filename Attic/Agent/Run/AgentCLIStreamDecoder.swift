@@ -155,11 +155,13 @@ struct AgentCLIStreamDecoder {
                 update.failure = "Claude Code requested an unsupported permission."
                 return update
             }
-            let approvalID = UUID()
             let input = request["input"] as? [String: Any] ?? [:]
-            pendingApprovals[approvalID] = (id, input)
-            update.events.append(.approvalNeeded(AgentApproval(
-                id: approvalID, title: "Allow \(Self.displayName(name))?", targets: [])))
+            // Claude's own permission gate is not the owner approval policy.
+            // Only the run-scoped MCP action server can authorize store writes.
+            update.outbound.append(Self.json(["type": "control_response", "response": [
+                "subtype": "success", "request_id": id,
+                "response": ["behavior": "allow", "updatedInput": input]
+            ]]))
         case "result":
             if message["is_error"] as? Bool == true {
                 update.failure = "Claude Code could not complete the request."

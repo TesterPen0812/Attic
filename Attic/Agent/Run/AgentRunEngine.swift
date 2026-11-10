@@ -26,6 +26,7 @@ struct AgentRunMCPAddress: Sendable {
 protocol AgentRunToolServing: AnyObject {
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress
     func setWatching(_ watching: Bool)
+    func setMode(_ mode: AgentChatMode)
     func pendingApprovals() -> [AgentApproval]
     func resolve(approval id: UUID, allow: Bool) async throws
     func changeSet() -> AgentChangeSet?
@@ -35,6 +36,7 @@ protocol AgentRunToolServing: AnyObject {
 
 extension AgentRunToolServing {
     func setWatching(_ watching: Bool) {}
+    func setMode(_ mode: AgentChatMode) {}
     func pendingApprovals() -> [AgentApproval] { [] }
     func resolve(approval id: UUID, allow: Bool) async throws {
         throw AgentRunError.toolServer("Attic could not resolve the approval.")
@@ -50,6 +52,7 @@ extension AgentRunToolServing {
 final class AgentRunMCPServer: AgentRunToolServing {
     private let begin: @MainActor (String, Bool) async throws -> AgentRunMCPAddress
     private let watchingChanged: @MainActor (Bool) -> Void
+    private let modeChanged: @MainActor (AgentChatMode) -> Void
     private let approvals: @MainActor () -> [AgentApproval]
     private let answer: @MainActor (UUID, Bool) async throws -> Void
     private let changes: @MainActor () -> AgentChangeSet?
@@ -58,6 +61,7 @@ final class AgentRunMCPServer: AgentRunToolServing {
 
     init(begin: @escaping @MainActor (String, Bool) async throws -> AgentRunMCPAddress,
          watchingChanged: @escaping @MainActor (Bool) -> Void,
+         modeChanged: @escaping @MainActor (AgentChatMode) -> Void = { _ in },
          approvals: @escaping @MainActor () -> [AgentApproval],
          answer: @escaping @MainActor (UUID, Bool) async throws -> Void,
          changes: @escaping @MainActor () -> AgentChangeSet?,
@@ -65,6 +69,7 @@ final class AgentRunMCPServer: AgentRunToolServing {
          drain: @escaping @MainActor () async -> AgentChangeSet?) {
         self.begin = begin
         self.watchingChanged = watchingChanged
+        self.modeChanged = modeChanged
         self.approvals = approvals
         self.answer = answer
         self.changes = changes
@@ -76,6 +81,7 @@ final class AgentRunMCPServer: AgentRunToolServing {
         try await begin(title, watching)
     }
     func setWatching(_ watching: Bool) { watchingChanged(watching) }
+    func setMode(_ mode: AgentChatMode) { modeChanged(mode) }
     func pendingApprovals() -> [AgentApproval] { approvals() }
     func resolve(approval id: UUID, allow: Bool) async throws { try await answer(id, allow) }
     func changeSet() -> AgentChangeSet? { changes() }
@@ -87,6 +93,7 @@ final class AgentRunMCPServer: AgentRunToolServing {
 private final class LiveAgentRunToken {
     var value: String?
     var finishedID: UUID?
+    var mode: AgentChatMode = .askFirst
 }
 
 extension AgentRunMCPServer {
@@ -101,6 +108,7 @@ extension AgentRunMCPServer {
                 let token = try server.beginAgentRun(title: title, watching: watching)
                 current.value = token
                 do {
+                    try server.setRunMode(current.mode, token: token)
                     for _ in 0..<160 {
                         switch server.state {
                         case .running:
@@ -124,6 +132,10 @@ extension AgentRunMCPServer {
             },
             watchingChanged: { watching in
                 if let token = current.value { try? server.setRunWatching(watching, token: token) }
+            },
+            modeChanged: { mode in
+                current.mode = mode
+                if let token = current.value { try? server.setRunMode(mode, token: token) }
             },
             approvals: {
                 current.value.map { server.pendingRunApprovals(token: $0) } ?? []
@@ -197,6 +209,7 @@ final class AgentRunEngine: AgentRunning {
     private var isRunning = false
     private var ending = false
     private var watching = false
+    private var mode: AgentChatMode = .askFirst
     private var activeReplyID: UUID?
     private var unflushedCharacters = 0
     private var currentEvents: [AgentEvent] = []
@@ -258,6 +271,11 @@ final class AgentRunEngine: AgentRunning {
     func setWatching(_ watching: Bool) {
         self.watching = watching
         tools?.setWatching(watching)
+    }
+
+    func setMode(_ mode: AgentChatMode) {
+        self.mode = mode
+        tools?.setMode(mode)
     }
 
     func resolve(approval id: UUID, allow: Bool) {
@@ -322,6 +340,7 @@ final class AgentRunEngine: AgentRunning {
                 tools = makeTools()
             }
             guard let tools else { throw AgentRunError.toolServer("Attic's tools are unavailable.") }
+            tools.setMode(mode)
             let address = try await tools.open(title: prompt, watching: watching)
             guard currentRunID == runID else { tools.close(); return }
             try Task.checkCancellation()
