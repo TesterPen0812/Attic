@@ -557,6 +557,15 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let (store, noteStore) = try runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        #if DEBUG
+        // Screen9 window-only capture: a fresh in-memory launch with an
+        // existing note, without touching any persisted preview or owner data.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SCREEN9_SAVED_NOTE"] == "1" {
+            _ = noteStore.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [
+                .text("Screen9 saved note"), .text("Existing writing on a cold launch.")
+            ]))
+        }
+        #endif
         // Attachments belong only to explicitly requested in-memory UI fixtures.
         if inMemoryStore, isUITesting, ["tasknote", "taskfiles"].contains(environment["ATTIC_UI_TEST_SEED"] ?? "") {
             Task { @MainActor in await TaskNotePreviewSeed.attachHeavyFiles(to: noteStore) }

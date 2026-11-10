@@ -254,6 +254,10 @@ private struct PanelPageTransitKey: EnvironmentKey {
 @MainActor
 final class PanelPageTransit: ObservableObject {
     @Published var sliding = false
+    /// The page whose contents are still travelling out. A retained page
+    /// may stop accepting input immediately but must keep painting until
+    /// its slide finishes.
+    @Published var departingPage: PanelPage?
 }
 
 extension EnvironmentValues {

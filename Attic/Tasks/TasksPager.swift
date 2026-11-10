@@ -613,6 +613,7 @@ final class TasksDisplayClock: NSObject {
 /// The pager's pages: those in the span (and always the one shown), each
 /// placed by `TasksPagerSlot`; the rest are not built.
 struct TasksPagerPages<Page: View>: View {
+    @Environment(\.panelPageTransit) private var transit
     @ObservedObject var span: TasksPagerSpan
     /// What the pages show (round 10): observed here, so a change the lists
     /// react to (a `show`'s scroll request, a new row) rebuilds the pages'
@@ -632,6 +633,16 @@ struct TasksPagerPages<Page: View>: View {
     let token: (Int) -> TasksPageModel.PageToken
 
     var body: some View {
+        if let transit {
+            TasksPagerOutgoingDraw(transit: transit) { drawsDeparting in
+                pages(drawsDeparting: drawsDeparting)
+            }
+        } else {
+            pages(drawsDeparting: false)
+        }
+    }
+
+    private func pages(drawsDeparting: Bool) -> some View {
         ZStack(alignment: .topLeading) {
             // Every slot stays (removing one left its neighbour's list
             // drawn where the last swipe had it); only its content comes
@@ -640,7 +651,7 @@ struct TasksPagerPages<Page: View>: View {
                 // The task-note route covers the Tasks shell but keeps its
                 // pages built. Hide their native scroll views from AppKit AX
                 // until Back reveals the shell again.
-                let drawn = model.isPageShown &&
+                let drawn = (model.isPageShown || drawsDeparting) &&
                     (index == shown || (span.pages.contains(index) && span.skipped != index))
                 Group {
                     if drawn || span.warm?.contains(index) == true {
@@ -658,6 +669,17 @@ struct TasksPagerPages<Page: View>: View {
                 .accessibilityHidden(index != shown)
             }
         }
+    }
+}
+
+/// Observe only the slide's start/end; the retained Tasks page can remain
+/// visually complete after it has released its keyboard and input monitors.
+private struct TasksPagerOutgoingDraw<Content: View>: View {
+    @ObservedObject var transit: PanelPageTransit
+    let content: (Bool) -> Content
+
+    var body: some View {
+        content(transit.sliding && transit.departingPage == .tasks)
     }
 }
 

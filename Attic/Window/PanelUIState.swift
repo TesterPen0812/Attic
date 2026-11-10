@@ -322,6 +322,7 @@ final class PanelUIState: ObservableObject {
         if pageTransit.sliding {
             pageSlideGeneration &+= 1
             pageTransit.sliding = false
+            pageTransit.departingPage = nil
         }
     }
 
@@ -360,6 +361,7 @@ final class PanelUIState: ObservableObject {
         pageSlideGeneration &+= 1
         let generation = pageSlideGeneration
         let sliding = motion.travels
+        pageTransit.departingPage = sliding ? PanelPage(selectedSection) : nil
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
         withAnimation(motion.animation, completionCriteria: .removed) {
             selectSection(section)
@@ -369,6 +371,7 @@ final class PanelUIState: ObservableObject {
             // switch owns a newer generation and must keep its transit state.
             guard sliding, let self, self.pageSlideGeneration == generation else { return }
             self.pageTransit.sliding = false
+            self.pageTransit.departingPage = nil
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }

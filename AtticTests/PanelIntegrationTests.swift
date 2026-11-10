@@ -53,6 +53,40 @@ final class PanelIntegrationTests: XCTestCase {
         spin(until: { element("composer-title") == nil })
         XCTAssertNil(element("composer-title"), "Escape folds the composer")
     }
+
+    func testScreen9OutgoingTasksStayDrawnUntilThePageSlideEnds() throws {
+        let panel = try makePanel()
+        let model = TasksPageModel(library: AtticLibrary(tasks: panel.store))
+        let transit = PanelPageTransit()
+        transit.departingPage = .tasks
+        transit.sliding = true
+        model.isPageShown = false // The outgoing page is no longer interactive.
+        var pageVisible = false
+        let pager = TasksPagerPages(
+            span: model.pagerSwipe.span, model: model, store: panel.store,
+            motion: model.pagerSwipe.motion, count: 3, shown: 0,
+            size: CGSize(width: 300, height: 200),
+            page: { index, drawn in
+                Text(drawn ? "Drawing" : "Quiet")
+                    .onAppear { if index == 0 { pageVisible = drawn } }
+                    .onChange(of: drawn) { _, current in if index == 0 { pageVisible = current } }
+                    .onDisappear { if index == 0 { pageVisible = false } }
+            },
+            token: { model.pageToken(TasksTab.allCases[$0]) }
+        )
+        let host = NSHostingView(rootView: pager.environment(\.panelPageTransit, transit))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 300, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        XCTAssertTrue(pageVisible, "outgoing Tasks rows must continue drawing while the page travels")
+        transit.sliding = false
+        spin(0.1)
+        XCTAssertFalse(pageVisible, "after the slide, the retained Tasks page returns to its quiet state")
+    }
     #endif
 
     func testR01UnrelatedSettingDoesNotReevaluateRetainedHosts() throws {
