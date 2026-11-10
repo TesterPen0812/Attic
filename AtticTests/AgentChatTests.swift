@@ -958,6 +958,37 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertFalse(topRow.isAway(.tasks))
     }
 
+    private func backdropMask() -> CALayer? {
+        func find(_ view: NSView) -> AgentChatBackdropView? {
+            if let found = view as? AgentChatBackdropView { return found }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
+        }
+        guard let content = window.contentView, let view = find(content) else { return nil }
+        return view.layer?.sublayers?.last?.mask
+    }
+
+    /// Screen 9, item 21: on the Air the main thread was busy for the first
+    /// frames of the opening. The blur, run by Core Animation on its own clock,
+    /// went on wiping while the colour (drawn on the main thread) and the
+    /// composer waited, so the colour arrived visibly later. The blur must
+    /// move only when the rest of the opening can.
+    func testTheBlurNeverRunsAheadOfAHitchedMainThread() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.open()
+        spin(0.05)
+        let mask = try XCTUnwrap(backdropMask())
+        func scale() -> CGFloat {
+            ((mask.presentation() ?? mask).value(forKeyPath: "transform.scale.x") as? CGFloat) ?? -1
+        }
+        let before = scale()
+        XCTAssertLessThan(before, 0.95, "Precondition: the wipe is under way")
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(scale(), before, accuracy: 0.001,
+                       "The blur wiped on while the main thread, and so the colour and the composer, could not")
+    }
+
     func testPanelHidingRemovesTheStageAtOnce() {
         model.open()
         spin(0.15)
@@ -1140,7 +1171,7 @@ final class AgentChatFXTests: XCTestCase {
         XCTAssertEqual(fx.liveCount, 0, "No stars burst from the ✦: they spread as a dotted halo round it")
         run(fx, seconds: 0.12)
         XCTAssertEqual(fx.liveCount, 0, "Nothing around the ✦ while the composer grows")
-        run(fx, seconds: AgentChatBackdropView.opening.duration + 0.05)
+        run(fx, seconds: AgentChatWipe.opening.duration + 0.05)
         XCTAssertEqual(fx.liveCount, 0, "The opening's stars end with the wipe")
         run(fx, seconds: 0.3)
         XCTAssertEqual(fx.liveCount, 0, "Nothing rises in the first second")
@@ -1170,31 +1201,62 @@ final class AgentChatFXTests: XCTestCase {
         let view = AgentChatBackdropView()
         view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
         view.layout()
-        view.setShown(true, origin: CGPoint(x: 280, y: 530), fades: false)
+        view.apply(reveal: 0.4, origin: CGPoint(x: 280, y: 530), fades: false)
         let layers = try XCTUnwrap(view.layer?.sublayers)
         XCTAssertFalse(layers.isEmpty)
         for layer in layers {
             let mask = try XCTUnwrap(layer.mask as? CAGradientLayer, "A hard path edge slices through text")
             XCTAssertEqual(mask.type, .radial)
-            let wipe = try XCTUnwrap(mask.animation(forKey: "wipe"))
-            XCTAssertEqual(wipe.duration, AgentChatBackdropView.opening.duration, accuracy: 0.001)
+            XCTAssertNil(mask.animation(forKey: "wipe"), "No clock of its own: it moves with the rest of the opening")
+            XCTAssertEqual(mask.locations?.dropFirst().first?.doubleValue ?? 0, Double(1 - AgentChatWipe.feather), accuracy: 0.001)
         }
     }
 
     func testTheWipeFollowsItsCurveFromTheStar() {
-        let start = Date(timeIntervalSinceReferenceDate: 1000)
-        let reach: CGFloat = 400
-        let timing = AgentChatBackdropView.opening
-        let small = AgentChatWipe.smallest(reach: reach)
-        let wipe = AgentChatWipe(shown: true, start: start, origin: CGPoint(x: 280, y: 530), reach: reach, from: small,
-                                 duration: timing.duration,
-                                 curve: (Double(timing.x1), Double(timing.y1), Double(timing.x2), Double(timing.y2)))
-        XCTAssertEqual(wipe.scale(at: start), small, accuracy: 0.001)
-        let half = wipe.scale(at: start.addingTimeInterval(timing.duration / 2))
-        XCTAssertEqual(half, small + (1 - small) * CGFloat(AgentEase.curve(0.3, 0.7, 0.2, 1, 0.5)), accuracy: 0.01)
-        XCTAssertEqual(wipe.scale(at: start.addingTimeInterval(timing.duration)), 1, accuracy: 0.001)
-        XCTAssertGreaterThanOrEqual(wipe.fullRadius * (1 - AgentChatWipe.feather), reach - 0.5,
+        let timing = AgentChatWipe.opening
+        XCTAssertEqual([timing.x1, timing.y1, timing.x2, timing.y2, timing.duration], [0.3, 0.7, 0.2, 1, 0.62])
+        XCTAssertEqual([AgentChatWipe.closing.x1, AgentChatWipe.closing.y1, AgentChatWipe.closing.x2, AgentChatWipe.closing.y2,
+                        AgentChatWipe.closing.duration], [0.5, 0, 0.8, 0.4, 0.4])
+        let wipe = AgentChatWipe(origin: CGPoint(x: 280, y: 530), size: CGSize(width: 340, height: 560))
+        XCTAssertEqual(wipe.scale(reveal: 0) * wipe.fullRadius, 0.5, accuracy: 0.001, "Closed: half a point at the ✦")
+        XCTAssertEqual(wipe.scale(reveal: 1), 1, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(wipe.fullRadius * (1 - AgentChatWipe.feather), hypot(280, 530) - 0.5,
                                     "Fully open, the solid part reaches every corner")
+    }
+
+    /// Screen 9, item 21, stepped and paused: at every point of the wipe the
+    /// blur and the colour over it are drawn at one circle.
+    func testBlurAndColourShareOneCircleAtEveryStep() throws {
+        let size = CGSize(width: 340, height: 560)
+        let star = CGPoint(x: 280, y: 530)
+        let wipe = AgentChatWipe(origin: star, size: size)
+        let view = AgentChatBackdropView()
+        view.frame = CGRect(origin: .zero, size: size)
+        view.layout()
+        let fx = AgentChatFX()
+        fx.wipeOrigin = star
+        for step in 1...9 {
+            let reveal = CGFloat(step) / 10
+            view.apply(reveal: reveal, origin: star, fades: false)
+            let blur = try XCTUnwrap(view.appliedScale)
+            fx.lastAuraScale = nil
+            let aura = ImageRenderer(content: AgentChatAuraLayer(fx: fx, reveal: reveal).frame(width: size.width, height: size.height))
+            _ = aura.nsImage
+            XCTAssertEqual(blur, wipe.scale(reveal: reveal), accuracy: 0.0001)
+            XCTAssertEqual(try XCTUnwrap(fx.lastAuraScale), blur, accuracy: 0.0001, "The colour is where the blur is")
+        }
+    }
+
+    /// Reduce Motion: the blur fades, with no circle.
+    func testReducedMotionFadesTheBlur() throws {
+        let view = AgentChatBackdropView()
+        view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
+        view.layout()
+        view.apply(reveal: 0.3, origin: CGPoint(x: 280, y: 530), fades: true)
+        for layer in try XCTUnwrap(view.layer?.sublayers) {
+            XCTAssertNil(layer.mask)
+            XCTAssertEqual(layer.opacity, 0.3, accuracy: 0.001)
+        }
     }
 
     func testClearLiveDropsLeftovers() {
