@@ -608,12 +608,21 @@ final class AppCoordinator: ObservableObject {
         // Slice 2: the workspace tools run through the app's task-note pages.
         agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
         let agentChat = uiState.agentChat
-        agentChat.weekDays = { [weak store] day in
-            AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [])
+        let calendarSource = CalendarEventSources.makeDefault(environment: runtime)
+        agentChat.weekDays = { [weak store, weak calendarSource] day in
+            let week = AgentChatModel.emptyWeek(holding: day)
+            let events: [CalendarEvent]
+            if let calendarSource, calendarSource.accessState == .granted,
+               let first = week.first?.day, let last = week.last?.day,
+               let end = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: last) {
+                events = calendarSource.events(in: DateInterval(start: first, end: end))
+            } else { events = [] }
+            return AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [],
+                                       events: events)
         }
         let agentActions = AgentActions(
             tasks: agentTools,
-            calendarSource: CalendarEventSources.makeDefault(environment: runtime),
+            calendarSource: calendarSource,
             calendarWriter: try? CalendarEventWriters.makeDefault(undoRoute: library.undo, environment: runtime),
             draw: DrawLibraryHub.activeStore,
             openPage: { [weak uiState] page in

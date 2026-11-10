@@ -743,17 +743,39 @@ final class AgentChatModel: ObservableObject {
             .map { AgentChatWeekDay(day: $0, bars: []) }
     }
 
-    /// The week holding `day`, one short bar per task due (three at most).
-    /// Events join when the chat can read the calendar.
-    static func week(holding day: Date, dueDays: [DueDay], calendar: Calendar = .autoupdatingCurrent) -> [AgentChatWeekDay] {
+    /// Task due dates contribute short marks. Calendar occurrences occupy the
+    /// actual fraction of each day, including overnight and all-day events.
+    static func week(holding day: Date, dueDays: [DueDay], events: [CalendarEvent] = [],
+                     calendar: Calendar = .autoupdatingCurrent) -> [AgentChatWeekDay] {
         emptyWeek(holding: day, calendar: calendar).map { entry in
             let parts = calendar.dateComponents([.year, .month, .day], from: entry.day)
             let due = dueDays.filter { $0.year == parts.year && $0.month == parts.month && $0.day == parts.day }.count
-            let bars = (0..<min(3, due)).map { index -> ClosedRange<Double> in
+            let taskMarks = (0..<min(3, due)).map { index -> ClosedRange<Double> in
                 let top = 0.06 + Double(index) * 0.3
                 return top...(top + 0.24)
             }
-            return AgentChatWeekDay(day: entry.day, bars: bars)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: entry.day) else {
+                return AgentChatWeekDay(day: entry.day, bars: taskMarks)
+            }
+            let interval = DateInterval(start: entry.day, end: next)
+            let seconds = next.timeIntervalSince(entry.day)
+            let eventSpans = events.compactMap { event -> ClosedRange<Double>? in
+                guard event.overlaps(interval) else { return nil }
+                let start = max(0, min(1, event.start.timeIntervalSince(entry.day) / seconds))
+                let end = max(start, min(1, event.end.timeIntervalSince(entry.day) / seconds))
+                // Keep short appointments visible in the 38pt strip.
+                return start...min(1, max(end, start + 0.025))
+            }.sorted { $0.lowerBound < $1.lowerBound }
+            // Merge overlapping meetings: busy time is the occupied duration,
+            // rather than counting concurrent events twice.
+            var busy: [ClosedRange<Double>] = []
+            for span in eventSpans {
+                if let last = busy.last, span.lowerBound <= last.upperBound {
+                    busy[busy.count - 1] = last.lowerBound...max(last.upperBound, span.upperBound)
+                } else { busy.append(span) }
+            }
+            return AgentChatWeekDay(day: entry.day,
+                                    bars: (busy + taskMarks).sorted { $0.lowerBound < $1.lowerBound })
         }
     }
 

@@ -480,6 +480,44 @@ final class AgentChatTests: XCTestCase {
 
     // MARK: Week strip, dots, effects
 
+    #if !ATTIC_GENERATED_TESTS
+    func testWeekStripUsesRealCalendarTimingAndTaskDueDatesWithFakeSource() throws {
+        let calendar = CalendarMonthMath.calendar(timeZone: try XCTUnwrap(TimeZone(identifier: "Europe/London")))
+        func date(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))!
+        }
+        func event(_ name: String, _ start: Date, _ end: Date, allDay: Bool = false) -> CalendarEvent {
+            CalendarEvent(id: name, title: name, start: start, end: end, isAllDay: allDay,
+                          location: nil, calendarTitle: "Fake", colour: .init(red: 0.2, green: 0.5, blue: 0.8))
+        }
+        let source = CalendarEventSourceStub(events: [
+            event("Meeting", date(9, 9), date(9, 11)),
+            event("Overlap", date(9, 10), date(9, 12)),
+            event("Overnight", date(10, 23), date(11, 2)),
+            event("All day", date(12, 0), date(13, 0), allDay: true)
+        ])
+        let interval = DateInterval(start: date(9, 0), end: date(16, 0))
+        let bars = AgentChatModel.week(holding: date(11, 12),
+                                      dueDays: [DueDay(year: 2026, month: 11, day: 13)!,
+                                                DueDay(year: 2026, month: 11, day: 13)!],
+                                      events: source.events(in: interval), calendar: calendar)
+        XCTAssertEqual(bars.count, 7)
+        XCTAssertEqual(bars[0].bars.count, 1, "Overlapping meetings show one occupied period")
+        XCTAssertEqual(bars[0].bars[0].lowerBound, 9.0 / 24, accuracy: 0.001)
+        XCTAssertEqual(bars[0].bars[0].upperBound, 12.0 / 24, accuracy: 0.001)
+        XCTAssertEqual(bars[1].bars[0].lowerBound, 23.0 / 24, accuracy: 0.001)
+        XCTAssertEqual(bars[1].bars[0].upperBound, 1, accuracy: 0.001)
+        XCTAssertEqual(bars[2].bars[0].lowerBound, 0, accuracy: 0.001)
+        XCTAssertEqual(bars[2].bars[0].upperBound, 2.0 / 24, accuracy: 0.001)
+        XCTAssertEqual(bars[3].bars, [0...1], "All-day events occupy the full day")
+        XCTAssertEqual(bars[4].bars.count, 2, "Task due-date marks still show alongside events")
+        source.accessState = .denied
+        let denied = AgentChatModel.week(holding: date(11, 12), dueDays: [],
+                                        events: source.events(in: interval), calendar: calendar)
+        XCTAssertTrue(denied.allSatisfy { $0.bars.isEmpty }, "Denied Calendar access must remain read-only and blank")
+    }
+    #endif
+
     func testACalendarReadShowsTheWeekAndAMoveTargetsADay() async {
         model.open()
         await start()
