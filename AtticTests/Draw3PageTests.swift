@@ -115,6 +115,25 @@ final class Draw3PageTests: XCTestCase {
         print("GAP_R19 total_objects=150 samples_ms=\(samples) median_ms=\(ordered[ordered.count / 2]) max_ms=\(ordered.last!) save_attempts=\(durable.metrics.saveAttempts)")
     }
 
+    func testOpeningCanvasWithHundredsOfTextBoxesDoesNotLoseContent() throws {
+        let durable = try persistentStore()
+        use(durable)
+        let canvasID = try XCTUnwrap(model.canvasID)
+        let boxes = (0..<400).map { index in
+            DrawObject(frame: DrawFrame(x: Double(index % 20) * 130, y: Double(index / 20) * 80),
+                       zIndex: Int64(index), content: .text("Text box \(index): a few lines of content 👩🏽‍🚀 אבג"))
+        }
+        XCTAssertTrue(model.perform(.put(boxes)).isSaved)
+        model.newCanvas(name: "Another board")
+        let start = ContinuousClock.now
+        model.open(canvasID)
+        let duration = start.duration(to: .now).components
+        let elapsedMS = Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15
+        XCTAssertEqual(model.objects, boxes)
+        XCTAssertFalse(durable.hasUnsettledEdits)
+        print("CANVAS_TEXT_OPEN total_text_boxes=400 model_open_ms=\(elapsedMS)")
+    }
+
     func testFailedRenameKeepsTypedNameAndRetryClosesOnlyAfterDurableSave() throws {
         struct Injected: Error {}
         var fail = false

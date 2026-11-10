@@ -246,6 +246,21 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.tool, .select)
     }
 
+    func testVeryNarrowWrappingKeepsEmojiAndRTLTextIntact() {
+        let samples = [
+            "Start 👩🏽‍🚀 אבג 🧑‍💻 End",
+            "Start\r👩🏽‍🚀\rאבג End",
+            String(repeating: "á👩‍👩‍👧‍👧אבג", count: 48)
+        ]
+        for text in samples {
+            for width in [CGFloat(0.01), 0.5, 2, 8, 15, 55] {
+                let lines = DrawText.lines(text, size: 14, width: width)
+                XCTAssertEqual(lines.joined(), text, "Wrap at \(width)pt must not lose source characters")
+                XCTAssertEqual(lines.flatMap { Array($0) }, Array(text), "A wrapped line must not split a grapheme")
+            }
+        }
+    }
+
     func testShapeIsDraggedOutThenReturnsToSelectWithNothingSelected() {
         model.clickTool(.shape)
         model.pickShape(.ellipse)
@@ -583,6 +598,38 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.map(\.text), ["x"], "Typing after Undo starts a new branch")
     }
 
+    func testUndoRedoRestoresTextMoveAndStyleInOrder() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Draft")
+        let typed = stored
+        let box = try XCTUnwrap(typed.first)
+        model.endEditing()
+
+        var moved = box
+        moved.frame.x += 40
+        XCTAssertTrue(model.perform(.put([moved])).isSaved)
+        XCTAssertEqual(stored, [moved])
+        model.select([moved.id])
+        model.styleSelection(colour: .red)
+        let styled = stored
+        XCTAssertEqual(styled.first?.style.colour, .red)
+
+        model.undo()
+        XCTAssertEqual(stored, [moved], "First Undo restores the previous colour")
+        model.undo()
+        XCTAssertEqual(stored, typed, "Second Undo restores the original position")
+        model.undo()
+        XCTAssertTrue(stored.isEmpty, "Third Undo removes the first typed content")
+
+        model.redo()
+        XCTAssertEqual(stored, typed)
+        model.redo()
+        XCTAssertEqual(stored, [moved])
+        model.redo()
+        XCTAssertEqual(stored, styled, "Redo restores text, position and style exactly")
+    }
+
     func testSwatchStylesTheOpenTextBox() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -672,5 +719,19 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection.count, 1)
         model.closeSearch()
         XCTAssertEqual(model.search.query, "")
+    }
+
+    func testOpeningSharedSearchEndsTheCurrentTextEditAndFindsItsSavedText() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Find this draft")
+        XCTAssertNotNil(model.editing)
+
+        model.openSearch()
+        XCTAssertNil(model.editing, "Opening the top Search finishes the active text box")
+        model.search.query = "draft"
+        let result = try XCTUnwrap(model.search.results.first)
+        XCTAssertEqual(result.canvas.id, model.canvasID)
+        XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
 }

@@ -270,6 +270,114 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertTrue(model.objects.isEmpty, "double-clicking a stroke with Eraser removes it")
     }
 
+    func testUndoRedoWhileTypingPreservesTheMiddleOfTheLineCaret() throws {
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(board))
+
+        model.setTool(.text)
+        board.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 60, y: 115)))
+        let editor = try XCTUnwrap(board.editor)
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.insertText("Hello world", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(model.editing?.text, "Hello world")
+
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+        editor.insertText("X", replacementRange: editor.selectedRange())
+        XCTAssertEqual(model.editing?.text, "Hello Xworld")
+
+        model.undo()
+        XCTAssertEqual(editor.string, "Hello world")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 6, length: 0), "Undo returns the caret to the edit")
+        model.redo()
+        XCTAssertEqual(editor.string, "Hello Xworld")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 7, length: 0), "Redo returns the caret after the insertion")
+    }
+
+    func testNativeTextMovementAndStyledInsertionRespectTheBoxStyle() throws {
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(board))
+
+        model.setTool(.text)
+        board.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 60, y: 115)))
+        let editor = try XCTUnwrap(board.editor)
+        editor.insertText("alpha beta\nsecond", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(model.editing?.text, "alpha beta\nsecond")
+
+        editor.setSelectedRange(NSRange(location: 8, length: 0))
+        editor.moveToBeginningOfLine(nil)
+        XCTAssertEqual(editor.selectedRange().location, 0)
+        editor.moveToEndOfLine(nil)
+        XCTAssertEqual(editor.selectedRange().location, 10)
+        editor.moveWordLeft(nil)
+        XCTAssertTrue((0..<10).contains(editor.selectedRange().location))
+
+        let expectedAttributes = editor.typingAttributes
+        editor.setSelectedRange(NSRange(location: 6, length: 4))
+        editor.insertText(NSAttributedString(string: "👩🏽‍🚀", attributes: [
+            .font: NSFont.boldSystemFont(ofSize: 40), .foregroundColor: NSColor.systemRed
+        ]), replacementRange: editor.selectedRange())
+
+        XCTAssertEqual(model.editing?.text, "alpha 👩🏽‍🚀\nsecond")
+        XCTAssertEqual(editor.string, model.editing?.text)
+        let font = try XCTUnwrap(editor.textStorage?.attribute(.font, at: 6, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(font, expectedAttributes[.font] as? NSFont, "Text boxes have one size even when rich text is inserted")
+        let colour = try XCTUnwrap(editor.textStorage?.attribute(.foregroundColor, at: 6, effectiveRange: nil) as? NSColor)
+        XCTAssertEqual(colour, expectedAttributes[.foregroundColor] as? NSColor, "Text boxes use the swatch's colour")
+    }
+
+    func testEndingTextEditingDoesNotTakeFocusFromAnotherControl() throws {
+        final class SearchControl: NSView {
+            override var acceptsFirstResponder: Bool { true }
+        }
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 500))
+        root.addSubview(board)
+        let search = SearchControl(frame: CGRect(x: 20, y: 465, width: 180, height: 30))
+        root.addSubview(search)
+        let window = NSWindow(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        defer { window.close() }
+
+        XCTAssertTrue(window.makeFirstResponder(board))
+        model.setTool(.text)
+        board.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 60, y: 115)))
+        let editor = try XCTUnwrap(board.editor)
+        editor.insertText("Draft", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(model.editing?.text, "Draft")
+
+        XCTAssertTrue(window.makeFirstResponder(search))
+        model.endEditing()
+        XCTAssertTrue(window.firstResponder === search, "Clicking Search should end the box edit without stealing the next control's focus")
+    }
+
+    func testEditorTextRendersAtTheCurrentZoomWhileTyping() throws {
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        defer { window.close() }
+
+        XCTAssertTrue(window.makeFirstResponder(board))
+        model.setTool(.text)
+        board.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 60, y: 115)))
+        let editor = try XCTUnwrap(board.editor)
+        editor.insertText("Zoom", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(model.editing?.text, "Zoom")
+        let pointSize = try XCTUnwrap(model.editing?.pointSize)
+
+        for zoom in [CGFloat(2), 0.25, 4, 1] {
+            model.setViewport(DrawViewport(x: 5, y: 10, zoom: zoom), byUser: true)
+            let font = try XCTUnwrap(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            XCTAssertEqual(font.pointSize, pointSize * zoom, accuracy: 0.01, "The live editor follows every zoom change")
+            XCTAssertEqual(editor.string, "Zoom")
+        }
+    }
+
     func testNothingRendersWhileHidden() {
         XCTAssertTrue(waitForInstall(after: 0))
         model.setShown(false)

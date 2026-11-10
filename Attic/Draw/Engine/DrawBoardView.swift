@@ -30,6 +30,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private var needsRaster = true
     private var dots = DrawDots()
     private(set) var editor: DrawTextEditorView?
+    private var appliedEditorPresentation: (zoom: CGFloat, dark: Bool)?
     /// Whether the scroll gesture under way began over the board's clear
     /// area (it pans and zooms) or over the top row or bar (it doesn't).
     private var scrollGestureIsOwn = true
@@ -149,8 +150,18 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        refreshEditorAppearance()
         layoutLayers()
         requestRaster()
+    }
+
+    private func refreshEditorAppearance() {
+        guard let editor, let edit = model.editing else { return }
+        let zoom = model.viewport.zoom
+        let dark = isDark
+        if let applied = appliedEditorPresentation, applied.zoom == zoom, applied.dark == dark { return }
+        editor.apply(edit, zoom: zoom, palette: DrawPalette(dark: dark), replacingText: false)
+        appliedEditorPresentation = (zoom, dark)
     }
 
     private func layoutLayers() {
@@ -229,6 +240,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     func drawViewportChanged() {
+        refreshEditorAppearance()
         layoutLayers()
         requestRaster()
         queueCursorRefresh()
@@ -360,16 +372,19 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawEditingChanged(replacingText: Bool) {
         guard let edit = model.editing else {
             if let editor {
+                let wasEditingFirstResponder = window?.firstResponder === editor
                 editor.owner = nil
                 editor.removeFromSuperview()
                 self.editor = nil
-                window?.makeFirstResponder(self)
+                appliedEditorPresentation = nil
+                if wasEditingFirstResponder { window?.makeFirstResponder(self) }
             }
             updateSelection()
             return
         }
         let editor = self.editor ?? makeEditor()
         editor.apply(edit, zoom: model.viewport.zoom, palette: DrawPalette(dark: isDark), replacingText: replacingText)
+        appliedEditorPresentation = (model.viewport.zoom, isDark)
         updateEditorFrame()
         if window?.firstResponder !== editor { window?.makeFirstResponder(editor) }
         updateSelection()
@@ -1161,11 +1176,24 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
         textContainer?.size = CGSize(width: wrap ?? .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         applying = true
         if replacingText, string != edit.text, !hasMarkedText() {
+            let caret = Self.caretAfterChange(from: string, to: edit.text)
             string = edit.text
-            setSelectedRange(NSRange(location: (edit.text as NSString).length, length: 0))
+            setSelectedRange(NSRange(location: caret, length: 0))
         }
         textStorage?.setAttributes(attributes, range: NSRange(location: 0, length: textStorage?.length ?? 0))
         applying = false
+    }
+
+    /// Undo and Redo replace text from the store. Return to the changed
+    /// grapheme boundary, including for edits before emoji or RTL writing.
+    private static func caretAfterChange(from before: String, to after: String) -> Int {
+        let old = Array(before), new = Array(after)
+        var prefix = 0
+        while prefix < min(old.count, new.count), old[prefix] == new[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(old.count, new.count) - prefix,
+              old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
+        return String(new.dropLast(suffix)).utf16.count
     }
 
     func textDidChange(_ notification: Notification) {

@@ -218,13 +218,24 @@ enum DrawText {
             let attributed = NSAttributedString(string: paragraph, attributes: [.init(kCTFontAttributeName as String): font])
             let typesetter = CTTypesetterCreateWithAttributedString(attributed)
             let utf16 = paragraph.utf16.count
+            // Core Text reports UTF-16 offsets, which may land inside a joined
+            // emoji or combining sequence when a box is extremely narrow.
+            // Break only at complete Character boundaries, keeping a cluster
+            // intact even when it is wider than the requested wrap width.
+            let source = paragraph as NSString
             var result: [String] = [], start = 0
             while start < utf16 {
-                var count = CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
-                if count <= 0 { count = 1 }
-                let range = NSRange(location: start, length: min(count, utf16 - start))
-                result.append((paragraph as NSString).substring(with: range).trimmingCharacters(in: .newlines))
-                start += range.length
+                let count = CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
+                let suggestedEnd = min(utf16, start + max(1, count))
+                let cluster = source.rangeOfComposedCharacterSequence(at: suggestedEnd - 1)
+                let end: Int
+                if NSMaxRange(cluster) > suggestedEnd {
+                    end = cluster.location > start ? cluster.location : NSMaxRange(cluster)
+                } else {
+                    end = suggestedEnd
+                }
+                result.append(source.substring(with: NSRange(location: start, length: end - start)))
+                start = end
             }
             return result
         }
