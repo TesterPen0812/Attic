@@ -388,6 +388,9 @@ final class CornerHoverMonitor {
             pointerInside: isInPanel,
             secondsSinceKeyboardInput: uptime - lastKeyboardInputAt
         ) || isMouseButtonPressed
+        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        let hadRevealDeadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil
+        #endif
         let transition = stateMachine.update(
             at: uptime,
             isInHotspot: isInHotspot,
@@ -398,6 +401,11 @@ final class CornerHoverMonitor {
             hideDelay: settings.hideDelay,
             dismissMode: settings.panelDismissMode
         )
+        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        if !hadRevealDeadline, stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil {
+            IdleLatencyTrace.cornerHotspotEntered(revealDelay: settings.revealDelay)
+        }
+        #endif
         scheduleFollowUp(
             at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
             isInteractionLocked: isInteractionLocked, isMouseButtonPressed: isMouseButtonPressed

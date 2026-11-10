@@ -299,16 +299,17 @@ enum IdleLatencyTrace {
 
     #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
     private static var serial = 0
-    private static var current: (id: Int, begunNS: UInt64)?
+    private static var current: (id: Int, begunNS: UInt64, kind: String, downOriginNS: UInt64)?
     private static var hiddenNS: UInt64?
     private static var lastInputNS = DispatchTime.now().uptimeNanoseconds
     private static var isPrimed = false
     private static var lastPanelPressNS: UInt64?
+    private static var recordedMouseUpID: Int?
     static private(set) var lastClassificationForTesting: (first: Bool, idleMS: Double)?
     private static var frameWatch: IdleLatencyFirstFrameWatch?
     private static func validPhase(_ phase: String) -> Bool {
         switch phase {
-        case "reveal_decision", "page_change_decision", "mouse_down_returned",
+        case "reveal_decision", "hotspot_entered", "page_change_decision", "mouse_down_returned",
              "sendEvent_dispatched", "island_sendEvent_dispatched", "handler_entered",
              "view_dispatch_done", "commit_handoff", "transaction_flushed",
              "cleanup_begin", "cleanup_end", "followup_scheduled", "followup_fired": return true
@@ -348,7 +349,14 @@ enum IdleLatencyTrace {
         lastPanelPressNS = timestamp
         begin("panel_control", original: original, context: context)
     }
-    static func untracedInput() { lastInputNS = timestamp }
+    static func untracedInput() {
+        lastInputNS = timestamp
+        // Do not attach a subsequent, untraced press's handler to a touch
+        // whose frame has already been observed (or which was superseded).
+        current = nil
+        frameWatch?.stop()
+        frameWatch = nil
+    }
     static func cleanupBegan() { point("cleanup_begin") }
     static func cleanupEnded() { point("cleanup_end") }
 
@@ -367,7 +375,7 @@ enum IdleLatencyTrace {
         let idle = received >= lastInputNS ? received - lastInputNS : 0
         lastInputNS = received
         serial &+= 1
-        current = (serial, received)
+        current = (serial, received, kind, eventNS)
         frameWatch?.stop()
         frameWatch = nil
 
@@ -392,6 +400,32 @@ enum IdleLatencyTrace {
         guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
         var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
         record.stage = phase
+        emit(record)
+    }
+
+    /// Timestamp the physical release separately from the mouse-down trace.
+    /// AppKit can consume mouse-up in a native tracking loop, so both the
+    /// window's sendEvent and nextEvent paths report it (once per touch).
+    static func mouseUp(original: TimeInterval) {
+        guard let trace = current, ["panel_control", "island_action"].contains(trace.kind),
+              recordedMouseUpID != trace.id else { return }
+        let received = timestamp
+        guard received >= trace.begunNS, received - trace.begunNS <= 8_000_000_000 else { return }
+        let origin = original.isFinite && original > 0 && original < Double(received) / 1e9
+            ? UInt64(original * 1e9) : received
+        recordedMouseUpID = trace.id
+        var record = FirstTouchLogRecord(id: trace.id, event: "mouse_up", atNS: received)
+        record.originNS = max(trace.downOriginNS, origin)
+        emit(record)
+    }
+
+    static func cornerHotspotEntered(revealDelay: TimeInterval) {
+        guard let trace = current, trace.kind == "corner_approach" else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
+        record.stage = "hotspot_entered"
+        record.revealDelayMS = revealDelay * 1_000
         emit(record)
     }
 
@@ -447,6 +481,7 @@ enum IdleLatencyTrace {
         guard current?.id == id else { return }
         frameWatch = nil
         emit(FirstTouchLogRecord(id: id, event: "frame_candidate", atNS: timestamp))
+        current = nil
     }
     #else
     static func startMonitoring() {}
@@ -455,6 +490,8 @@ enum IdleLatencyTrace {
     static var shouldTracePanelPress: Bool { false }
     static func panelPressBegan(original: TimeInterval, context: Context) {}
     static func untracedInput() {}
+    static func mouseUp(original: TimeInterval) {}
+    static func cornerHotspotEntered(revealDelay: TimeInterval) {}
     static func cleanupBegan() {}
     static func cleanupEnded() {}
     static func begin(_ kind: String, original: TimeInterval?, context: Context,
