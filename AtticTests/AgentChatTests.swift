@@ -1137,6 +1137,9 @@ final class AgentChatFXTests: XCTestCase {
         fx.emptyThread = true
         fx.open(at: CGPoint(x: 250, y: 520))
         XCTAssertEqual(fx.ringCount, 0, "No ring over the composer as it grows")
+        XCTAssertEqual(fx.liveCount, 0, "No stars burst from the ✦: they spread as a dotted halo round it")
+        run(fx, seconds: 0.12)
+        XCTAssertEqual(fx.liveCount, 0, "Nothing around the ✦ while the composer grows")
         run(fx, seconds: AgentChatBackdropView.opening.duration + 0.05)
         XCTAssertEqual(fx.liveCount, 0, "The opening's stars end with the wipe")
         run(fx, seconds: 0.3)

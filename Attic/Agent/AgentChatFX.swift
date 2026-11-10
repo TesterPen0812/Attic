@@ -171,9 +171,9 @@ final class AgentChatFX: ObservableObject {
     func open(at star: CGPoint) {
         clearLive()
         addFlash(0.9)
-        // No ring: it crossed the composer as the composer grew. The stars end
-        // with the wipe, and the first ember waits until they have gone.
-        burst(star.x, star.y, count: 20, speed: 130, life: 0.3...0.58)
+        // No ring and no stars: a burst from the ✦ spreads as a dotted halo
+        // around it while the composer grows (screen 9, item 22). The colour
+        // and the blur are the opening; the first ember waits a moment.
         ember = Self.firstEmber
     }
 
