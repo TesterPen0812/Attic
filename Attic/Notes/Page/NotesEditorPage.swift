@@ -647,6 +647,7 @@ struct NotesEditorPage: View {
         .atticDesignCorners()
         .noteFormatRowLeaving(.newNote)
         .accessibilityIdentifier(plus.identifier)
+        .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
         .modifier(NotesComposerChromeAccessibility(size: CGSize(width: side, height: side)))
     }
 
@@ -676,7 +677,8 @@ struct NotesEditorPage: View {
 
     /// The stops in order: the text, then the bottom row's controls.
     private var keyboardStops: [NotesKeyboardOrder.Stop] {
-        NotesKeyboardOrder.stops(format: showsFormatButton)
+        NotesKeyboardOrder.stops(format: showsFormatButton,
+                                newNote: !reviewsInPlace && sharedChrome?.plusHandedOver != true)
     }
 
     /// ⌃Tab or ⌃⇧Tab with no selection bar: the next or previous control.
@@ -722,6 +724,7 @@ struct NotesEditorPage: View {
             case .format:
                 move(to: .text)
                 chrome.openFormatBar(keyboard: true)
+            case .newNote: newNoteFromPlus()
             case .text: return false
             }
             return true
@@ -1916,10 +1919,10 @@ private struct NoteComparisonPreview: NSViewRepresentable {
 /// note can be formatted), and round again into the text. Every stop is
 /// drawn: the text's caret, or the control's ring.
 enum NotesKeyboardOrder {
-    enum Stop: Hashable { case text, allNotes, format }
+    enum Stop: Hashable { case text, allNotes, format, newNote }
 
-    static func stops(format: Bool) -> [Stop] {
-        format ? [.text, .allNotes, .format] : [.text, .allNotes]
+    static func stops(format: Bool, newNote: Bool = true) -> [Stop] {
+        [.text, .allNotes] + (format ? [.format] : []) + (newNote ? [.newNote] : [])
     }
 
     static func next(after current: Stop, in stops: [Stop], forward: Bool) -> Stop? {

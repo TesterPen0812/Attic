@@ -37,7 +37,12 @@ final class NotesFormatUITests: XCTestCase {
 
     private var noteText: XCUIElement { app.textViews["note-text"] }
     private var noteValue: String { (noteText.value as? String) ?? "" }
-    private func element(_ identifier: String) -> XCUIElement { app.descendants(matching: .any)[identifier] }
+    /// SwiftUI can expose the same identifier on more than one AX descendant
+    /// while an outgoing control is still mounted. Check the first matching
+    /// control and keep the interaction and state assertions below.
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 6, _ message: String,
                          file: StaticString = #filePath, line: UInt = #line) {
@@ -154,7 +159,9 @@ final class NotesFormatUITests: XCTestCase {
         require(pill, "⌘T turns the bottom row into the format row")
         XCTAssertFalse(element("notes-new-note").exists, "New note steps aside")
         pill.click()
-        let heading = element("notes-format-row-notes-format-heading2")
+        // Accepted N1 (2026-11-01): the style pill widens into five inline
+        // cells; the Heading cell now has the strip's stable identifier.
+        let heading = element("notes-format-strip-heading2")
         require(heading, "the style list")
         // E1 exposes menu-item semantics, but is a custom dropdown, not an
         // NSMenu. XCUIElement.click() otherwise attempts native menu traversal

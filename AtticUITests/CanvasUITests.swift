@@ -169,7 +169,7 @@ final class CanvasUITests: XCTestCase {
         assertStrokeCount(1)
 
         app.typeKey("1", modifierFlags: .command)
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("4", modifierFlags: .command)
         assertStrokeCount(1)
 
         app.typeKey(",", modifierFlags: .command)
@@ -283,7 +283,8 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func openCanvas() {
-        app.typeKey("3", modifierFlags: .command)
+        // Canvas is the fourth page: ⌘3 opens Calendar.
+        app.typeKey("4", modifierFlags: .command)
         XCTAssertTrue(
             canvasSurface.waitForExistence(timeout: 3)
         )

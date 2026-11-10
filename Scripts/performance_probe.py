@@ -147,7 +147,8 @@ def launch(app, root, token, logs, seed=False, done=False, extra=False, corner=N
         env["ATTIC_PERF_CORNER"] = corner
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
             "--stderr", str(logs.with_suffix(".stderr.log")),
-            *(arg for pair in env.items() for arg in ("--env", f"{pair[0]}={pair[1]}")), str(app))
+            *(arg for pair in env.items() for arg in ("--env", f"{pair[0]}={pair[1]}")),
+            str(app), "--args", "-AtticDraw.enabled", "NO")
 
 
 def build_preview(identity):
@@ -187,7 +188,8 @@ def build_preview(identity):
 def initialize_container(app, executable):
     """Let LaunchServices create the unique sandbox before writing its fixture."""
     command("/usr/bin/open", "-n", "--env", "ATTIC_UI_TESTING=1",
-            "--env", "ATTIC_PERF_SEED_ONLY=1", str(app))
+            "--env", "ATTIC_PERF_SEED_ONLY=1", str(app),
+            "--args", "-AtticDraw.enabled", "NO")
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         for line in output("/bin/ps", "-axo", "pid=,command=").splitlines():
