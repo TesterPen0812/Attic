@@ -274,7 +274,7 @@ struct AgentChatStage: View {
             if let card = fx.composerFrame { fx.dust(card, count: 130) }
             let at = fx.sparkPoint
             fx.ring(at.x, at.y, radius: 45, duration: 0.5)
-        case .approvalDenied:
+        case .approvalDenied, .wroteInNote:
             break
         case .changesLanded:
             fx.landOnChanges()
@@ -512,7 +512,10 @@ struct AgentChatComposer: View {
         .onChange(of: shown, initial: true) { _, now in transition(now) }
         .onChange(of: focused) { _, now in setTyping(now) }
         .onChange(of: model.draft) { old, new in if alive, new.count > old.count { fx.keystroke(count: new.count) } }
-        .onReceive(model.effects) { effect in if effect == .approvalDenied, alive { deny() } }
+        .onReceive(model.effects) { effect in
+            if effect == .approvalDenied, alive { deny() }
+            if effect == .wroteInNote { focusSoon() }
+        }
     }
 
     private func transition(_ open: Bool) {

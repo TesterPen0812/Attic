@@ -1421,6 +1421,9 @@ final class AgentNoteWritingTests: XCTestCase {
     }
 
     func testTheEditIsSavedBeforeItIsShownBeingWritten() async {
+        var back = 0
+        let watch = model.effects.sink { if $0 == .wroteInNote { back += 1 } }
+        defer { watch.cancel() }
         model.open()
         await run()
         XCTAssertEqual(presented, [noteID], "Watching, the note is shown being written")
@@ -1428,8 +1431,10 @@ final class AgentNoteWritingTests: XCTestCase {
         XCTAssertTrue(savedBody().contains(checklist), "Mid-way, the whole edit is already saved")
         XCTAssertEqual(model.writingLabel, "Writing in your note")
         XCTAssertEqual(steps.last?.state, .running, "The row turns done once it has been written")
+        XCTAssertEqual(back, 0, "The keyboard stays put while it is written")
         await release()
         XCTAssertNil(model.writingLabel, "Then the chat comes back")
+        XCTAssertEqual(back, 1, "and the composer has the keyboard again")
         XCTAssertEqual(steps.last?.state, .done)
         XCTAssertEqual(steps.last?.title, "Added a checklist to your note")
         XCTAssertEqual(changes?.value.items.map(\.title), ["Write the launch blog post"])

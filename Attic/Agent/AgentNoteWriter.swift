@@ -94,10 +94,14 @@ final class AgentNoteWriter {
     static func openInNotes(_ noteID: UUID, pages: NotesPageController?, select: () -> Void) async -> AgentNoteSurface? {
         guard let pages, let note = pages.store.note(withID: noteID), note.taskID == nil,
               await pages.openFromLibrary(noteID: noteID) else { return nil }
+        // As a library row does: the note, not the list, is on show.
+        if pages.isLibraryPresented { pages.dismissLibrary() }
         select()
         for _ in 0..<45 {
             if let session = pages.active, session.noteID == noteID, let view = session.engine.textView,
                view.window != nil, !view.visibleRect.isEmpty {
+                // Shown, never handed the keyboard: it stays with the chat.
+                if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
                 // One more frame, so the page's arrival has drawn the note.
                 try? await Task.sleep(for: .milliseconds(16))
                 return view

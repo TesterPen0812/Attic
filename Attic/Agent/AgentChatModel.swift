@@ -132,6 +132,8 @@ enum AgentChatEffect: Equatable {
     /// A watched note edit's writing point, in window coordinates; `star`
     /// lets a star go from it.
     case writing(CGPoint, star: Bool)
+    /// The chat is back from a note it wrote in.
+    case wroteInNote
 }
 
 /// How fast a reply writes itself. The HTML's values; tests use `.instant`.
@@ -342,7 +344,7 @@ final class AgentChatModel: ObservableObject {
     /// UI-testing seam: `ATTIC_UI_TEST_CHAT=seed;open@2;close@5;open@8`
     /// seeds an exchange and toggles the chat at those seconds after launch,
     /// so a recorder can watch openings with no click or key on screen.
-    /// `send:<text>@3` sends a message then.
+    /// `send:<text>@3` sends a message then; `undo@9` undoes the last changes.
     func runUITestingScript(_ script: String) {
         for part in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             if part == "seed" {
@@ -351,6 +353,15 @@ final class AgentChatModel: ObservableObject {
             }
             let pieces = part.split(separator: "@")
             guard pieces.count == 2, let seconds = Double(pieces[1]) else { continue }
+            if pieces[0] == "undo" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    guard let self, let last = self.entries.last(where: {
+                        if case .changes = $0.content { true } else { false }
+                    }) else { return }
+                    self.undo(last.id)
+                }
+                continue
+            }
             if pieces[0].hasPrefix("send:") {
                 let text = String(pieces[0].dropFirst(5))
                 DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
@@ -536,6 +547,7 @@ final class AgentChatModel: ObservableObject {
             self.writingLabel = String(localized: "Writing in your note")
             await present()
             if self.writingLabel != nil { self.writingLabel = nil }
+            if self.isOpen { self.effects.send(.wroteInNote) }
         }
     }
 
