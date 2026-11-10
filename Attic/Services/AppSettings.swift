@@ -97,6 +97,7 @@ final class AppSettings: ObservableObject {
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
+        static let soundsEnabled = "soundsEnabled"
         static let nextEventInNow = "nextEventInNow"
         static let animations = "animations"
         static let hideAnimation = "panelHideAnimation"
@@ -249,6 +250,12 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
+    }
+
+    /// Short, quiet sounds when something lands (Accepted 2026-11-10,
+    /// "Sounds"; `AtticSounds`). On by default.
+    @Published var soundsEnabled: Bool {
+        didSet { defaults.set(soundsEnabled, forKey: Key.soundsEnabled) }
     }
 
     /// "Next event in Now" (Accepted 2026-10-29): today's next event at the
@@ -458,6 +465,7 @@ final class AppSettings: ObservableObject {
         inAppAgentBackend = AgentBackend(rawValue: defaults.string(forKey: Key.inAppAgentBackend) ?? "") ?? .claude
         inAppAgentChoices = Self.storedChoices(defaults)
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        soundsEnabled = (defaults.object(forKey: Key.soundsEnabled) as? Bool) ?? true
         nextEventInNow = (defaults.object(forKey: Key.nextEventInNow) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true

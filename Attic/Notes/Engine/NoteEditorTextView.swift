@@ -845,6 +845,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let pasteboard = copyPasteboard
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        AtticSounds.play(.copied)
     }
 
     func rotor(_ rotor: NSAccessibilityCustomRotor,

@@ -137,6 +137,7 @@ extension DrawPageModel {
                               zIndex: z, content: .image(item.image))
         }
         perform(.put(placed), on: drop.canvas)
+        AtticSounds.play(.attached)
     }
 }
 
@@ -231,6 +232,7 @@ final class DrawImageActions: DrawImageSeam {
     /// that only read PNG), and no board behind it.
     func copyAsImage(_ objects: [DrawObject]) {
         guard !objects.isEmpty else { return }
+        AtticSounds.play(.copied)
         if objects.count == 1, case .image(let image) = objects[0].content {
             return copyOriginal(image)
         }

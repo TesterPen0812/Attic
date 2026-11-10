@@ -4902,7 +4902,7 @@ extension NoteEditorEngine {
         let applied = performEdit(session.range, with: replacement, name: "Insert File",
                                   selection: NSRange(location: session.range.location + replacement.length, length: 0))
         if !applied, let id = item.staged?.id { staged[id] = nil }
-        return applied
+        return AtticSounds.play(.attached, if: applied)
     }
 }
 

@@ -465,6 +465,7 @@ final class RecentlyDeletedModel: ObservableObject {
             message = report.failure.map {
                 Message(text: String(localized: "“\(entry.title)” couldn’t be restored: \($0)"), tone: .error)
             }
+            AtticSounds.play(report.restored > 0 ? .restored : .failed)
             reload()
             return
         }
@@ -474,6 +475,7 @@ final class RecentlyDeletedModel: ObservableObject {
         case let .attachment(attachment): library.restoreAttachment(attachment)
         case .draw: false
         }
+        AtticSounds.play(restored ? .restored : .failed)
         message = restored
             ? nil
             : Message(
@@ -518,6 +520,7 @@ final class RecentlyDeletedModel: ObservableObject {
             Message(text: RecentlyDeletedPresentation.restoreFailure(count: failures.count, reason: reason), tone: .error)
         }
         reload()
+        if restored > 0 || !failures.isEmpty { AtticSounds.play(restored > 0 ? .restored : .failed) }
         if restored > 0 {
             AccessibilityNotification.Announcement(RecentlyDeletedPresentation.restoredPhrase(restored)).post()
         }
@@ -564,6 +567,7 @@ final class RecentlyDeletedModel: ObservableObject {
         guard let request = emptyRequest else { return }
         emptyRequest = nil
         if !request.drawn.isEmpty { _ = draw()?.purge(request.drawn) }
+        AtticSounds.play(.emptied)
         guard let library, !request.selection.isEmpty else { return finishEmpty(request) }
         library.emptyRecentlyDeleted(request.selection)
         finishEmpty(request)

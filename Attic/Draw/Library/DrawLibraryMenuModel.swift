@@ -332,8 +332,10 @@ final class DrawLibraryMenuModel: ObservableObject {
     private func delete(_ canvas: DrawCanvas) {
         let result = store.perform(.deleteCanvas, on: canvas.id)
         switch result {
-        case .saved, .unchanged: break
+        case .saved: AtticSounds.play(.trashed)
+        case .unchanged: break
         case let .retry(message), let .held(message):
+            AtticSounds.play(.failed)
             toasts?.show(message.isEmpty ? String(localized: "The canvas couldn’t be deleted.") : message,
                          actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
             return

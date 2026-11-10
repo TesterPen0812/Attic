@@ -1202,6 +1202,7 @@ final class TasksPageModel: ObservableObject {
         if let failure = outcome.failure {
             rowFailure = RowFailure(id: id, message: failure.message, canRetry: failure.canRetry)
             rowRetry = failure.canRetry ? retry : nil
+            AtticSounds.play(.failed)
         } else if rowFailure?.id == id {
             rowFailure = nil
             rowRetry = nil
@@ -1237,6 +1238,7 @@ final class TasksPageModel: ObservableObject {
             pickerFailure = RowFailure(id: id, message: failure.message, canRetry: failure.canRetry)
             pickerRetry = failure.canRetry ? change : nil
             pickerRetrySaved = failure.canRetry ? onSaved : nil
+            AtticSounds.play(.failed)
             return false
         }
         clearPickerFailure()
@@ -1628,11 +1630,11 @@ final class TasksPageModel: ObservableObject {
     func toggleDone(_ ids: [UUID]) -> CommandOutcome {
         let tasks = ids.compactMap { store.listedTask(withID: $0) }
         if !tasks.isEmpty, tasks.allSatisfy({ $0.status == .done }) {
-            return tasks.count == 1 ? reopen(tasks[0].id) : library.reopenTasks(tasks.map(\.id))
+            return tasks.count == 1 ? reopen(tasks[0].id) : AtticSounds.play(.undone, after: library.reopenTasks(tasks.map(\.id)))
         } else if ids.count == 1 {
             return complete(ids[0])
         } else {
-            return library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done)
+            return AtticSounds.play(.done, after: library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done))
         }
     }
 
@@ -1655,7 +1657,7 @@ final class TasksPageModel: ObservableObject {
         guard task.status != .done else { return .applied }
         let holdTab: TasksTab? = tab == .done ? nil : tab
         let index = holdTab.flatMap { holdTab in rows(for: holdTab).firstIndex { $0.id == id } }
-        let outcome = library.completeTask(id)
+        let outcome = AtticSounds.play(.done, after: library.completeTask(id))
         if outcome.isApplied, let holdTab, let index { hold(id, tab: holdTab, at: index) }
         return outcome
     }
@@ -1667,7 +1669,7 @@ final class TasksPageModel: ObservableObject {
     /// task comes back with its family.
     @discardableResult
     func reopen(_ id: UUID) -> CommandOutcome {
-        let outcome = library.reopenTasks([id])
+        let outcome = AtticSounds.play(.undone, after: library.reopenTasks([id]))
         if outcome.isApplied {
             cancelHold(id)
             reloadDoneLogAfterChange()
@@ -1724,7 +1726,7 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func setStatus(_ status: TaskStatus, for ids: [UUID]) -> CommandOutcome {
         if status == .done {
-            return ids.count == 1 ? complete(ids[0]) : library.updateTasks(ids, status: .done)
+            return ids.count == 1 ? complete(ids[0]) : AtticSounds.play(.done, after: library.updateTasks(ids, status: .done))
         }
         let loggedOrDone = ids.filter { store.task(withID: $0)?.status == .done || store.task(withID: $0) == nil }
         if loggedOrDone == ids, status == .todo {
@@ -1819,6 +1821,7 @@ final class TasksPageModel: ObservableObject {
         let archived = reachesDoneLog(live)
         let outcome = archived ? library.deleteListedTasks(live) : library.deleteTasks(live)
         guard outcome.isApplied else { return outcome }
+        AtticSounds.play(.trashed)
         if archived || tab == .done { reloadDoneLogAfterEdit() }
         if doneDetailID.map(live.contains) == true { doneDetailID = nil }
         selection.subtract(live)
@@ -2077,7 +2080,8 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func toggleSubtask(_ id: UUID) -> CommandOutcome {
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
-        return library.updateTask(id, status: task.status == .done ? .todo : .done)
+        let isDone = task.status == .done
+        return AtticSounds.play(isDone ? .undone : .done, after: library.updateTask(id, status: isDone ? .todo : .done))
     }
 
     // MARK: - Add bar
@@ -2112,6 +2116,7 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
+        AtticSounds.play(.created)
         // Files added while it was written go onto it (O17-06).
         attachComposerFiles(to: task.id)
         selectOnly(nil)

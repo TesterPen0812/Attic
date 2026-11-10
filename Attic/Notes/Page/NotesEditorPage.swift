@@ -830,6 +830,7 @@ struct NotesEditorPage: View {
 
     private func newNote() {
         guard controller.requestNewNote() else { return }
+        AtticSounds.play(.created)
         library.clearSearch()
         // An untouched draft stays; only the caret moves to its title.
         DispatchQueue.main.async { chrome.focusText() }
@@ -839,6 +840,7 @@ struct NotesEditorPage: View {
     /// named, its caret at the end of the title.
     private func newNote(title: String, tag: String?) {
         guard controller.requestNewNote(title: title, tags: tag.map { [$0] } ?? []) else { return }
+        AtticSounds.play(.created)
         library.clearSearch()
         DispatchQueue.main.async { chrome.focusText() }
     }
@@ -882,6 +884,7 @@ struct NotesEditorPage: View {
     private func delete(_ id: UUID) {
         Task { @MainActor in
             guard await controller.deleteNoteDurably(noteID: id) else { return }
+            AtticSounds.play(.trashed)
             guard let toasts, let step = controller.libraryUndoStepID else { return }
             // The toast is one way to Undo; the library's history is the other
             // (⌘Z, the menus), and it outlives the toast.

@@ -45,6 +45,12 @@ struct GeneralSettingsView: View {
                     identifier: "setting-haptics"
                 )
                 AtticGroupDivider()
+                AtticSwitchRow(
+                    title: String(localized: "Sounds"),
+                    isOn: soundsBinding,
+                    identifier: "setting-sounds"
+                )
+                AtticGroupDivider()
                 // Lively (the default) or Subtle springs, or Reduced to
                 // crossfades and instant changes (round 9, owner item 26;
                 // Lively and Subtle: the Motion Lab's finish).
@@ -156,5 +162,19 @@ struct GeneralSettingsView: View {
             get: { loginItemService.isEnabled },
             set: { loginItemService.setEnabled($0) }
         )
+    }
+
+    private var soundsBinding: Binding<Bool> {
+        Binding(
+            get: { settings.soundsEnabled },
+            set: { Self.setSounds($0, in: settings) }
+        )
+    }
+
+    /// The Sounds switch: turned on, it plays the done sound once, so the
+    /// person hears what they chose.
+    static func setSounds(_ isOn: Bool, in settings: AppSettings, sounds: AtticSounds = .shared) {
+        settings.soundsEnabled = isOn
+        if isOn { sounds.play(.done) }
     }
 }

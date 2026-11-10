@@ -47,6 +47,7 @@ enum TaskNoteFiles {
         Task { @MainActor in
             let added = await importFiles(staging.urls, to: taskID, tasks: tasks, controller: controller)
             staging.discard()
+            if !added { AtticSounds.play(.failed) }
             guard let toasts else { return }
             if added {
                 toasts.show(String(localized: "Added to task's note"), actionTitle: String(localized: "Open"),

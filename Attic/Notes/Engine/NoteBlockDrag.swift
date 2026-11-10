@@ -471,6 +471,7 @@ final class NoteBlockDragSession: NSObject {
         let lineOnPage = clip.map { line.midY - $0.bounds.minY }
         let moved = engine.moveBlock(source, to: target.location)
         guard moved else { end(at: home(in: textView), how: "drop-refused"); return false }
+        AtticSounds.play(.dropped)
         // The move selects the block where it landed.
         let landing = textView.selectedRange().location
         let block = engine.blockRange(at: min(max(landing, 0), max(0, engine.textStorage.length - 1)))
