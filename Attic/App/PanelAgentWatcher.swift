@@ -322,14 +322,23 @@ final class AgentReachWindow {
 
     private(set) var window: NSPanel?
 
+    /// Never moved down from under the menu bar: a frame pushed down there
+    /// would put the drawing out of line with the stage.
+    private final class Window: NSPanel {
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    }
+
     /// Draws `fx` over `panel` and `island` (screen frames), with the stage
     /// where `stage` is. False when the stage is not in a window.
     func show(fx: AgentChatFX, stage: NSView, over panel: NSWindow, island: CGRect?) -> Bool {
         guard let stageWindow = stage.window else { return false }
         let stageFrame = stageWindow.convertToScreen(stage.convert(stage.bounds, to: nil))
-        var area = panel.frame.union(stageFrame)
+        var area = stageFrame
         if let island { area = area.union(island) }
-        area = area.insetBy(dx: -Self.margin, dy: -Self.margin).integral
+        area = area.insetBy(dx: -Self.margin, dy: -Self.margin)
+        // Nothing is drawn above the panel's top: the layer stays clear of the menu bar.
+        area.size.height = min(area.maxY, stageFrame.maxY) - area.minY
+        area = area.integral
         let window = self.window ?? make()
         self.window = window
         window.setFrame(area, display: false)
@@ -354,7 +363,7 @@ final class AgentReachWindow {
     }
 
     private func make() -> NSPanel {
-        let window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let window = Window(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -368,3 +377,4 @@ final class AgentReachWindow {
         return window
     }
 }
+

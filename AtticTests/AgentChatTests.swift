@@ -1616,6 +1616,10 @@ final class AgentChatDrawFoldTests: XCTestCase {
     }
 }
 
+private final class FlippedTestView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// Holds a watched presentation until the test lets it go.
 @MainActor
 private final class WatchGate {
@@ -2203,6 +2207,34 @@ final class AgentChatWatchingTests: XCTestCase {
         XCTAssertEqual(opened, [.calendar], "The page still comes forward")
         XCTAssertNotNil(board.dayRequest, "On its day")
         XCTAssertTrue(effects.isEmpty, "No travel, taps or bursts: \(effects)")
+    }
+
+    /// The reach window lies exactly over the stage and the island, even
+    /// with the panel at the top of the screen (a window there was pushed
+    /// down from under the menu bar, so the spark drew 67 pt below the
+    /// island's dot).
+    func testTheReachWindowLiesOverTheStageAndTheIsland() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let panel = NSWindow(contentRect: CGRect(x: screen.frame.maxX - 420, y: screen.frame.maxY - 560, width: 400, height: 544),
+                             styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let stage = FlippedTestView(frame: CGRect(x: 40, y: 40, width: 320, height: 464))
+        panel.contentView?.addSubview(stage)
+        panel.orderFront(nil)
+        let stageFrame = panel.convertToScreen(stage.convert(stage.bounds, to: nil))
+        let island = CGRect(x: stageFrame.midX - 95, y: stageFrame.minY - 55, width: 190, height: 71)
+        let reach = AgentReachWindow()
+        defer { reach.hide() }
+        XCTAssertTrue(reach.show(fx: AgentChatFX(), stage: stage, over: panel, island: island))
+        let frame = try XCTUnwrap(reach.window?.frame)
+        XCTAssertEqual(frame.maxY, stageFrame.maxY, accuracy: 1, "Its top is the stage's: never moved down")
+        XCTAssertEqual(frame.minY, island.minY - AgentReachWindow.margin, accuracy: 1, "Down past the island")
+        XCTAssertEqual(frame.minX, stageFrame.minX - AgentReachWindow.margin, accuracy: 1)
+        XCTAssertTrue(reach.window?.ignoresMouseEvents == true, "Clicks pass through")
+        XCTAssertTrue(reach.window?.isVisible == true)
+        reach.hide()
+        XCTAssertFalse(reach.window?.isVisible == true)
     }
 
     func testTheSparkTapsTheIslandBeforeThePageSwitches() async {
