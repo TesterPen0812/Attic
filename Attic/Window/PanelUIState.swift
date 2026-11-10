@@ -90,6 +90,8 @@ final class PanelUIState: ObservableObject {
     /// Shows the agent's watched changes on the real pages; the panel
     /// controller gives it the island.
     var agentWatcher: PanelAgentWatcher?
+    /// The window the spark flies out to the island in. Set by the panel controller.
+    var agentReach: AgentChatReach?
     /// The pages another panel hosts (Accepted "Tall island", "Pull a page
     /// out, snap it back in"): on the docked panel, the pages that are out;
     /// on a floating panel, every page but its own. A page lives in one
