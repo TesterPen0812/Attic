@@ -1130,11 +1130,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         revealTextRange(range, resolvePrefixLayout: true)
     }
 
-    /// Find already knows the exact text range. Laying out just that range
-    /// avoids a synchronous full-prefix pass on the first distant match;
-    /// the next native layout still corrects the viewport and floating bands.
+    /// A cold Find result needs its preceding paragraphs laid out before
+    /// scrolling. TextKit's estimated positions can otherwise move the
+    /// result thousands of points after the next native layout pass.
     func scrollFindMatchToVisible(_ range: NSRange) {
-        revealTextRange(range, resolvePrefixLayout: false)
+        revealTextRange(range, resolvePrefixLayout: true)
     }
 
     private func revealTextRange(_ range: NSRange, resolvePrefixLayout: Bool) {

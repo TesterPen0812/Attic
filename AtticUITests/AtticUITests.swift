@@ -364,6 +364,22 @@ final class AtticUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
     }
 
+    /// P4's Notes + opens a composer. Command-Return creates the note and
+    /// opens its editor; the tests can then exercise live document editing.
+    private func createNotesEditor(_ title: String, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+        let newNote = app.buttons["notes-new-note"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5), "Notes + is available", file: file, line: line)
+        newNote.click()
+        let titleField = cardTitle
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5), "Notes + opens the P4 composer", file: file, line: line)
+        titleField.click()
+        titleField.typeText(title)
+        app.typeKey(.return, modifierFlags: .command)
+        let body = app.textViews["note-text"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10), "Command-Return opens the new note", file: file, line: line)
+        return body
+    }
+
     /// A kept task draft holds the panel open on idle; once it is cleared,
     /// the idle panel hides. The launch is an explicit open, which opens the
     /// card; Escape closes it and keeps the draft (Accepted "The '+' card"),
@@ -405,14 +421,10 @@ final class AtticUITests: XCTestCase {
     }
 
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
-        addBar.click()
         app.typeKey("2", modifierFlags: .command)
-        let newNote = app.buttons["notes-new-note"]
-        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
-        newNote.click()
-        let body = app.textViews["note-text"]
-        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        let body = createNotesEditor("Idle note")
         body.click()
+        app.typeKey("a", modifierFlags: .command)
         body.typeText("An autosaved note can rest.")
         waitForValue("An autosaved note can rest.", in: body)
         let pin = app.buttons["panel-pin-button"]
@@ -738,15 +750,10 @@ final class AtticUITests: XCTestCase {
 
     func testNotesEditorKeepsDraftWhileBrowsingSavedNotes() throws {
         app.typeKey("2", modifierFlags: .command)
-
-        let newNote = app.buttons["notes-new-note"]
-        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
-        newNote.click()
-
-        let body = app.textViews["note-text"]
-        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        let body = createNotesEditor("Draft note")
         XCTAssertTrue(body.wait(for: \.isHittable, toEqual: true, timeout: 10))
         body.click()
+        app.typeKey("a", modifierFlags: .command)
         let text = "Live Notes UI\nThe active draft survives opening the library."
         app.typeText(text)
         waitForValue(text, in: body)
@@ -809,19 +816,17 @@ final class AtticUITests: XCTestCase {
         XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
         XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
         XCTAssertTrue(app.buttons["panel-pin-button"].isSelected)
-        XCTAssertTrue(addBar.isHittable)
+        XCTAssertTrue(app.buttons["tasks-new-task"].isHittable,
+                      "the P4 shared + remains reachable at minimum size")
         XCTAssertTrue(app.buttons["panel-section-tasks"].isHittable)
     }
 
     func testNoteTextScrollsUnderStationaryControls() throws {
         app.typeKey("2", modifierFlags: .command)
-        let newNote = app.buttons["notes-new-note"]
-        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
-        newNote.click()
-        let body = app.textViews["note-text"]
-        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        let body = createNotesEditor("Scrolling note")
         XCTAssertTrue(body.wait(for: \.isHittable, toEqual: true, timeout: 10))
         body.click()
+        app.typeKey("a", modifierFlags: .command)
         let text = "Scrolling note\n" + (1...60).map { String($0) }.joined(separator: "\n")
         app.typeText(text)
         waitForValue(text, in: body)

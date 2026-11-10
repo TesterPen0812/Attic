@@ -71,7 +71,13 @@ final class NotesPageUITests: XCTestCase {
     // MARK: Helpers
 
     private var noteText: XCUIElement { app.textViews["note-text"] }
-    private var noteValue: String { (noteText.value as? String) ?? "" }
+    /// The text view is briefly absent while the library slides away or a
+    /// newly created document mounts. Polling its value must not throw a
+    /// query error before `waitFor` can assert that the editor really opens.
+    private var noteValue: String {
+        guard noteText.exists else { return "" }
+        return (noteText.value as? String) ?? ""
+    }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 6, _ message: String,
                          file: StaticString = #filePath, line: UInt = #line) {
@@ -173,7 +179,9 @@ final class NotesPageUITests: XCTestCase {
         require(menu, "the ⋯ shows on a note with text")
         menu.click()
         // Accepted 2026-10-29 "Notes ••• menu names": Delete.
-        let delete = app.menuItems["Delete"]
+        // Several open menus can expose a "Delete" title in XCTest's app-wide
+        // query. The note's own command has a stable accessibility ID.
+        let delete = app.menuItems["notes-menu-delete"]
         require(delete, "the note's menu opens")
         delete.click()
 
