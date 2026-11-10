@@ -1497,7 +1497,7 @@ final class AgentNoteWritingTests: XCTestCase {
     // MARK: The writer
 
     private func writer(_ surface: FakeNoteSurface?, opened: @escaping (UUID) -> Void = { _ in }) -> AgentNoteWriter {
-        let writer = AgentNoteWriter(open: { opened($0); return surface }, base: { _ in NoteDocument(blocks: [.text("Before")]) })
+        let writer = AgentNoteWriter(open: { id, _ in opened(id); return surface }, base: { _ in NoteDocument(blocks: [.text("Before")]) })
         writer.pace = .init(character: 0.001, newline: 0.002, cap: 3, arrive: 0, settle: 0, hold: 0.01, frame: 0.001)
         return writer
     }

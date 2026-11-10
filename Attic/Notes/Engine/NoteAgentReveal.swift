@@ -49,6 +49,13 @@ protocol AgentNoteSurface: AnyObject {
     @discardableResult
     func veilAgentWriting(_ range: NSRange, shown: Int) -> CGRect?
     func liftAgentVeil()
+    /// Shown, never handed the keyboard: it stays with the chat, even when
+    /// the page's arrival gives the note its caret back.
+    func keepKeyboardOff()
+}
+
+extension AgentNoteSurface {
+    func keepKeyboardOff() {}
 }
 
 extension NoteEditorTextView: AgentNoteSurface {
@@ -75,6 +82,20 @@ extension NoteEditorTextView: AgentNoteSurface {
     /// last added one, are masked out. Lines after the edit stay in place.
     @discardableResult
     func veilAgentWriting(_ range: NSRange, shown: Int) -> CGRect? {
+        // The writer has the note from here.
+        engine?.agentVeil = nil
+        return applyAgentVeil(range, shown: shown)
+    }
+
+    /// Before the writer has the note: the added text is hidden from the
+    /// first frame the page draws, as the note comes forward.
+    func applyPendingAgentVeil() {
+        guard let range = engine?.agentVeil, window != nil else { return }
+        applyAgentVeil(range, shown: 0)
+    }
+
+    @discardableResult
+    private func applyAgentVeil(_ range: NSRange, shown: Int) -> CGRect? {
         // The last added line, not the line after it: a span ending in a
         // new line ends before it.
         let text = string as NSString
@@ -82,7 +103,7 @@ extension NoteEditorTextView: AgentNoteSurface {
         if range.length > 0, last <= text.length, text.character(at: last - 1) == 10 { last -= 1 }
         guard let layer, let caret = agentCaret(at: range.location + shown),
               let end = agentCaret(at: last) else {
-            liftAgentVeil()
+            removeAgentMask()
             return nil
         }
         let mask = (layer.mask as? CAShapeLayer) ?? CAShapeLayer()
@@ -109,7 +130,16 @@ extension NoteEditorTextView: AgentNoteSurface {
         return convert(caret, to: nil)
     }
 
+    func keepKeyboardOff() {
+        if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+    }
+
     func liftAgentVeil() {
+        engine?.agentVeil = nil
+        removeAgentMask()
+    }
+
+    private func removeAgentMask() {
         guard layer?.mask != nil else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

@@ -188,6 +188,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var hoveredHeadingOffset: Int?
     var updatingHeadingControls = false
     private(set) weak var textView: NoteEditorTextView?
+    /// The agent's added text, hidden from the first frame the note is drawn
+    /// until the writer takes it over (`NoteAgentReveal`). Display only.
+    var agentVeil: NSRange?
     /// Native work captured before detach may not enter a later view lease.
     private(set) var viewGeneration: UInt64 = 0
     var keepsComposedViewportWarm = false

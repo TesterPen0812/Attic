@@ -611,8 +611,9 @@ final class AppCoordinator: ObservableObject {
         // Watched note edits are shown being written: Notes forward on the
         // note, then back. Only ever asked while the chat is open.
         let noteWriter = AgentNoteWriter(
-            open: { [weak uiState, weak pages = noteDraft.pages] id in
-                await AgentNoteWriter.openInNotes(id, pages: pages, select: { uiState?.selectSection(.notes) })
+            open: { [weak uiState, weak pages = noteDraft.pages] id, before in
+                await AgentNoteWriter.openInNotes(id, before: before, pages: pages,
+                                                  select: { uiState?.selectSection(.notes) })
             },
             base: { [weak noteStore] id in noteStore?.takeAgentWriteBase(id) }
         )

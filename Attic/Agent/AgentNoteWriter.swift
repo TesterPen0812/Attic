@@ -30,14 +30,15 @@ final class AgentNoteWriter {
     }
 
     /// Brings Notes forward on the note and hands back its editor once it is
-    /// on show. Called only while the chat is open.
-    private let open: (UUID) async -> AgentNoteSurface?
+    /// on show. Called only while the chat is open. Given the text from
+    /// before, the added text is hidden from the first frame the page draws.
+    private let open: (UUID, NoteDocument?) async -> AgentNoteSurface?
     /// The note's text from just before the agent's write (`NoteStore`).
     private let base: (UUID) -> NoteDocument?
     var pace = Pace()
     var reducesMotion: () -> Bool = { false }
 
-    init(open: @escaping (UUID) async -> AgentNoteSurface?, base: @escaping (UUID) -> NoteDocument?) {
+    init(open: @escaping (UUID, NoteDocument?) async -> AgentNoteSurface?, base: @escaping (UUID) -> NoteDocument?) {
         self.open = open
         self.base = base
     }
@@ -53,18 +54,29 @@ final class AgentNoteWriter {
 
     private func write(noteID: UUID, before: NoteDocument, watching: @escaping () -> Bool,
                        point: (CGPoint, Bool) -> Void) async {
-        guard watching(), !Task.isCancelled, let surface = await open(noteID), watching(), !Task.isCancelled else { return }
+        guard watching(), !Task.isCancelled,
+              let surface = await open(noteID, reducesMotion() ? nil : before) else { return }
+        // However it ends, nothing stays hidden.
+        defer { surface.liftAgentVeil() }
+        guard watching(), !Task.isCancelled else { return }
         let insertion = surface.agentInsertion(since: before)
         // Reduced, or text replaced or removed: the note as it is now, plainly.
+        surface.keepKeyboardOff()
         guard !reducesMotion(), let insertion, !insertion.replaces, insertion.range.length > 0 else {
-            await pause(pace.hold, while: watching)
+            await pause(pace.hold, while: watching) { surface.keepKeyboardOff() }
             return
         }
         let schedule = Self.schedule(surface.agentText(in: insertion.range), pace: pace)
         // The spark waits at the writing point while the note settles in.
         var at = surface.veilAgentWriting(insertion.range, shown: 0).map { CGPoint(x: $0.maxX + 8, y: $0.midY) }
-        defer { surface.liftAgentVeil() }
-        await pause(pace.arrive, while: watching) { if let at { point(at, false) } }
+        await pause(pace.arrive, while: watching) {
+            surface.keepKeyboardOff()
+            // The page is still settling in: the veil and the spark follow it.
+            if let caret = surface.veilAgentWriting(insertion.range, shown: 0) {
+                at = CGPoint(x: caret.maxX + 8, y: caret.midY)
+            }
+            if let at { point(at, false) }
+        }
         let start = Date()
         var shown = 0
         var next = 0
@@ -81,33 +93,46 @@ final class AgentNoteWriter {
                 at = CGPoint(x: caret.maxX + 8, y: caret.midY)
             }
             if let at { point(at, star) }
+            surface.keepKeyboardOff()
             if pace.frame > 0 { try? await Task.sleep(for: .seconds(pace.frame)) } else { await Task.yield() }
         }
         surface.liftAgentVeil()
         guard watching(), !Task.isCancelled else { return }
-        await pause(pace.settle, while: watching) { if let at { point(at, false) } }
+        await pause(pace.settle, while: watching) {
+            surface.keepKeyboardOff()
+            if let at { point(at, false) }
+        }
     }
 
     /// The Notes page opens the note, as a followed link does, and comes
     /// forward; then its editor, once it is in the window and laid out. A
     /// task's own note is not a Notes page note: nothing opens.
-    static func openInNotes(_ noteID: UUID, pages: NotesPageController?, select: () -> Void) async -> AgentNoteSurface? {
+    static func openInNotes(_ noteID: UUID, before: NoteDocument?, pages: NotesPageController?,
+                            select: () -> Void) async -> AgentNoteSurface? {
         guard let pages, let note = pages.store.note(withID: noteID), note.taskID == nil,
               await pages.openFromLibrary(noteID: noteID) else { return nil }
         // As a library row does: the note, not the list, is on show.
         if pages.isLibraryPresented { pages.dismissLibrary() }
+        // The added text is hidden before the page is drawn, not after.
+        var veiled: NoteEditorEngine?
+        if let before, let engine = pages.active.flatMap({ $0.noteID == noteID ? $0.engine : nil }),
+           let insertion = engine.agentInsertion(since: before), !insertion.replaces, insertion.range.length > 0 {
+            engine.agentVeil = insertion.range
+            veiled = engine
+        }
         select()
         for _ in 0..<45 {
             if let session = pages.active, session.noteID == noteID, let view = session.engine.textView,
                view.window != nil, !view.visibleRect.isEmpty {
-                // Shown, never handed the keyboard: it stays with the chat.
-                if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+                view.keepKeyboardOff()
                 // One more frame, so the page's arrival has drawn the note.
                 try? await Task.sleep(for: .milliseconds(16))
                 return view
             }
             try? await Task.sleep(for: .milliseconds(16))
         }
+        veiled?.textView?.liftAgentVeil()
+        veiled?.agentVeil = nil
         return nil
     }
 
