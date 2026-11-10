@@ -142,7 +142,7 @@ struct TasksPage: View {
     /// Moving the pager changes a page's X in `space`, but does not move its
     /// rows within the page. Measure in this space to avoid a geometry
     /// callback on every follow frame; `TasksPointer` projects on read.
-    static func slotSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
+    nonisolated static func slotSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
         TasksPagerSlot.localSpace(TasksTab.allCases.firstIndex(of: tab) ?? 0)
     }
     #if DEBUG
@@ -4804,7 +4804,7 @@ struct TasksNoticeClearance: View {
 
     /// The gap between a toast and the top of the bottom stack: the
     /// stack's own spacing between its controls.
-    static let gap = AtticSpacing.s8
+    nonisolated static let gap = AtticSpacing.s8
 
     /// The clearance above the panel's content inset (pure, tested).
     nonisolated static func clearance(stack: CGFloat, bottomInset: CGFloat, contentBottom: CGFloat) -> CGFloat {

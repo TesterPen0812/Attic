@@ -1622,7 +1622,7 @@ struct AtticUnfoldShape: InsettableShape, Equatable {
         return copy
     }
 
-    static func height(reveal: CGFloat, full: CGFloat) -> CGFloat {
+    nonisolated static func height(reveal: CGFloat, full: CGFloat) -> CGFloat {
         let start = min(full, AtticDropdownReveal.startHeight)
         return min(full, start + (full - start) * max(0, min(1, reveal)))
     }

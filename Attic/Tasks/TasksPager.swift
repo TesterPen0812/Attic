@@ -704,7 +704,7 @@ struct TasksPagerSlot: ViewModifier {
     let width: CGFloat
 
     /// Inside the moving slot, coordinates are invariant as the pager slides.
-    static func localSpace(_ index: Int) -> NamedCoordinateSpace {
+    nonisolated static func localSpace(_ index: Int) -> NamedCoordinateSpace {
         .named("AtticTasksSlot-\(index)")
     }
 
