@@ -692,7 +692,7 @@ struct TasksKeptPage<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        MainActor.assumeIsolated { lhs.frozen != nil && lhs.frozen == rhs.frozen }
+        lhs.frozen != nil && lhs.frozen == rhs.frozen
     }
 }
 

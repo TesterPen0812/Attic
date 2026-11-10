@@ -26,6 +26,9 @@ struct TasksPage: View {
     let layout: PanelPageLayout
     /// The add bar's keyboard focus (the shell's quick capture sets it).
     @Binding var addBarFocused: Bool
+    /// A value captured when SwiftUI builds this view. Equality can run
+    /// on a display-link thread and must not read a live Binding there.
+    private let addBarFocusSnapshot: Bool
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
@@ -129,6 +132,7 @@ struct TasksPage: View {
         self.store = store
         self.layout = layout
         _addBarFocused = addBarFocused
+        addBarFocusSnapshot = addBarFocused.wrappedValue
         self.chrome = chrome
         _pointer = State(initialValue: pointer)
         _dragSession = State(initialValue: dragSession ?? TasksDragSession())
@@ -3488,7 +3492,7 @@ struct TasksPageFocusedContent<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        MainActor.assumeIsolated { lhs.generation == rhs.generation && lhs.focusedRow == rhs.focusedRow }
+        lhs.generation == rhs.generation && lhs.focusedRow == rhs.focusedRow
     }
 }
 
@@ -3498,10 +3502,8 @@ struct TasksPageFocusedContent<Content: View>: View, Equatable {
 /// callbacks are the shell's and do not change what the page shows.
 extension TasksPage: Equatable {
     nonisolated static func == (lhs: TasksPage, rhs: TasksPage) -> Bool {
-        MainActor.assumeIsolated {
-            lhs.model === rhs.model && lhs.store === rhs.store && lhs.layout == rhs.layout
-                && lhs.addBarFocused == rhs.addBarFocused
-        }
+        lhs.model === rhs.model && lhs.store === rhs.store && lhs.layout == rhs.layout
+            && lhs.addBarFocusSnapshot == rhs.addBarFocusSnapshot
     }
 }
 
@@ -4623,7 +4625,7 @@ struct TasksRowSnapshot<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        MainActor.assumeIsolated { lhs.key == rhs.key }
+        lhs.key == rhs.key
     }
 }
 

@@ -8,6 +8,35 @@ import XCTest
 /// ordering a window on screen or touching the general pasteboard.
 @MainActor
 final class OwnerTasks1010Tests: XCTestCase {
+    /// SwiftUI may call Equatable views during async display-link rendering.
+    func testFocusableTasksViewsCompareFromDisplayLinkThread() throws {
+        struct ThreadSafeInput<T>: @unchecked Sendable { let value: T }
+        let focused = ThreadSafeInput(value: TasksPageFocusedContent(generation: 12, focusedRow: nil) { EmptyView() })
+        let kept = ThreadSafeInput(value: TasksKeptPage(frozen: nil) { EmptyView() })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 520))
+        let unfocused = ThreadSafeInput(value: TasksPage(model: model, store: store, layout: layout,
+                                                          addBarFocused: .constant(false)))
+        let focusedPage = ThreadSafeInput(value: TasksPage(model: model, store: store, layout: layout,
+                                                            addBarFocused: .constant(true)))
+        let key = TasksRowKey(model: AtticTaskRowModel(title: "Test"), isSelected: false,
+                              selectionRun: .single, isExpanded: false, isDropTarget: false,
+                              isFocused: false, tab: .now, layout: layout, isLive: false)
+        let row = ThreadSafeInput(value: TasksRowSnapshot(key: key) { EmptyView() })
+        let done = expectation(description: "off-thread SwiftUI equality")
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertTrue(focused.value == focused.value)
+            XCTAssertFalse(kept.value == kept.value)
+            XCTAssertTrue(unfocused.value == unfocused.value)
+            XCTAssertFalse(unfocused.value == focusedPage.value, "focus is captured when the view is built")
+            XCTAssertTrue(row.value == row.value)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+    }
+
     func testApplicationActivationPreservesThePanelPosition() throws {
         let suite = "OwnerTasks1010.position.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

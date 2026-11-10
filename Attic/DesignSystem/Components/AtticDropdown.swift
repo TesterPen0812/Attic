@@ -166,8 +166,11 @@ private struct AtticDropdownHeightObserver: ViewModifier {
                     Color.clear.preference(key: AtticDropdownNaturalHeightKey.self, value: proxy.size.height)
                 })
                 .onPreferenceChange(AtticDropdownNaturalHeightKey.self) { [reporter] height in
-                    MainActor.assumeIsolated {
-                        reporter.report(height + AtticDropdownMetrics.inset * 2, to: changed)
+                    let measured = height + AtticDropdownMetrics.inset * 2
+                    if Thread.isMainThread {
+                        MainActor.assumeIsolated { reporter.report(measured, to: changed) }
+                    } else {
+                        Task { @MainActor in reporter.report(measured, to: changed) }
                     }
                 }
         } else {
@@ -205,9 +208,12 @@ private struct AtticDropdownWidthObserver: ViewModifier {
     func body(content: Content) -> some View {
         if let changed {
             content.onPreferenceChange(AtticDropdownIdealWidthKey.self) { [reporter] width in
-                MainActor.assumeIsolated {
-                    guard width > 0 else { return }
-                    reporter.report(width + AtticDropdownMetrics.inset * 2, to: changed)
+                guard width > 0 else { return }
+                let measured = width + AtticDropdownMetrics.inset * 2
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { reporter.report(measured, to: changed) }
+                } else {
+                    Task { @MainActor in reporter.report(measured, to: changed) }
                 }
             }
         } else {
