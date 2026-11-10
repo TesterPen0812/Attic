@@ -990,6 +990,7 @@ final class DrawPageModel: ObservableObject {
             library.commitRename()
             guard !library.isRenaming else { return }
         }
+        endEditing()
         closeFilter()
         isSearching = true
     }
