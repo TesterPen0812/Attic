@@ -610,7 +610,8 @@ struct AtticStatusCircle: View {
     @Environment(\.atticDesign) private var design
     @State private var completion: Double = 1
     @State private var drawnCheck: Double = 1
-    @State private var checkScale: CGFloat = 1
+    /// Counts completions: each one plays the tick's pop.
+    @State private var tickTrigger = 0
     @State private var discOpacity: Double = 1
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
@@ -634,6 +635,10 @@ struct AtticStatusCircle: View {
 
     /// The tick's animation: pop (Lively 0.30 s / 0.28), or the Reduced
     /// fallback (the disc and its check fade in together).
+    static func tickSpring(tuning: AtticMotionTuning = .current) -> Spring {
+        Spring(duration: tuning.tick.response, bounce: tuning.tick.bounce)
+    }
+
     static func tickAnimation(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> Animation? {
         if reduceMotion { return AtticMotionPreset.complete.animation(reduceMotion: true) }
         return .spring(duration: tuning.tick.response, bounce: tuning.tick.bounce)
@@ -685,7 +690,17 @@ struct AtticStatusCircle: View {
                     .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
                     .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
-                    .scaleEffect(checkProgress == nil ? checkScale : 1)
+                    // The tick lands on pop: it grows from 0.6 on its own
+                    // keyframe (never sharing the sweep's transaction, which
+                    // a second `withAnimation` interrupted on screen).
+                    .keyframeAnimator(initialValue: CGFloat(1), trigger: tickTrigger) { content, scale in
+                        content.scaleEffect(scale)
+                    } keyframes: { _ in
+                        KeyframeTrack {
+                            MoveKeyframe(Self.tickStartScale)
+                            SpringKeyframe(1, spring: Self.tickSpring())
+                        }
+                    }
                     .opacity(discOpacity)
             case .backlog:
                 let dashed = design.increaseContrast ? m.backlogLineWidthIncreased : m.backlogLineWidth
@@ -705,21 +720,17 @@ struct AtticStatusCircle: View {
             if design.reduceMotion {
                 completion = 1
                 drawnCheck = 1
-                checkScale = 1
                 discOpacity = 0
                 withAnimation(motion) { discOpacity = 1 }
             } else {
                 completion = 0
                 drawnCheck = 0
-                checkScale = Self.tickStartScale
                 discOpacity = 1
                 withAnimation(motion) {
                     completion = 1
-                }
-                withAnimation(Self.tickAnimation(reduceMotion: false)) {
                     drawnCheck = 1
-                    checkScale = 1
                 }
+                tickTrigger &+= 1
             }
         }
         .accessibilityHidden(true)

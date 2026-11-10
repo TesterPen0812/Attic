@@ -3954,7 +3954,7 @@ struct TasksLiftedCardLayer<Card: View>: View {
                 card(current)
                     .frame(width: current.origin.width, alignment: .topLeading)
                     .modifier(AtticReorderLiftModifier(lifted: true))
-                    .scaleEffect(Self.scale(raised: raised, landed: current.landed, reduceMotion: design.reduceMotion))
+                    .scaleEffect(Self.scale(raised: raised, landed: false, reduceMotion: design.reduceMotion))
                     .offset(x: current.origin.minX, y: current.y)
             }
         }
@@ -3963,11 +3963,22 @@ struct TasksLiftedCardLayer<Card: View>: View {
             guard id != nil, !design.reduceMotion else { return }
             withAnimation(Self.liftAnimation) { raised = true }
         }
+        // Landing: back to its size in a transaction of its own, so the
+        // drop's commit (the landing's completion) never waits for it.
+        .onChange(of: lift.lift?.landed == true) { _, landed in
+            guard landed, raised else { return }
+            withAnimation(Self.settleAnimation) { raised = false }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear { installSnapshot() }
         .onDisappear { lift.snapshot = nil }
+    }
+
+    /// Settling back on the drop: the press spring (0.20 s, no bounce).
+    static var settleAnimation: Animation {
+        .spring(duration: AtticMotionScale.press.response, bounce: 0)
     }
 
     static var liftAnimation: Animation {
