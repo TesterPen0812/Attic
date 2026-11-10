@@ -1204,3 +1204,52 @@ final class AgentChatFXTests: XCTestCase {
         XCTAssertEqual(fx.liveCount, 0)
     }
 }
+
+/// Draw's floating controls fold under the chat as the top row does (screen 9,
+/// item 24): blurred, the title capsule stayed a bright patch and the tool bar
+/// glowed through the composer.
+@MainActor
+final class AgentChatDrawFoldTests: XCTestCase {
+    private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
+        guard depth < 50 else { return nil }
+        if (element.accessibilityIdentifier?() ?? nil) == id { return element }
+        for child in (element.accessibilityChildren?() ?? nil) ?? [] {
+            if let found = find(id, in: child as AnyObject, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    func testDrawsTitleAndToolsFoldWhileTheChatIsOver() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let topRow = PanelTopRowState()
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let size = CGSize(width: 320, height: 460)
+        let host = NSHostingView(rootView: DrawPageHost(model: model, uiState: PanelUIState(),
+                                                        layout: PanelPageLayout(cornerSize: 52, panelSize: size))
+            .environment(\.panelTopRowState, topRow)
+            .atticDesign(AtticDesignContext(mode: .dark))
+            .frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        spin(0.3)
+        XCTAssertNotNil(find("draw-title", in: host), "Precondition: the title is there before the chat")
+        XCTAssertNotNil(find("draw-tool-bar", in: host), "Precondition: the tools are there before the chat")
+        topRow.chatOver = true
+        spin(0.5)
+        XCTAssertNil(find("draw-title", in: host), "The title capsule folds away under the chat")
+        XCTAssertNil(find("draw-tool-bar", in: host), "The tool bar folds away under the chat")
+        topRow.chatOver = false
+        spin(0.5)
+        XCTAssertNotNil(find("draw-title", in: host), "The title comes back when the chat closes")
+        XCTAssertNotNil(find("draw-tool-bar", in: host))
+    }
+}
