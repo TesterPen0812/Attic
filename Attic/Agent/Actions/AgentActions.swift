@@ -93,7 +93,7 @@ final class AgentActions {
 
     enum UndoEntry {
         case history(UndoHistoryID, UUID, String)
-        case draw(UUID, DrawSnapshot, String)
+        case draw(UUID, DrawSnapshot, UUID, String)
         case createdNote(UUID, revision: String, name: String)
         case updatedNote(UUID, document: NoteDocument?, title: String, body: String,
                          revision: String, name: String)
@@ -102,7 +102,7 @@ final class AgentActions {
 
         var title: String {
             switch self {
-            case let .history(_, _, name), let .draw(_, _, name), let .createdNote(_, _, name),
+            case let .history(_, _, name), let .draw(_, _, _, name), let .createdNote(_, _, name),
                  let .proposal(_, _, name),
                  let .updatedNote(_, _, _, _, _, name), let .unavailable(name): name
             }
@@ -297,7 +297,13 @@ final class AgentActions {
         } else if name.hasPrefix("draw_") {
             let result = try drawAction(name, arguments)
             text = result.0; step = result.1
-            if let snapshot = result.2 { extraEntries.append(.draw(snapshot.canvas.id, snapshot, step.title)) }
+            if let snapshot = result.2 {
+                if let undoID = draw?.undoStepID(on: snapshot.canvas.id) {
+                    extraEntries.append(.draw(snapshot.canvas.id, snapshot, undoID, step.title))
+                } else {
+                    extraEntries.append(.unavailable("\(step.title): Draw's Undo step is unavailable"))
+                }
+            }
         } else {
             text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
                 try await tasks.callAsync(name: name, arguments: arguments)
@@ -407,10 +413,10 @@ final class AgentActions {
                     success = result == .applied
                     if !success { failures.append("\(entry.title): \(String(describing: result))") }
                 }
-            case let .draw(canvasID, snapshot, _):
+            case let .draw(canvasID, snapshot, expectedStepID, _):
                 if let draw, let current = try? draw.open(canvasID),
                    current.objects == snapshot.objects && current.canvas.name == snapshot.canvas.name,
-                   draw.canUndo(on: canvasID) {
+                   draw.undoStepID(on: canvasID) == expectedStepID {
                     success = draw.undo(on: canvasID).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }

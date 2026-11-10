@@ -190,7 +190,8 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "create_tasks", "update_tasks",
                                              "search_items", "open_page", "calendar_search",
                                              "calendar_read", "calendar_create", "calendar_update", "calendar_delete",
-                                             "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes"]))
+                                             "draw_list_canvases", "draw_read_canvas", "draw_move_object",
+                                             "draw_add_text", "draw_add_shape", "draw_add_strokes"]))
         for definition in defs {
             let schema = try XCTUnwrap(definition["inputSchema"] as? [String: Any])
             XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
@@ -659,6 +660,28 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(try f.draw.open(canvas.id).objects.first, object)
     }
 
+    func testDrawUndoNeverConsumesANewerOwnerHistoryStepWithUnchangedObjects() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Sketch")
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Owner's draft"))]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Add to sketch")
+        _ = try performed(await f.actions.call(name: "draw_add_text", arguments: [
+            "canvas_id": canvas.id.uuidString, "text": "Agent addition", "x": 10, "y": 25
+        ], watching: false, requestID: request))
+        let agentObjects = try f.draw.open(canvas.id).objects
+
+        // Tags change the canvas history without changing visible objects or its name.
+        // Undo of the agent request must never consume this later owner command.
+        XCTAssertTrue(f.draw.perform(.tags(["owner"]), on: canvas.id).isSaved)
+        let ownerStep = try XCTUnwrap(f.draw.undoStepID(on: canvas.id))
+        let result = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(result.undone, 0)
+        XCTAssertNotNil(result.remaining)
+        XCTAssertEqual(try f.draw.open(canvas.id).canvas.tags, ["owner"])
+        XCTAssertEqual(try f.draw.open(canvas.id).objects, agentObjects)
+        XCTAssertEqual(f.draw.undoStepID(on: canvas.id), ownerStep)
+    }
+
     func testDrawRenameAndApprovedDeleteUndoInReverseOrder() async throws {
         let f = try fixture()
         let canvas = f.draw.create(name: "Original canvas")
@@ -798,7 +821,8 @@ final class AgentActionsTests: XCTestCase {
         let names = Set(definitions.compactMap { $0["name"] as? String })
         XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "open_page", "calendar_search",
                                               "calendar_read", "calendar_create", "calendar_update", "calendar_delete",
-                                              "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes",
+                                              "draw_list_canvases", "draw_read_canvas", "draw_move_object",
+                                              "draw_add_text", "draw_add_shape", "draw_add_strokes",
                                               "agent_approval_status"]))
         for definition in definitions {
             XCTAssertEqual((definition["inputSchema"] as? [String: Any])?["additionalProperties"] as? Bool, false)
