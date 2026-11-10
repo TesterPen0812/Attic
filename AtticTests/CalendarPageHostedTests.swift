@@ -422,6 +422,31 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    /// ••• ticks the picked view: Month stays ticked while a Month is folded
+    /// by scrolling (that tick made Week look picked), Week while Week is.
+    func testMoreTicksThePickedViewNotTheFold() throws {
+        let chrome = PanelSharedChrome()
+        func ticked() -> [String] {
+            chrome.more(on: .calendar).filter { $0.state == .on }.map(\.title)
+        }
+        try withReducedMotion {
+            try withPage(events: [], height: 460, chrome: chrome) { page in
+                XCTAssertEqual(ticked(), ["Month"])
+                page.scroll(to: CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count) + 40)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week", "folded by scrolling")
+                XCTAssertEqual(ticked(), ["Month"], "still Month: Week was not picked")
+                page.model.pickWeek(true)
+                page.settle(0.5)
+                XCTAssertEqual(ticked(), ["Week"])
+                page.scroll(to: 0)
+                XCTAssertEqual(ticked(), ["Week"])
+                page.model.pickWeek(false)
+                page.settle(0.5)
+                XCTAssertEqual(ticked(), ["Month"])
+            }
+        }
+    }
+
     /// The picked view is kept across a relaunch.
     func testThePickedViewSurvivesARelaunch() throws {
         let suite = "CalendarPickedView-\(UUID().uuidString)"
@@ -966,7 +991,7 @@ final class CalendarPageHostedTests: XCTestCase {
     private func withPage(events: [CalendarEvent], seed: (TaskStore) throws -> Void = { _ in },
                           taskActions: ((TaskStore) -> CalendarTaskRowActions)? = nil, keyWindow: Bool = false,
                           height: CGFloat = 900, makeWriter: (() throws -> CalendarEventWriter)? = nil,
-                          resumeDefaults: UserDefaults? = nil,
+                          resumeDefaults: UserDefaults? = nil, chrome: PanelSharedChrome? = nil,
                           _ body: (MountedPage) throws -> Void) throws {
         let store = try makeTestStore()
         try seed(store)
@@ -982,6 +1007,7 @@ final class CalendarPageHostedTests: XCTestCase {
                                 taskActions: taskActions?(store) ?? CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
                                 onNewTask: { _ in })
             .environment(\.panelResumeDefaults, resumeDefaults)
+            .environment(\.panelSharedChrome, chrome)
             .atticDesign(design)
             .frame(width: size.width, height: size.height)
         let window: NSWindow = keyWindow

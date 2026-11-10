@@ -295,8 +295,9 @@ struct CalendarPage: View {
     /// The Day view, unless a search has the page.
     private var showsDay: Bool { model.isDayView && !searchOpen && !model.snapshot.isSearching }
 
-    /// What ••• ticks: as before, Week while the grid shows the week.
-    private var currentView: CalendarViewMode { showsDay ? .day : flags.weekView ? .week : .month }
+    /// What ••• ticks: the picked view. A Month folded by scrolling is still
+    /// Month (ticking Week there made Week look picked, 2026-11-10).
+    private var currentView: CalendarViewMode { showsDay ? .day : model.isWeekPicked ? .week : .month }
 
     /// ‹ ›: a day in the Day view, otherwise a week or a month.
     private func step(_ n: Int) {
