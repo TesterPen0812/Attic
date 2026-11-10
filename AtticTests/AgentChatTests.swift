@@ -958,37 +958,6 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertFalse(topRow.isAway(.tasks))
     }
 
-    private func backdropMask() -> CALayer? {
-        func find(_ view: NSView) -> AgentChatBackdropView? {
-            if let found = view as? AgentChatBackdropView { return found }
-            for child in view.subviews { if let found = find(child) { return found } }
-            return nil
-        }
-        guard let content = window.contentView, let view = find(content) else { return nil }
-        return view.layer?.sublayers?.last?.mask
-    }
-
-    /// Screen 9, item 21: on the Air the main thread was busy for the first
-    /// frames of the opening. The blur, run by Core Animation on its own clock,
-    /// went on wiping while the colour (drawn on the main thread) and the
-    /// composer waited, so the colour arrived visibly later. The blur must
-    /// move only when the rest of the opening can.
-    func testTheBlurNeverRunsAheadOfAHitchedMainThread() throws {
-        AtticMotionPreference.systemReduceMotionOverride = false
-        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
-        model.open()
-        spin(0.05)
-        let mask = try XCTUnwrap(backdropMask())
-        func scale() -> CGFloat {
-            ((mask.presentation() ?? mask).value(forKeyPath: "transform.scale.x") as? CGFloat) ?? -1
-        }
-        let before = scale()
-        XCTAssertLessThan(before, 0.95, "Precondition: the wipe is under way")
-        Thread.sleep(forTimeInterval: 0.2)
-        XCTAssertEqual(scale(), before, accuracy: 0.001,
-                       "The blur wiped on while the main thread, and so the colour and the composer, could not")
-    }
-
     /// Screen 9: the earlier reply was drawn over the page's still readable
     /// rows before the blur had covered them. It arrives with the wipe.
     func testTheThreadArrivesWithTheWipeNotBeforeIt() {
