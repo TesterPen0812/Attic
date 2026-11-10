@@ -18,10 +18,25 @@ private final class FakeRunner: AgentRunning {
     var undone: [UUID] = []
     var undoFailure: Error?
     var cancels = 0
+    var contexts: [AgentRequestContext] = []
+    var saved: [AgentChatSummary] = []
+    var savedEntries: [UUID: [AgentThreadEntry]] = [:]
 
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> {
         sent.append((text, watching))
         return AsyncStream { self.continuation = $0 }
+    }
+
+    func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent> {
+        contexts.append(context)
+        return send(text, watching: watching)
+    }
+
+    func chats() -> [AgentChatSummary] { saved }
+    func reopen(chat id: UUID) -> Bool {
+        guard let entries = savedEntries[id] else { return false }
+        snapshot = AgentThreadSnapshot(entries: entries, events: [], isRunning: false)
+        return true
     }
 
     func setWatching(_ watching: Bool) { self.watching.append(watching) }
@@ -466,6 +481,162 @@ final class AgentChatTests: XCTestCase {
         model.send()
         XCTAssertEqual(runner.sent.count, 1)
         XCTAssertEqual(model.draft, "two", "What you typed waits")
+    }
+
+    // MARK: The composer's controls
+
+    private func finishRun() async {
+        runner.continuation?.yield(.finished)
+        runner.continuation?.finish()
+        await settle()
+    }
+
+    func testThePageChipSendsThePageAndItsItemUntilItIsRemoved() async {
+        let note = AgentTarget(page: .notes, itemID: UUID(), title: "Launch plan")
+        page = .notes
+        model.currentItem = { note }
+        model.open()
+        XCTAssertEqual(model.chipPage, .notes, "The chip names the page on show")
+        XCTAssertTrue(model.includesPage)
+        await start("Summarise this")
+        XCTAssertEqual(runner.contexts.last?.page, .notes)
+        XCTAssertEqual(runner.contexts.last?.pageItem, note, "The open item goes with the page")
+        await finishRun()
+
+        model.removePage()
+        await start("And now?")
+        XCTAssertEqual(runner.contexts.last, AgentRequestContext.none, "Without the chip, no page context")
+        await finishRun()
+
+        model.addPage()
+        await start("This page again")
+        XCTAssertEqual(runner.contexts.last?.page, .notes, "This page brings it back")
+        await finishRun()
+    }
+
+    func testTheChipFollowsThePage() {
+        model.open()
+        XCTAssertEqual(model.chipPage, .tasks)
+        page = .calendar
+        model.pageChanged(to: .calendar)
+        XCTAssertEqual(model.chipPage, .calendar)
+    }
+
+    func testAddedTasksNotesAndFilesGoWithOneMessage() async throws {
+        let task = AgentTarget(page: .tasks, itemID: UUID(), title: "Call the plumber")
+        model.attach(task)
+        model.attach(task)
+        XCTAssertEqual(model.attachments.count, 1, "Adding the same item twice keeps one chip")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-\(UUID().uuidString).txt")
+        try Data("eggs, milk".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        model.attachFile(at: url)
+        XCTAssertEqual(model.attachments.count, 2)
+        await start("Plan the shop")
+        XCTAssertEqual(runner.contexts.last?.items, [task])
+        XCTAssertEqual(runner.contexts.last?.files, [AgentFileAttachment(name: url.lastPathComponent, text: "eggs, milk")])
+        XCTAssertTrue(model.attachments.isEmpty, "What was added went with that message")
+        await finishRun()
+        await start("Next")
+        XCTAssertEqual(runner.contexts.last?.items, [])
+        XCTAssertEqual(runner.contexts.last?.files, [])
+        await finishRun()
+    }
+
+    func testFileRefusesAnythingButSmallTextFiles() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let text = folder.appendingPathComponent("notes.txt")
+        try Data("Hello".utf8).write(to: text)
+        let image = folder.appendingPathComponent("photo.png")
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13]).write(to: image)
+        let large = folder.appendingPathComponent("large.txt")
+        try Data(repeating: 0x61, count: AgentChatFiles.maxBytes + 1).write(to: large)
+        let binary = folder.appendingPathComponent("binary.txt")
+        try Data([0x41, 0, 0x42]).write(to: binary)
+
+        XCTAssertEqual(try AgentChatFiles.read(text).get(), AgentFileAttachment(name: "notes.txt", text: "Hello"))
+        XCTAssertEqual(AgentChatFiles.read(image).failure, .notText)
+        XCTAssertEqual(AgentChatFiles.read(large).failure, .tooLarge)
+        XCTAssertEqual(AgentChatFiles.read(binary).failure, .notText, "Text that isn't text is refused")
+        XCTAssertEqual(AgentChatFiles.read(folder).failure, .unreadable)
+
+        model.attachFile(at: image)
+        XCTAssertTrue(model.attachments.isEmpty)
+        XCTAssertEqual(model.attachmentRefusal, AgentChatFiles.Refusal.notText.message, "Refused plainly")
+        model.attachFile(at: text)
+        XCTAssertNil(model.attachmentRefusal)
+        XCTAssertEqual(model.attachments.map(\.name), ["notes.txt"])
+    }
+
+    func testTheAgentMenuAndSettingsAreOneSetting() throws {
+        let suite = "attic-chat-agent-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.inAppAgentBackend = .claude
+        let binding = model.bindAgent(to: settings)
+        defer { binding.cancel() }
+        XCTAssertEqual(model.agent, .claude)
+        model.agent = .codex
+        XCTAssertEqual(settings.inAppAgentBackend, .codex, "The chat's menu changes Settings")
+        settings.inAppAgentBackend = .claude
+        XCTAssertEqual(model.agent, .claude, "Settings changes the chat's menu")
+        XCTAssertEqual(AppSettings(defaults: defaults).inAppAgentBackend, .claude, "Saved as the one setting")
+    }
+
+    func testReopeningAChatShowsItAsItEndedAndListsHistory() async {
+        let old = AgentChatSummary(id: UUID(), title: "Boiler quotes", updated: Date().addingTimeInterval(-86_400))
+        runner.saved = [old]
+        runner.savedEntries[old.id] = [AgentThreadEntry(id: UUID(), role: "user", text: "Boiler quotes"),
+                                       AgentThreadEntry(id: UUID(), role: "assistant", text: "Three so far."),
+                                       AgentThreadEntry(id: UUID(), role: "notice", text: "A note")]
+        model.refreshHistory()
+        XCTAssertEqual(model.history, [old])
+        model.open()
+        await start("Something new")
+        model.reopen(old.id)
+        XCTAssertFalse(model.entries.isEmpty, "A chat can't be reopened over a run still going")
+        await finishRun()
+        model.reopen(old.id)
+        XCTAssertEqual(model.entries.count, 3)
+        guard case let .asked(text) = model.entries.first?.content else { return XCTFail("Expected the question") }
+        XCTAssertEqual(text, "Boiler quotes")
+        guard case let .reply(reply) = model.entries[1].content else { return XCTFail("Expected the reply") }
+        XCTAssertTrue(reply.wordTimes.allSatisfy { $0 == .distantPast }, "A reopened reply is already written")
+        XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) }, "Nothing in it plays again")
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    func testHistoryDaysReadTodayAWeekdayOrTheDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 10, hour: 15)))
+        XCTAssertEqual(AgentChatModel.dayLabel(now.addingTimeInterval(-3600), now: now, calendar: calendar),
+                       String(localized: "Today"))
+        let tuesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 9)))
+        XCTAssertNotEqual(AgentChatModel.dayLabel(tuesday, now: now, calendar: calendar), String(localized: "Today"))
+        let october = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 19, hour: 9)))
+        XCTAssertTrue(AgentChatModel.dayLabel(october, now: now, calendar: calendar).contains("19"))
+    }
+
+    func testEscapeLeavesTaskOrNoteBeforeClosing() {
+        model.open()
+        model.pickingItem = true
+        model.escape()
+        XCTAssertFalse(model.pickingItem)
+        XCTAssertTrue(model.isOpen)
+        model.escape()
+        XCTAssertFalse(model.isOpen)
+    }
+
+    func testNewChatPutsThePageChipBackAndClearsWhatWasAdded() async {
+        model.removePage()
+        model.attach(AgentTarget(page: .tasks, itemID: UUID(), title: "Call"))
+        model.newChat()
+        XCTAssertTrue(model.includesPage)
+        XCTAssertTrue(model.attachments.isEmpty)
     }
 
     func testNewChatStopsTheRunAndEmptiesTheThread() async {
@@ -1611,5 +1782,12 @@ final class AgentNoteWritingTests: XCTestCase {
         XCTAssertEqual(middle?.range, NSRange(location: 2, length: 2))
         XCTAssertEqual(NoteEditorEngine.agentInsertion(from: "Title\nOld", to: "Title\nNew")?.replaces, true)
         XCTAssertNil(NoteEditorEngine.agentInsertion(from: "Same", to: "Same"))
+    }
+}
+
+private extension Result {
+    var failure: Failure? {
+        if case let .failure(error) = self { return error }
+        return nil
     }
 }
