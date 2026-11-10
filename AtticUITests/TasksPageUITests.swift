@@ -1128,7 +1128,9 @@ final class TasksPageUITests: XCTestCase {
         // Accepted 2026-10-29 "Tasks: Later is the backlog": Now has no
         // Completed today disclosure. Click between its last No date row
         // and the add bar (the standalone preview's own bottom control).
-        let gapTop = row("Call the plumber").frame.maxY, gapBottom = addBar.frame.minY
+        let plus = window.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 3), "the bottom '+' marks the list's empty space")
+        let gapTop = row("Call the plumber").frame.maxY, gapBottom = plus.frame.minY
         XCTAssertGreaterThan(gapBottom - gapTop, 40, "the demo list leaves space under its last line")
         window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: window.frame.width / 2, dy: (gapTop + gapBottom) / 2 - window.frame.minY)).click()
