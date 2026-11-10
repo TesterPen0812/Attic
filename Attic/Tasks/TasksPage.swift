@@ -3602,7 +3602,8 @@ private struct TasksAddBar: View {
                     },
                     files: model.composerFilesValue,
                     onAttach: model.services.chooseComposerFiles == nil ? nil : { model.services.chooseComposerFiles?() },
-                    onClearFiles: { model.clearComposerFiles(); editor.focus() }
+                    onClearFiles: { model.clearComposerFiles(); editor.focus() },
+                    isAccessibilityVisible: stripShown
                 )
                 // On the bar's edge (U-21): an open or set button's fill
                 // stays inside the bar's column (it stood 3.5 pt out when the

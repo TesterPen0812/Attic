@@ -1323,6 +1323,9 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     var files: Value? = nil
     var onAttach: (() -> Void)? = nil
     var onClearFiles: () -> Void = {}
+    /// A zero-height strip must not leave its independently focusable
+    /// buttons in the accessibility tree while it waits for a draft.
+    var isAccessibilityVisible = true
 
     /// The width the strip may take (the bar's), as laid out.
     @State private var available: CGFloat = .infinity
@@ -1355,6 +1358,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                                  identifier: "composer-date", compact: compact, showsTitle: !iconOnly.contains(0),
                                  keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
                                  clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
+                    .accessibilityHidden(!isAccessibilityVisible)
                     // With all three set, a long date gives way after the tag
                     // (never below its first words).
                     .layoutPriority(-0.5)
@@ -1365,6 +1369,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                                  identifier: "composer-tag", compact: compact, showsTitle: !iconOnly.contains(1),
                                  keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                                  clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
+                    .accessibilityHidden(!isAccessibilityVisible)
                     .layoutPriority(-1)
                     .atticDropdown(isPresented: $tagsPresented, prefer: .above, label: String(localized: "Tags")) {
                         tagPicker()
@@ -1372,6 +1377,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                 AtticStripButton(systemName: "exclamationmark", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
                                  identifier: "composer-priority", compact: compact, showsTitle: !iconOnly.contains(2),
                                  clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
+                    .accessibilityHidden(!isAccessibilityVisible)
                     .fixedSize(horizontal: true, vertical: false)
                     .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority"),
                                    contentHeight: AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4) {
@@ -1382,6 +1388,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                                      identifier: "composer-files", compact: compact, showsTitle: !iconOnly.contains(3),
                                      keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                                      clearLabel: String(localized: "Remove files"), open: onAttach, clear: onClearFiles)
+                        .accessibilityHidden(!isAccessibilityVisible)
                         // A long file name gives way first.
                         .layoutPriority(-1.5)
                 }
@@ -1393,7 +1400,8 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if abs(width - available) > 0.5 { available = width }
         }
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: isAccessibilityVisible ? .contain : .ignore)
+        .accessibilityHidden(!isAccessibilityVisible)
         .accessibilityLabel(onAttach == nil ? String(localized: "Date, tag and priority")
                             : String(localized: "Date, tag, priority and files"))
     }
