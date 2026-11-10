@@ -63,7 +63,7 @@ struct DrawSelectionOverlay: View {
                 DrawSelectionBar(model: model, actions: actions, styleAbove: place.above)
                     .fixedSize()
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { barSize = $0 }
-                    .offset(x: place.origin.x, y: place.origin.y - (model.isSelectionStyleOpen && place.above ? DrawSelectionBarMetrics.line : 0))
+                    .offset(x: place.origin.x, y: place.origin.y)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
