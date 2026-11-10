@@ -1001,14 +1001,16 @@ final class TasksPageUITests: XCTestCase {
         due.click()
         let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
+        let original = label("Book dentist")
+        XCTAssertTrue(original.contains(", later") && original.contains("due Tomorrow"),
+                      "the Backlog row starts put off with its date: \(original)")
         pressRowKeys()
         XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")
-        let spoken = label("Book dentist")
-        XCTAssertTrue(spoken.contains(", to do"), "not completed or started: \(spoken)")
-        XCTAssertTrue(spoken.contains("due Tomorrow"), "its date is as it was: \(spoken)")
+        XCTAssertEqual(label("Book dentist"), original,
+                       "Backspace, forward delete, Space, ⇧Space and ⌘B cannot change a row behind the picker")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(!remove.exists, "Esc closes the picker")
-        XCTAssertTrue(self.row("Book dentist").exists, "still on Now")
+        XCTAssertEqual(label("Book dentist"), original, "Esc returns to the unchanged Backlog row")
     }
 
     /// Round 5: the add bar's suggestion list keeps the keys in the draft.
