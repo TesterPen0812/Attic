@@ -93,14 +93,15 @@ struct SettingsView: View {
             AtticContentCard {
                 page
                     .id(navigation.selection)
-                    // A crossfade in every feel (pages never scale).
-                    .transition(AtticMotionPreset.pageSwitch.transition(
-                        reduceMotion: reduceMotion || settings.animations == .reduced, edge: nil, anchor: .top))
+                    // Sections cross-fade, 0.16 s ease-out (Accepted
+                    // 2026-11-10); pages never scale.
+                    .transition(.opacity)
             }
             // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
             // makes the gap to the sidebar.
             .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
-            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced),
+            .animation(AtticMotionScale.resolved(AtticMotionScale.crossfade,
+                                                 reduceMotion: reduceMotion || settings.animations == .reduced),
                        value: navigation.selection)
         }
         .background(AtticSidebarBackground())

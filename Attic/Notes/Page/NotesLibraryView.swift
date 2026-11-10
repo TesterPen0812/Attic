@@ -438,7 +438,7 @@ struct NotesLibraryView: View {
                         ForEach(groups) { group in
                             let folded = model.foldedGroups.contains(group.id)
                             TasksGroupHeader(title: group.title, count: group.rows.count, folded: folded, items: .notes) {
-                                withAnimation(design.reduceMotion ? nil : AtticPanelChromeMetrics.curve(0.26)) {
+                                withAnimation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticPanelChromeMetrics.curve(0.26)) {
                                     model.toggleGroup(group.id, in: groups)
                                 }
                             }

@@ -6,6 +6,13 @@ struct GeneralSettingsView: View {
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var globalHotKey: GlobalHotKey
 
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
+    /// The Reduced motion row shows only while motion is reduced.
+    static func showsReducedStyle(level: AtticAnimationLevel, systemReduceMotion: Bool) -> Bool {
+        level.reducesMotion(systemReduceMotion: systemReduceMotion)
+    }
+
     var body: some View {
         SettingsPage(section: .general) {
             SettingsGroup(title: String(localized: "Startup")) {
@@ -60,6 +67,17 @@ struct GeneralSettingsView: View {
                     selection: $settings.animations,
                     identifier: "setting-animations"
                 )
+                // Reduced, or macOS Reduce Motion: Instant (today's) or
+                // Fade (Accepted 2026-11-10, "Reduced motion, both").
+                if Self.showsReducedStyle(level: settings.animations, systemReduceMotion: systemReduceMotion) {
+                    AtticGroupDivider()
+                    AtticPopUpRow(
+                        label: String(localized: "Reduced motion"),
+                        choices: AtticReducedMotionStyle.allCases.map { ($0, $0.title) },
+                        selection: $settings.reducedMotionStyle,
+                        identifier: "setting-reduced-motion-style"
+                    )
+                }
                 AtticGroupDivider()
                 // The four hide animations, a user choice (owner, 2026-10-19).
                 AtticPopUpRow(

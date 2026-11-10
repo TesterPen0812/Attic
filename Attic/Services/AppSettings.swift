@@ -100,6 +100,7 @@ final class AppSettings: ObservableObject {
         static let soundsEnabled = "soundsEnabled"
         static let nextEventInNow = "nextEventInNow"
         static let animations = "animations"
+        static let reducedMotionStyle = "reducedMotionStyle"
         static let hideAnimation = "panelHideAnimation"
         static let islandSpot = "panelIslandSpot"
         static let hideSpeedLab = "motionLabHideSpeeds"
@@ -275,6 +276,15 @@ final class AppSettings: ObservableObject {
             AtticMotionPreference.level = animations
             guard oldValue != animations else { return }
             applyAnimationLevel()
+        }
+    }
+
+    /// When motion is reduced (Animations: Reduced, or macOS Reduce
+    /// Motion): Instant (the default) or Fade (Accepted 2026-11-10).
+    @Published var reducedMotionStyle: AtticReducedMotionStyle {
+        didSet {
+            defaults.set(reducedMotionStyle.rawValue, forKey: Key.reducedMotionStyle)
+            AtticReducedMotionStyle.current = reducedMotionStyle
         }
     }
 
@@ -487,6 +497,9 @@ final class AppSettings: ObservableObject {
         }
         animations = storedAnimations
         AtticMotionPreference.level = storedAnimations
+        let storedReduced = defaults.string(forKey: Key.reducedMotionStyle).flatMap(AtticReducedMotionStyle.init(rawValue:)) ?? .default
+        reducedMotionStyle = storedReduced
+        AtticReducedMotionStyle.current = storedReduced
         // Preserve the native-popover experiment from older lab data, ignoring retired tuning choices.
         let storedTuning = motionLabAvailable
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }

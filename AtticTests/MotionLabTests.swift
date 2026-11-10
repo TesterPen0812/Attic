@@ -77,13 +77,15 @@ final class MotionLabTests: XCTestCase {
             for spring in [t.slide, t.expand, t.doneSlide, t.settle, t.failReturn] {
                 XCTAssertEqual(spring.response, AtticMotionScale.spatial, "\(feel)")
             }
-            for spring in [t.popover, t.toast, t.complete] {
+            for spring in [t.popover, t.complete] {
                 XCTAssertEqual(spring.response, AtticMotionScale.standard, "\(feel)")
             }
+            // The toast arrives on pop's 0.30 s (Accepted 2026-11-10).
+            XCTAssertEqual(t.toast.response, AtticMotionScale.pop.response, "\(feel)")
             XCTAssertEqual(t.leaveResponse, AtticMotionScale.fast, "\(feel)")
-            let bounces = Set([t.slide, t.expand, t.doneSlide, t.popover, t.toast, t.complete, t.settle, t.failReturn].map(\.bounce))
-            XCTAssertEqual(bounces.count, 1, "\(feel): one bounce per feel")
-            for preset in AtticMotionPreset.allCases {
+            let bounces = Set([t.slide, t.expand, t.doneSlide, t.popover, t.complete, t.settle, t.failReturn].map(\.bounce))
+            XCTAssertEqual(bounces.count, 1, "\(feel): one bounce per feel, light arrivals apart")
+            for preset in AtticMotionPreset.allCases where preset != .toast {
                 XCTAssertTrue(AtticMotionScale.durations.contains(preset.spring(in: t).response), "\(feel) \(preset)")
             }
         }

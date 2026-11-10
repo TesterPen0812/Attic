@@ -610,6 +610,8 @@ struct AtticStatusCircle: View {
     @Environment(\.atticDesign) private var design
     @State private var completion: Double = 1
     @State private var drawnCheck: Double = 1
+    /// Counts completions: each one plays the tick's pop.
+    @State private var tickTrigger = 0
     @State private var discOpacity: Double = 1
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
@@ -626,6 +628,21 @@ struct AtticStatusCircle: View {
     static let previewCheckWidth: CGFloat = 1.1
     /// The appearance check's name for an open (to do or Later) ring.
     static let openRingProbeName = "open status ring"
+    /// The tick lands on pop (Accepted 2026-11-10): it draws and grows from
+    /// this scale on the feel's pop spring while the disc sweeps on
+    /// `complete`, unchanged.
+    static let tickStartScale: CGFloat = 0.6
+
+    /// The tick's animation: pop (Lively 0.30 s / 0.28), or the Reduced
+    /// fallback (the disc and its check fade in together).
+    static func tickSpring(tuning: AtticMotionTuning = .current) -> Spring {
+        Spring(duration: tuning.tick.response, bounce: tuning.tick.bounce)
+    }
+
+    static func tickAnimation(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> Animation? {
+        if reduceMotion { return AtticMotionPreset.complete.animation(reduceMotion: true) }
+        return .spring(duration: tuning.tick.response, bounce: tuning.tick.bounce)
+    }
 
     var body: some View {
         let tokens = design.tokens
@@ -673,6 +690,17 @@ struct AtticStatusCircle: View {
                     .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
                     .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
+                    // The tick lands on pop: it grows from 0.6 on its own
+                    // keyframe (never sharing the sweep's transaction, which
+                    // a second `withAnimation` interrupted on screen).
+                    .keyframeAnimator(initialValue: CGFloat(1), trigger: tickTrigger) { content, scale in
+                        content.scaleEffect(scale)
+                    } keyframes: { _ in
+                        KeyframeTrack {
+                            MoveKeyframe(Self.tickStartScale)
+                            SpringKeyframe(1, spring: Self.tickSpring())
+                        }
+                    }
                     .opacity(discOpacity)
             case .backlog:
                 let dashed = design.increaseContrast ? m.backlogLineWidthIncreased : m.backlogLineWidth
@@ -702,6 +730,7 @@ struct AtticStatusCircle: View {
                     completion = 1
                     drawnCheck = 1
                 }
+                tickTrigger &+= 1
             }
         }
         .accessibilityHidden(true)
@@ -1145,7 +1174,7 @@ struct AtticPageTabs<Page: Hashable>: View {
             }
         }
         // Reduced animations: the underline moves at once.
-        .animation(design.reduceMotion ? nil : AtticMotionPreset.slide.animation(reduceMotion: false), value: selected)
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.slide.animation(reduceMotion: false), value: selected)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
@@ -1497,10 +1526,10 @@ struct AtticTaskRow: View {
                     }
                 }
                 .frame(height: d.line)
-                .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
+                .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.hover.animation(reduceMotion: false),
                            value: showsFocusRing)
                 // The › makes room: the date slides left while it shows.
-                .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
+                .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.hover.animation(reduceMotion: false),
                            value: showsOpen)
                 if twoLine {
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
@@ -1724,7 +1753,7 @@ struct AtticRowOpenButton: View {
         .focusable(false)
         .focusEffectDisabled()
         .onHover { hovered = $0 }
-        .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false), value: hovered)
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.hover.animation(reduceMotion: false), value: hovered)
         .atticRowControl()
         .accessibilityLabel(String(localized: "Open page"))
         .accessibilityIdentifier("task-row-open")
@@ -2399,7 +2428,7 @@ struct AtticQuickLook: View {
                                     translation = 0
                                 },
                                 onDragCancelled: {
-                                    withAnimation(design.reduceMotion ? nil : AtticMotionPreset.failReturn.animation(reduceMotion: false)) {
+                                    withAnimation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.failReturn.animation(reduceMotion: false)) {
                                         drag = nil
                                         translation = 0
                                     }

@@ -65,7 +65,7 @@ struct NotesTagBar: View {
 
     var body: some View {
         let m = NotesBarMetrics.self
-        let motion = design.reduceMotion ? nil : AtticPanelChromeMetrics.curve(0.26)
+        let motion = design.reduceMotion ? AtticMotionScale.reducedChange : AtticPanelChromeMetrics.curve(0.26)
         let collapsed = tags.isEmpty
         PanelTagBarWidth(collapsed: collapsed) {
             // Sizes the bar: All and the tags at their own widths.
@@ -284,7 +284,7 @@ struct NotesTagBarPill: View {
                 .frame(height: m.pillHeight)
                 .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AtticPressButtonStyle())
         .focusEffectDisabled()
         .onHover(perform: onHover)
         .accessibilityAddTraits(selected ? .isSelected : [])
