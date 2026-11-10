@@ -442,7 +442,8 @@ final class PanelIslandModel: ObservableObject {
     /// Pages the agent changed that you have not been back to.
     @Published var agentDots: Set<AgentPage> = []
     /// The agent's spark tapping an item as it opens that page while you
-    /// watch: a ring, and the item pressed (the design's `goPage`).
+    /// watch: the item pressed (the design's `goPage`). The ring is the
+    /// chat's, drawn whole over the island by its reach window.
     @Published private(set) var agentTapped: (page: PanelPage, id: UUID)?
 
     func agentTap(_ page: PanelPage) { agentTapped = (page, UUID()) }
@@ -767,12 +768,6 @@ struct PanelIslandView: View {
                 if let agentPage = AgentPage(page), model.agentDots.contains(agentPage) {
                     agentDot(index, awake: awake, dots: dots)
                 }
-            }
-            if let tap = model.agentTapped, let index = L.pages.firstIndex(of: tap.page) {
-                let rect = itemRect(index)
-                AgentIslandTap(centre: awake ? CGPoint(x: rect.midX, y: rect.midY) : dotCentre(index, dots: dots),
-                               reduceMotion: design.reduceMotion)
-                    .id(tap.id)
             }
             let settings = itemRect(L.pages.count)
             Group {
@@ -1493,38 +1488,5 @@ final class PanelIslandWindows {
             ? islandFrame
             : restFrame.insetBy(dx: -PanelIslandLayout.wakeDistance, dy: -PanelIslandLayout.wakeDistance)
         return island.isVisible && shownAlpha > 0.01 && zone.contains(point)
-    }
-}
-
-/// The agent's tap on an island item: the design's ring (40 px, 0.42 s),
-/// seven stars, and the press (scale 0.86 and back in 300 ms) as a pulse.
-private struct AgentIslandTap: View {
-    let centre: CGPoint
-    let reduceMotion: Bool
-    @State private var t: CGFloat = 0
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(LinearGradient(colors: [AgentIris.blue, AgentIris.pink], startPoint: .topLeading, endPoint: .bottomTrailing),
-                        lineWidth: 1.5 * (1 - t) + 0.5)
-                .frame(width: 40 * t + 4, height: 40 * t + 4)
-                .opacity(Double(1 - t))
-            ForEach(0..<7, id: \.self) { k in
-                let a = Double(k) / 7 * 2 * .pi + 0.4
-                AgentSparkShape()
-                    .fill(AgentIris.all[k % AgentIris.all.count])
-                    .frame(width: 3.5, height: 3.5)
-                    .offset(x: cos(a) * 17 * t, y: sin(a) * 17 * t)
-                    .opacity(Double(1 - t))
-            }
-        }
-        .position(centre)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion else { t = 1; return }
-            withAnimation(.easeOut(duration: 0.42)) { t = 1 }
-        }
     }
 }

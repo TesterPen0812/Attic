@@ -75,6 +75,16 @@ final class AgentChatFX: ObservableObject {
 
     /// Nothing is moving: the timelines pause until `wake()`.
     @Published private(set) var isIdle = false
+    /// The spark is out past the stage's edge (to the island and back):
+    /// meanwhile a window over the panel and the island draws this layer in
+    /// the stage's place, so the flight and the island's tap ring show whole.
+    @Published private(set) var reachesOut = false
+    /// A window can draw the layer past the stage (the panel's can; a bare
+    /// stage cannot, and its spark simply stops at the edge).
+    var canReachOut = false
+    /// The stage's size, as last drawn.
+    private(set) var stageSize: CGSize = .zero
+    private var reachTurn = 0
     /// The spark reached the changes row: its ✦ answers.
     let starPop = PassthroughSubject<Void, Never>()
 
@@ -341,13 +351,50 @@ final class AgentChatFX: ObservableObject {
 
     func point(at point: CGPoint?) {
         pointer = point
+        if let point { reach(toward: point) }
         wake()
     }
 
     /// The design's `tap`: a ring of 40 px in 0.42 s and seven stars.
     func tap(at point: CGPoint) {
+        reach(toward: point)
         ring(point.x, point.y, radius: 20, duration: 0.42)
         burst(point.x, point.y, count: 7, speed: 35)
+    }
+
+    // MARK: Past the stage's edge
+
+    /// How far in from the stage's edge the spark is drawn whole (its glyph,
+    /// glow and orbiting dots).
+    static let reachMargin: CGFloat = 24
+
+    private var stageBounds: CGRect { CGRect(origin: .zero, size: stageSize) }
+
+    /// Heading for a point past the edge: the reach window takes over first.
+    private func reach(toward point: CGPoint) {
+        guard canReachOut, !reachesOut, stageSize != .zero,
+              !stageBounds.insetBy(dx: Self.reachMargin, dy: Self.reachMargin).contains(point) else { return }
+        reachTurn += 1
+        reachesOut = true
+    }
+
+    /// Back on the stage, whatever happens: the stage draws again.
+    func endReach() {
+        reachTurn += 1
+        if reachesOut { reachesOut = false }
+        wake()
+    }
+
+    /// Anything still drawn past the edge: the pointer's goal, the spark,
+    /// a ring or a particle.
+    private var anythingOut: Bool {
+        let bounds = stageBounds
+        let inner = bounds.insetBy(dx: Self.reachMargin, dy: Self.reachMargin)
+        if let pointer, !inner.contains(pointer) { return true }
+        if spark.on, !inner.contains(CGPoint(x: spark.x, y: spark.y)) { return true }
+        if rings.contains(where: { !bounds.contains(CGRect(x: $0.x - $0.radius, y: $0.y - $0.radius,
+                                                           width: $0.radius * 2, height: $0.radius * 2)) }) { return true }
+        return particles.contains { !bounds.contains(CGPoint(x: $0.x, y: $0.y)) }
     }
 
     /// A row lit up: the design's `ping` (a landed card, held) or the hover's.
@@ -472,6 +519,14 @@ final class AgentChatFX: ObservableObject {
             let actions = landed.compactMap(\.onLand)
             DispatchQueue.main.async { actions.forEach { $0() } }
         }
+        if reachesOut, !anythingOut {
+            // Off the frame, unless it has gone out again since.
+            let turn = reachTurn
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.reachTurn == turn else { return }
+                self.endReach()
+            }
+        }
         let busy = acting || needsYou || spark.on || landing || emptyThread || !particles.isEmpty || !rings.isEmpty
             || !flights.isEmpty || !scans.isEmpty || !pings.isEmpty || !sketches.isEmpty || pointer != nil
             || abs(energy - energyGoal) > 0.01 || flash > 0.01
@@ -520,6 +575,7 @@ final class AgentChatFX: ObservableObject {
     static let flightLife = 0.82
 
     func draw(in context: inout GraphicsContext, size: CGSize) {
+        stageSize = size
         for scan in scans { drawScan(scan, in: &context, width: size.width) }
         for ring in rings {
             let u = ring.age / ring.duration
@@ -728,10 +784,34 @@ struct AgentChatFXLayer: View {
     @ObservedObject var fx: AgentChatFX
 
     var body: some View {
+        // While the spark is out past the edge, the reach window draws it all.
+        if !fx.reachesOut {
+            TimelineView(.animation(minimumInterval: 1 / 60, paused: fx.isIdle)) { timeline in
+                Canvas { context, size in
+                    fx.advance(to: timeline.date)
+                    fx.draw(in: &context, size: size)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// The same layer in the reach window, which spans the panel and the
+/// island: the stage's drawing, moved to where the stage sits in it.
+struct AgentChatFXReachLayer: View {
+    @ObservedObject var fx: AgentChatFX
+    /// The stage's top left in this layer.
+    let stageOrigin: CGPoint
+    let stageSize: CGSize
+
+    var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: fx.isIdle)) { timeline in
-            Canvas { context, size in
+            Canvas { context, _ in
                 fx.advance(to: timeline.date)
-                fx.draw(in: &context, size: size)
+                context.translateBy(x: stageOrigin.x, y: stageOrigin.y)
+                fx.draw(in: &context, size: stageSize)
             }
         }
         .allowsHitTesting(false)

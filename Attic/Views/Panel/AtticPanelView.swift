@@ -245,7 +245,8 @@ struct AtticPanelView: View {
                               page: currentPage, chrome: sharedChrome,
                               rows: { [tasksPageState] ids in tasksPageState.builtModel?.agentRowFrames(ids) ?? [] },
                               selectPage: selectPage,
-                              setTyping: { [uiState] in uiState.setInteractionLock(.agentComposer, isActive: $0) })
+                              setTyping: { [uiState] in uiState.setInteractionLock(.agentComposer, isActive: $0) },
+                              reach: { [uiState] in uiState.agentReach?($0) ?? false })
             }
         }
         .overlay(alignment: .topLeading) {

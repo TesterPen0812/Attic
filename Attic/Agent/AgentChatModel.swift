@@ -336,6 +336,10 @@ final class AgentChatModel: ObservableObject {
     private(set) var runWeek: UUID?
     /// The page the agent itself is going to: arriving there keeps the chat open.
     private var agentGoingTo: AgentPage?
+    /// The page the agent switched to while it is watched: the chip names it
+    /// once the change has been seen and the chat comes back, not at the
+    /// switch (the drawing's chip turns over as the thread returns).
+    private var chipAfterWatching: AgentPage?
     /// The run's events, stamped as they arrive, for the step beats.
     private var feedTask: Task<Void, Never>?
     /// When each shown step started, and when the last one turned done.
@@ -424,6 +428,7 @@ final class AgentChatModel: ObservableObject {
         closedAtOnce = false
         guard !isOpen else { return }
         chipPage = currentPage()
+        chipAfterWatching = nil
         bar.isChatOpen = true
         unread = false
         runner?.setWatching(true)
@@ -538,7 +543,12 @@ final class AgentChatModel: ObservableObject {
     /// (never one the agent opened) closes the chat.
     func pageChanged(to page: AgentPage?) {
         if let page { dots.remove(page) }
-        if chipPage != page { chipPage = page }
+        if let page, page == agentGoingTo, watch == .watching {
+            chipAfterWatching = page
+        } else {
+            chipAfterWatching = nil
+            if chipPage != page { chipPage = page }
+        }
         defer { agentGoingTo = nil }
         if isOpen, page != agentGoingTo { close() }
     }
@@ -740,6 +750,10 @@ final class AgentChatModel: ObservableObject {
     private func setWatch(_ level: AgentWatchLevel, label: String?) {
         if watch != level { watch = level }
         if liveLabel != label { liveLabel = label }
+        if level == .none, let page = chipAfterWatching {
+            chipAfterWatching = nil
+            if chipPage != page { chipPage = page }
+        }
     }
 
     /// The pointer and the page's motion, sent only while the chat is open.
@@ -861,6 +875,7 @@ final class AgentChatModel: ObservableObject {
     func removePage() { includesPage = false }
     func addPage() {
         chipPage = currentPage()
+        chipAfterWatching = nil
         includesPage = true
     }
 

@@ -310,3 +310,71 @@ final class PanelAgentWatcher {
         }
     }
 }
+
+/// The window the spark flies out to the island in (the design's `goPage`):
+/// a see-through, click-through window over the panel, the gap and the
+/// island, which draws the chat's alive layer while the spark is past the
+/// panel's edge. The stage draws it again once the spark is back.
+@MainActor
+final class AgentReachWindow {
+    /// How far past the panel and the island the layer may draw.
+    static let margin: CGFloat = 40
+
+    private(set) var window: NSPanel?
+
+    /// Never moved down from under the menu bar: a frame pushed down there
+    /// would put the drawing out of line with the stage.
+    private final class Window: NSPanel {
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    }
+
+    /// Draws `fx` over `panel` and `island` (screen frames), with the stage
+    /// where `stage` is. False when the stage is not in a window.
+    func show(fx: AgentChatFX, stage: NSView, over panel: NSWindow, island: CGRect?) -> Bool {
+        guard let stageWindow = stage.window else { return false }
+        let stageFrame = stageWindow.convertToScreen(stage.convert(stage.bounds, to: nil))
+        var area = stageFrame
+        if let island { area = area.union(island) }
+        area = area.insetBy(dx: -Self.margin, dy: -Self.margin)
+        // Nothing is drawn above the panel's top: the layer stays clear of the menu bar.
+        area.size.height = min(area.maxY, stageFrame.maxY) - area.minY
+        area = area.integral
+        let window = self.window ?? make()
+        self.window = window
+        window.setFrame(area, display: false)
+        // The layer's space runs down from the window's top left.
+        let origin = CGPoint(x: stageFrame.minX - area.minX, y: area.maxY - stageFrame.maxY)
+        window.contentView = NSHostingView(rootView: AgentChatFXReachLayer(fx: fx, stageOrigin: origin,
+                                                                           stageSize: stage.bounds.size))
+        if window.parent !== panel {
+            window.parent?.removeChildWindow(window)
+            panel.addChildWindow(window, ordered: .above)
+        }
+        // Above the island, which is the panel's child too.
+        window.orderFrontRegardless()
+        return true
+    }
+
+    func hide() {
+        guard let window, window.isVisible || window.parent != nil else { return }
+        window.parent?.removeChildWindow(window)
+        window.orderOut(nil)
+        window.contentView = nil
+    }
+
+    private func make() -> NSPanel {
+        let window = Window(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.level = .floating
+        window.hidesOnDeactivate = false
+        window.isMovable = false
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        window.setAccessibilityElement(false)
+        return window
+    }
+}
+

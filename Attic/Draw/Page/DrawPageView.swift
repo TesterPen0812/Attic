@@ -38,17 +38,18 @@ struct DrawPageHost: View {
             DrawBoardRepresentable(model: model, clearInsets: clearInsets)
             // The page's floating controls fold away under the chat, as the
             // top row does: blurred, their glass would still glow through.
+            // Unlike the top row, they stay folded while the chat watches.
             DrawSelectionOverlay(model: model, viewportState: model.viewportState)
                 .opacity(model.isDrawingLive ? 0 : 1)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
             DrawZoomPill(model: model, viewportState: model.viewportState)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, barInsets.bottom + DrawPageMetrics.capsule + DrawPageMetrics.pillGap)
             DrawToolBar(model: model)
                 .opacity(dim)
                 .animation(dimAnimation, value: model.isDrawingLive)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.leading, barInsets.leading)
                 .padding(.bottom, barInsets.bottom)

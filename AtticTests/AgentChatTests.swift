@@ -1168,6 +1168,36 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertFalse(topRow.isAway(.tasks))
     }
 
+    /// While the chat watches the agent work, the page's own top row shows
+    /// beside the chat's controls (the drawing's Calendar, f018–f030); under
+    /// the blur it folds again.
+    func testThePagesTopRowShowsWhileTheChatWatches() {
+        let gate = WatchGate()
+        model.currentPage = { .tasks }
+        model.presentWatched = { _ in { await gate.wait() } }
+        model.open()
+        spin(0.15)
+        XCTAssertTrue(topRow.isAway(.tasks), "Precondition: folded under the blur")
+        model.draft = "open my calendar"
+        model.send()
+        spin(0.05)
+        runner.continuation?.yield(.stepStarted(AgentStep(id: UUID(), title: "Opening Calendar", kind: .openPage,
+                                                          targets: [AgentTarget(page: .calendar)], state: .running)))
+        for _ in 0..<60 where model.watch != .watching { spin(0.05) }
+        spin(0.1)
+        XCTAssertEqual(model.watch, .watching, "Precondition: the glass has cleared")
+        XCTAssertTrue(topRow.chatOver, "The chat is still open")
+        XCTAssertTrue(topRow.chatWatching)
+        XCTAssertFalse(topRow.isAway(.tasks), "The page's top row shows while the agent works")
+        XCTAssertFalse(topRow.isAway(.calendar), "And on the page it switches to")
+        gate.open()
+        for _ in 0..<60 where model.watch != .none { spin(0.05) }
+        spin(0.1)
+        XCTAssertEqual(model.watch, .none)
+        XCTAssertFalse(topRow.chatWatching)
+        XCTAssertTrue(topRow.isAway(.calendar), "The blur back, the top row folds again")
+    }
+
     private func backdropView() -> AgentChatBackdropView? {
         func find(_ view: NSView) -> AgentChatBackdropView? {
             if let found = view as? AgentChatBackdropView { return found }
@@ -1320,6 +1350,11 @@ final class AgentChatHostedTests: XCTestCase {
         spin(1.2)
         XCTAssertEqual(model.phase, .idle)
         XCTAssertEqual(model.entries.count, 5, "Sent, step, week, reply, changes")
+        // At rest means after the moved chip has landed on the week strip
+        // (0.82 s from its start, which can fall after the 1.2 s above):
+        // its landing is the run's last change, not a loop.
+        for _ in 0..<60 where !fx.isIdle { spin(0.05) }
+        XCTAssertTrue(fx.isIdle, "Everything has landed")
         // Bounded: a thread at rest stops updating (no layout feedback loop).
         let rest = AgentChatStage.bodyEvaluations
         spin(0.5)
@@ -1352,6 +1387,32 @@ final class AgentChatFXTests: XCTestCase {
         run(fx, seconds: 4)
         XCTAssertEqual(fx.liveCount, 0)
         XCTAssertTrue(fx.isIdle)
+    }
+
+    /// The spark heading past the stage's edge (to the island) hands the
+    /// layer to the reach window; back inside, the stage draws it again.
+    func testTheSparkReachesPastTheEdgeAndComesBack() {
+        let fx = AgentChatFX()
+        fx.acting = true
+        // The stage's size, as a frame would draw it.
+        let renderer = ImageRenderer(content: Canvas { context, size in fx.draw(in: &context, size: size) }
+            .frame(width: 300, height: 500))
+        _ = renderer.cgImage
+        XCTAssertEqual(fx.stageSize, CGSize(width: 300, height: 500), "Precondition: the stage has drawn")
+        fx.point(at: CGPoint(x: 150, y: 620))
+        XCTAssertFalse(fx.reachesOut, "Nothing to draw it in: the stage keeps it")
+        fx.canReachOut = true
+        fx.point(at: CGPoint(x: 150, y: 250))
+        XCTAssertFalse(fx.reachesOut, "Inside, the stage draws it")
+        fx.point(at: CGPoint(x: 150, y: 620))
+        XCTAssertTrue(fx.reachesOut, "Past the edge: the window takes over before the spark moves")
+        run(fx, seconds: 1)
+        fx.tap(at: CGPoint(x: 150, y: 620))
+        run(fx, seconds: 0.2)
+        XCTAssertTrue(fx.reachesOut, "Still out while the spark and its ring are there")
+        fx.point(at: CGPoint(x: 150, y: 250))
+        run(fx, seconds: 2)
+        XCTAssertFalse(fx.reachesOut, "Back inside, once the ring and stars have gone")
     }
 
     func testWorkingKeepsItAwake() {
@@ -1541,10 +1602,39 @@ final class AgentChatDrawFoldTests: XCTestCase {
         spin(0.5)
         XCTAssertNil(find("draw-title", in: host), "The title capsule folds away under the chat")
         XCTAssertNil(find("draw-tool-bar", in: host), "The tool bar folds away under the chat")
+        topRow.chatWatching = true
+        spin(0.5)
+        XCTAssertNotNil(find("draw-title", in: host), "Watching, the page's top row shows again, as drawn")
+        XCTAssertNil(find("draw-tool-bar", in: host), "The tools stay folded under the composer")
+        topRow.chatWatching = false
+        spin(0.5)
+        XCTAssertNil(find("draw-title", in: host), "The blur back, the title folds again")
         topRow.chatOver = false
         spin(0.5)
         XCTAssertNotNil(find("draw-title", in: host), "The title comes back when the chat closes")
         XCTAssertNotNil(find("draw-tool-bar", in: host))
+    }
+}
+
+private final class FlippedTestView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// Holds a watched presentation until the test lets it go.
+@MainActor
+private final class WatchGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        opened = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 
@@ -1862,6 +1952,24 @@ final class AgentChatWatchingTests: XCTestCase {
 
     // MARK: Committed before shown
 
+    /// The composer's page chip names the new page once the action has been
+    /// seen and the chat comes back, as drawn, not at the switch.
+    func testThePageChipTurnsOverAfterTheActionNotAtTheSwitch() async {
+        model.mode = .auto
+        model.open()
+        XCTAssertEqual(model.chipPage, .tasks)
+        await run("Put the dentist on Friday morning")
+        guard case .calendarEvent? = presented.last else { return XCTFail("The event is shown being added: \(presented)") }
+        // The watcher switches the page part way; the panel reports it.
+        model.pageChanged(to: .calendar)
+        XCTAssertTrue(model.isOpen, "The agent's own switch keeps the chat open")
+        XCTAssertEqual(model.watch, .watching)
+        XCTAssertEqual(model.chipPage, .tasks, "While the event is added, the chip is unchanged")
+        await release()
+        XCTAssertEqual(model.watch, .none, "The chat is back")
+        XCTAssertEqual(model.chipPage, .calendar, "Now the chip names Calendar")
+    }
+
     func testACalendarEventIsSavedBeforeItIsShown() async throws {
         model.mode = .auto
         model.open()
@@ -2099,6 +2207,34 @@ final class AgentChatWatchingTests: XCTestCase {
         XCTAssertEqual(opened, [.calendar], "The page still comes forward")
         XCTAssertNotNil(board.dayRequest, "On its day")
         XCTAssertTrue(effects.isEmpty, "No travel, taps or bursts: \(effects)")
+    }
+
+    /// The reach window lies exactly over the stage and the island, even
+    /// with the panel at the top of the screen (a window there was pushed
+    /// down from under the menu bar, so the spark drew 67 pt below the
+    /// island's dot).
+    func testTheReachWindowLiesOverTheStageAndTheIsland() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let panel = NSWindow(contentRect: CGRect(x: screen.frame.maxX - 420, y: screen.frame.maxY - 560, width: 400, height: 544),
+                             styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let stage = FlippedTestView(frame: CGRect(x: 40, y: 40, width: 320, height: 464))
+        panel.contentView?.addSubview(stage)
+        panel.orderFront(nil)
+        let stageFrame = panel.convertToScreen(stage.convert(stage.bounds, to: nil))
+        let island = CGRect(x: stageFrame.midX - 95, y: stageFrame.minY - 55, width: 190, height: 71)
+        let reach = AgentReachWindow()
+        defer { reach.hide() }
+        XCTAssertTrue(reach.show(fx: AgentChatFX(), stage: stage, over: panel, island: island))
+        let frame = try XCTUnwrap(reach.window?.frame)
+        XCTAssertEqual(frame.maxY, stageFrame.maxY, accuracy: 1, "Its top is the stage's: never moved down")
+        XCTAssertEqual(frame.minY, island.minY - AgentReachWindow.margin, accuracy: 1, "Down past the island")
+        XCTAssertEqual(frame.minX, stageFrame.minX - AgentReachWindow.margin, accuracy: 1)
+        XCTAssertTrue(reach.window?.ignoresMouseEvents == true, "Clicks pass through")
+        XCTAssertTrue(reach.window?.isVisible == true)
+        reach.hide()
+        XCTAssertFalse(reach.window?.isVisible == true)
     }
 
     func testTheSparkTapsTheIslandBeforeThePageSwitches() async {

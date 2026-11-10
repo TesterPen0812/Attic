@@ -51,6 +51,47 @@ struct AgentChatBarButton: View {
     }
 }
 
+/// Shows the alive layer in a window over the panel and the island (the
+/// stage and the layer's state given), or puts it back on the stage (nil).
+/// Answers whether the window took it.
+typealias AgentChatReach = (_ target: (fx: AgentChatFX, stage: NSView)?) -> Bool
+
+/// Hands the alive layer to the reach window and back, and tells the top row
+/// while the chat watches the agent work. A view of its own, so neither
+/// updates the stage's body.
+private struct AgentChatStageRelay: View {
+    @ObservedObject var fx: AgentChatFX
+    let watching: Bool
+    let stage: () -> NSView?
+    let reach: AgentChatReach?
+
+    @Environment(\.panelTopRowState) private var topRow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onAppear { fx.canReachOut = reach != nil }
+            .onChange(of: fx.reachesOut) { _, out in
+                // The window takes the layer, or the stage keeps it after all.
+                if out {
+                    guard let stage = stage(), reach?((fx, stage)) == true else { return fx.endReach() }
+                } else {
+                    _ = reach?(nil)
+                }
+            }
+            .onChange(of: watching, initial: true) { _, now in
+                if topRow?.chatWatching != now { topRow?.chatWatching = now }
+            }
+            .onDisappear {
+                if fx.reachesOut { fx.endReach() }
+                _ = reach?(nil)
+                if topRow?.chatWatching == true { topRow?.chatWatching = false }
+            }
+    }
+}
+
 /// Puts the chat over the panel while it is open or closing, and nothing at
 /// all otherwise: a closed chat is one `if`, however busy its run is.
 struct AgentChatHost: View {
@@ -64,6 +105,8 @@ struct AgentChatHost: View {
     let rows: (Set<UUID>?) -> [(id: UUID, frame: CGRect)]
     let selectPage: (PanelPage) -> Void
     let setTyping: (Bool) -> Void
+    /// Draws the alive layer past the panel's edge while the spark is out.
+    var reach: AgentChatReach? = nil
 
     @Environment(\.panelTopRowState) private var topRow
     @State private var mounted = false
@@ -81,7 +124,7 @@ struct AgentChatHost: View {
         ZStack {
             if mounted {
                 AgentChatStage(model: model, fx: fx, shown: bar.isChatOpen, layout: layout, rows: rows, setTyping: setTyping,
-                               didClose: { if !bar.isChatOpen { mounted = false } })
+                               didClose: { if !bar.isChatOpen { mounted = false } }, reach: reach)
             }
         }
         .onAppear { model.openPage = { [selectPage] in selectPage($0.panelPage) } }
@@ -113,6 +156,7 @@ struct AgentChatStage: View {
     let rows: (Set<UUID>?) -> [(id: UUID, frame: CGRect)]
     let setTyping: (Bool) -> Void
     let didClose: () -> Void
+    var reach: AgentChatReach? = nil
 
     #if DEBUG
     /// Test seams: how often the stage's body ran, whether it is on screen, and
@@ -127,8 +171,10 @@ struct AgentChatStage: View {
     /// The wipe's progress, 0 to 1: the one clock the blur, its colour and
     /// the thread share. It starts at 0 and animates on the wipe's curve.
     @State private var reveal: CGFloat = 0
-    /// The chat has stepped aside while the agent writes in a note: the blur,
-    /// its colour, the thread and the floating controls go; the composer stays.
+    /// The chat has stepped aside while it watches the agent work: the blur,
+    /// its colour and the thread go; the composer and the floating controls
+    /// stay, and the page's own top row shows beside them (the drawing's
+    /// `watch(2)`).
     @State private var aside = false
     /// New chat: the old thread is leaving, upward (or, with Reduce Motion, fading).
     @State private var dispersing = false
@@ -193,13 +239,12 @@ struct AgentChatStage: View {
             }
             if !model.entries.isEmpty {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) { topControls }
-                    .opacity(aside ? 0 : 1)
-                    .allowsHitTesting(!aside)
                     .padding(.top, layout.chromeInsets.top)
                     .padding(.trailing, PanelSharedBottomBar.plusInsets(layout: layout).trailing)
                     .transition(.opacity)
             }
             if alive { AgentChatFXLayer(fx: fx) }
+            AgentChatStageRelay(fx: fx, watching: model.watch == .watching, stage: { backdropView }, reach: alive ? reach : nil)
         }
         .coordinateSpace(.named(Self.space))
         // Pages report frames in the hosting view's global space.
