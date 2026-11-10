@@ -1353,6 +1353,21 @@ final class NoteStore: ObservableObject {
         return presentationByID?[id]
     }
 
+    /// An agent may undo a newly created note only while *every physical
+    /// replica* still has the revision it created. The presentation lookup
+    /// above is deduplicated and cannot prove that the owner changed no copy.
+    func agentCreatedNoteIsUnchanged(_ id: UUID, revision: String) -> Bool {
+        do {
+            let fresh = ModelContext(container)
+            let replicas = try storedNotesIncludingDeleted(matching: id, in: fresh)
+            return !replicas.isEmpty && replicas.allSatisfy {
+                $0.deletedAt == nil && $0.revisionToken == revision &&
+                $0.tagsRaw.isEmpty && $0.pinnedAt == nil && $0.taskID == nil &&
+                $0.imageCount == 0 && $0.fileCount == 0
+            }
+        } catch { return false }
+    }
+
     private func currentPresentationIndex() -> PresentationIndex {
         if let presentationIndex, presentationIndex.revision == revision {
             return presentationIndex

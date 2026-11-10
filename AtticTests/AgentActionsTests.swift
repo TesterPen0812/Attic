@@ -471,6 +471,102 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: try XCTUnwrap(UUID(uuidString: id)))?.title, "Original")
     }
 
+    #if !ATTIC_GENERATED_TESTS
+    func testUndoCreatedNoteRefusesToDeleteARevisionEditedByTheOwner() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create an outline")
+        let result = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Outline", "body": "Agent draft"
+        ], watching: false, requestID: request))
+        let created = try XCTUnwrap(try payload(result.text)["note"] as? [String: Any])
+        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(created["id"] as? String)))
+        let revision = try XCTUnwrap(notes.note(withID: id)?.revisionToken)
+
+        let ownerEdit = try payload(tools.call(name: "update_note", arguments: [
+            "id": id.uuidString, "base_revision": revision, "body": "Owner's important changes"
+        ]))
+        XCTAssertEqual(ownerEdit["status"] as? String, "applied")
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertFalse(undone.failures.isEmpty)
+        XCTAssertEqual(notes.note(withID: id)?.body, "Owner's important changes")
+        XCTAssertNotNil(undone.remaining)
+    }
+
+    func testUndoCreatedNoteAfterAnAgentEditStillRemovesIt() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Write a note")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Draft", "body": "First version"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "id": id.uuidString, "body": "Second version"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(actions.changeSet(for: request)?.count, 2)
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 2)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertNil(notes.note(withID: id))
+    }
+
+    func testUndoCreatedNoteKeepsDivergentPhysicalReplica() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create note")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Draft", "body": "Agent content"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        let original = try XCTUnwrap(notes.note(withID: id))
+        let ownerCopy = NoteItem(id: id, title: original.title, body: "Owner's divergent content")
+        ownerCopy.revisionID = UUID()
+        let seed = ModelContext(tasks.container)
+        seed.insert(ownerCopy)
+        try seed.save()
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertEqual(undone.remaining?.count, 1)
+        let physical = try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>(
+            predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(physical.count, 2)
+        XCTAssertTrue(physical.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testUndoCreatedNoteKeepsOwnerTagsThatDidNotChangeRevision() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create outline")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Outline", "body": "A draft"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        let initial = try XCTUnwrap(notes.note(withID: id))
+        let revision = initial.revisionToken
+        XCTAssertTrue(notes.setTags(["important"], for: initial))
+        XCTAssertEqual(notes.note(withID: id)?.revisionToken, revision)
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertNotNil(undone.remaining)
+        XCTAssertEqual(notes.note(withID: id)?.tags, ["important"])
+    }
+
+    #endif
+
     func testUndoPutsBackANoteLeftOnScreenByAWatchedWriteOnlyWhenItsEditorIsClean() async throws {
         let tasks = try makeTestStore()
         let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
