@@ -318,6 +318,35 @@ final class AgentChatModel: ObservableObject {
 
     func toggle() { isOpen ? close() : open() }
 
+    #if DEBUG
+    /// UI-testing seam (`ATTIC_UI_TEST_CHAT`): an earlier exchange, already
+    /// written, so an opening can be watched over a thread without a run.
+    func seedExchangeForUITesting(asked: String, reply: String) {
+        entries.append(AgentChatEntry(.asked(asked)))
+        let words = AgentChatWords.paragraphs(reply).flatMap { $0 }
+        entries.append(AgentChatEntry(.reply(AgentChatReply(raw: reply, wordTimes: words.map { _ in .distantPast },
+                                                            marksStart: .distantPast))))
+    }
+
+    /// UI-testing seam: `ATTIC_UI_TEST_CHAT=seed;open@2;close@5;open@8`
+    /// seeds an exchange and toggles the chat at those seconds after launch,
+    /// so a recorder can watch openings with no click or key on screen.
+    func runUITestingScript(_ script: String) {
+        for part in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if part == "seed" {
+                seedExchangeForUITesting(asked: "Tell me a short hello.", reply: "Hi there!")
+                continue
+            }
+            let pieces = part.split(separator: "@")
+            guard pieces.count == 2, let seconds = Double(pieces[1]) else { continue }
+            let opens = pieces[0] == "open"
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                opens ? self?.open() : self?.close()
+            }
+        }
+    }
+    #endif
+
     /// The panel has gone: the chat goes with no motion, and the run carries on.
     func panelDidHide() {
         guard isOpen else { return }
