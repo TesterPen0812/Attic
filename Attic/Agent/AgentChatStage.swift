@@ -560,8 +560,11 @@ struct AgentChatComposer: View {
         .offset(x: shake)
         .overlay(alignment: .top) {
             if let label = model.liveLabel {
+                // The drawing's `bottom: calc(100% + 14px)`: its bottom 7 pt
+                // above the composer's top, whatever the composer holds.
                 AgentChatLiveLabel(text: label, alive: alive)
-                    .alignmentGuide(.top) { $0[.bottom] + 7 }
+                    .frame(height: 0, alignment: .bottom)
+                    .offset(y: -7)
                     .transition(alive ? .opacity.combined(with: .scale(scale: 0.97)).combined(with: .offset(y: 4)) : .opacity)
             }
         }
