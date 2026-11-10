@@ -60,6 +60,7 @@ private struct AtticRaisedButtonBody: View {
             }
         }
             .atticFocusRing(state == .focused, cornerRadius: cornerRadius)
+            .atticPressScale(configuration.isPressed && isEnabled)
             .contentShape(shape)
             .onHover { hovered = $0 }
     }
@@ -225,7 +226,7 @@ private struct AtticRaisedButtonLabel: View {
                                 .opacity(name == shown ? 1 : 0)
                         }
                     }
-                    .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
+                    .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
                 }
             }
             if let title {
@@ -274,12 +275,12 @@ struct AtticSelectionMarker: View {
 
     /// A marker travelling to a new choice; Reduce Motion, at once.
     static func travel(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .spring(duration: pop.response, bounce: pop.bounce)
+        reduceMotion ? AtticMotionScale.reducedChange : .spring(duration: pop.response, bounce: pop.bounce)
     }
 
     /// A change of choice in place: 160 ms ease-out; Reduce Motion, at once.
     static func animation(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.16)
+        reduceMotion ? AtticMotionScale.reducedChange : .easeOut(duration: 0.16)
     }
 
     /// The marker leaves one cell and arrives in the next by fading.
@@ -346,7 +347,7 @@ struct AtticHoverChip: View {
             .offset(x: place.minX, y: place.minY)
             .animation(travels ? AtticSelectionMarker.travel(reduceMotion: reduceMotion) : nil, value: place)
             .opacity(visible ? 1 : 0)
-            .animation(reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: visible)
+            .animation(reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: visible)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .onChange(of: Target(frame: frame, shown: shown), initial: true) { old, new in
@@ -1400,6 +1401,35 @@ extension EnvironmentValues {
     }
 }
 
+/// Press (Accepted 2026-11-10): a button or capsule shrinks to 0.97 while
+/// held, on a 0.20 s spring with no bounce, and comes back on release.
+/// Only the scale animates (state fills stay instant). Rows never take it;
+/// off when motion is reduced.
+struct AtticPressScale: ViewModifier {
+    let pressed: Bool
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let reduce = design.reduceMotion
+        content.animation(AtticMotionScale.pressAnimation(reduceMotion: reduce)) {
+            $0.scaleEffect(AtticMotionScale.pressedScale(pressed: pressed, reduceMotion: reduce))
+        }
+    }
+}
+
+extension View {
+    func atticPressScale(_ pressed: Bool) -> some View {
+        modifier(AtticPressScale(pressed: pressed))
+    }
+}
+
+/// A plain capsule button (the tag bar's pills) that presses in.
+struct AtticPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.atticPressScale(configuration.isPressed)
+    }
+}
+
 /// A plain button that never fades its label when disabled. Components
 /// with a designed disabled state draw it with the disabled inks, which
 /// meet the contrast rule; the plain style's extra fade would push them
@@ -1466,6 +1496,7 @@ private struct AtticSmallButtonFace: View {
         .background(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent).fill(fill.color))
         .modifier(AtticSmallButtonGlass(floating: floating, radius: radius, state: state))
         .atticFocusRing(state == .focused, cornerRadius: radius)
+        .atticPressScale(isPressed && isEnabled)
     }
 }
 

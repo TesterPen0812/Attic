@@ -70,6 +70,9 @@ struct TasksPage: View {
     /// The rows a keyboard or menu reorder just exchanged, held invisible
     /// for a moment so they dissolve into their new places (round 13).
     @State private var reorderFade: Set<UUID> = []
+    /// A delete is under way: the rows leave first and the gap closes
+    /// `AtticMotionScale.gapCloseDelay` later (Accepted 2026-11-10).
+    @State private var rowsLeaving = false
     @State private var boundaryHintTask: Task<Void, Never>?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
@@ -1451,7 +1454,7 @@ struct TasksPage: View {
                               rowsAreInterchangeable: { doneRowsAreInterchangeable() },
                               foldTurn: model.foldTurn,
                               toggleDay: { key in
-                                  toggleGroup(key, on: .done, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                                  toggleGroup(key, on: .done, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                               },
                               foldPlaces: { rows in foldPlaces(rows, in: .done) })
             }
@@ -1471,7 +1474,7 @@ struct TasksPage: View {
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
         let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
-        let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
+        let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
         // A group's fold turn (fix round 2), read here as a value: the
@@ -1508,9 +1511,9 @@ struct TasksPage: View {
                                 // A turning group's body closes or opens over
                                 // its rows (fix round 2).
                                 .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id]))
-                                // A row added or leaving drops into or rises
-                                // out of its place (round 9).
-                                .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
+                                // A row added drops into its place (round 9);
+                                // a row leaving fades and shrinks on the exit.
+                                .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))
                         } else {
                             if dateGroup.showsHeader {
                                 // A row dragged into this day marks its header
@@ -1518,7 +1521,7 @@ struct TasksPage: View {
                                 TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
                                     TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
                                                      overdue: dateGroup.isOverdue, isDropTarget: targeted) {
-                                        toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                                        toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                                     }
                                 }
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
@@ -1589,7 +1592,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(reorderFade.isEmpty ? travel : nil, value: ids)
+                .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
@@ -1705,6 +1708,8 @@ struct TasksPage: View {
                 beginDragSession(in: tab)
                 if let origin = pointer.frame(for: TasksRowID(tab: tab, id: id)) {
                     pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
+                    // A haptic on pick-up as well as on the drop (Accepted 2026-11-10).
+                    AtticHaptics.pickUp(enabled: design.hapticsEnabled)
                     pointer.dayDrop.setLineX((origin.minX + TasksDesignMetrics.textX)...(origin.maxX - TasksDesignMetrics.rowPaddingX))
                 }
                 beginDayDrop(in: tab)
@@ -1864,7 +1869,7 @@ struct TasksPage: View {
     /// 21, the Motion Lab: `expand`); Reduce Motion shows it at once.
     private func toggleExpanded(_ id: UUID) {
         PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
-        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
+        withAnimation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.expand.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
         }
     }
@@ -2131,6 +2136,11 @@ struct TasksPage: View {
         let visible = visibleIDs()
         let next = visible.first { !ids.contains($0) && (visible.firstIndex(of: $0) ?? 0) > (ids.compactMap { visible.firstIndex(of: $0) }.max() ?? 0) }
             ?? visible.last { !ids.contains($0) }
+        // The rows leave first, then the gap closes (Accepted 2026-11-10).
+        rowsLeaving = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + AtticMotionScale.gapCloseDelay + AtticMotionScale.spatial * 2) {
+            rowsLeaving = false
+        }
         // Focus moves only once the delete saved (Astra 6); a failure shows
         // under the row the command came from.
         guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { [weak model] in model?.delete(ids) ?? .failed(.taskGone) }).isApplied else { return }
@@ -3066,7 +3076,7 @@ struct TasksPage: View {
     private func beginDayDrop(in tab: TasksTab) {
         pointer.dayDrop.set(nil)
         guard tab == .now, model.reorders(on: tab), !model.dayDragLive else { return }
-        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
+        withAnimation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             model.dayDragLive = true
         }
     }
@@ -3845,6 +3855,8 @@ final class TasksLiftedCard: ObservableObject {
         let origin: CGRect
         /// The card's top in the page.
         var y: CGFloat
+        /// Dropped: the card settles back to its size as it lands.
+        var landed = false
     }
 
     @Published private(set) var lift: Lift?
@@ -3891,6 +3903,7 @@ final class TasksLiftedCard: ObservableObject {
     func land(at y: CGFloat) {
         guard var lift else { return }
         lift.y = y
+        lift.landed = true
         self.lift = lift
     }
 
@@ -3928,6 +3941,10 @@ struct TasksLiftedCardLayer<Card: View>: View {
     @ObservedObject var lift: TasksLiftedCard
     @ViewBuilder let card: (TasksLiftedCard.Lift) -> Card
     @Environment(\.self) private var environment
+    @Environment(\.atticDesign) private var design
+    /// Picked up (Accepted 2026-11-10): the card grows to
+    /// `AtticMotionScale.liftScale` on `lift`, and back as it lands.
+    @State private var raised = false
 
     var body: some View {
         // The drag out of the panel carries this card as drawn here.
@@ -3937,14 +3954,30 @@ struct TasksLiftedCardLayer<Card: View>: View {
                 card(current)
                     .frame(width: current.origin.width, alignment: .topLeading)
                     .modifier(AtticReorderLiftModifier(lifted: true))
+                    .scaleEffect(Self.scale(raised: raised, landed: current.landed, reduceMotion: design.reduceMotion))
                     .offset(x: current.origin.minX, y: current.y)
             }
+        }
+        .onChange(of: lift.lift?.id, initial: true) { _, id in
+            raised = false
+            guard id != nil, !design.reduceMotion else { return }
+            withAnimation(Self.liftAnimation) { raised = true }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear { installSnapshot() }
         .onDisappear { lift.snapshot = nil }
+    }
+
+    static var liftAnimation: Animation {
+        .spring(duration: AtticMotionScale.lift.response, bounce: AtticMotionScale.lift.bounce)
+    }
+
+    /// The card's scale: lifted while held, back to 1 as it lands; never
+    /// when motion is reduced.
+    static func scale(raised: Bool, landed: Bool, reduceMotion: Bool) -> CGFloat {
+        raised && !landed && !reduceMotion ? AtticMotionScale.liftScale : 1
     }
 
     private func installSnapshot() {
@@ -4172,7 +4205,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         // the card has landed in the gap.
         .opacity(hidden ? 0.001 : 1)
         .offset(y: hidden ? 0 : offset)
-        .animation(hidden || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        .animation(hidden || design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
         // A Done row's cell can draw another task after a new query
         // (`TasksDoneSlots`): its controls' frames go with it.
         .onChange(of: id) { [session, pointer, tab, reports] old, new in

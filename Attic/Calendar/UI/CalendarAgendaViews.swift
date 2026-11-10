@@ -302,7 +302,8 @@ struct CalendarEventRow: View {
                     .padding(.leading, metrics.textX)
                     .padding(.trailing, metrics.trailing)
                     .padding(.bottom, isBlock ? metrics.paddingY : 8)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    // Drops in 4 pt, never a slide from the edge (Accepted 2026-11-10).
+                    .transition(design.reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -AtticMotionScale.detailsDrop)))
             }
         }
         .background {
