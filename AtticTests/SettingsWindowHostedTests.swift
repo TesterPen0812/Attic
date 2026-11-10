@@ -37,7 +37,11 @@ final class SettingsWindowHostedTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        defer { window.contentView = nil; window.close() }
+        // SwiftUI creates the native scroll hierarchy when the hosting
+        // window is presented. Keep the test window off-screen, as in UX2,
+        // but make it visible to AppKit before looking for NSScrollView.
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
 
         func scrollViews(in view: NSView) -> [NSScrollView] {
             (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap(scrollViews)
