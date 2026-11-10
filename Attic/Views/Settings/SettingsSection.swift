@@ -116,6 +116,16 @@ enum SettingsVisibility {
         isEnabled
     }
 
+    /// The thinking levels the in-app agent's CLI takes for this model.
+    static func agentThinkingChoices(backend: AgentBackend, model: String) -> [String] {
+        AgentModelCatalog.model(model, for: backend)?.efforts ?? []
+    }
+
+    /// Thinking appears only when the agent's CLI takes a level for the model.
+    static func showsAgentThinking(_ option: AgentModelOption?) -> Bool {
+        !(option?.efforts.isEmpty ?? true)
+    }
+
     /// The refused global shortcut Settings must explain, or nil while the
     /// shortcut is working or has not been attempted yet.
     static func globalShortcutFailure(_ registration: GlobalHotKeyRegistration) -> GlobalHotKeyFailure? {

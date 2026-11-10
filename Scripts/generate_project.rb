@@ -150,6 +150,11 @@ end
 unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
 add_swift_sources(project, crash_helper, 'AtticOperationCrashHelper', 'AtticOperationCrashHelper')
 add_swift_sources(project, agent_helper, 'AtticAgentHelper', 'AtticAgentHelper')
+# The helper refuses any agent model or thinking level the app does not list,
+# so it compiles the app's one closed catalog rather than a copy of it.
+agent_catalog = app_group.files.find { |file| file.path == 'Agent/Run/AgentModelCatalog.swift' }
+abort 'Missing shared agent model catalog' unless agent_catalog
+agent_helper.source_build_phase.add_file_reference(agent_catalog)
 embed_helper = unit_host.new_copy_files_build_phase('Embed operation crash helper')
 embed_helper.dst_subfolder_spec = '6' # Contents/MacOS
 embed_helper.dst_path = ''

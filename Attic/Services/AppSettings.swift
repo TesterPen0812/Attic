@@ -87,6 +87,10 @@ final class AppSettings: ObservableObject {
         static let appearance = AppearanceMigration.Key.appearance
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let inAppAgentBackend = "inAppAgentBackend"
+        static let inAppAgentClaudeModel = "inAppAgentClaudeModel"
+        static let inAppAgentClaudeEffort = "inAppAgentClaudeEffort"
+        static let inAppAgentCodexModel = "inAppAgentCodexModel"
+        static let inAppAgentCodexEffort = "inAppAgentCodexEffort"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
         static let panelCornerSize = "panelCornerSize"
@@ -204,6 +208,41 @@ final class AppSettings: ObservableObject {
 
     @Published var inAppAgentBackend: AgentBackend {
         didSet { defaults.set(inAppAgentBackend.rawValue, forKey: Key.inAppAgentBackend) }
+    }
+
+    /// Each agent keeps its own model and thinking level (2026-11-10), always
+    /// one Attic lists. A run reads it when it starts, so a change applies
+    /// from the next message.
+    @Published private(set) var inAppAgentChoices: [AgentBackend: AgentRunChoice]
+
+    func inAppAgentChoice(for backend: AgentBackend) -> AgentRunChoice {
+        inAppAgentChoices[backend] ?? AgentModelCatalog.defaultChoice(for: backend)
+    }
+
+    func setInAppAgentChoice(_ choice: AgentRunChoice, for backend: AgentBackend) {
+        let listed = AgentModelCatalog.normalized(choice, for: backend)
+        inAppAgentChoices[backend] = listed
+        let keys = Self.choiceKeys(for: backend)
+        defaults.set(listed.model, forKey: keys.model)
+        if let effort = listed.effort { defaults.set(effort, forKey: keys.effort) }
+        else { defaults.removeObject(forKey: keys.effort) }
+    }
+
+    private static func choiceKeys(for backend: AgentBackend) -> (model: String, effort: String) {
+        backend == .claude ? (Key.inAppAgentClaudeModel, Key.inAppAgentClaudeEffort)
+            : (Key.inAppAgentCodexModel, Key.inAppAgentCodexEffort)
+    }
+
+    private static func storedChoices(_ defaults: UserDefaults) -> [AgentBackend: AgentRunChoice] {
+        var choices: [AgentBackend: AgentRunChoice] = [:]
+        for backend in AgentBackend.allCases {
+            let keys = choiceKeys(for: backend)
+            let stored = defaults.string(forKey: keys.model).map {
+                AgentRunChoice(model: $0, effort: defaults.string(forKey: keys.effort))
+            }
+            choices[backend] = AgentModelCatalog.normalized(stored, for: backend)
+        }
+        return choices
     }
 
     /// The light haptic tick when a task is completed or a dragged item
@@ -417,6 +456,7 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         inAppAgentBackend = AgentBackend(rawValue: defaults.string(forKey: Key.inAppAgentBackend) ?? "") ?? .claude
+        inAppAgentChoices = Self.storedChoices(defaults)
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         nextEventInNow = (defaults.object(forKey: Key.nextEventInNow) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true

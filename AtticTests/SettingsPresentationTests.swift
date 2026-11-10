@@ -218,6 +218,52 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertTrue(SettingsVisibility.showsAgentConnection(isEnabled: true))
     }
 
+    // MARK: The in-app agent's own model and thinking level (2026-11-10)
+
+    func testAgentModelChoicesFollowTheAgentAndThinkingHidesWithoutLevels() {
+        XCTAssertEqual(AgentModelCatalog.models(for: .claude).map(\.title), ["Opus", "Sonnet", "Haiku"])
+        XCTAssertEqual(AgentModelCatalog.models(for: .codex).map(\.title),
+                       ["GPT-6.1 Sol", "GPT-6.1 Terra", "GPT-6 Astra", "GPT-6 Luna"])
+        XCTAssertEqual(SettingsVisibility.agentThinkingChoices(backend: .claude, model: "sonnet"),
+                       ["low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(SettingsVisibility.agentThinkingChoices(backend: .codex, model: "gpt-6-luna"),
+                       ["low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(SettingsVisibility.agentThinkingChoices(backend: .codex, model: "gpt-6.1-sol").last, "ultra")
+
+        XCTAssertTrue(SettingsVisibility.showsAgentThinking(
+            AgentModelOption(id: "sonnet", title: "Sonnet", efforts: ["medium"])))
+        XCTAssertFalse(SettingsVisibility.showsAgentThinking(
+            AgentModelOption(id: "plain", title: "Plain", efforts: [])),
+            "Thinking appears only when the agent's CLI takes a level for the model")
+        XCTAssertFalse(SettingsVisibility.showsAgentThinking(nil))
+        XCTAssertEqual(AgentModelCatalog.effortTitle("xhigh"), "Extra high")
+    }
+
+    @MainActor
+    func testAgentModelAndThinkingPersistPerAgent() throws {
+        try withSettingsDefaults { defaults in
+            let settings = AppSettings(defaults: defaults)
+            XCTAssertEqual(settings.inAppAgentChoice(for: .claude), AgentRunChoice(model: "sonnet", effort: "medium"))
+            XCTAssertEqual(settings.inAppAgentChoice(for: .codex), AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+
+            settings.setInAppAgentChoice(AgentRunChoice(model: "opus", effort: "max"), for: .claude)
+            settings.setInAppAgentChoice(AgentRunChoice(model: "gpt-6-luna", effort: "low"), for: .codex)
+            settings.inAppAgentBackend = .codex
+            let reloaded = AppSettings(defaults: defaults)
+            XCTAssertEqual(reloaded.inAppAgentBackend, .codex)
+            XCTAssertEqual(reloaded.inAppAgentChoice(for: .claude), AgentRunChoice(model: "opus", effort: "max"))
+            XCTAssertEqual(reloaded.inAppAgentChoice(for: .codex), AgentRunChoice(model: "gpt-6-luna", effort: "low"),
+                           "Each agent keeps its own model; switching agents never mixes them")
+
+            // A value Attic no longer lists falls back instead of reaching a CLI.
+            settings.setInAppAgentChoice(AgentRunChoice(model: "gpt-retired", effort: "low"), for: .codex)
+            XCTAssertEqual(settings.inAppAgentChoice(for: .codex), AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+            defaults.set("turbo", forKey: "inAppAgentClaudeEffort")
+            XCTAssertEqual(AppSettings(defaults: defaults).inAppAgentChoice(for: .claude),
+                           AgentRunChoice(model: "opus", effort: "medium"))
+        }
+    }
+
     /// A refused global shortcut used to be swallowed while the menu kept
     /// advertising ⌃⌥Space. Settings stays silent for a working shortcut and
     /// explains a refusal, distinguishing a resolvable conflict from a plain

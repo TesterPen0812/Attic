@@ -7,7 +7,7 @@ protocol AgentHelperTransmitting: AnyObject {
     var events: AsyncStream<AgentHelperFrame> { get }
     func start() async throws
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
-                      mcpToken: String, sessionID: String?)
+                      mcpToken: String, sessionID: String?, model: String?, effort: String?)
     func writeLine(_ line: String)
     func interrupt()
     func stop()
@@ -179,6 +179,7 @@ final class AgentRunEngine: AgentRunning {
     typealias ToolFactory = @MainActor () -> any AgentRunToolServing
 
     private let selectedBackend: @MainActor () -> AgentBackend
+    private let selectedChoice: @MainActor (AgentBackend) -> AgentRunChoice?
     private let makeHelper: HelperFactory
     private let makeTools: ToolFactory
     private let undoChanges: (@MainActor (UUID) async throws -> Void)?
@@ -205,12 +206,14 @@ final class AgentRunEngine: AgentRunning {
 
     init(
         selectedBackend: @escaping @MainActor () -> AgentBackend = { .claude },
+        selectedChoice: @escaping @MainActor (AgentBackend) -> AgentRunChoice? = { _ in nil },
         helper: @escaping HelperFactory = { try AgentHelperClient() },
         tools: @escaping ToolFactory,
         journalURL: URL? = nil,
         undo: (@MainActor (UUID) async throws -> Void)? = nil
     ) {
         self.selectedBackend = selectedBackend
+        self.selectedChoice = selectedChoice
         makeHelper = helper
         makeTools = tools
         undoChanges = undo
@@ -316,6 +319,9 @@ final class AgentRunEngine: AgentRunning {
         do {
             guard currentRunID == runID else { return }
             let backend = selectedBackend()
+            // Read once per run: a change in Settings applies from the next
+            // message and never touches a run already going.
+            let choice = AgentModelCatalog.normalized(selectedChoice(backend), for: backend)
             if activeBackend != backend { shutdownTransport() }
             var newProcess = false
             if tools == nil {
@@ -343,10 +349,12 @@ final class AgentRunEngine: AgentRunning {
                 decoder = AgentCLIStreamDecoder(
                     backend: backend, instructions: Self.systemPrompt(),
                     sessionID: archive.sessions[backend.rawValue],
-                    workingDirectory: FileManager.default.temporaryDirectory.path)
+                    workingDirectory: FileManager.default.temporaryDirectory.path,
+                    choice: choice)
                 client.startBackend(backend.rawValue, instructions: Self.systemPrompt(),
                                     mcpURL: address.url, mcpToken: address.token,
-                                    sessionID: archive.sessions[backend.rawValue])
+                                    sessionID: archive.sessions[backend.rawValue],
+                                    model: choice.model, effort: choice.effort)
                 newProcess = true
             }
             guard let helper else { throw AgentRunError.toolServer("Agent helper not available.") }

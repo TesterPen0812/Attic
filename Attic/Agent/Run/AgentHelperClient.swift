@@ -209,11 +209,21 @@ final class AgentHelperClient {
     #endif
 
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
-                      mcpToken: String, sessionID: String?) {
+                      mcpToken: String, sessionID: String?, model: String? = nil, effort: String? = nil) {
         var frame: [String: Any] = ["type": "start", "backend": backend,
                                     "instructions": instructions, "mcpURL": mcpURL,
                                     "mcpToken": mcpToken]
         if let sessionID { frame["sessionID"] = sessionID }
+        // The helper accepts only a model and level Attic lists. Without a
+        // model, the agent's default choice is sent.
+        if let model {
+            frame["model"] = model
+            if let effort { frame["effort"] = effort }
+        } else if let agent = AgentBackend(rawValue: backend) {
+            let choice = AgentModelCatalog.defaultChoice(for: agent)
+            frame["model"] = choice.model
+            if let effort = choice.effort { frame["effort"] = effort }
+        }
         send(frame)
     }
 

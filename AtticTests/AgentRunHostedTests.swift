@@ -99,6 +99,50 @@ final class AgentRunHostedTests: XCTestCase {
         reopenedRunner.cancel()
     }
 
+    func testEachMessageStartsWithTheModelChosenBeforeIt() async {
+        var choice = AgentRunChoice(model: "opus", effort: "high")
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(selectedBackend: { .claude },
+                                    selectedChoice: { _ in choice },
+                                    helper: { let helper = FakeRunHelper(); helpers.append(helper); return helper },
+                                    tools: { FakeRunTools() }, journalURL: journalURL())
+        _ = runner.send("First", watching: true)
+        await wait { helpers.first?.inputs.count == 1 }
+        XCTAssertEqual(helpers.first?.startedChoice, AgentRunChoice(model: "opus", effort: "high"))
+
+        choice = AgentRunChoice(model: "haiku", effort: "low")
+        XCTAssertEqual(helpers.count, 1, "A change never restarts a run already going")
+        helpers[0].emitLine(#"{"type":"result","is_error":false}"#)
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertEqual(helpers[0].startedChoice, AgentRunChoice(model: "opus", effort: "high"))
+
+        _ = runner.send("Second", watching: true)
+        await wait { helpers.count == 2 && helpers[1].inputs.count == 1 }
+        XCTAssertEqual(helpers[1].startedChoice, AgentRunChoice(model: "haiku", effort: "low"),
+                       "A change applies from the next message")
+        runner.cancel()
+    }
+
+    func testRunsUseEachAgentsDefaultAndHealAnUnlistedChoice() async {
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: journalURL())
+        _ = runner.send("Default", watching: true)
+        await wait { helper.startedChoice != nil }
+        XCTAssertEqual(helper.startedChoice, AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+        runner.cancel()
+        await wait { !runner.threadSnapshot().isRunning }
+
+        let stale = FakeRunHelper()
+        let staleRunner = AgentRunEngine(selectedBackend: { .claude },
+                                         selectedChoice: { _ in AgentRunChoice(model: "claude-retired", effort: "max") },
+                                         helper: { stale }, tools: { FakeRunTools() }, journalURL: journalURL())
+        _ = staleRunner.send("Stale", watching: true)
+        await wait { stale.startedChoice != nil }
+        XCTAssertEqual(stale.startedChoice, AgentRunChoice(model: "sonnet", effort: "medium"))
+        staleRunner.cancel()
+    }
+
     func testCancelMidStreamStopsHelperAndToolServer() async {
         let helper = FakeRunHelper()
         let tools = FakeRunTools()
@@ -370,6 +414,7 @@ private final class FakeRunHelper: AgentHelperTransmitting {
     private let continuation: AsyncStream<AgentHelperFrame>.Continuation
     var inputs: [String] = []
     var startedSession: String?
+    var startedChoice: AgentRunChoice?
     var startFailure: String?
     var stopped = false
     var onInput: ((String, FakeRunHelper) -> Void)?
@@ -389,8 +434,9 @@ private final class FakeRunHelper: AgentHelperTransmitting {
         startContinuation = nil
     }
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
-                      mcpToken: String, sessionID: String?) {
+                      mcpToken: String, sessionID: String?, model: String?, effort: String?) {
         startedSession = sessionID ?? "first"
+        startedChoice = model.map { AgentRunChoice(model: $0, effort: effort) }
         if let startFailure { continuation.yield(AgentHelperFrame(["type": "failed", "message": startFailure])) }
         else { continuation.yield(AgentHelperFrame(["type": "started", "backend": backend])) }
     }
