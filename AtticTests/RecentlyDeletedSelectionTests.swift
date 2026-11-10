@@ -457,6 +457,41 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(model.message?.tone, .error)
     }
 
+    /// E-4: the cue is a result of completed work, including asynchronous
+    /// task/note-family cleanup, never a confirmation-button sound.
+    func testE4EmptiedCueWaitsForCoordinatedPurgeAndPlaysOnce() async throws {
+        let fixture = try makeFixture()
+        let ids = try deleteTasks(["A"], in: fixture)
+        fixture.library.presentationDefaults = nil
+        let held = HeldFamilyPurge()
+        fixture.library.taskNotePurge = { _, _, _ in await held.wait() }
+        let model = model(fixture)
+
+        var cues: [AtticSounds.Cue] = []
+        let sounds = AtticSounds.shared
+        sounds.lastPlayed = -.infinity
+        sounds.settingEnabled = { true }
+        sounds.systemAllows = { true }
+        sounds.clock = { 20_000 }
+        sounds.output = { cues.append($0) }
+        defer {
+            sounds.settingEnabled = nil
+            sounds.output = nil
+            sounds.systemAllows = { true }
+            sounds.clock = { ProcessInfo.processInfo.systemUptime }
+            sounds.lastPlayed = -.infinity
+        }
+
+        model.requestEmpty()
+        model.confirmEmpty()
+        for _ in 0..<200 where held.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(held.gate)
+        XCTAssertTrue(cues.isEmpty, "nothing sounds while coordinated deletion is pending")
+        gate.resume(returning: [ids[0]])
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(cues, [.emptied], "one sound after the coordinated purge finishes")
+    }
+
     /// The page's keys and its Undo name: ⌘R restores, ⌘⌫ asks.
     func testKeys() {
         XCTAssertEqual(RecentlyDeletedKeys.restore, KeyboardShortcut("r", modifiers: .command))

@@ -346,6 +346,39 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertEqual(try payloadRows(container, fixture.ids), 4, "The 30-day removal keeps them too")
     }
 
+    /// E-4: a confirmed purge with only kept Draw rows is not an emptying.
+    func testE4KeptDrawRowsDoNotPlayEmptiedAndKeepWarning() throws {
+        let container = try container()
+        let store = DrawPersistentStore(container: container)
+        let fixture = try payloadReplicaFixture(store, container: container) {
+            $0.apply(Data([1, 2, 3]), id: $0.id, canvasID: $0.canvasID, role: $0.role)
+        }
+        XCTAssertEqual(store.purge(fixture.targets), DrawPurgeReport(removed: 0, kept: 2))
+
+        var cues: [AtticSounds.Cue] = []
+        let sounds = AtticSounds.shared
+        sounds.lastPlayed = -.infinity
+        sounds.settingEnabled = { true }
+        sounds.systemAllows = { true }
+        sounds.clock = { 20_000 }
+        sounds.output = { cues.append($0) }
+        defer {
+            sounds.settingEnabled = nil
+            sounds.output = nil
+            sounds.systemAllows = { true }
+            sounds.clock = { ProcessInfo.processInfo.systemUptime }
+            sounds.lastPlayed = -.infinity
+        }
+
+        let model = RecentlyDeletedModel(library: nil, draw: { store })
+        model.reload()
+        model.requestEmpty()
+        model.confirmEmpty()
+        XCTAssertEqual(model.entries.count, 2)
+        XCTAssertEqual(model.message?.tone, .warning, "kept-item warning remains")
+        XCTAssertFalse(cues.contains(.emptied), "nothing was removed")
+    }
+
     func testAgreeingPayloadReplicasAllGoOnEveryPurgePath() throws {
         // Delete Permanently.
         do {
