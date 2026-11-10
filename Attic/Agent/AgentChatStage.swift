@@ -155,10 +155,13 @@ struct AgentChatStage: View {
         let _ = Self.bodyEvaluations += 1
         #endif
         ZStack(alignment: .topTrailing) {
-            AgentChatBackdrop(shown: shown, reveal: reveal, origin: star, tint: tint, fades: !alive, solid: solid,
+            AgentChatBackdrop(shown: shown, reveal: reveal, clearing: model.watch.clearing, origin: star, tint: tint,
+                              fades: !alive, solid: solid,
                               onEscape: { model.escape() },
                               didMake: { view in DispatchQueue.main.async { backdropView = view } })
-                .opacity(aside ? 0 : 1)
+                // The design's `backdrop-filter 420ms`; Reduce Motion's plain fade.
+                .animation(alive ? .timingCurve(0.25, 0.1, 0.25, 1, duration: 0.42) : .linear(duration: Self.fade),
+                           value: model.watch)
                 // Still there to click: a click while watching closes the chat.
                 .overlay { Color.clear.contentShape(Rectangle()).onTapGesture { model.close() } }
                 .accessibilityHidden(true)
@@ -199,6 +202,8 @@ struct AgentChatStage: View {
             if alive { AgentChatFXLayer(fx: fx) }
         }
         .coordinateSpace(.named(Self.space))
+        // Pages report frames in the hosting view's global space.
+        .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { fx.stageOrigin = $0 }
         .onAppear(perform: appeared)
         #if DEBUG
         .onAppear { Self.isMounted = true }
@@ -214,7 +219,7 @@ struct AgentChatStage: View {
             wipe(to: now)
         }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
-        .onChange(of: model.writingLabel != nil) { _, now in
+        .onChange(of: model.watch == .watching) { _, now in
             // The design's 280 ms; Reduce Motion's plain fade.
             withAnimation(alive ? .easeOut(duration: 0.28) : .linear(duration: Self.fade)) { aside = now }
         }
@@ -300,8 +305,29 @@ struct AgentChatStage: View {
             if let card = fx.composerFrame { fx.dust(card, count: 130) }
             let at = fx.sparkPoint
             fx.ring(at.x, at.y, radius: 45, duration: 0.5)
-        case .approvalDenied, .wroteInNote:
+        case .approvalDenied, .watchEnded:
             break
+        case let .pointer(point):
+            fx.point(at: point.flatMap(onStage))
+        case let .tap(point):
+            if let at = onStage(point) { fx.tap(at: at) }
+        case let .burst(point, count, speed, ring):
+            guard let at = onStage(point) else { return }
+            if count == 1 {
+                fx.star(at.x, at.y, vy: Double.random(in: -13 ... 2), life: Double.random(in: 0.3 ... 0.6), size: Double.random(in: 1 ... 2.25))
+            } else {
+                fx.burst(at.x, at.y, count: count, speed: speed)
+            }
+            if ring > 0 { fx.ring(at.x, at.y, radius: ring, duration: 0.5) }
+        case let .ping(rect, duration):
+            if let frame = onStage(rect) { fx.ping(frame, duration: duration, holds: true) }
+        case let .pingRows(ids):
+            for row in rowsOnStage(Set(ids)) { fx.ping(row.frame, duration: 0.9, holds: false) }
+        case let .sketch(replay):
+            guard let backdropView else { return }
+            let origin = backdropView.convert(CGPoint.zero, from: nil)
+            let down = backdropView.convert(CGPoint(x: 0, y: 1), from: nil).y - origin.y
+            fx.sketch(replay, transform: CGAffineTransform(a: 1, b: 0, c: 0, d: down, tx: origin.x, ty: origin.y))
         case .changesLanded:
             fx.landOnChanges()
         case let .undoing(changes):
@@ -309,6 +335,21 @@ struct AgentChatStage: View {
         case let .writing(point, star):
             guard let backdropView else { return }
             fx.write(at: backdropView.convert(point, from: nil), star: star)
+        }
+    }
+
+    /// A watched point on this stage: from the window, or the global space.
+    private func onStage(_ point: AgentWatchPoint) -> CGPoint? {
+        switch point.space {
+        case .window: return backdropView?.convert(point.point, from: nil)
+        case .global: return CGPoint(x: point.point.x - fx.stageOrigin.x, y: point.point.y - fx.stageOrigin.y)
+        }
+    }
+
+    private func onStage(_ rect: AgentWatchRect) -> CGRect? {
+        switch rect.space {
+        case .window: return backdropView?.convert(rect.rect, from: nil)
+        case .global: return rect.rect.offsetBy(dx: -fx.stageOrigin.x, dy: -fx.stageOrigin.y)
         }
     }
 
@@ -518,14 +559,14 @@ struct AgentChatComposer: View {
         }
         .offset(x: shake)
         .overlay(alignment: .top) {
-            if let label = model.writingLabel {
+            if let label = model.liveLabel {
                 AgentChatLiveLabel(text: label, alive: alive)
                     .alignmentGuide(.top) { $0[.bottom] + 7 }
                     .transition(alive ? .opacity.combined(with: .scale(scale: 0.97)).combined(with: .offset(y: 4)) : .opacity)
             }
         }
         .animation(alive ? .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.34) : .linear(duration: AgentChatStage.fade),
-                   value: model.writingLabel)
+                   value: model.liveLabel)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { frame in
             fx.composerFrame = frame
         }
@@ -541,7 +582,7 @@ struct AgentChatComposer: View {
         .onChange(of: model.draft) { old, new in if alive, new.count > old.count { fx.keystroke(count: new.count) } }
         .onReceive(model.effects) { effect in
             if effect == .approvalDenied, alive { deny() }
-            if effect == .wroteInNote { focusSoon() }
+            if effect == .watchEnded { focusSoon() }
         }
     }
 
