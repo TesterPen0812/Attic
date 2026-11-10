@@ -1317,9 +1317,11 @@ extension NoteStore {
         guard current.revisionToken == baseRevisionToken else {
             return .failure(.staleRevision(expected: baseRevisionToken, current: current.revisionToken))
         }
+        var baseDocument: NoteDocument?
         if let content = current.content, case let .editable(base) = NoteContentCodec.decode(content) {
             do { try NoteAgentTextSafety.validate(base: base, proposed: document) }
             catch { return .failure(.saveFailed(error.localizedDescription)) }
+            baseDocument = base
         }
         let data: Data
         guard document.isWritableByThisBuild else { return .failure(.readOnly) }
@@ -1362,6 +1364,8 @@ extension NoteStore {
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
+            // Saved first; this only lets a watched run show what it added.
+            if let baseDocument { agentWriteBases[noteID] = baseDocument } else { agentWriteBases[noteID] = nil }
             return .success(.applied(revisionToken: revisionID.uuidString))
         } catch let error as NoteDocumentStoreError {
             modelContext.rollback()
@@ -1370,6 +1374,23 @@ extension NoteStore {
             modelContext.rollback()
             return .failure(.encodingFailed(error.localizedDescription))
         }
+    }
+
+    /// An agent Undo puts `document` back on a note it wrote in: directly when
+    /// the note is not on screen, or over a clean editor on screen, which
+    /// then reloads (a watched run leaves the note it wrote in on show).
+    /// Refused when the note moved on from `revision` or its editor holds
+    /// unsaved text.
+    func agentRestore(noteID: UUID, document: NoteDocument, revision: String) -> Bool {
+        let disposition = agentWriteDisposition(noteID)
+        let onScreen = disposition == .proposal && agentUndoMayReplaceOnScreen(noteID)
+        guard disposition == .direct || onScreen, let current = note(withID: noteID),
+              current.revisionToken == revision,
+              case .success(.applied) = agentWrite(noteID: noteID, baseRevisionToken: revision, document: document,
+                                                   agentName: "Agent Undo", disposition: .direct) else { return false }
+        agentWriteBases[noteID] = nil
+        if onScreen { agentUndoReplacedOnScreen(noteID) }
+        return true
     }
 
     /// The owner-facing notice stays readable; database details belong in the log.

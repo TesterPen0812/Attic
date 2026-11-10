@@ -330,15 +330,16 @@ final class AgentActions {
                 }
                 if !success { failures.append("\(entry.title): the note could not be removed") }
             case let .updatedNote(noteID, document, title, body, revision, _):
-                if let noteStore = tasks.noteStore, let current = noteStore.note(withID: noteID),
+                if let noteStore = tasks.noteStore, let document {
+                    // A note the chat wrote in while watched is on screen: a
+                    // clean editor there is put back too, and reloads.
+                    success = noteStore.agentRestore(noteID: noteID, document: document,
+                                                     revision: noteRevisions[noteID] ?? revision)
+                    if success { noteRevisions[noteID] = noteStore.note(withID: noteID)?.revisionToken }
+                } else if let noteStore = tasks.noteStore, let current = noteStore.note(withID: noteID),
                    current.revisionToken == (noteRevisions[noteID] ?? revision),
                    noteStore.agentWriteDisposition(noteID) == .direct {
-                    if let document {
-                        if case .success(.applied) = noteStore.agentWrite(
-                            noteID: noteID, baseRevisionToken: current.revisionToken,
-                            document: document, agentName: "Agent Undo", disposition: .direct
-                        ) { success = true }
-                    } else if let result = try? tasks.call(name: "update_note", arguments: [
+                    if let result = try? tasks.call(name: "update_note", arguments: [
                         "id": noteID.uuidString, "base_revision": current.revisionToken,
                         "title": title, "body": body
                     ]), let payload = (try? JSONSerialization.jsonObject(with: Data(result.utf8))) as? [String: Any] {
