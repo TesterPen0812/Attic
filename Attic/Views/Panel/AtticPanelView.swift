@@ -1019,8 +1019,24 @@ extension AppearancePreference {
 struct PanelRootLayout: Layout {
     #if DEBUG
     /// The size the root was last placed at (hosted tests compare it with
-    /// the window's visible frame).
-    @MainActor static var lastPlacedSize: CGSize?
+    /// the window's visible frame). SwiftUI may place from its async display
+    /// link, so the recorder must not cross to the main actor.
+    private final class PlacementRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var size: CGSize?
+
+        func record(_ value: CGSize) { lock.withLock { size = value } }
+        func latest() -> CGSize? { lock.withLock { size } }
+    }
+
+    private nonisolated static let placementRecorder = PlacementRecorder()
+    nonisolated static var lastPlacedSize: CGSize? { placementRecorder.latest() }
+
+    /// One entry point shared by normal SwiftUI layout and the off-thread
+    /// regression. Layout is free to call this from a display-link thread.
+    nonisolated static func recordPlacedSize(_ size: CGSize) {
+        placementRecorder.record(size)
+    }
     #endif
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -1037,8 +1053,7 @@ struct PanelRootLayout: Layout {
             subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
         }
         #if DEBUG
-        let size = bounds.size
-        MainActor.assumeIsolated { Self.lastPlacedSize = size }
+        Self.recordPlacedSize(bounds.size)
         #endif
     }
 }
