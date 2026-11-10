@@ -71,7 +71,13 @@ final class NotesPageUITests: XCTestCase {
     // MARK: Helpers
 
     private var noteText: XCUIElement { app.textViews["note-text"] }
-    private var noteValue: String { (noteText.value as? String) ?? "" }
+    /// The text view is briefly absent while the library slides away or a
+    /// newly created document mounts. Polling its value must not throw a
+    /// query error before `waitFor` can assert that the editor really opens.
+    private var noteValue: String {
+        guard noteText.exists else { return "" }
+        return (noteText.value as? String) ?? ""
+    }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 6, _ message: String,
                          file: StaticString = #filePath, line: UInt = #line) {
