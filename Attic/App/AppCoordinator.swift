@@ -640,6 +640,7 @@ final class AppCoordinator: ObservableObject {
         }
         let agentRunner = AgentRunEngine(
             selectedBackend: { [weak settings] in settings?.inAppAgentBackend ?? .claude },
+            selectedChoice: { [weak settings] backend in settings?.inAppAgentChoice(for: backend) },
             tools: { AgentRunMCPServer.live(server: agentServer) },
             journalURL: runtime.usesEphemeralAgentCredential
                 ? runtime.galleryScratchRoot.appendingPathComponent("AgentThread.json")

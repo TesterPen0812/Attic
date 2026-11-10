@@ -271,9 +271,16 @@ private final class HelperService {
             send(["type": "testCLIsReady"])
         #endif
         case "start":
+            // Only a model and thinking level Attic lists may reach a command
+            // line: the helper checks the app's own closed catalog, never the
+            // app's word, and refuses everything else before building it.
             guard cli == nil, !startingCLI, let name = message["backend"] as? String,
-                  name == "claude" || name == "codex" else { send(["type": "failed", "message": "Invalid agent request."]); return }
-            startCLI(name: name, message: message)
+                  name == "claude" || name == "codex", let model = message["model"] as? String,
+                  message["effort"] == nil || message["effort"] is String,
+                  let modelArguments = AgentModelCatalog.launchArguments(
+                      backend: name, model: model, effort: message["effort"] as? String)
+            else { send(["type": "failed", "message": "Invalid agent request."]); return }
+            startCLI(name: name, message: message, modelArguments: modelArguments)
         case "input":
             guard let line = message["line"] as? String, line.utf8.count < maximumLineSize,
                   let cliInput else { return }
@@ -284,7 +291,7 @@ private final class HelperService {
         }
     }
 
-    private func startCLI(name: String, message: [String: Any]) {
+    private func startCLI(name: String, message: [String: Any], modelArguments: [String]) {
         startingCLI = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
@@ -297,14 +304,14 @@ private final class HelperService {
                     self.send(["type": "failed", "message": selection.message])
                     return
                 }
-                self.launchCLI(name: name, message: message, executable: executable,
-                               environment: self.childEnvironment(env, backend: name))
+                self.launchCLI(name: name, message: message, modelArguments: modelArguments,
+                               executable: executable, environment: self.childEnvironment(env, backend: name))
             }
         }
     }
 
-    private func launchCLI(name: String, message: [String: Any], executable: String,
-                           environment loginEnv: [String: String]) {
+    private func launchCLI(name: String, message: [String: Any], modelArguments: [String],
+                           executable: String, environment loginEnv: [String: String]) {
         let prompt = message["instructions"] as? String ?? ""
         let server = message["mcpURL"] as? String ?? ""
         let mcpToken = message["mcpToken"] as? String ?? ""
@@ -344,7 +351,7 @@ private final class HelperService {
                         // Attic alone authorizes protected actions, through the
                         // trusted chat approval path in AgentActionsMCP.
                         "--allowedTools", "mcp__attic",
-                        "--system-prompt", prompt]
+                        "--system-prompt", prompt] + modelArguments
             if let session = message["sessionID"] as? String, !session.isEmpty {
                 args += ["--resume", session]
             }
@@ -373,7 +380,7 @@ private final class HelperService {
             // noninteractive thread. Attic alone authorizes protected actions
             // through the trusted chat approval path.
             let mcpOnly = "mcp_servers={attic={url=\"\(server)\",bearer_token_env_var=\"ATTIC_RUN_MCP_TOKEN\",default_tools_approval_mode=\"approve\"}}"
-            arguments = ["app-server", "--strict-config", "--config", mcpOnly]
+            arguments = ["app-server", "--strict-config", "--config", mcpOnly] + modelArguments
                 + ["shell_tool", "unified_exec", "browser_use", "computer_use", "apps",
                    "standalone_web_search", "hooks", "skill_search"].flatMap { ["--disable", $0] }
         }

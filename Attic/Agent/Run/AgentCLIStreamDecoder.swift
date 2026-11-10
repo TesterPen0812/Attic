@@ -15,6 +15,9 @@ struct AgentCLIStreamDecoder {
     let backend: AgentBackend
     let instructions: String
     let workingDirectory: String
+    /// The model and level this run was started with. Codex also gets them on
+    /// every turn, so a resumed thread cannot keep its earlier model.
+    let choice: AgentRunChoice?
     private(set) var sessionID: String?
 
     private var codexInitialized = false
@@ -31,6 +34,7 @@ struct AgentCLIStreamDecoder {
         self.instructions = instructions
         self.sessionID = sessionID
         self.workingDirectory = workingDirectory
+        self.choice = choice
     }
 
     mutating func beginTurn(_ prompt: String) -> AgentCLITransition {
@@ -254,11 +258,16 @@ struct AgentCLIStreamDecoder {
     }
 
     private func codexTurn() -> String {
-        Self.json(["jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": [
+        var params: [String: Any] = [
             "threadId": sessionID ?? "",
             "input": [["type": "text", "text": pendingPrompt]],
             "approvalPolicy": "never"
-        ]])
+        ]
+        if let choice {
+            params["model"] = choice.model
+            if let effort = choice.effort { params["effort"] = effort }
+        }
+        return Self.json(["jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": params])
     }
 
     private mutating func startStep(id: String, name: String, into update: inout AgentCLITransition) {

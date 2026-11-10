@@ -19,6 +19,25 @@ struct AgentAccessSettingsView: View {
                     selection: $settings.inAppAgentBackend,
                     identifier: "setting-in-app-agent-backend"
                 )
+                AtticGroupDivider()
+                // Model and Thinking follow the selected agent; each agent
+                // keeps its own choice. A change applies from the next message.
+                AtticPopUpRow(
+                    label: String(localized: "Model"),
+                    choices: AgentModelCatalog.models(for: backend).map { ($0.id, $0.title) },
+                    selection: modelSelection,
+                    identifier: "setting-in-app-agent-model"
+                )
+                if SettingsVisibility.showsAgentThinking(AgentModelCatalog.model(choice.model, for: backend)) {
+                    AtticGroupDivider()
+                    AtticPopUpRow(
+                        label: String(localized: "Thinking"),
+                        choices: SettingsVisibility.agentThinkingChoices(backend: backend, model: choice.model)
+                            .map { ($0, AgentModelCatalog.effortTitle($0)) },
+                        selection: effortSelection,
+                        identifier: "setting-in-app-agent-thinking"
+                    )
+                }
             }
 
             SettingsGroup(
@@ -87,6 +106,32 @@ struct AgentAccessSettingsView: View {
             backendStatuses = await AgentBackendDiscovery.statuses()
             didCheckBackends = true
         }
+    }
+
+    private var backend: AgentBackend { settings.inAppAgentBackend }
+
+    private var choice: AgentRunChoice { settings.inAppAgentChoice(for: backend) }
+
+    private var modelSelection: Binding<String> {
+        let backend = backend
+        return Binding(
+            get: { settings.inAppAgentChoice(for: backend).model },
+            set: { model in
+                let current = settings.inAppAgentChoice(for: backend)
+                settings.setInAppAgentChoice(AgentRunChoice(model: model, effort: current.effort), for: backend)
+            }
+        )
+    }
+
+    private var effortSelection: Binding<String> {
+        let backend = backend
+        return Binding(
+            get: { settings.inAppAgentChoice(for: backend).effort ?? AgentModelCatalog.defaultEffort },
+            set: { effort in
+                let current = settings.inAppAgentChoice(for: backend)
+                settings.setInAppAgentChoice(AgentRunChoice(model: current.model, effort: effort), for: backend)
+            }
+        )
     }
 
     private func backendLabel(_ backend: AgentBackend) -> String {
