@@ -807,7 +807,9 @@ final class DrawPageModel: ObservableObject {
     func arrange(toFront: Bool) {
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
-        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count)
+        // Pre-increment below: leave every chosen object's z below the
+        // previous bottom, so UUID tie-breaking cannot leave one in front.
+        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count) - 1
         let moved = chosen.map { object -> DrawObject in
             z += 1
             var copy = object
