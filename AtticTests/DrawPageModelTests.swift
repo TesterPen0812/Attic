@@ -246,6 +246,16 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.tool, .select)
     }
 
+    func testVeryNarrowWrappingKeepsEmojiAndRTLTextIntact() {
+        let text = "Start 👩🏽‍🚀 אבג 🧑‍💻 End"
+        for width in [CGFloat(0.5), 2, 8, 15, 55] {
+            let lines = DrawText.lines(text, size: 14, width: width)
+            XCTAssertEqual(lines.joined(), text, "Wrap at \(width)pt must never lose or corrupt composed characters")
+            let original = Array(text)
+            XCTAssertEqual(lines.flatMap { Array($0) }, original, "A wrapped line must not split an emoji grapheme")
+        }
+    }
+
     func testShapeIsDraggedOutThenReturnsToSelectWithNothingSelected() {
         model.clickTool(.shape)
         model.pickShape(.ellipse)
@@ -672,5 +682,19 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection.count, 1)
         model.closeSearch()
         XCTAssertEqual(model.search.query, "")
+    }
+
+    func testOpeningSharedSearchEndsTheCurrentTextEditAndFindsItsSavedText() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Find this draft")
+        XCTAssertNotNil(model.editing)
+
+        model.openSearch()
+        XCTAssertNil(model.editing, "Opening the top Search finishes the active text box")
+        model.search.query = "draft"
+        let result = try XCTUnwrap(model.search.results.first)
+        XCTAssertEqual(result.canvas.id, model.canvasID)
+        XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
 }
