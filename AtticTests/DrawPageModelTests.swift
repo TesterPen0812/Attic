@@ -170,6 +170,51 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
+    func testPenPressureSmoothsAndSurvivesMoveAndResize() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100), pressure: 0)
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.5)
+        model.pointerUp(at: CGPoint(x: 130, y: 100), pressure: 1)
+        let original = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = original.content else { return XCTFail("Not a stroke") }
+        XCTAssertGreaterThan(points.count, 3)
+        XCTAssertEqual(points.first?.pressure, 0)
+        XCTAssertEqual(points.last?.pressure, 1)
+        XCTAssertTrue(points.contains { ($0.pressure ?? 0) > 0 && ($0.pressure ?? 0) < 1 })
+        let moved = original.translated(by: DrawPoint(x: 12, y: 20), id: original.id)
+        guard case .stroke(let translated) = moved.content else { return XCTFail("Move lost ink") }
+        XCTAssertEqual(translated.map(\.pressure), points.map(\.pressure))
+        let resized = DrawPageModel.resized([moved], handle: .bottomRight,
+                                           delta: CGPoint(x: 50, y: 20), shift: false)
+        guard case .stroke(let stretched) = resized.first?.content else { return XCTFail("Resize lost ink") }
+        XCTAssertEqual(stretched.map(\.pressure), points.map(\.pressure))
+        let data = try JSONEncoder().encode(moved)
+        let roundTripped = try JSONDecoder().decode(DrawObject.self, from: data)
+        XCTAssertEqual(roundTripped, moved)
+    }
+
+    func testPressureInkRendersThinAtLightContactAndBroadAtFirmContact() {
+        let outline = DrawInk.pressureOutline([
+            DrawPoint(x: 20, y: 20, pressure: 0),
+            DrawPoint(x: 120, y: 20, pressure: 1),
+        ], baseWidth: 10)
+        XCTAssertFalse(outline.contains(CGPoint(x: 30, y: 25)), "light nib stays narrower than 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 110, y: 25)), "firm nib grows beyond 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 20, y: 20)))
+        XCTAssertTrue(outline.contains(CGPoint(x: 120, y: 20)))
+    }
+
+    func testTabletPressureIsNotResetByAnInterleavedMouseRelease() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.8)
+        model.pointerDragged(to: CGPoint(x: 100, y: 110))
+        model.pointerUp(at: CGPoint(x: 130, y: 100))
+        let saved = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = saved.content else { return XCTFail("Not a stroke") }
+        XCTAssertEqual(try XCTUnwrap(points.last?.pressure), 0.8, accuracy: 0.0001)
+    }
+
     func testTextPlacesABoxAndTypesStraightAway() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -439,8 +484,8 @@ final class DrawPageModelTests: XCTestCase {
         model.setBoard(size: CGSize(width: 360, height: 500), clearInsets: model.clearInsets)
         model.scroll(dx: 10, dy: 10, command: false, at: .zero)
         model.pointerDragged(to: CGPoint(x: 140, y: 130))
-        guard case .ink(let points) = model.live else { return XCTFail("The stroke is still live") }
-        XCTAssertEqual(points.count, 4)
+        guard case .ink(let trace) = model.live else { return XCTFail("The stroke is still live") }
+        XCTAssertEqual(trace.samples.count, 4)
         model.pointerUp()
         XCTAssertEqual(stored.count, 1)
     }

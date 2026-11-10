@@ -273,15 +273,16 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         defer { CATransaction.commit() }
         marqueeLayer.path = nil
         switch model.live {
-        case .ink(let points):
-            if liveInk == nil {
+        case .ink(let trace):
+            if liveInk == nil || (trace.hasPressure && liveInk?.usesPressure == false) {
+                liveInk?.container.removeFromSuperlayer()
                 liveStartRevision = model.contentRevision
                 let ink = DrawLiveInk(colour: DrawPalette(dark: isDark).cgColor(model.colour),
-                                      width: CGFloat(model.strokeSize.strokeWidth))
+                                      width: CGFloat(model.strokeSize.strokeWidth), usesPressure: trace.hasPressure)
                 worldLayer.addSublayer(ink.container)
                 liveInk = ink
             }
-            liveInk?.update(points)
+            liveInk?.update(trace)
         case .shape(let kind, let start, let end):
             if liveShape == nil {
                 liveStartRevision = model.contentRevision
@@ -407,15 +408,30 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
             model.doubleClick(at: point)
             return
         }
-        model.pointerDown(at: point, shift: event.modifierFlags.contains(.shift))
+        model.pointerDown(at: point, shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift))
+        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
     }
 
     override func mouseUp(with event: NSEvent) {
-        model.pointerUp(at: boardPoint(event))
+        model.pointerUp(at: boardPoint(event), pressure: penPressure(event))
+    }
+
+    /// Tablet-point samples may arrive separately from mouse drags; include
+    /// their pressure and coordinates only while a pen gesture is active.
+    override func tabletPoint(with event: NSEvent) {
+        guard case .ink = model.live, let pressure = penPressure(event) else { return }
+        model.pointerDragged(to: boardPoint(event), pressure: pressure)
+    }
+
+    /// Trackpads and ordinary mice can report force, but pen pressure is
+    /// meaningful only on tablet-point events. Keep their strokes constant.
+    private func penPressure(_ event: NSEvent) -> CGFloat? {
+        guard (event.type == .tabletPoint || event.subtype == .tabletPoint), event.pressure.isFinite else { return nil }
+        let pressure = CGFloat(event.pressure)
+        return Swift.min(CGFloat(1), Swift.max(CGFloat(0), pressure))
     }
 
     override func otherMouseDown(with event: NSEvent) { model.pointerDown(at: boardPoint(event), panButton: true) }
@@ -889,14 +905,16 @@ final class DrawLiveInk {
     let container = CALayer()
     private var tail: CAShapeLayer
     private var startIndex = 1
-    private var startPoint: CGPoint?
+    private var startPoint: DrawInkSample?
     private let colour: CGColor
     private let width: CGFloat
+    let usesPressure: Bool
     static let chunk = 32
 
-    init(colour: CGColor, width: CGFloat) {
+    init(colour: CGColor, width: CGFloat, usesPressure: Bool = false) {
         self.colour = colour
         self.width = width
+        self.usesPressure = usesPressure
         container.actions = DrawBoardView.noActions
         tail = CAShapeLayer()
         tail = makeLayer()
@@ -905,8 +923,8 @@ final class DrawLiveInk {
     private func makeLayer() -> CAShapeLayer {
         let layer = CAShapeLayer()
         layer.actions = DrawBoardView.noActions
-        layer.fillColor = nil
-        layer.strokeColor = colour
+        layer.fillColor = usesPressure ? colour : nil
+        layer.strokeColor = usesPressure ? nil : colour
         layer.lineWidth = width
         layer.lineCap = .round
         layer.lineJoin = .round
@@ -916,24 +934,40 @@ final class DrawLiveInk {
 
     var layerCount: Int { container.sublayers?.count ?? 0 }
 
-    func update(_ points: [CGPoint]) {
+    func update(_ trace: DrawInkTrace) {
+        let points = trace.samples
         guard let first = points.first else { return }
         if startPoint == nil { startPoint = first }
         if points.count - startIndex > Self.chunk, let start = startPoint {
             // Freeze everything up to the last midpoint; the tail restarts there.
-            let frozen = CGMutablePath()
-            frozen.move(to: start)
-            for index in startIndex..<(points.count - 1) {
-                frozen.addQuadCurve(to: DrawInk.mid(points[index], points[index + 1]), control: points[index])
+            let last = points.count - 1
+            let middle = DrawInkSample(point: DrawInk.mid(points[last - 1].point, points[last].point),
+                                       pressure: points[last - 1].pressure == nil && points[last].pressure == nil
+                                           ? nil : ((points[last - 1].pressure ?? 0.5) + (points[last].pressure ?? 0.5)) / 2)
+            if usesPressure {
+                let segment = [start] + Array(points[startIndex..<last]) + [middle]
+                tail.path = DrawInk.pressureOutline(DrawInk.smooth(segment), baseWidth: width)
+            } else {
+                let frozen = CGMutablePath()
+                frozen.move(to: start.point)
+                for index in startIndex..<last {
+                    frozen.addQuadCurve(to: DrawInk.mid(points[index].point, points[index + 1].point), control: points[index].point)
+                }
+                tail.path = frozen
             }
-            tail.path = frozen
             tail = makeLayer()
-            startPoint = DrawInk.mid(points[points.count - 2], points[points.count - 1])
+            startPoint = middle
             startIndex = points.count - 1
         }
-        let path = CGMutablePath()
-        DrawInk.livePath(start: startPoint ?? first, points: points[min(startIndex, points.count)...], into: path)
-        tail.path = path
+        if usesPressure {
+            let segment = [startPoint ?? first] + Array(points[min(startIndex, points.count)...])
+            tail.path = DrawInk.pressureOutline(DrawInk.smooth(segment), baseWidth: width)
+        } else {
+            let path = CGMutablePath()
+            DrawInk.livePath(start: (startPoint ?? first).point,
+                             points: points[min(startIndex, points.count)...], into: path)
+            tail.path = path
+        }
     }
 }
 

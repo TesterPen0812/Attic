@@ -65,7 +65,7 @@ extension DrawPageModel {
 
     // MARK: Pointer
 
-    func pointerDown(at screen: CGPoint, shift: Bool = false, panButton: Bool = false) {
+    func pointerDown(at screen: CGPoint, shift: Bool = false, panButton: Bool = false, pressure: CGFloat? = nil) {
         guard canvasID != nil else { return }
         if isFiltering { closeFilter(); return }
         if editing != nil { endEditing(); return }
@@ -84,7 +84,7 @@ extension DrawPageModel {
         switch tool {
         case .pen:
             select([])
-            begin(.ink([world]))
+            begin(.ink(DrawInkTrace(DrawInkSample(point: world, pressure: pressure))))
         case .eraser:
             begin(.erase(gone: [], last: world))
             erase(to: world)
@@ -115,16 +115,18 @@ extension DrawPageModel {
         }
     }
 
-    func pointerDragged(to screen: CGPoint, shift: Bool = false) {
+    func pointerDragged(to screen: CGPoint, shift: Bool = false, pressure: CGFloat? = nil) {
         guard let live else { return }
         let world = viewport.world(screen)
         switch live {
         case .pan(let start, let from):
             setViewport(from.panned(dx: screen.x - start.x, dy: screen.y - start.y), byUser: true)
             return
-        case .ink(var points):
-            points.append(world)
-            self.setLive(.ink(points))
+        case .ink(let trace):
+            // The live trace is reference-owned by this gesture. Avoid
+            // appending to a copied array on every event as it grows.
+            trace.append(DrawInkSample(point: world, pressure: pressure))
+            board?.drawLiveChanged()
         case .erase:
             erase(to: world)
         case .shape(let kind, let start, _):
@@ -153,8 +155,8 @@ extension DrawPageModel {
         }
     }
 
-    func pointerUp(at screen: CGPoint? = nil) {
-        if let screen { pointerDragged(to: screen) }
+    func pointerUp(at screen: CGPoint? = nil, pressure: CGFloat? = nil) {
+        if let screen { pointerDragged(to: screen, pressure: pressure) }
         finishLiveInput()
     }
 
@@ -176,8 +178,8 @@ extension DrawPageModel {
         switch finished {
         case .pan:
             break
-        case .ink(let points):
-            let samples = DrawInk.smooth(points)
+        case .ink(let trace):
+            let samples = DrawInk.smooth(trace.samples)
             if !samples.isEmpty {
                 let object = DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: topZ + 1,
                                         style: DrawStyle(colour: colour, size: strokeSize, corners: .square),

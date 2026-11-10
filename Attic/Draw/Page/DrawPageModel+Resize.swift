@@ -142,7 +142,11 @@ extension DrawPageModel {
                 let p = map(a.x, a.y), q = map(b.x, b.y)
                 object.frame = DrawFrame(x: p.x, y: p.y, width: q.x - p.x, height: q.y - p.y)
             case .stroke(let points):
-                let mapped = points.map { map($0.x, $0.y) }
+                let mapped = points.map { point in
+                    var transformed = map(point.x, point.y)
+                    transformed.pressure = point.pressure
+                    return transformed
+                }
                 object.content = .stroke(mapped)
                 object.frame = DrawGeometry.strokeFrame(mapped)
             default:
