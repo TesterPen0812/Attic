@@ -958,6 +958,31 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertFalse(topRow.isAway(.tasks))
     }
 
+    private func backdropView() -> AgentChatBackdropView? {
+        func find(_ view: NSView) -> AgentChatBackdropView? {
+            if let found = view as? AgentChatBackdropView { return found }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
+        }
+        return window.contentView.flatMap(find)
+    }
+
+    /// Mid-opening, the blur is part way and at the thread's circle: a
+    /// representable alone is handed only the wipe's end, and the preview
+    /// showed the whole panel blurred in its first frame.
+    func testMidOpeningTheBlurIsPartWayAndAtTheThreadsCircle() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.seedExchangeForUITesting(asked: "Tell me a short hello.", reply: "Hi there!")
+        model.open()
+        spin(0.12)
+        let blur = try XCTUnwrap(backdropView()?.appliedScale)
+        XCTAssertLessThan(blur, 0.97, "The blur wipes; it is not all there at once")
+        XCTAssertEqual(blur, try XCTUnwrap(AgentChatWipeReveal.lastScale), accuracy: 0.02, "One circle for the blur and the thread")
+        spin(0.8)
+        XCTAssertEqual(try XCTUnwrap(backdropView()?.appliedScale), 1, accuracy: 0.001)
+    }
+
     /// Screen 9: the earlier reply was drawn over the page's still readable
     /// rows before the blur had covered them. It arrives with the wipe.
     func testTheThreadArrivesWithTheWipeNotBeforeIt() {

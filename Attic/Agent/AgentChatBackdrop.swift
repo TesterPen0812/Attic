@@ -10,7 +10,30 @@ import SwiftUI
 /// main thread's first frames while everything else waited, and the colour
 /// arrived visibly later: screen 9, item 21.) It exists only while the chat
 /// is on screen. It also catches Escape, wherever the keyboard is.
-struct AgentChatBackdrop: NSViewRepresentable, Animatable {
+struct AgentChatBackdrop: View, Animatable {
+    var shown: Bool
+    var reveal: CGFloat
+    var origin: CGPoint
+    var tint: NSColor
+    var fades: Bool
+    var solid: Bool
+    var onEscape: @MainActor () -> Void
+    var didMake: @MainActor (AgentChatBackdropView) -> Void = { _ in }
+
+    /// A representable is handed only an animation's end value; a view's body
+    /// gets every frame of it, and passes each one on.
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+
+    var body: some View {
+        AgentChatBackdropRepresentable(shown: shown, reveal: reveal, origin: origin, tint: tint, fades: fades, solid: solid,
+                                       onEscape: onEscape, didMake: didMake)
+    }
+}
+
+struct AgentChatBackdropRepresentable: NSViewRepresentable {
     /// Where the wipe is going: open, or closing (Escape is then left alone).
     var shown: Bool
     /// 0: a point at the ✦ (or clear, when fading); 1: open.
@@ -24,11 +47,6 @@ struct AgentChatBackdrop: NSViewRepresentable, Animatable {
     var solid: Bool
     var onEscape: @MainActor () -> Void
     var didMake: @MainActor (AgentChatBackdropView) -> Void = { _ in }
-
-    var animatableData: CGFloat {
-        get { reveal }
-        set { reveal = newValue }
-    }
 
     func makeNSView(context: Context) -> AgentChatBackdropView {
         let view = AgentChatBackdropView()
