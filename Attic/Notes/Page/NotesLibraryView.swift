@@ -713,11 +713,9 @@ private struct PreparedNotesLibraryRow: View, Equatable {
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        MainActor.assumeIsolated {
-            lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
-                && lhs.row == rhs.row && lhs.isSelected == rhs.isSelected
-                && lhs.isHighlighted == rhs.isHighlighted && lhs.anchors === rhs.anchors
-        }
+        lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
+            && lhs.row == rhs.row && lhs.isSelected == rhs.isSelected
+            && lhs.isHighlighted == rhs.isHighlighted && lhs.anchors === rhs.anchors
     }
 }
 
@@ -745,12 +743,10 @@ private struct PreparedNotesBoardCard: View, Equatable {
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        MainActor.assumeIsolated {
-            lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
-                && lhs.tagFilter == rhs.tagFilter && lhs.row == rhs.row
-                && lhs.isSelected == rhs.isSelected && lhs.isHighlighted == rhs.isHighlighted
-                && lhs.anchors === rhs.anchors
-        }
+        lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
+            && lhs.tagFilter == rhs.tagFilter && lhs.row == rhs.row
+            && lhs.isSelected == rhs.isSelected && lhs.isHighlighted == rhs.isHighlighted
+            && lhs.anchors === rhs.anchors
     }
 }
 

@@ -200,6 +200,30 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertTrue(TasksFileDropDelegate.takes(.attachmentCard))
     }
 
+    #if !ATTIC_GENERATED_TESTS
+    func testNativeFilePromiseWithUnusableFileURLStillStagesItsImage() async throws {
+        let source = try pngFile(named: "Moodboard.png")
+        let native = NSItemProvider()
+        native.suggestedName = "Moodboard"
+        // Native pasteboard bridges can advertise a file URL even when the
+        // usable content arrives through the file promise representation.
+        native.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) {
+            completion in
+            completion(Data("unresolved promise".utf8), nil)
+            return nil
+        }
+        native.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier,
+                                          fileOptions: [], visibility: .all) { completion in
+            completion(source, false, nil)
+            return nil
+        }
+        let staged = try await TaskDroppedFiles.stage([native])
+        defer { staged.discard() }
+        XCTAssertEqual(staged.urls.count, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(staged.urls.first)), try Data(contentsOf: source))
+    }
+    #endif
+
     func testNativeTileMarkerCopiesToAnotherTaskButRejectsSelfAndStaleSources() async throws {
         let (store, _, files) = try makeStore()
         let source = try XCTUnwrap(store.create(title: "Source"))
@@ -243,6 +267,122 @@ final class TaskAttachmentDropTests: XCTestCase {
             // A marker is a lookup key, never authorization to copy an arbitrary file.
         }
     }
+
+    /// SwiftUI can reconstruct an empty NSItemProvider for a native drag,
+    /// while the private attachment ID remains on the drag pasteboard.
+    #if !ATTIC_GENERATED_TESTS
+    func testNativeEmptyProviderBridgeResolvesVerifiedCardMarker() async throws {
+        let (store, _, _) = try makeStore()
+        let source = try XCTUnwrap(store.create(title: "Source"))
+        let destination = try XCTUnwrap(store.create(title: "Destination"))
+        let png = try pngFile(named: "Native.png")
+        _ = await store.attachStagedFiles(to: source.id) { TaskAttachmentStaging(urls: [png]) }
+        let reference = try XCTUnwrap(store.task(withID: source.id)?.attachments.first)
+
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let marker = NSPasteboard.PasteboardType(TaskDropContent.attachmentCardType.identifier)
+        XCTAssertTrue(pasteboard.setData(Data(reference.id.uuidString.utf8), forType: marker))
+        let emptyProvider = NSItemProvider()
+        XCTAssertTrue(emptyProvider.registeredTypeIdentifiers.isEmpty)
+        let sources = try await TaskDroppedAttachmentCards.sources(
+            from: [emptyProvider], in: store, nativePasteboard: pasteboard)
+        let copied = await store.attachCopies(to: destination.id) { sources }
+        XCTAssertEqual(copied?.count, 1)
+        XCTAssertEqual(store.task(withID: source.id)?.attachments.count, 1)
+        XCTAssertEqual(store.task(withID: destination.id)?.attachments.first?.filename, "Native.png")
+
+        // A pasteboard marker is a lookup identifier, never copy authority.
+        let selfCopy = await store.attachCopies(to: source.id) {
+            try await TaskDroppedAttachmentCards.sources(
+                from: [emptyProvider], in: store, nativePasteboard: pasteboard)
+        }
+        XCTAssertNil(selfCopy, "a tile dropped on its owner must not duplicate")
+        do {
+            _ = try await TaskDroppedAttachmentCards.sources(
+                from: [emptyProvider, NSItemProvider()], in: store, nativePasteboard: pasteboard)
+            XCTFail("two empty providers must not resolve to the same attachment")
+        } catch TaskDropError.attachmentUnavailable {
+            // The native marker identifies one tile, not a multi-card drag.
+        }
+
+        for invalid in [nil, Data(UUID().uuidString.utf8), Data("not-a-uuid".utf8)] as [Data?] {
+            pasteboard.clearContents()
+            if let invalid { XCTAssertTrue(pasteboard.setData(invalid, forType: marker)) }
+            do {
+                _ = try await TaskDroppedAttachmentCards.sources(
+                    from: [emptyProvider], in: store, nativePasteboard: pasteboard)
+                XCTFail("a missing, stale or invalid marker must not resolve")
+            } catch TaskDropError.attachmentUnavailable {
+                // Correctly rejected before a copy reservation.
+            }
+        }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setData(Data(reference.id.uuidString.utf8), forType: marker))
+        do {
+            _ = try await TaskDroppedAttachmentCards.sources(
+                from: [NSItemProvider(object: "plain text" as NSString)], in: store, nativePasteboard: pasteboard)
+            XCTFail("the native marker must not override an unrelated provider")
+        } catch TaskDropError.unsupported {
+            // Only the empty native bridge may consult the native pasteboard.
+        }
+        XCTAssertEqual(store.task(withID: source.id)?.attachments.count, 1)
+        XCTAssertEqual(store.task(withID: destination.id)?.attachments.count, 1)
+    }
+
+    func testNativeDropCapturesCardMarkerBeforeAsyncImport() async throws {
+        let (store, _, _) = try makeStore()
+        let source = try XCTUnwrap(store.create(title: "Source"))
+        let destination = try XCTUnwrap(store.create(title: "Destination"))
+        _ = await store.attachStagedFiles(to: source.id) { [self] in
+            TaskAttachmentStaging(urls: [try pngFile(named: "Captured.png")])
+        }
+        let reference = try XCTUnwrap(store.task(withID: source.id)?.attachments.first)
+
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let markerType = NSPasteboard.PasteboardType(TaskDropContent.attachmentCardType.identifier)
+        XCTAssertTrue(pasteboard.setData(Data(reference.id.uuidString.utf8), forType: markerType))
+        let nativeFile = providedFile(try pngFile(named: "Promised.png"), type: .png, suggestedName: "Promised")
+        func classifies(_ types: [UTType], nativeMarker: Bool) -> TaskDropContent {
+            TaskDropContent.classify({ wanted in
+                types.contains { type in wanted.contains { type.conforms(to: $0) } }
+            }, nativeAttachmentMarker: nativeMarker)
+        }
+        XCTAssertEqual(classifies([.png], nativeMarker: false), .files)
+        XCTAssertEqual(classifies([.png], nativeMarker: true), .attachmentCard,
+                       "the native marker takes priority over an advertised file promise")
+        XCTAssertEqual(classifies([.utf8PlainText], nativeMarker: true), .unsupported,
+                       "a stale marker must not turn a text drag into an attachment")
+        XCTAssertEqual(classifies([.url], nativeMarker: true), .unsupported,
+                       "a link must not turn into an attachment")
+        XCTAssertEqual(classifies([], nativeMarker: true), .attachmentCard,
+                       "the native bridge may lose every declared provider type")
+        XCTAssertEqual(classifies([TaskDragPayload.internalTaskType, .png], nativeMarker: true), .task,
+                       "task reordering retains priority over attachment copying")
+        let textProvider = NSItemProvider(object: "Text only" as NSString)
+        let untouched = TaskDropContent.attachmentCardProviders([textProvider], nativePasteboard: pasteboard)
+        XCTAssertTrue(untouched.first === textProvider,
+                      "a private marker cannot override an unrelated text provider")
+        XCTAssertEqual(TaskDropContent.attachmentCardProviders([NSItemProvider()], nativePasteboard: pasteboard).count, 1)
+        let recovered = TaskDropContent.attachmentCardProviders([nativeFile], nativePasteboard: pasteboard)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertTrue(try XCTUnwrap(recovered.first).hasItemConformingToTypeIdentifier(
+            TaskDropContent.attachmentCardType.identifier))
+
+        // performDrop returns and the native pasteboard disappears before
+        // the async copy reservation reads the reconstructed provider.
+        pasteboard.clearContents()
+        let sources = try await TaskDroppedAttachmentCards.sources(
+            from: recovered, in: store, nativePasteboard: pasteboard)
+        let copies = await store.attachCopies(to: destination.id) { sources }
+        XCTAssertEqual(copies?.count, 1)
+        XCTAssertEqual(store.task(withID: destination.id)?.attachments.first?.filename, "Captured.png")
+        XCTAssertEqual(store.task(withID: source.id)?.attachments.count, 1)
+        XCTAssertTrue(TaskDropContent.attachmentCardProviders([], nativePasteboard: pasteboard).isEmpty,
+                      "a missing marker cannot invent an attachment provider")
+    }
+    #endif
 
     // MARK: - R4 staging
 

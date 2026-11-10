@@ -113,6 +113,18 @@ final class NotesV2ChromeTests: XCTestCase {
 
     // MARK: The root fills its window, whatever its content asks
 
+    #if DEBUG
+    func testRootPlacementRecorderWorksFromAsyncDisplayLinkThread() {
+        let done = expectation(description: "layout recorder returns from background")
+        DispatchQueue.global(qos: .userInitiated).async {
+            PanelRootLayout.recordPlacedSize(CGSize(width: 327, height: 515))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(PanelRootLayout.lastPlacedSize, CGSize(width: 327, height: 515))
+    }
+    #endif
+
     func testRootLayoutPlacesOverwideContentAtTheWindowsSizeFromItsOrigin() throws {
         for width in [320, 360, 380, 341.5] as [CGFloat] {
             let host = NSHostingView(rootView: PanelRootLayout {

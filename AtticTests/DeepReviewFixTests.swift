@@ -285,6 +285,33 @@ final class DeepReviewFixTests: XCTestCase {
 
     // MARK: - P2-04: a visible keyboard focus at every Tab stop
 
+    #if !ATTIC_GENERATED_TESTS
+    /// The native token editor consumes Tab itself, before a SwiftUI page
+    /// handler can run. Leaving the add bar must wrap to the first visible
+    /// task, even in a nonactivating panel with an incomplete AppKit key loop.
+    func testNativeAddBarTabCyclesToFirstTaskWithoutAppKitKeyLoop() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.spin(0.4)
+        let first = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
+        func findEditor(in view: NSView) -> AtticTokenTextView? {
+            if let editor = view as? AtticTokenTextView { return editor }
+            return view.subviews.lazy.compactMap { findEditor(in: $0) }.first
+        }
+        let editor = try XCTUnwrap(hosted.window.contentView.flatMap { findEditor(in: $0) },
+                                   "the add bar contains its native token editor")
+        XCTAssertTrue(hosted.window.makeFirstResponder(editor))
+        XCTAssertTrue(hosted.focus.addBar)
+        editor.insertTab(nil)
+        hosted.spin(0.4)
+        XCTAssertTrue(hosted.window.isVisible, "native Tab must leave the panel onscreen")
+        XCTAssertFalse(hosted.focus.addBar)
+        XCTAssertEqual(hosted.pointer.keyboardRow?.id, first,
+                       "the native field hands Tab to the page's visible row order")
+    }
+    #endif
+
     /// Tab through the page: every task row Tab reaches is drawn as the
     /// keyboard's row (its ring on the highlight's edge), and only rows of
     /// the page shown are reached. Neither held: a lazy list's cell read

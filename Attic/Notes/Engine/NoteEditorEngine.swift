@@ -2732,7 +2732,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Pasteboard
 
-    static let fragmentType = NSPasteboard.PasteboardType("com.taha.attic.note-fragment")
+    nonisolated static let fragmentType = NSPasteboard.PasteboardType("com.taha.attic.note-fragment")
 
     func fragment(for range: NSRange) -> NoteDocument {
         var fragment = NoteTextCodec.document(from: textStorage.attributedSubstring(from: range),
