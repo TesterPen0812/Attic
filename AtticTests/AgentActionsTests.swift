@@ -133,6 +133,54 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertNotNil(handler.runChangeSet(token: token))
     }
 
+    func testApprovalWordsNameActualTargetsForEveryToolThatCanPrompt() async throws {
+        let f = try fixture()
+        let id = UUID()
+        let context = ModelContext(f.store.container)
+        context.insert(TaskItem(id: id, title: "Send the invoice"))
+        try context.save()
+        f.store.refresh()
+        let request = f.actions.beginRequest(title: "Review changes")
+        let deletion = try approval(await f.actions.call(name: "delete_task",
+            arguments: ["id": id.uuidString], watching: true, requestID: request))
+        XCTAssertEqual(deletion.title, "Delete Send the invoice?")
+        XCTAssertEqual(deletion.targets.map(\.title), ["Send the invoice"])
+        XCTAssertNil(f.store.task(withID: id)?.deletedAt)
+
+        let calendar = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Dentist", "start": iso(Date(timeIntervalSince1970: 1_793_361_600)),
+            "calendar_id": "home"
+        ], watching: true, requestID: request))
+        XCTAssertEqual(calendar.title, "Add Dentist to Calendar?")
+        XCTAssertEqual(calendar.targets.map(\.title), ["Dentist"])
+        XCTAssertTrue(f.backend.events.isEmpty)
+
+        let first = AgentTarget(page: .tasks, itemID: UUID(), title: "Pay rent")
+        let second = AgentTarget(page: .tasks, itemID: UUID(), title: "Book dentist")
+        let batch = [first, second]
+        XCTAssertEqual(AgentApprovalWords.title("delete_task", arguments: [:], targets: batch), "Delete 2 tasks?")
+        XCTAssertEqual(batch.compactMap(\.title), ["Pay rent", "Book dentist"])
+        XCTAssertEqual(AgentApprovalWords.title("delete_item", arguments: ["kind": "canvas"],
+                                                targets: [AgentTarget(page: .draw, title: "A"),
+                                                          AgentTarget(page: .draw, title: "B")]),
+                       "Delete 2 canvases?")
+        for (name, args, target, expected) in [
+            ("delete_note", [:], AgentTarget(page: .notes, title: "My plan"), "Delete My plan?"),
+            ("delete_item", ["kind": "canvas"], AgentTarget(page: .draw, title: "Launch"), "Delete Launch?"),
+            ("make_note_checkbox", [:], first, "Move Pay rent into its note?"),
+            ("remove_from_tasks", [:], first, "Move Pay rent into Notes?"),
+            ("calendar_update", [:], AgentTarget(page: .calendar, title: "Dentist"), "Change Dentist in Calendar?"),
+            ("calendar_delete", [:], AgentTarget(page: .calendar, title: "Dentist"), "Delete Dentist from Calendar?")
+        ] as [(String, [String: String], AgentTarget, String)] {
+            XCTAssertTrue(AgentActionApprovalPolicy.requiresApproval(name, arguments: args), name)
+            XCTAssertEqual(AgentApprovalWords.title(name, arguments: args, targets: [target]), expected)
+        }
+        let tableArgs: [String: Any] = ["operations": [["op": "delete_row"], ["op": "delete_row"]]]
+        XCTAssertTrue(AgentActionApprovalPolicy.requiresApproval("update_note_table", arguments: tableArgs))
+        XCTAssertEqual(AgentApprovalWords.title("update_note_table", arguments: tableArgs,
+                                                targets: [.init(page: .notes, title: "My plan")]),
+                       "Delete 2 rows from My plan?")
+    }
     #endif
 
     func testDefinitionsAreClosedAndApprovalPolicyIsCodeEnforced() throws {

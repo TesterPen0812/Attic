@@ -45,6 +45,41 @@ enum AgentActionApprovalPolicy {
     }
 }
 
+/// The owner sees the intended effect and the resolved item titles, never an
+/// internal MCP tool name. The approval card lists every named target below it.
+enum AgentApprovalWords {
+    static func title(_ name: String, arguments: [String: Any], targets: [AgentTarget]) -> String {
+        let names = targets.compactMap(\.title).filter { !$0.isEmpty }
+        let subject = names.first ?? (arguments["_resolved_title"] as? String)
+            ?? (arguments["title"] as? String)
+        let count = targets.count
+        func phrase(_ verb: String, _ kind: String) -> String {
+            if count > 1 { return "\(verb) \(count) \(kind == "canvas" ? "canvases" : "\(kind)s")?" }
+            return "\(verb) \(subject ?? "this \(kind)")?"
+        }
+        switch name {
+        case "delete_task": return phrase("Delete", "task")
+        case "delete_note": return phrase("Delete", "note")
+        case "delete_item":
+            let kind = (arguments["kind"] as? String) ?? "item"
+            return phrase("Delete", kind)
+        case "make_note_checkbox": return "Move \(subject ?? "this subtask") into its note?"
+        case "remove_from_tasks": return "Move \(subject ?? "this task") into Notes?"
+        case "calendar_create": return "Add \(subject ?? "this event") to Calendar?"
+        case "calendar_update": return "Change \(subject ?? "this event") in Calendar?"
+        case "calendar_delete": return "Delete \(subject ?? "this event") from Calendar?"
+        case "update_note_table":
+            let deletions = (arguments["operations"] as? [[String: Any]] ?? [])
+                .compactMap { $0["op"] as? String }.filter { $0.hasPrefix("delete_") }
+            let kind = Set(deletions.map { String($0.dropFirst("delete_".count)) })
+            let what = kind.count == 1 ? kind.first!.replacingOccurrences(of: "_", with: " ") : "table part"
+            let quantity = deletions.count == 1 ? "a \(what)" : "\(deletions.count) \(what)s"
+            return "Delete \(quantity) from \(subject ?? "this note")?"
+        default: return "Approve change to \(subject ?? "this item")?"
+        }
+    }
+}
+
 @MainActor
 final class AgentActions {
     let tasks: AgentTaskTools
@@ -169,7 +204,9 @@ final class AgentActions {
         if requestModes[requestID] != .auto && AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
             let id = UUID()
             let targets = targetsForArguments(name, prepared)
-            let approval = AgentApproval(id: id, title: "Allow \(name.replacingOccurrences(of: "_", with: " "))?", targets: targets)
+            let approval = AgentApproval(id: id,
+                                         title: AgentApprovalWords.title(name, arguments: prepared, targets: targets),
+                                         targets: targets)
             approvals[id] = AwaitingApproval(name: name, arguments: prepared, watching: watching, requestID: requestID)
             return .approvalNeeded(approval)
         }
