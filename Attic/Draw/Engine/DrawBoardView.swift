@@ -1161,11 +1161,24 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
         textContainer?.size = CGSize(width: wrap ?? .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         applying = true
         if replacingText, string != edit.text, !hasMarkedText() {
+            let caret = Self.caretAfterChange(from: string, to: edit.text)
             string = edit.text
-            setSelectedRange(NSRange(location: (edit.text as NSString).length, length: 0))
+            setSelectedRange(NSRange(location: caret, length: 0))
         }
         textStorage?.setAttributes(attributes, range: NSRange(location: 0, length: textStorage?.length ?? 0))
         applying = false
+    }
+
+    /// Undo and Redo replace text from the store. Return to the changed
+    /// grapheme boundary, including for edits before emoji or RTL writing.
+    private static func caretAfterChange(from before: String, to after: String) -> Int {
+        let old = Array(before), new = Array(after)
+        var prefix = 0
+        while prefix < min(old.count, new.count), old[prefix] == new[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(old.count, new.count) - prefix,
+              old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
+        return String(new.dropLast(suffix)).utf16.count
     }
 
     func textDidChange(_ notification: Notification) {
