@@ -45,6 +45,11 @@ final class ScriptedAgentRunner: AgentRunning {
     private var inverses: [Inverse] = []
     private var changedPages: Set<AgentPage> = []
     private var changeCount = 0
+    /// The chat history, kept in memory: what was asked and answered.
+    private var thread: [AgentThreadEntry] = []
+    private var threadID = UUID()
+    private var threadUpdated = Date()
+    private var past: [(summary: AgentChatSummary, entries: [AgentThreadEntry])] = []
 
     init(tools: AgentTaskTools, mode: @escaping () -> AgentChatMode = { .askFirst },
          now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent, pace: Double = 1) {
@@ -59,6 +64,8 @@ final class ScriptedAgentRunner: AgentRunning {
 
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> {
         cancel()
+        thread.append(AgentThreadEntry(id: UUID(), role: "user", text: text))
+        threadUpdated = now()
         isWatching = watching
         inverses = []
         changedPages = []
@@ -92,6 +99,50 @@ final class ScriptedAgentRunner: AgentRunning {
             }
         }
     }
+
+    func threadSnapshot() -> AgentThreadSnapshot {
+        AgentThreadSnapshot(entries: thread, events: [], isRunning: false)
+    }
+
+    func forgetThread() {
+        if let summary = summary { past.append((summary, thread)) }
+        thread = []
+        threadID = UUID()
+    }
+
+    func chats() -> [AgentChatSummary] {
+        (past.map(\.summary) + [summary].compactMap { $0 }).sorted { $0.updated > $1.updated }
+    }
+
+    func reopen(chat id: UUID) -> Bool {
+        if id == threadID { return true }
+        guard output == nil, let index = past.firstIndex(where: { $0.summary.id == id }) else { return false }
+        let chosen = past.remove(at: index)
+        if let summary { past.append((summary, thread)) }
+        thread = chosen.entries
+        threadID = chosen.summary.id
+        threadUpdated = chosen.summary.updated
+        return true
+    }
+
+    private var summary: AgentChatSummary? {
+        guard let first = thread.first(where: { $0.role == "user" }) else { return nil }
+        return AgentChatSummary(id: threadID, title: first.text, updated: threadUpdated)
+    }
+
+    #if DEBUG
+    /// UI-testing seam (`ATTIC_UI_TEST_CHAT=history`): two earlier chats, as
+    /// the design's list has them, so the clock has something to show.
+    func seedHistoryForUITesting() {
+        let day: TimeInterval = 86_400
+        for (title, reply, age) in [("Boiler quotes", "Three quotes so far. The **Friday** one is cheapest.", 6 * day),
+                                    ("Plan the move", "I added **12 tasks** for the move, spread over two weeks.", 22 * day)] {
+            past.append((AgentChatSummary(id: UUID(), title: title, updated: now().addingTimeInterval(-age)),
+                         [AgentThreadEntry(id: UUID(), role: "user", text: title),
+                          AgentThreadEntry(id: UUID(), role: "assistant", text: reply)]))
+        }
+    }
+    #endif
 
     func cancel() {
         run?.cancel()
@@ -406,7 +457,13 @@ final class ScriptedAgentRunner: AgentRunning {
 
     // MARK: Helpers
 
-    private func emit(_ event: AgentEvent) { output?.yield(event) }
+    private func emit(_ event: AgentEvent) {
+        if case let .textDelta(text) = event {
+            if let last = thread.indices.last, thread[last].role == "assistant" { thread[last].text += text }
+            else { thread.append(AgentThreadEntry(id: UUID(), role: "assistant", text: text)) }
+        }
+        output?.yield(event)
+    }
 
     private func wait(_ seconds: TimeInterval) async throws {
         try Task.checkCancellation()

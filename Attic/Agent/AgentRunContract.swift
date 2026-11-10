@@ -56,8 +56,37 @@ enum AgentEvent: Sendable, Equatable {
     case progress(done: Int, total: Int)
     case approvalNeeded(AgentApproval)
     case changes(AgentChangeSet)
+    /// A line for the thread that does not end the run.
+    case notice(String)
     case finished
     case failed(String)
+}
+
+/// A text file the person added to a request with File…: its name and text,
+/// read once when picked. No URL or bookmark is kept.
+struct AgentFileAttachment: Equatable, Sendable {
+    let name: String
+    let text: String
+}
+
+/// What goes with one request besides its text: the page chip (the page and
+/// its open or selected item), the tasks and notes added with Task or note…,
+/// and the files added with File….
+struct AgentRequestContext: Equatable, Sendable {
+    var page: AgentPage?
+    var pageItem: AgentTarget?
+    var items: [AgentTarget] = []
+    var files: [AgentFileAttachment] = []
+
+    static let none = AgentRequestContext()
+    var isEmpty: Bool { page == nil && pageItem == nil && items.isEmpty && files.isEmpty }
+}
+
+/// One saved chat in the history list.
+struct AgentChatSummary: Identifiable, Equatable, Codable, Sendable {
+    let id: UUID
+    var title: String
+    var updated: Date
 }
 
 /// Read-only conversation history, including messages sent before the panel reopened.
@@ -81,6 +110,8 @@ struct AgentThreadSnapshot: Sendable, Equatable {
 @MainActor
 protocol AgentRunning: AnyObject {
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent>
+    /// The request with its context. The text alone is what the thread keeps.
+    func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent>
     func setWatching(_ watching: Bool)
     func setMode(_ mode: AgentChatMode)
     func resolve(approval id: UUID, allow: Bool)
@@ -91,10 +122,20 @@ protocol AgentRunning: AnyObject {
     func threadSnapshot() -> AgentThreadSnapshot
     /// The live backend owns its history and events across view lifetimes.
     var retainsThread: Bool { get }
+    /// Starts a new chat. The current one, if it has a message, is kept in history.
     func forgetThread()
+    /// Saved chats, newest first, the current one included.
+    func chats() -> [AgentChatSummary]
+    /// Makes a saved chat the current one; `threadSnapshot()` then holds it.
+    func reopen(chat id: UUID) -> Bool
 }
 
 extension AgentRunning {
+    func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent> {
+        send(text, watching: watching)
+    }
+    func chats() -> [AgentChatSummary] { [] }
+    func reopen(chat id: UUID) -> Bool { false }
     func setMode(_ mode: AgentChatMode) {}
     // Existing scripted runners and test doubles continue to deliver their
     // events from send(). Only the live backend has a persistent thread.
