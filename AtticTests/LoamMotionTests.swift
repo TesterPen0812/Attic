@@ -57,7 +57,7 @@ final class LoamMotionTests: XCTestCase {
         XCTAssertEqual(AtticPanelChromeMetrics.fold(reduceMotion: false), .timingCurve(0.3, 0.7, 0.2, 1, duration: 0.26))
         XCTAssertEqual(AtticPanelChromeMetrics.curve(0.2), .timingCurve(0.3, 0.7, 0.2, 1, duration: 0.2))
         // The chat's numbers, unchanged.
-        XCTAssertEqual(AtticChatMotion.opening, AgentChatBackdrop.opening.duration)
+        XCTAssertEqual(AtticChatMotion.opening, 0.62)
         XCTAssertEqual(AtticChatMotion.closing, 0.40)
         // Unchanged: the page slide's spring, the sweep, the Reduced fade.
         XCTAssertEqual(AtticMotionTuning.lively.slide, AtticMotionSpring(response: 0.28, bounce: 0.12))
