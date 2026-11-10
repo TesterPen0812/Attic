@@ -160,6 +160,8 @@ final class DrawPageModel: ObservableObject {
     private(set) var contentRevision = 0
     var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
+    /// Last drag modifier for callers that finish an input without an event.
+    var lastPointerShift = false
     private(set) var editing: DrawTextEdit?
     private(set) var isShown = false
     var spaceHeld = false
@@ -805,7 +807,9 @@ final class DrawPageModel: ObservableObject {
     func arrange(toFront: Bool) {
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
-        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count)
+        // Pre-increment below: leave every chosen object's z below the
+        // previous bottom, so UUID tie-breaking cannot leave one in front.
+        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count) - 1
         let moved = chosen.map { object -> DrawObject in
             z += 1
             var copy = object

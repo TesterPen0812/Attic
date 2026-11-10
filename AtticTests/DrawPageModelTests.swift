@@ -288,6 +288,36 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(b.x, 60, accuracy: 0.01)
     }
 
+    func testShiftConstrainedShapeCommitsTheGeometryShownBeforeMouseUp() throws {
+        model.pickShape(.rectangle)
+        let end = CGPoint(x: 160, y: 260)
+        model.pointerDown(at: CGPoint(x: 60, y: 200))
+        model.pointerDragged(to: end, shift: true)
+        guard case .shape(_, let start, let previewEnd) = model.live else { return XCTFail("Missing shape preview") }
+        let preview = DrawGeometry.boxFrame(from: start, to: previewEnd)
+        XCTAssertEqual(preview.width, preview.height, accuracy: 0.01)
+        model.pointerUp(at: end)
+        let saved = try XCTUnwrap(stored.first)
+        XCTAssertEqual(saved.frame, preview, "Mouse-up must preserve Shift-constrained geometry")
+    }
+
+    func testShiftConstrainedResizeCommitsTheGeometryShownBeforeMouseUp() throws {
+        let rectangle = DrawObject(frame: DrawFrame(x: 60, y: 140, width: 90, height: 50),
+                                   content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([rectangle])).isSaved)
+        model.setTool(.select)
+        model.select([rectangle.id])
+        let corner = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        let end = CGPoint(x: corner.point.x + 80, y: corner.point.y + 10)
+        model.pointerDown(at: corner.point)
+        model.pointerDragged(to: end, shift: true)
+        guard case .resize(let preview) = model.live else { return XCTFail("Missing resize preview") }
+        let expected = try XCTUnwrap(preview.current.first)
+        XCTAssertNotEqual(expected.frame, rectangle.frame)
+        model.pointerUp(at: end)
+        XCTAssertEqual(stored.first, expected, "Mouse-up must preserve Shift-constrained resize")
+    }
+
     // MARK: Strips (Shape, D1, D2) and D3
 
     func testShapeWidensInPlaceAndEscapeFoldsIt() {
@@ -430,6 +460,52 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.count, 2)
         XCTAssertTrue(key("v", command: true))
         XCTAssertEqual(stored.count, 4)
+    }
+
+    func testSendToBackPutsEverySelectedObjectBehindUnselectedAndUndoesTogether() {
+        let bottom = DrawObject(zIndex: 1, content: .shape(.rectangle))
+        let middle = DrawObject(zIndex: 2, content: .shape(.ellipse))
+        let front = DrawObject(zIndex: 3, content: .shape(.arrow))
+        let top = DrawObject(zIndex: 4, content: .shape(.line))
+        XCTAssertTrue(model.perform(.put([bottom, middle, front, top])).isSaved)
+        model.select([front.id, top.id])
+        model.runMore(.sendToBack)
+
+        XCTAssertEqual(stored.map(\.id), [front.id, top.id, bottom.id, middle.id],
+                       "Both selected objects must move behind the old bottom, without a z-index tie")
+        XCTAssertEqual(stored.count, 4)
+        model.undo()
+        XCTAssertEqual(stored, [bottom, middle, front, top], "The group reorder is one Undo step")
+        model.redo()
+        XCTAssertEqual(stored.map(\.id), [front.id, top.id, bottom.id, middle.id])
+    }
+
+    func testMovingSelectedStrokeAndShapeTracksHandlesAndSavesOnlyOnRelease() throws {
+        let points = (0..<3000).map { DrawPoint(x: 180 + Double($0) / 15, y: 300 + sin(Double($0) / 10) * 15) }
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: 1, content: .stroke(points))
+        let shape = DrawObject(frame: DrawFrame(x: 70, y: 140, width: 55, height: 30),
+                               zIndex: 2, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([stroke, shape])).isSaved)
+        model.setViewport(DrawViewport(x: 0, y: 0, zoom: 1), byUser: true)
+        model.setTool(.select)
+        model.select([stroke.id, shape.id])
+        let before = model.handleSpots
+        let original = stored
+        let delta = CGPoint(x: 23, y: 16)
+        model.pointerDown(at: CGPoint(x: 90, y: 155))
+        model.pointerDragged(to: CGPoint(x: 90 + delta.x, y: 155 + delta.y))
+        guard case .move = model.live else { return XCTFail("Expected a live selection move") }
+        XCTAssertEqual(stored, original, "A live drag does not persist intermediate frames")
+        for (first, current) in zip(before, model.handleSpots) {
+            XCTAssertEqual(first.handle, current.handle)
+            XCTAssertEqual(current.point.x, first.point.x + delta.x, accuracy: 0.01)
+            XCTAssertEqual(current.point.y, first.point.y + delta.y, accuracy: 0.01)
+        }
+        model.pointerUp()
+        XCTAssertEqual(model.object(shape.id)?.frame.x, shape.frame.x + Double(delta.x))
+        XCTAssertEqual(model.object(stroke.id)?.frame.x, stroke.frame.x + Double(delta.x))
+        model.undo()
+        XCTAssertEqual(stored, original, "Both objects move and undo in one save")
     }
 
     func testInkEraseColourAndWidthUndoRedoThirtyStepsExactly() {

@@ -135,9 +135,10 @@ final class DrawBoardViewTests: XCTestCase {
     }
 
     /// Board points are y-down; AppKit's view points are y-up.
-    private func mouse(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1) -> NSEvent {
+    private func mouse(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1,
+                       flags: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: board.bounds.height - point.y),
-                           modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                           modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
                            context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
     }
 
@@ -381,6 +382,31 @@ final class DrawBoardViewTests: XCTestCase {
             XCTAssertEqual(font.pointSize, pointSize * zoom, accuracy: 0.01, "The live editor follows every zoom change")
             XCTAssertEqual(editor.string, "Zoom")
         }
+    }
+
+    func testBoardMouseUpRetainsShiftConstraintForShapeAndResize() throws {
+        model.pickShape(.rectangle)
+        let from = CGPoint(x: 60, y: 110), to = CGPoint(x: 145, y: 138)
+        board.mouseDown(with: mouse(.leftMouseDown, from))
+        board.mouseDragged(with: mouse(.leftMouseDragged, to, flags: [.shift]))
+        guard case .shape(_, let start, let end) = model.live else { return XCTFail("No constrained shape preview") }
+        let previewFrame = DrawGeometry.boxFrame(from: start, to: end)
+        XCTAssertEqual(previewFrame.width, previewFrame.height, accuracy: 0.01)
+        board.mouseUp(with: mouse(.leftMouseUp, to, flags: [.shift]))
+        let object = try XCTUnwrap(model.objects.first)
+        XCTAssertEqual(object.frame, previewFrame)
+
+        model.select([object.id])
+        let handle = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        let resizeEnd = CGPoint(x: handle.point.x + 75, y: handle.point.y + 12)
+        board.mouseDown(with: mouse(.leftMouseDown, handle.point))
+        board.mouseDragged(with: mouse(.leftMouseDragged, resizeEnd, flags: [.shift]))
+        guard case .resize(let preview) = model.live else { return XCTFail("No constrained resize preview") }
+        let resized = try XCTUnwrap(preview.current.first)
+        board.mouseUp(with: mouse(.leftMouseUp, resizeEnd, flags: [.shift]))
+        XCTAssertEqual(model.objects.first, resized)
+        model.undo()
+        XCTAssertEqual(model.objects.first, object, "Resizing takes one Undo step")
     }
 
     func testNothingRendersWhileHidden() {

@@ -67,6 +67,7 @@ extension DrawPageModel {
 
     func pointerDown(at screen: CGPoint, shift: Bool = false, panButton: Bool = false, pressure: CGFloat? = nil) {
         guard canvasID != nil else { return }
+        lastPointerShift = shift
         if isFiltering { closeFilter(); return }
         if editing != nil { endEditing(); return }
         if isSelectionStyleOpen { isSelectionStyleOpen = false; return }
@@ -117,6 +118,7 @@ extension DrawPageModel {
 
     func pointerDragged(to screen: CGPoint, shift: Bool = false, pressure: CGFloat? = nil) {
         guard let live else { return }
+        lastPointerShift = shift
         let world = viewport.world(screen)
         switch live {
         case .pan(let start, let from):
@@ -155,8 +157,8 @@ extension DrawPageModel {
         }
     }
 
-    func pointerUp(at screen: CGPoint? = nil, pressure: CGFloat? = nil) {
-        if let screen { pointerDragged(to: screen, pressure: pressure) }
+    func pointerUp(at screen: CGPoint? = nil, shift: Bool? = nil, pressure: CGFloat? = nil) {
+        if let screen { pointerDragged(to: screen, shift: shift ?? lastPointerShift, pressure: pressure) }
         finishLiveInput()
     }
 
