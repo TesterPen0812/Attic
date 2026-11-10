@@ -666,7 +666,11 @@ final class TasksPageUITests: XCTestCase {
                 stop = "+"
             } else {
                 let after = try windowBitmap()
-                let lit = titles.indices.filter { changedPixels(before, after, in: rows[$0], excluding: nil) > 30 }
+                // The panel is translucent above a moving desktop. A pixel
+                // *difference* from the first screenshot also counts the
+                // moving wallpaper as extra rings. Look for the actual thin,
+                // contrasting strokes on both edges in this one frame.
+                let lit = titles.indices.filter { focusRingStrokePixels(after, in: rows[$0]) > 30 }
                 XCTAssertLessThanOrEqual(lit.count, 1, "one ring at a time (\(lit.map { titles[$0] }))")
                 if let index = lit.first {
                     stop = titles[index]
@@ -686,6 +690,37 @@ final class TasksPageUITests: XCTestCase {
 
     private func windowBitmap() throws -> NSBitmapImageRep {
         try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    }
+
+    /// Count points with a 1 pt ring stroke on *both* long edges, comparing
+    /// their contrast with the same frame's inside and outside pixels.
+    /// This detects two visible rings but ignores a changing glass backdrop,
+    /// title glyphs, hover fills and controls in a row's interior.
+    private func focusRingStrokePixels(_ image: NSBitmapImageRep, in row: CGRect) -> Int {
+        let scale = CGFloat(image.pixelsWide) / window.frame.width
+        let middle = row.insetBy(dx: 24, dy: 0)
+        func brightness(_ x: Int, _ y: CGFloat) -> CGFloat? {
+            let py = Int((y * scale).rounded())
+            guard x >= 0, x < image.pixelsWide, py >= 0, py < image.pixelsHigh,
+                  let c = image.colorAt(x: x, y: py)?.usingColorSpace(.sRGB) else { return nil }
+            return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        }
+        func strokeCount(at edge: CGFloat, inside: CGFloat) -> Int {
+            var count = 0
+            for x in stride(from: Int(middle.minX * scale), to: Int(middle.maxX * scale), by: 2) {
+                guard let inner = brightness(x, edge + inside * 8),
+                      let outer = brightness(x, edge - inside * 6) else { continue }
+                let hasStroke = stride(from: -4.0, through: 4.0, by: 0.5).contains { offset in
+                    guard let ink = brightness(x, edge + CGFloat(offset)) else { return false }
+                    let fromInner = ink - inner, fromOuter = ink - outer
+                    return abs(fromInner) > 0.19 && abs(fromOuter) > 0.19
+                        && fromInner * fromOuter > 0
+                }
+                if hasStroke { count += 1 }
+            }
+            return count
+        }
+        return min(strokeCount(at: row.minY, inside: 1), strokeCount(at: row.maxY, inside: -1))
     }
 
     /// How many sampled pixels (every other one) differ inside `rect`
@@ -1001,14 +1036,16 @@ final class TasksPageUITests: XCTestCase {
         due.click()
         let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
+        let original = label("Book dentist")
+        XCTAssertTrue(original.contains(", later") && original.contains("due Tomorrow"),
+                      "the Backlog row starts put off with its date: \(original)")
         pressRowKeys()
         XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")
-        let spoken = label("Book dentist")
-        XCTAssertTrue(spoken.contains(", to do"), "not completed or started: \(spoken)")
-        XCTAssertTrue(spoken.contains("due Tomorrow"), "its date is as it was: \(spoken)")
+        XCTAssertEqual(label("Book dentist"), original,
+                       "Backspace, forward delete, Space, ⇧Space and ⌘B cannot change a row behind the picker")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(!remove.exists, "Esc closes the picker")
-        XCTAssertTrue(self.row("Book dentist").exists, "still on Now")
+        XCTAssertEqual(label("Book dentist"), original, "Esc returns to the unchanged Backlog row")
     }
 
     /// Round 5: the add bar's suggestion list keeps the keys in the draft.
@@ -1128,7 +1165,9 @@ final class TasksPageUITests: XCTestCase {
         // Accepted 2026-10-29 "Tasks: Later is the backlog": Now has no
         // Completed today disclosure. Click between its last No date row
         // and the add bar (the standalone preview's own bottom control).
-        let gapTop = row("Call the plumber").frame.maxY, gapBottom = addBar.frame.minY
+        let plus = window.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 3), "the bottom '+' marks the list's empty space")
+        let gapTop = row("Call the plumber").frame.maxY, gapBottom = plus.frame.minY
         XCTAssertGreaterThan(gapBottom - gapTop, 40, "the demo list leaves space under its last line")
         window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: window.frame.width / 2, dy: (gapTop + gapBottom) / 2 - window.frame.minY)).click()

@@ -52,8 +52,13 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertTrue(image.waitForExistence(timeout: 5))
         let destination = row("Ship appearance PR")
         XCTAssertTrue(destination.waitForExistence(timeout: 5))
+        let dragOut = app.descendants(matching: .any).matching(identifier: "tasks-drag-out-state").firstMatch
+        XCTAssertTrue(dragOut.waitForExistence(timeout: 3), "the page reports row drag-out sessions")
+        let beforeDragOut = dragOut.value as? String
         image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.3, thenDragTo: destination.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
+        XCTAssertEqual(dragOut.value as? String, beforeDragOut,
+                       "a file tile's native drag must not turn into its parent task's drag-out")
         waitFor(app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "task-attachment-tile-", "Moodboard.png"
         )).count == 2,

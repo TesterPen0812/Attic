@@ -59,12 +59,15 @@ struct TaskAttachmentDragItem: Sendable {
             }
             return nil
         }
-        // Lets Attic's own task drop targets recognize and refuse the card,
-        // so releasing it over its panel never re-imports it. Registered after
-        // the file (lower fidelity) and visible only to this process.
+        // Lets Attic's own task drop targets recognize and copy the card.
+        // The native drag pasteboard crosses an item-provider bridge; a
+        // `.ownProcess` representation can disappear there and leave only
+        // a file promise, so use `.all`. The UUID is still resolved and
+        // verified against Attic's live store before a copy is allowed.
+        // Registered after the file so external receivers prefer the file.
         provider.registerDataRepresentation(
             forTypeIdentifier: TaskDropContent.attachmentCardType.identifier,
-            visibility: .ownProcess
+            visibility: .all
         ) { completion in
             completion(Data(item.reference.id.uuidString.utf8), nil)
             return nil

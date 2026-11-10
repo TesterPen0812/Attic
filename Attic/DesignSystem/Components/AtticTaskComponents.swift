@@ -1556,10 +1556,10 @@ struct AtticTaskRow: View {
         }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)
-        // While editing, the title field is reachable. When the row has
-        // attachment tiles, its individual file drag targets also remain
-        // reachable; the row still supplies its own spoken description.
-        .accessibilityElement(children: titleEditing == nil && !hasTiles ? .combine : .contain)
+        // Keep interactive descendants in the accessibility tree: the date
+        // is a real button on Backlog rows, just as attachment tiles are
+        // individual drag targets. The row retains its spoken description.
+        .accessibilityElement(children: titleEditing == nil && !hasTiles && !(meta != nil && model.trailingDue != nil) ? .combine : .contain)
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityAction { actions.openPage() }
