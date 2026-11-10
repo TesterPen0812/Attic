@@ -13,6 +13,82 @@ import XCTest
 @MainActor
 final class PanelIntegrationTests: XCTestCase {
 
+    #if !ATTIC_GENERATED_TESTS
+    func testScreen9NotesLibraryEscapeLeavesTheOpenComposerInCharge() async throws {
+        var keys: NotesLibraryKeys?
+        NotesLibraryView.lifetimeProbe = { keys = $0 }
+        defer { NotesLibraryView.lifetimeProbe = nil }
+
+        let panel = try makePanel()
+        guard case .success = panel.notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Saved note")])) else {
+            return XCTFail("seed a saved note so Notes opens its library")
+        }
+        await panel.noteDraft.pages.startAndWait()
+        XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: true), .shown)
+        let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
+        func descendants(_ view: AnyObject) -> [AnyObject] {
+            [view] + ((view.accessibilityChildren?() ?? nil) ?? []).flatMap { descendants($0 as AnyObject) }
+        }
+        func element(_ id: String) -> AnyObject? {
+            descendants(root).first { ($0.accessibilityIdentifier?() ?? "") == id }
+        }
+        spin(until: { keys?.handler != nil && element("notes-new-note") != nil })
+        XCTAssertTrue(try XCTUnwrap(element("notes-new-note")).accessibilityPerformPress?() ?? false)
+        spin(until: { element("composer-title") != nil })
+        XCTAssertNotNil(element("composer-title"), "Notes opens the shared + composer")
+
+        // The creation Undo notice shares the window with this draft; it
+        // must not give Notes' library permission to consume Escape.
+        panel.controller.toasts.show("Added to Notes", answersUndoKey: false, action: {})
+        XCTAssertEqual(panel.controller.toasts.current?.message, "Added to Notes")
+
+        let window = panel.controller.panelForTesting
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        XCTAssertFalse(try XCTUnwrap(keys?.handler)(escape), "the library must let Escape reach the open composer")
+        XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented, "Escape must not open a ghost Title editor")
+        window.onUnhandledEscape?()
+        spin(until: { element("composer-title") == nil })
+        XCTAssertNil(element("composer-title"), "Escape folds the composer")
+    }
+
+    func testScreen9OutgoingTasksStayDrawnUntilThePageSlideEnds() throws {
+        let panel = try makePanel()
+        let model = TasksPageModel(library: AtticLibrary(tasks: panel.store))
+        let transit = PanelPageTransit()
+        transit.departingPage = .tasks
+        transit.sliding = true
+        model.isPageShown = false // The outgoing page is no longer interactive.
+        var pageVisible = false
+        let pager = TasksPagerPages(
+            span: model.pagerSwipe.span, model: model, store: panel.store,
+            motion: model.pagerSwipe.motion, count: 3, shown: 0,
+            size: CGSize(width: 300, height: 200),
+            page: { index, drawn in
+                Text(drawn ? "Drawing" : "Quiet")
+                    .onAppear { if index == 0 { pageVisible = drawn } }
+                    .onChange(of: drawn) { _, current in if index == 0 { pageVisible = current } }
+                    .onDisappear { if index == 0 { pageVisible = false } }
+            },
+            token: { model.pageToken(TasksTab.allCases[$0]) }
+        )
+        let host = NSHostingView(rootView: pager.environment(\.panelPageTransit, transit))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 300, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        XCTAssertTrue(pageVisible, "outgoing Tasks rows must continue drawing while the page travels")
+        transit.sliding = false
+        spin(0.1)
+        XCTAssertFalse(pageVisible, "after the slide, the retained Tasks page returns to its quiet state")
+    }
+    #endif
+
     func testR01UnrelatedSettingDoesNotReevaluateRetainedHosts() throws {
         #if ATTIC_LOCAL_ONLY
         var counts = [0, 0, 0]

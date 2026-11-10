@@ -122,10 +122,15 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
         private func composerRoomChanged(open: Bool) {
             guard drawn, let scroll = enclosingScrollView else { return }
-            let atEnd = scroll.contentView.bounds.origin.y >= TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll) - 1
+            let end = TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll)
+            let top = TasksScrollKeeper.clampedOriginY(-.greatestFiniteMagnitude, in: scroll)
+            let atEnd = scroll.contentView.bounds.origin.y >= end - 1
             if open {
                 roomLift = 0
-                guard atEnd else { return }
+                // A short list is at both the top and the end. Opening the
+                // card makes it scrollable, but must not lift its heading
+                // behind the panel's fixed top row.
+                guard atEnd, end > top + 1 else { return }
                 // Once the list has its new end room (the same turn's update).
                 DispatchQueue.main.async { [weak self] in
                     guard let self, let scroll = self.enclosingScrollView, self.composerRoom?.isOpen == true else { return }

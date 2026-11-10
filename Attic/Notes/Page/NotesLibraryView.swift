@@ -38,6 +38,7 @@ struct NotesLibraryView: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+    @Environment(\.panelComposer) private var panelComposer
     /// The search field's keyboard, as the top row's field reports it.
     private var fieldFocused: Bool {
         get { searchFocused }
@@ -254,6 +255,9 @@ struct NotesLibraryView: View {
         case .passThrough:
             return false
         case .escape:
+            // The shared composer owns Escape while open, including while a
+            // "Added to Notes · Undo" notice is visible above the library.
+            if panelComposer?.isOpen() == true { return false }
             if Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query) { endSearch() } else { onBack() }
         case .find:
             beginSearch()

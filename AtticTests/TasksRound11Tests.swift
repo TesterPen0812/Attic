@@ -9,6 +9,45 @@ import XCTest
 /// pager's settle steps on a clock and ends; motion presets stay crisp.
 @MainActor
 final class TasksRound11Tests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testScreen9OpeningComposerCannotScrollAShortListUnderTheHeader() throws {
+        let previousMotion = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previousMotion }
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 320, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 300))
+        scroll.hasVerticalScroller = true
+        scroll.contentView.contentInsets = NSEdgeInsets(top: 60, left: 0, bottom: 20, right: 0)
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        let keeper = TasksScrollKeeper.KeeperView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        document.addSubview(keeper)
+        scroll.documentView = document
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertTrue(keeper.enclosingScrollView === scroll, "the keeper must observe the real scroll view")
+
+        // With just a heading and a few rows there is no scrollable content.
+        // Extra *bottom* clearance from the card must not push the heading past the top inset.
+        let top = TasksScrollKeeper.clampedOriginY(-.greatestFiniteMagnitude, in: scroll)
+        XCTAssertEqual(TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll), top, accuracy: 1)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: top))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let room = PanelComposerRoom()
+        keeper.composerRoom = room
+        room.set(height: 240, open: true)
+        document.setFrameSize(CGSize(width: 300, height: 400))
+        scroll.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertGreaterThan(TasksScrollKeeper.clampedOriginY(.greatestFiniteMagnitude, in: scroll), top + 50,
+                             "the open card creates real scroll room below the list")
+        XCTAssertEqual(scroll.contentView.bounds.minY, top, accuracy: 1,
+                       "a short list's Today heading must stay below the header when the card opens")
+    }
+    #endif
     private func content(_ hosted: Hosted) -> NSView { hosted.window.contentView ?? NSView() }
 
     /// The pages' lists (the add bar's field has a scroll view too).

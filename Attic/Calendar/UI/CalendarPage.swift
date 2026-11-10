@@ -84,6 +84,11 @@ struct CalendarPage: View {
             model.setVisible(isReallyVisible)
             // A retained, prewarmed Calendar is mounted but not the shown page.
             if isReallyVisible { model.pageAppeared() }
+            #if DEBUG
+            if isReallyVisible, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
+                model.setDayView(true)
+            }
+            #endif
             model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
                 guard let library else { return }
                 toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
@@ -92,6 +97,11 @@ struct CalendarPage: View {
         .onChange(of: isReallyVisible) { _, current in
             model.setVisible(current)
             if current { model.pageAppeared() }
+            #if DEBUG
+            if current, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
+                model.setDayView(true)
+            }
+            #endif
         }
         .onDisappear { model.setVisible(false) }
         // Another day: the agenda's task selection lets go.

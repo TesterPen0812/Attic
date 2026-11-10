@@ -32,6 +32,7 @@ struct TasksPage: View {
     @Environment(\.atticTagColouring) private var tagColouring
     /// In the panel, "+" opens the shell's card instead of the add bar.
     @Environment(\.panelComposer) private var panelComposer
+    @Environment(\.panelPageTransit) private var panelPageTransit
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
     /// page's Tab order (A10). Not observed.
@@ -203,10 +204,11 @@ struct TasksPage: View {
                 pager
                 TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
             }
-            // The neighbours are drawn only as they slide in, never past the
-            // page's edge (the panel's shadow margin lies beyond it). Here, not
-            // on the pager, so the lists still run under the controls.
-            .clipped()
+            // The Tasks tabs need a local clip, but the whole Tasks page
+            // travels through the panel on a cross-page slide. During that
+            // travel the inner clip must not cut rows in the middle of the
+            // shared glass; its outer rim provides the visible boundary.
+            .modifier(TasksPagerWindowClip(transit: panelPageTransit, width: layout.panelSize.width))
             // The controls float over the lists in both, in the page's own
             // layer. Outside the page's clip: on a page switch the top row
             // stays in place while the page slides away (Accepted
@@ -4909,6 +4911,38 @@ struct TasksEdgeBackdrops: View {
 
     var body: some View {
         AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset))
+    }
+}
+
+/// Limit the three Tasks tabs at rest. A cross-page slide supplies its own
+/// outer glass clip, so let the moving Tasks page draw across its local edges.
+private struct TasksPagerWindowClip: ViewModifier {
+    let transit: PanelPageTransit?
+    let width: CGFloat
+
+    func body(content: Content) -> some View {
+        if let transit {
+            content.modifier(Observing(transit: transit, width: width))
+        } else {
+            content.clipped()
+        }
+    }
+
+    private struct Observing: ViewModifier {
+        @ObservedObject var transit: PanelPageTransit
+        let width: CGFloat
+
+        func body(content: Content) -> some View {
+            content.clipShape(HorizontalClip(extensionWidth: transit.sliding ? width : 0))
+        }
+    }
+
+    private struct HorizontalClip: Shape {
+        let extensionWidth: CGFloat
+
+        func path(in rect: CGRect) -> Path {
+            Path(rect.insetBy(dx: -extensionWidth, dy: 0))
+        }
     }
 }
 
