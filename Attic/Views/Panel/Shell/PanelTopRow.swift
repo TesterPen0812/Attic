@@ -348,6 +348,11 @@ struct PanelTransitScrollIndicators: ViewModifier {
 
         func body(content: Content) -> some View {
             content.scrollIndicators(transit.sliding ? .never : .automatic)
+                // A page travelling past another page's edge must keep its
+                // scroll content visible until the outer glass rim clips it.
+                // The native scroll viewport otherwise cuts text on the
+                // internal seam even when its page-level clip is widened.
+                .scrollClipDisabled(transit.sliding)
         }
     }
 }
