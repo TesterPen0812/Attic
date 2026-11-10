@@ -340,9 +340,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                                    cornerWidth: 2, cornerHeight: 2, transform: nil))
         }
         for object in chosen {
-            let moved = object.translated(by: DrawPoint(x: offset.x, y: offset.y), id: object.id)
-            if chosen.count == 1, case .shape(let kind) = moved.content, kind == .line || kind == .arrow { continue }
-            let rect = viewRect(viewport.screen(DrawGeometry.bounds(moved)).insetBy(dx: -gap, dy: -gap))
+            if chosen.count == 1, case .shape(let kind) = object.content, kind == .line || kind == .arrow { continue }
+            let bounds = DrawGeometry.bounds(object).offsetBy(dx: offset.x, dy: offset.y)
+            let rect = viewRect(viewport.screen(bounds).insetBy(dx: -gap, dy: -gap))
             outline.addPath(CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
         }
         // One object's handles, or the corners around several (they scale
