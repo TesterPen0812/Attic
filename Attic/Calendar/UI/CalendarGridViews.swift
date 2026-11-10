@@ -101,6 +101,7 @@ struct CalendarKey: View {
         .accessibilityLabel(Self.accessibilityName(day.day))
         .accessibilityAddTraits(day.isSelected ? .isSelected : [])
         .accessibilityIdentifier("calendar-day-\(day.day.rawValue)")
+        .agentWatchMark(AgentWatchBoard.dayKey(day.day))
     }
 
     static func accessibilityName(_ day: DueDay, locale: Locale = .current) -> String {
