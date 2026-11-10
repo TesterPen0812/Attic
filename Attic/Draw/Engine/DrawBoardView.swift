@@ -416,7 +416,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func mouseUp(with event: NSEvent) {
-        model.pointerUp(at: boardPoint(event), pressure: penPressure(event))
+        model.pointerUp(at: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
     }
 
     /// Tablet-point samples may arrive separately from mouse drags; include

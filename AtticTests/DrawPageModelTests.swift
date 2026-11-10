@@ -273,6 +273,36 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(b.x, 60, accuracy: 0.01)
     }
 
+    func testShiftConstrainedShapeCommitsTheGeometryShownBeforeMouseUp() throws {
+        model.pickShape(.rectangle)
+        let end = CGPoint(x: 160, y: 260)
+        model.pointerDown(at: CGPoint(x: 60, y: 200))
+        model.pointerDragged(to: end, shift: true)
+        guard case .shape(_, let start, let previewEnd) = model.live else { return XCTFail("Missing shape preview") }
+        let preview = DrawGeometry.boxFrame(from: start, to: previewEnd)
+        XCTAssertEqual(preview.width, preview.height, accuracy: 0.01)
+        model.pointerUp(at: end)
+        let saved = try XCTUnwrap(stored.first)
+        XCTAssertEqual(saved.frame, preview, "Mouse-up must preserve Shift-constrained geometry")
+    }
+
+    func testShiftConstrainedResizeCommitsTheGeometryShownBeforeMouseUp() throws {
+        let rectangle = DrawObject(frame: DrawFrame(x: 60, y: 140, width: 90, height: 50),
+                                   content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([rectangle])).isSaved)
+        model.setTool(.select)
+        model.select([rectangle.id])
+        let corner = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        let end = CGPoint(x: corner.point.x + 80, y: corner.point.y + 10)
+        model.pointerDown(at: corner.point)
+        model.pointerDragged(to: end, shift: true)
+        guard case .resize(let preview) = model.live else { return XCTFail("Missing resize preview") }
+        let expected = try XCTUnwrap(preview.current.first)
+        XCTAssertNotEqual(expected.frame, rectangle.frame)
+        model.pointerUp(at: end)
+        XCTAssertEqual(stored.first, expected, "Mouse-up must preserve Shift-constrained resize")
+    }
+
     // MARK: Strips (Shape, D1, D2) and D3
 
     func testShapeWidensInPlaceAndEscapeFoldsIt() {

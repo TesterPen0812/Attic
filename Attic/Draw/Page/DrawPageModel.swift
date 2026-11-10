@@ -160,6 +160,8 @@ final class DrawPageModel: ObservableObject {
     private(set) var contentRevision = 0
     var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
+    /// Last drag modifier for callers that finish an input without an event.
+    var lastPointerShift = false
     private(set) var editing: DrawTextEdit?
     private(set) var isShown = false
     var spaceHeld = false
