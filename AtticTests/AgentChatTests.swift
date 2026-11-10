@@ -989,6 +989,20 @@ final class AgentChatHostedTests: XCTestCase {
                        "The blur wiped on while the main thread, and so the colour and the composer, could not")
     }
 
+    /// Screen 9: the earlier reply was drawn over the page's still readable
+    /// rows before the blur had covered them. It arrives with the wipe.
+    func testTheThreadArrivesWithTheWipeNotBeforeIt() {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.seedExchangeForUITesting(asked: "Tell me a short hello.", reply: "Hi there!")
+        AgentChatWipeReveal.lastScale = nil
+        model.open()
+        spin(0.01)
+        XCTAssertLessThan(AgentChatWipeReveal.lastScale ?? 1, 0.2, "At the start of the wipe the thread is hidden with the blur")
+        spin(1)
+        XCTAssertEqual(AgentChatWipeReveal.lastScale ?? 0, 1, accuracy: 0.001, "Open, the whole thread shows")
+    }
+
     func testPanelHidingRemovesTheStageAtOnce() {
         model.open()
         spin(0.15)
@@ -1225,8 +1239,8 @@ final class AgentChatFXTests: XCTestCase {
     }
 
     /// Screen 9, item 21, stepped and paused: at every point of the wipe the
-    /// blur and the colour over it are drawn at one circle.
-    func testBlurAndColourShareOneCircleAtEveryStep() throws {
+    /// blur, the colour over it and the thread are drawn at one circle.
+    func testBlurColourAndThreadShareOneCircleAtEveryStep() throws {
         let size = CGSize(width: 340, height: 560)
         let star = CGPoint(x: 280, y: 530)
         let wipe = AgentChatWipe(origin: star, size: size)
@@ -1240,15 +1254,23 @@ final class AgentChatFXTests: XCTestCase {
             view.apply(reveal: reveal, origin: star, fades: false)
             let blur = try XCTUnwrap(view.appliedScale)
             fx.lastAuraScale = nil
+            AgentChatWipeReveal.lastScale = nil
             let aura = ImageRenderer(content: AgentChatAuraLayer(fx: fx, reveal: reveal).frame(width: size.width, height: size.height))
             _ = aura.nsImage
+            let thread = ImageRenderer(content: Color.red
+                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: wipe, fades: false))
+                .frame(width: size.width, height: size.height)
+                .coordinateSpace(.named(AgentChatStage.space)))
+            _ = thread.nsImage
             XCTAssertEqual(blur, wipe.scale(reveal: reveal), accuracy: 0.0001)
             XCTAssertEqual(try XCTUnwrap(fx.lastAuraScale), blur, accuracy: 0.0001, "The colour is where the blur is")
+            XCTAssertEqual(try XCTUnwrap(AgentChatWipeReveal.lastScale), blur, accuracy: 0.0001,
+                           "The thread shows only where the blur is")
         }
     }
 
-    /// Reduce Motion: the blur fades, with no circle.
-    func testReducedMotionFadesTheBlur() throws {
+    /// Reduce Motion: the blur and the thread fade in together.
+    func testReducedMotionFadesTheBlurAndTheThreadTogether() throws {
         let view = AgentChatBackdropView()
         view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
         view.layout()
@@ -1257,6 +1279,12 @@ final class AgentChatFXTests: XCTestCase {
             XCTAssertNil(layer.mask)
             XCTAssertEqual(layer.opacity, 0.3, accuracy: 0.001)
         }
+        AgentChatWipeReveal.lastScale = nil
+        _ = ImageRenderer(content: Color.red
+            .modifier(AgentChatWipeReveal(reveal: 0.3, wipe: AgentChatWipe(origin: .zero, size: CGSize(width: 10, height: 10)),
+                                          fades: true))
+            .frame(width: 10, height: 10)).nsImage
+        XCTAssertEqual(try XCTUnwrap(AgentChatWipeReveal.lastScale), 0.3, accuracy: 0.001)
     }
 
     func testClearLiveDropsLeftovers() {

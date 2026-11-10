@@ -169,6 +169,10 @@ struct AgentChatStage: View {
                         AgentChatThread(model: model, fx: fx, alive: alive, onAway: { model.close() })
                     }
                 }
+                // The thread arrives with the blur under it, never over the
+                // page's still readable rows (screen 9): the wipe's circle,
+                // or its fade.
+                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: AgentChatWipe(origin: star, size: layout.panelSize), fades: !alive))
                 AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, alive: alive, setTyping: setTyping, didClose: didClose)
             }
             if !model.entries.isEmpty {
@@ -329,6 +333,55 @@ struct AgentChatIconButton: View {
         .onHover { hovered = $0 }
         .help(label)
         .accessibilityLabel(label)
+    }
+}
+
+/// What the chat draws over the page shows only where the blur already is:
+/// inside the wipe's circle, with the same soft rim, or at the fade's
+/// opacity. The circle is the blur's, in the stage's space.
+struct AgentChatWipeReveal: ViewModifier, Animatable {
+    var reveal: CGFloat
+    let wipe: AgentChatWipe
+    let fades: Bool
+
+    #if DEBUG
+    /// Test seam: the circle's scale (or the fade) the thread was last drawn at.
+    static var lastScale: CGFloat?
+    #endif
+
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        // One structure throughout, so the thread is never rebuilt as the
+        // wipe ends: only the mask's own content changes.
+        let open = min(max(reveal, 0), 1)
+        content
+            .opacity(fades ? Double(open) : 1)
+            .mask {
+                if fades || open >= 1 {
+                    #if DEBUG
+                    let _ = Self.lastScale = fades ? open : 1
+                    #endif
+                    Color.black
+                } else {
+                    GeometryReader { geometry in
+                        let frame = geometry.frame(in: .named(AgentChatStage.space))
+                        let scale = wipe.scale(reveal: open)
+                        #if DEBUG
+                        let _ = Self.lastScale = scale
+                        #endif
+                        RadialGradient(stops: [.init(color: .black, location: 0),
+                                               .init(color: .black, location: 1 - AgentChatWipe.feather),
+                                               .init(color: .clear, location: 1)],
+                                       center: UnitPoint(x: (wipe.origin.x - frame.minX) / max(1, frame.width),
+                                                         y: (wipe.origin.y - frame.minY) / max(1, frame.height)),
+                                       startRadius: 0, endRadius: max(0.5, wipe.fullRadius * scale))
+                    }
+                }
+            }
     }
 }
 
