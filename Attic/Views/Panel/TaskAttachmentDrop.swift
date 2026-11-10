@@ -16,7 +16,7 @@ enum TaskDropContent: Equatable {
     case files
     case unsupported
 
-    /// Marks a gallery card drag; visible only to this process.
+    /// Marks a gallery card drag across the native pasteboard bridge.
     static let attachmentCardType = UTType(exportedAs: "com.taha.attic.task-attachment")
 
     /// File URLs, plus content that apps commonly provide or promise without
