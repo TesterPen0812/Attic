@@ -1,3 +1,10 @@
+## 2026-11-10 · Task date and composer accessibility
+
+Dated task rows keep their visible due-date button individually accessible,
+including in Later, while preserving the row's spoken description. The
+composer's collapsed, zero-height strip hides its date, tag, priority and
+file controls from the accessibility tree until the strip is shown.
+
 ## 2026-11-09 · Notice keyboard actions (R-26)
 
 Retry and Dismiss in a panel notice participate in Tab navigation and use
