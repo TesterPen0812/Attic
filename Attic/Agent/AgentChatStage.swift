@@ -594,11 +594,19 @@ struct AgentChatComposer: View {
 
     private var modePicker: some View {
         Menu {
-            Picker(String(localized: "Mode"), selection: $model.mode) {
-                ForEach(AgentChatMode.allCases) { Text($0.title).tag($0) }
+            ForEach(AgentChatMode.allCases) { choice in
+                Button {
+                    model.mode = choice
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(choice.title)
+                            Text(choice.description).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if model.mode == choice { Image(systemName: "checkmark") }
+                    }
+                }
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
         } label: {
             HStack(spacing: 3) {
                 Text(model.mode.title).font(.system(size: 10, weight: .medium))

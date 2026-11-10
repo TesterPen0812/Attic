@@ -25,6 +25,9 @@ struct AgentCLIStreamDecoder {
     private var pendingPrompt = ""
     private var streamedClaudeText = false
     private var steps: [String: AgentStep] = [:]
+    private var toolNames: [String: String] = [:]
+    private var toolInputs: [String: [String: Any]] = [:]
+    private var claudeInputs: [Int: (id: String, name: String, json: String)] = [:]
     private var finishedStepIDs = Set<String>()
     private var pendingApprovals: [UUID: (backendID: String, input: [String: Any])] = [:]
 
@@ -41,6 +44,9 @@ struct AgentCLIStreamDecoder {
         pendingPrompt = prompt
         streamedClaudeText = false
         steps.removeAll()
+        toolNames.removeAll()
+        toolInputs.removeAll()
+        claudeInputs.removeAll()
         finishedStepIDs.removeAll()
         if backend == .claude {
             return AgentCLITransition(outbound: [Self.json([
@@ -101,13 +107,31 @@ struct AgentCLIStreamDecoder {
                             update.failure = "Claude Code tried a tool outside Attic."
                             return update
                         }
-                        startStep(id: id, name: String(name.dropFirst("mcp__attic__".count)), into: &update)
+                        let toolName = String(name.dropFirst("mcp__attic__".count))
+                        let input = block["input"] as? [String: Any] ?? [:]
+                        startStep(id: id, name: toolName, arguments: input, into: &update)
+                        if let index = event["index"] as? Int {
+                            claudeInputs[index] = (id: id, name: toolName, json: "")
+                        }
                     }
                 case "content_block_delta":
-                    if let delta = event["delta"] as? [String: Any],
-                       delta["type"] as? String == "text_delta", let text = delta["text"] as? String {
-                        streamedClaudeText = true
-                        update.events.append(.textDelta(text))
+                    if let delta = event["delta"] as? [String: Any] {
+                        if delta["type"] as? String == "text_delta", let text = delta["text"] as? String {
+                            streamedClaudeText = true
+                            update.events.append(.textDelta(text))
+                        } else if delta["type"] as? String == "input_json_delta",
+                                  let part = delta["partial_json"] as? String,
+                                  let index = event["index"] as? Int, var input = claudeInputs[index] {
+                            input.json += part
+                            claudeInputs[index] = input
+                        }
+                    }
+                case "content_block_stop":
+                    if let index = event["index"] as? Int,
+                       let input = claudeInputs.removeValue(forKey: index),
+                       let data = input.json.data(using: .utf8),
+                       let args = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                        rewordStep(id: input.id, name: input.name, arguments: args, into: &update)
                     }
                 default: break
                 }
@@ -130,7 +154,10 @@ struct AgentCLIStreamDecoder {
                         update.failure = "Claude Code tried a tool outside Attic."
                         return update
                     }
-                    startStep(id: id, name: String(name.dropFirst("mcp__attic__".count)), into: &update)
+                    let toolName = String(name.dropFirst("mcp__attic__".count))
+                    let args = block["input"] as? [String: Any] ?? [:]
+                    startStep(id: id, name: toolName, arguments: args, into: &update)
+                    rewordStep(id: id, name: toolName, arguments: args, into: &update)
                 default: break
                 }
             }
@@ -151,11 +178,13 @@ struct AgentCLIStreamDecoder {
                 update.failure = "Claude Code requested an unsupported permission."
                 return update
             }
-            let approvalID = UUID()
             let input = request["input"] as? [String: Any] ?? [:]
-            pendingApprovals[approvalID] = (id, input)
-            update.events.append(.approvalNeeded(AgentApproval(
-                id: approvalID, title: "Allow \(Self.displayName(name))?", targets: [])))
+            // Claude's own permission gate is not the owner approval policy.
+            // Only the run-scoped MCP action server can authorize store writes.
+            update.outbound.append(Self.json(["type": "control_response", "response": [
+                "subtype": "success", "request_id": id,
+                "response": ["behavior": "allow", "updatedInput": input]
+            ]]))
         case "result":
             if message["is_error"] as? Bool == true {
                 update.failure = "Claude Code could not complete the request."
@@ -228,9 +257,10 @@ struct AgentCLIStreamDecoder {
                 return update
             }
             if method == "item/started" {
-                startStep(id: id, name: name, into: &update)
+                startStep(id: id, name: name, arguments: Self.toolArguments(item), into: &update)
             } else {
-                if steps[id] == nil { startStep(id: id, name: name, into: &update) }
+                if steps[id] == nil { startStep(id: id, name: name, arguments: Self.toolArguments(item), into: &update) }
+                rewordStep(id: id, name: name, arguments: Self.toolArguments(item), into: &update)
                 let status = item["status"] as? String ?? "completed"
                 finishStep(id: id, failed: status == "failed" || item["error"] != nil,
                            result: item["result"], into: &update)
@@ -270,7 +300,17 @@ struct AgentCLIStreamDecoder {
         return Self.json(["jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": params])
     }
 
-    private mutating func startStep(id: String, name: String, into update: inout AgentCLITransition) {
+    private static func toolArguments(_ item: [String: Any]) -> [String: Any] {
+        if let args = item["arguments"] as? [String: Any] { return args }
+        if let args = item["input"] as? [String: Any] { return args }
+        if let raw = item["arguments"] as? String,
+           let data = raw.data(using: .utf8),
+           let args = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { return args }
+        return [:]
+    }
+
+    private mutating func startStep(id: String, name: String, arguments: [String: Any] = [:],
+                                    into update: inout AgentCLITransition) {
         guard steps[id] == nil else { return }
         let kind: AgentStepKind
         if name.contains("delete") { kind = .delete }
@@ -279,11 +319,24 @@ struct AgentCLIStreamDecoder {
         else if name.contains("update") || name.contains("edit") { kind = .update }
         else if name.contains("open") { kind = .openPage }
         else { kind = .read }
-        let step = AgentStep(id: UUID(), title: Self.displayName(name), kind: kind,
+        let step = AgentStep(id: UUID(), title: AgentActionWords.running(name, arguments), kind: kind,
                              targets: [], state: .running)
         steps[id] = step
+        toolNames[id] = name
+        toolInputs[id] = arguments
         update.events.append(.stepStarted(step))
         update.events.append(.progress(done: finishedStepIDs.count, total: steps.count))
+    }
+
+    private mutating func rewordStep(id: String, name: String, arguments: [String: Any],
+                                     into update: inout AgentCLITransition) {
+        guard !arguments.isEmpty, var step = steps[id], !finishedStepIDs.contains(id) else { return }
+        let title = AgentActionWords.running(name, arguments)
+        toolInputs[id] = arguments
+        guard title != step.title else { return }
+        step.title = title
+        steps[id] = step
+        update.events.append(.stepReworded(step))
     }
 
     private mutating func finishStep(id: String, failed: Bool, result: Any? = nil,
@@ -332,7 +385,35 @@ struct AgentCLIStreamDecoder {
             } else {
                 step.state = failed ? .failed("The tool returned an error.") : .done
             }
+        } else if let action = Self.actionEnvelope(result), let status = action["status"] as? String {
+            let approvalTitle = (action["approval_title"] as? String)
+                ?? ((action["approvalNeeded"] as? [String: Any])?["title"] as? String)
+            switch status {
+            case "waiting":
+                let detail = approvalTitle?.trimmingCharacters(in: CharacterSet(charactersIn: "?"))
+                    ?? AgentActionWords.running(toolNames[id] ?? "", toolInputs[id] ?? [:])
+                step.title = AgentActionWords.clip("Awaiting approval: \(detail)")
+                step.kind = .read // No mutation has occurred yet.
+                step.state = .done
+            case "refused", "failed":
+                let detail = approvalTitle?.trimmingCharacters(in: CharacterSet(charactersIn: "?"))
+                    ?? AgentActionWords.running(toolNames[id] ?? "", toolInputs[id] ?? [:])
+                step.title = AgentActionWords.clip("\(status == "refused" ? "Refused" : "Failed"): \(detail)")
+                step.kind = .read
+                step.state = .failed(action["message"] as? String ?? "The action was not performed.")
+            default:
+                step.title = AgentActionWords.finishedWithoutReceipt(step.title)
+                step.state = failed ? .failed("The tool returned an error.") : .done
+            }
         } else {
+            if let raw = result as? String, let name = toolNames[id],
+               let data = raw.data(using: .utf8),
+               (try? JSONSerialization.jsonObject(with: data)) != nil {
+                step.title = AgentActionWords.completed(name, toolInputs[id] ?? [:],
+                                                        response: raw, targets: step.targets)
+            } else {
+                step.title = AgentActionWords.finishedWithoutReceipt(step.title)
+            }
             step.state = failed ? .failed("The tool returned an error.") : .done
         }
         steps[id] = step
@@ -355,7 +436,7 @@ struct AgentCLIStreamDecoder {
             }
         }
         if let object = value as? [String: Any] {
-            if object["step"] is [String: Any] { return object }
+            if object["step"] is [String: Any] || object["status"] is String { return object }
             if let content = object["content"],
                let nested = actionEnvelope(content, depth: depth + 1) { return nested }
             if let text = object["text"],

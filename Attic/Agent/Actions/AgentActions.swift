@@ -20,9 +20,11 @@ struct AgentUndoReport {
 
 enum AgentActionsError: Error, LocalizedError {
     case invalid(String)
+    case refused(String)
     var errorDescription: String? {
-        if case let .invalid(message) = self { return message }
-        return nil
+        switch self {
+        case let .invalid(message), let .refused(message): return message
+        }
     }
 }
 
@@ -40,6 +42,41 @@ enum AgentActionApprovalPolicy {
             return operations.contains { ($0["op"] as? String)?.hasPrefix("delete_") == true }
         }
         return false
+    }
+}
+
+/// The owner sees the intended effect and the resolved item titles, never an
+/// internal MCP tool name. The approval card lists every named target below it.
+enum AgentApprovalWords {
+    static func title(_ name: String, arguments: [String: Any], targets: [AgentTarget]) -> String {
+        let names = targets.compactMap(\.title).filter { !$0.isEmpty }
+        let subject = names.first ?? (arguments["_resolved_title"] as? String)
+            ?? (arguments["title"] as? String)
+        let count = targets.count
+        func phrase(_ verb: String, _ kind: String) -> String {
+            if count > 1 { return "\(verb) \(count) \(kind == "canvas" ? "canvases" : "\(kind)s")?" }
+            return "\(verb) \(subject ?? "this \(kind)")?"
+        }
+        switch name {
+        case "delete_task": return phrase("Delete", "task")
+        case "delete_note": return phrase("Delete", "note")
+        case "delete_item":
+            let kind = (arguments["kind"] as? String) ?? "item"
+            return phrase("Delete", kind)
+        case "make_note_checkbox": return "Move \(subject ?? "this subtask") into its note?"
+        case "remove_from_tasks": return "Move \(subject ?? "this task") into Notes?"
+        case "calendar_create": return "Add \(subject ?? "this event") to Calendar?"
+        case "calendar_update": return "Change \(subject ?? "this event") in Calendar?"
+        case "calendar_delete": return "Delete \(subject ?? "this event") from Calendar?"
+        case "update_note_table":
+            let deletions = (arguments["operations"] as? [[String: Any]] ?? [])
+                .compactMap { $0["op"] as? String }.filter { $0.hasPrefix("delete_") }
+            let kind = Set(deletions.map { String($0.dropFirst("delete_".count)) })
+            let what = kind.count == 1 ? kind.first!.replacingOccurrences(of: "_", with: " ") : "table part"
+            let quantity = deletions.count == 1 ? "a \(what)" : "\(deletions.count) \(what)s"
+            return "Delete \(quantity) from \(subject ?? "this note")?"
+        default: return "Approve change to \(subject ?? "this item")?"
+        }
     }
 }
 
@@ -85,6 +122,7 @@ final class AgentActions {
     private(set) var journals: [UUID: Journal] = [:]
     private var order: [UUID] = []
     private var approvals: [UUID: AwaitingApproval] = [:]
+    private var requestModes: [UUID: AgentChatMode] = [:]
     private var activeCalls: [UUID: Int] = [:]
     private var closedRequests = Set<UUID>()
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -111,10 +149,38 @@ final class AgentActions {
         }.map(Self.runDefinition)
     }
 
+    /// Keep the allowlist closed: every current or future write tool must be
+    /// explicitly reviewed before Read only can offer or execute it.
+    static func isReadOnlyAction(_ name: String) -> Bool {
+        ["list_tasks", "get_task_workspace", "list_notes", "list_deleted", "list_tags",
+         "get_settings", "search_items", "calendar_search", "calendar_read",
+         "calendar_list_calendars", "draw_list_canvases"].contains(name)
+    }
+
+    func setMode(_ mode: AgentChatMode, for requestID: UUID) throws {
+        try checkOpen(requestID)
+        requestModes[requestID] = mode
+        if mode == .readOnly { cancelApprovals(for: requestID) }
+    }
+
+    func guardMode(_ name: String, requestID: UUID) throws {
+        if requestModes[requestID] == .readOnly && !Self.isReadOnlyAction(name) {
+            throw AgentActionsError.refused("Read only: \(name.replacingOccurrences(of: "_", with: " ")) would change something. Nothing was changed.")
+        }
+    }
+
+    func refusalStep(name: String, arguments: [String: Any], reason: String) -> AgentStep {
+        let targets = targetsForArguments(name, arguments)
+        let title = targets.compactMap(\.title).first ?? AgentActionWords.running(name, arguments)
+        return AgentStep(id: UUID(), title: AgentActionWords.clip("Refused: \(title)"),
+                         kind: .read, targets: targets, state: .failed(reason))
+    }
+
     @discardableResult
     func beginRequest(title: String) -> UUID {
         let id = UUID()
         journals[id] = Journal(changeSet: AgentChangeSet(id: id, title: title, pages: [], count: 0))
+        requestModes[id] = .askFirst
         order.append(id)
         return id
     }
@@ -127,16 +193,20 @@ final class AgentActions {
     /// `watching` comes from the host run, never from the model's JSON.
     func call(name: String, arguments: [String: Any], watching: Bool, requestID: UUID) async throws -> AgentActionCall {
         try checkOpen(requestID)
+        try guardMode(name, requestID: requestID)
         activeCalls[requestID, default: 0] += 1
         defer { callEnded(requestID) }
         try validate(name, arguments)
         let localArguments = try preparedArguments(name: name, arguments: arguments)
         let prepared = try await preparedCalendarArguments(name: name, arguments: localArguments)
         try checkOpen(requestID)
-        if AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
+        try guardMode(name, requestID: requestID)
+        if requestModes[requestID] != .auto && AgentActionApprovalPolicy.requiresApproval(name, arguments: prepared) {
             let id = UUID()
             let targets = targetsForArguments(name, prepared)
-            let approval = AgentApproval(id: id, title: "Allow \(name.replacingOccurrences(of: "_", with: " "))?", targets: targets)
+            let approval = AgentApproval(id: id,
+                                         title: AgentApprovalWords.title(name, arguments: prepared, targets: targets),
+                                         targets: targets)
             approvals[id] = AwaitingApproval(name: name, arguments: prepared, watching: watching, requestID: requestID)
             return .approvalNeeded(approval)
         }
@@ -150,6 +220,7 @@ final class AgentActions {
         }
         approvals[id] = nil
         guard allow else { return nil }
+        try guardMode(pending.name, requestID: pending.requestID)
         activeCalls[pending.requestID, default: 0] += 1
         defer { callEnded(pending.requestID) }
         return try await execute(name: pending.name, arguments: pending.arguments,
@@ -167,6 +238,7 @@ final class AgentActions {
     func sealRequest(_ id: UUID) {
         closedRequests.insert(id)
         cancelApprovals(for: id)
+        requestModes[id] = nil
     }
 
     func drainRequest(_ id: UUID) async -> AgentChangeSet? {
@@ -194,11 +266,15 @@ final class AgentActions {
     private func execute(name: String, arguments: [String: Any], watching: Bool,
                          requestID: UUID) async throws -> AgentActionResult {
         try checkOpen(requestID)
+        try guardMode(name, requestID: requestID)
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
         })
-        let step: AgentStep
+        let priorTargets = targetsForArguments(name, arguments)
+        let noteBefore = ["update_note", "update_note_table"].contains(name)
+            ? noteSnapshot(for: arguments) : nil
+        var step: AgentStep
         let text: String
         var extraEntries: [UndoEntry] = []
         if name == "open_page" {
@@ -215,14 +291,12 @@ final class AgentActions {
         } else if name == "search_items" {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
-            (text, step) = try await calendarAction(name, arguments)
+            (text, step) = try await calendarAction(name, arguments, requestID: requestID)
         } else if name.hasPrefix("draw_") {
             let result = try drawAction(name, arguments)
             text = result.0; step = result.1
             if let snapshot = result.2 { extraEntries.append(.draw(snapshot.canvas.id, snapshot, step.title)) }
         } else {
-            let noteBefore = ["update_note", "update_note_table"].contains(name)
-                ? noteSnapshot(for: arguments) : nil
             text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
                 try await tasks.callAsync(name: name, arguments: arguments)
             } else {
@@ -252,6 +326,16 @@ final class AgentActions {
                 extraEntries.append(.proposal(noteID: noteID, editID: editID, name: step.title))
             }
         }
+        step.targets = step.targets.map { target in
+            guard target.title == nil else { return target }
+            var enriched = target
+            enriched.title = priorTargets.first(where: {
+                $0.itemID != nil && $0.itemID == target.itemID && $0.page == target.page
+            })?.title
+            return enriched
+        }
+        step.title = AgentActionWords.completed(name, arguments, response: text, targets: step.targets,
+                                               previousNoteBody: noteBefore?.body)
         var entries: [UndoEntry] = []
         for history in route.retainedHistories {
             let current = route.steps(in: history, redo: false)
@@ -429,7 +513,17 @@ final class AgentActions {
     }
 
     private func targetsForArguments(_ name: String, _ arguments: [String: Any]) -> [AgentTarget] {
-        Self.targetsFromResponse("{}", name: name, arguments: arguments)
+        Self.targetsFromResponse("{}", name: name, arguments: arguments).map { target in
+            guard target.title == nil, let id = target.itemID else { return target }
+            var enriched = target
+            switch target.page {
+            case .tasks: enriched.title = tasks.store.task(withID: id)?.title
+            case .notes: enriched.title = tasks.noteStore?.note(withID: id)?.title
+            case .draw: enriched.title = (try? draw?.open(id))?.canvas.name
+            case .calendar: enriched.title = arguments["_resolved_title"] as? String
+            }
+            return enriched
+        }
     }
 
     private static func targetsFromResponse(_ text: String, name: String, arguments: [String: Any]) -> [AgentTarget] {

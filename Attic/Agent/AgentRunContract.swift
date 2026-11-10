@@ -51,6 +51,7 @@ struct AgentChangeSet: Identifiable, Sendable, Equatable, Codable {
 enum AgentEvent: Sendable, Equatable {
     case textDelta(String)
     case stepStarted(AgentStep)
+    case stepReworded(AgentStep)
     case stepFinished(AgentStep)
     case progress(done: Int, total: Int)
     case approvalNeeded(AgentApproval)
@@ -81,6 +82,7 @@ struct AgentThreadSnapshot: Sendable, Equatable {
 protocol AgentRunning: AnyObject {
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent>
     func setWatching(_ watching: Bool)
+    func setMode(_ mode: AgentChatMode)
     func resolve(approval id: UUID, allow: Bool)
     func undo(changeSet id: UUID) async throws
     func cancel()
@@ -93,6 +95,7 @@ protocol AgentRunning: AnyObject {
 }
 
 extension AgentRunning {
+    func setMode(_ mode: AgentChatMode) {}
     // Existing scripted runners and test doubles continue to deliver their
     // events from send(). Only the live backend has a persistent thread.
     var retainsThread: Bool { false }

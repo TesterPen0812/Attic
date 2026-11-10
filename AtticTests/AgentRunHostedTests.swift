@@ -238,24 +238,18 @@ final class AgentRunHostedTests: XCTestCase {
         })
     }
 
-    func testApprovalWaitsWhileChatIsClosed() async throws {
+    func testCLIPermissionPassesThroughToTrustedActionPolicyWhileChatIsClosed() async throws {
         let helper = FakeRunHelper()
         let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journalURL())
         _ = runner.send("Update", watching: true)
         await wait { helper.inputs.count == 1 }
         runner.setWatching(false)
         helper.emitLine(#"{"type":"control_request","request_id":"approval-1","request":{"subtype":"can_use_tool","tool_name":"mcp__attic__update_task","input":{"id":"item"}}}"#)
-        await wait { runner.threadSnapshot().events.contains { if case .approvalNeeded = $0 { return true }; return false } }
-        XCTAssertEqual(helper.inputs.count, 1, "No response is sent before the owner answers")
-        guard let approval = runner.threadSnapshot().events.compactMap({ event -> AgentApproval? in
-            if case .approvalNeeded(let approval) = event { return approval }
-            return nil
-        }).first else { return XCTFail("Expected an approval") }
-        runner.resolve(approval: approval.id, allow: false)
         await wait { helper.inputs.count == 2 }
         let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(helper.inputs[1].utf8)) as? [String: Any])
         XCTAssertEqual(((response["response"] as? [String: Any])?["response"] as? [String: Any])?["behavior"] as? String,
-                       "deny")
+                       "allow")
+        XCTAssertFalse(runner.threadSnapshot().events.contains { if case .approvalNeeded = $0 { return true }; return false })
         runner.cancel()
     }
 
