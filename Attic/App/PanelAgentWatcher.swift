@@ -240,8 +240,10 @@ final class PanelAgentWatcher {
                 await frameWait()
             }
         }
-        // The objects themselves take over from the replay.
+        // The objects themselves take over from the replay, at once (both
+        // drawn together read as bold).
         draw.agentVeil.subtract(objects)
+        replay.finished = true
         await pause(pace.afterSketch)
         chat?.watchEffect(.pointer(nil))
     }

@@ -321,15 +321,15 @@ final class ScriptedAgentRunner: AgentRunning {
                        targets: [AgentTarget(page: .draw, title: name)], seconds: 0, finishedTargets: {
             var targets: [AgentTarget] = []
             try await self.wait(0.4)
-            // The design's box, arrow and words, at the panel's scale.
+            // The design's arrow, box and words, in its order, at the panel's scale.
             let calls: [(String, [String: Any])] = [
-                ("draw_add_shape", ["canvas_id": canvasID, "shape": "rectangle", "corners": "rounded",
-                                    "x": 245, "y": 312, "width": 90, "height": 44]),
                 ("draw_add_strokes", ["canvas_id": canvasID, "colour": "blue",
                                       "points": Self.curve(from: CGPoint(x: 286, y: 220), control: CGPoint(x: 300, y: 262),
                                                            to: CGPoint(x: 289, y: 306))]),
                 ("draw_add_strokes", ["canvas_id": canvasID, "colour": "blue",
                                       "points": [["x": 281.5, "y": 298], ["x": 289, "y": 306], ["x": 299.5, "y": 300.5]]]),
+                ("draw_add_shape", ["canvas_id": canvasID, "shape": "rectangle", "corners": "rounded",
+                                    "x": 245, "y": 312, "width": 90, "height": 44]),
                 ("draw_add_text", ["canvas_id": canvasID, "text": "Press kit", "x": 262, "y": 324, "width": 70, "height": 20]),
             ]
             for (tool, arguments) in calls {
