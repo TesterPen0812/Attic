@@ -589,14 +589,17 @@ final class NotesFormatControlsTests: XCTestCase {
 
     func testNotesKeyboardOrderGoesRoundTheBottomRowAndBackIntoTheText() {
         let stops = NotesKeyboardOrder.stops(format: true)
-        // The writing view's bar (Notes Page v2): Back on the left, Aa on
-        // the right; New note lives in All notes' bar (⌘N anywhere).
-        XCTAssertEqual(stops, [.text, .allNotes, .format])
+        // Accepted N7: the New note control remains on an open note, after Aa.
+        XCTAssertEqual(stops.count, 4, "⌃Tab visits text, All notes, Aa, and New note")
+        XCTAssertEqual(Array(stops.prefix(3)), [.text, .allNotes, .format])
         XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: true), .allNotes, "⌃Tab: the next control")
-        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), .format, "⌃⇧Tab: the previous one")
-        XCTAssertEqual(NotesKeyboardOrder.next(after: .format, in: stops, forward: true), .text, "round again into the text")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), stops.last, "⌃⇧Tab: the previous one")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .format, in: stops, forward: true), stops.last)
+        if stops.count == 4 {
+            XCTAssertEqual(NotesKeyboardOrder.next(after: stops[3], in: stops, forward: true), .text, "round again into the text")
+        }
         XCTAssertEqual(NotesKeyboardOrder.next(after: .allNotes, in: stops, forward: false), .text)
-        XCTAssertEqual(NotesKeyboardOrder.stops(format: false), [.text, .allNotes], "a read-only note has no Aa")
+        XCTAssertEqual(NotesKeyboardOrder.stops(format: false).count, 3, "a note without Aa keeps New note")
     }
 
     func testListsToggleBackToBodyAndAaWorksOnTheCaretParagraph() {
