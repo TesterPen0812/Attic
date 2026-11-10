@@ -1034,7 +1034,7 @@ final class AtticGlassMenuCard {
         window.orderFront(nil)
         #endif
         guard animated else { return }
-        let lift = window.lift
+        let lift: AtticGlassMenuLiftView = window.lift
         let reduce = menu.style.reduceMotion
         if reduce {
             lift.layer?.add(AtticMenuMotion.fade(from: 0, to: 1, duration: AtticMenuMetrics.openFade, easeIn: false), forKey: "attic.open.fade")
