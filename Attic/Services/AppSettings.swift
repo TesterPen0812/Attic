@@ -206,6 +206,12 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(inAppAgentBackend.rawValue, forKey: Key.inAppAgentBackend) }
     }
 
+    func inAppAgentChoice(for backend: AgentBackend) -> AgentRunChoice {
+        AgentModelCatalog.defaultChoice(for: backend)
+    }
+
+    func setInAppAgentChoice(_ choice: AgentRunChoice, for backend: AgentBackend) {}
+
     /// The light haptic tick when a task is completed or a dragged item
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {

@@ -130,6 +130,82 @@ final class AgentHelperLaunchTests: XCTestCase {
         XCTAssertTrue(recorded.contains("app-server\n--strict-config\n"))
         XCTAssertTrue(recorded.contains("TOKEN_SET=yes"))
     }
+
+    // MARK: The in-app agent's own model and thinking level (2026-11-10)
+
+    func testRealHelperPassesTheChosenModelAndEffortToEachCLI() async throws {
+        let directory = try fixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let claudeLog = directory.appendingPathComponent("claude-arguments.txt")
+        let codexLog = directory.appendingPathComponent("codex-arguments.txt")
+        let claude = try fakeCLI("claude", in: directory, body: """
+        if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" > '\(claudeLog.path)'
+        """)
+        let codex = try fakeCLI("codex", in: directory, body: """
+        if [ "$1" = "login" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" > '\(codexLog.path)'
+        """)
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        await configure(helper, claude: [claude], codex: [codex])
+
+        helper.startBackend("claude", instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                            mcpToken: String(repeating: "x", count: 40), sessionID: nil,
+                            model: "opus", effort: "high")
+        let claudeExit = await until("exited", from: helper)
+        XCTAssertEqual(claudeExit?.status, 0)
+        let claudeArguments = try String(contentsOf: claudeLog, encoding: .utf8)
+        XCTAssertTrue(claudeArguments.contains("--model\nopus\n--effort\nhigh\n"), claudeArguments)
+        XCTAssertTrue(claudeArguments.contains("--allowedTools\nmcp__attic\n"), "The tool grant stays")
+        XCTAssertTrue(claudeArguments.contains("--strict-mcp-config\n"), "The strict MCP config stays")
+
+        helper.startBackend("codex", instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                            mcpToken: String(repeating: "x", count: 40), sessionID: nil,
+                            model: "gpt-6.1-sol", effort: "medium")
+        let codexExit = await until("exited", from: helper)
+        XCTAssertEqual(codexExit?.status, 0)
+        let codexArguments = try String(contentsOf: codexLog, encoding: .utf8)
+        XCTAssertTrue(codexArguments.contains("app-server\n--strict-config\n"), "The strict config stays")
+        XCTAssertTrue(codexArguments.contains(
+            "--config\nmodel=\"gpt-6.1-sol\"\n--config\nmodel_reasoning_effort=\"medium\"\n"), codexArguments)
+        XCTAssertTrue(codexArguments.contains("--disable\nshell_tool\n"), "Native tools stay off")
+    }
+
+    func testRealHelperRefusesAModelOrEffortAtticDoesNotList() async throws {
+        let directory = try fixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ran = directory.appendingPathComponent("ran.txt")
+        let claude = try fakeCLI("claude", in: directory, body: """
+        if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" >> '\(ran.path)'
+        """)
+        let codex = try fakeCLI("codex", in: directory, body: """
+        if [ "$1" = "login" ] && [ "$2" = "status" ]; then exit 0; fi
+        printf '%s\\n' "$@" >> '\(ran.path)'
+        """)
+        let helper = try AgentHelperClient()
+        defer { helper.stop() }
+        try await helper.start()
+        await configure(helper, claude: [claude], codex: [codex])
+
+        let refused: [(String, String, String?)] = [
+            ("codex", #"gpt-6.1-sol" --config shell_tool=true"#, "medium"),
+            ("codex", "gpt-6.1-sol", "turbo"),
+            ("claude", "fable", "medium"),
+            ("claude", "sonnet", nil)
+        ]
+        for (backend, model, effort) in refused {
+            helper.startBackend(backend, instructions: "fake launch", mcpURL: "http://127.0.0.1:7335/mcp",
+                                mcpToken: String(repeating: "x", count: 40), sessionID: nil,
+                                model: model, effort: effort)
+            let failed = await until("failed", from: helper)
+            XCTAssertEqual(failed?.message, "Invalid agent request.", "\(backend) \(model)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ran.path),
+                       "No refused choice may launch either CLI")
+    }
     #endif
 
     private func forgeConnection(port: UInt16, token: String) -> Int32 {

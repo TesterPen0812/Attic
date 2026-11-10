@@ -209,7 +209,7 @@ final class AgentHelperClient {
     #endif
 
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
-                      mcpToken: String, sessionID: String?) {
+                      mcpToken: String, sessionID: String?, model: String? = nil, effort: String? = nil) {
         var frame: [String: Any] = ["type": "start", "backend": backend,
                                     "instructions": instructions, "mcpURL": mcpURL,
                                     "mcpToken": mcpToken]

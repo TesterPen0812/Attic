@@ -1,13 +1,5 @@
 import Foundation
 
-enum AgentBackend: String, Codable, CaseIterable, Sendable {
-    case claude
-    case codex
-
-    var title: String { self == .claude ? "Claude Code" : "Codex" }
-    var loginCommand: String { self == .claude ? "claude auth login" : "codex login" }
-}
-
 /// One transition from a recorded CLI JSON line. Keeping protocol translation
 /// separate from the process and MCP transport makes it possible to test the
 /// agent's state machine without invoking either signed-in CLI.
@@ -34,7 +26,7 @@ struct AgentCLIStreamDecoder {
     private var pendingApprovals: [UUID: (backendID: String, input: [String: Any])] = [:]
 
     init(backend: AgentBackend, instructions: String, sessionID: String? = nil,
-         workingDirectory: String) {
+         workingDirectory: String, choice: AgentRunChoice? = nil) {
         self.backend = backend
         self.instructions = instructions
         self.sessionID = sessionID

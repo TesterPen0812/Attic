@@ -171,6 +171,87 @@ final class AgentCLIStreamTests: XCTestCase {
         XCTAssertEqual(codexStep.state, .done)
     }
 
+    // MARK: The in-app agent's own model and thinking level (2026-11-10)
+
+    func testModelArgumentsPerAgentModelAndEffortIncludingDefaults() {
+        let claudeDefault = AgentModelCatalog.defaultChoice(for: .claude)
+        XCTAssertEqual(claudeDefault, AgentRunChoice(model: "sonnet", effort: "medium"))
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "claude", model: claudeDefault.model,
+                                                         effort: claudeDefault.effort),
+                       ["--model", "sonnet", "--effort", "medium"])
+        let codexDefault = AgentModelCatalog.defaultChoice(for: .codex)
+        XCTAssertEqual(codexDefault, AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "codex", model: codexDefault.model,
+                                                         effort: codexDefault.effort),
+                       ["--config", #"model="gpt-6.1-sol""#, "--config", #"model_reasoning_effort="medium""#])
+
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "claude", model: "opus", effort: "max"),
+                       ["--model", "opus", "--effort", "max"])
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "claude", model: "haiku", effort: "low"),
+                       ["--model", "haiku", "--effort", "low"])
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "codex", model: "gpt-6-luna", effort: "xhigh"),
+                       ["--config", #"model="gpt-6-luna""#, "--config", #"model_reasoning_effort="xhigh""#])
+        XCTAssertEqual(AgentModelCatalog.launchArguments(backend: "codex", model: "gpt-6.1-terra", effort: "ultra"),
+                       ["--config", #"model="gpt-6.1-terra""#, "--config", #"model_reasoning_effort="ultra""#])
+
+        // Every listed choice builds arguments; the menus can only offer these.
+        for backend in AgentBackend.allCases {
+            for option in AgentModelCatalog.models(for: backend) {
+                XCTAssertFalse(option.efforts.isEmpty, "\(option.id) takes a thinking level in its CLI")
+                for effort in option.efforts {
+                    XCTAssertNotNil(AgentModelCatalog.launchArguments(backend: backend.rawValue,
+                                                                      model: option.id, effort: effort))
+                }
+            }
+        }
+    }
+
+    func testUnlistedModelsAndLevelsBuildNoArguments() {
+        let refused: [(String, String, String?)] = [
+            ("claude", "fable", "medium"),            // not offered
+            ("claude", "sonnet", "ultra"),            // Claude Code has no ultra
+            ("claude", "sonnet", nil),                // a level is always sent
+            ("claude", "gpt-6.1-sol", "medium"),      // another agent's model
+            ("codex", "sonnet", "medium"),
+            ("codex", "gpt-6-luna", "ultra"),         // Luna advertises up to max
+            ("codex", #"gpt-6.1-sol" --config x="y"#, "medium"),
+            ("codex", "gpt-6.1-sol", "medium\"; x=\"1"),
+            ("codex", "", "medium"),
+            ("bash", "sonnet", "medium")
+        ]
+        for (backend, model, effort) in refused {
+            XCTAssertNil(AgentModelCatalog.launchArguments(backend: backend, model: model, effort: effort),
+                         "\(backend) \(model) \(effort ?? "nil") must be refused")
+        }
+    }
+
+    func testStoredChoicesHealToListedValues() {
+        XCTAssertEqual(AgentModelCatalog.normalized(nil, for: .codex), AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+        XCTAssertEqual(AgentModelCatalog.normalized(AgentRunChoice(model: "gpt-retired", effort: "high"), for: .codex),
+                       AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+        XCTAssertEqual(AgentModelCatalog.normalized(AgentRunChoice(model: "gpt-6-luna", effort: "ultra"), for: .codex),
+                       AgentRunChoice(model: "gpt-6-luna", effort: "medium"))
+        XCTAssertEqual(AgentModelCatalog.normalized(AgentRunChoice(model: "opus", effort: "xhigh"), for: .claude),
+                       AgentRunChoice(model: "opus", effort: "xhigh"))
+        XCTAssertEqual(AgentModelCatalog.normalized(AgentRunChoice(model: "opus", effort: nil), for: .claude),
+                       AgentRunChoice(model: "opus", effort: "medium"))
+    }
+
+    func testCodexTurnsCarryTheChosenModelAndEffort() throws {
+        var stream = AgentCLIStreamDecoder(backend: .codex, instructions: "Attic", sessionID: "old-thread",
+                                           workingDirectory: "/tmp",
+                                           choice: AgentRunChoice(model: "gpt-6.1-terra", effort: "high"))
+        _ = stream.beginTurn("Resume")
+        _ = stream.accept(#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+        let resumed = stream.accept(#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"old-thread"}}}"#)
+        let turn = try decoded(resumed.outbound[0])
+        XCTAssertEqual(turn["method"] as? String, "turn/start")
+        let params = try XCTUnwrap(turn["params"] as? [String: Any])
+        XCTAssertEqual(params["model"] as? String, "gpt-6.1-terra",
+                       "A resumed thread must not keep the model it was started with")
+        XCTAssertEqual(params["effort"] as? String, "high")
+    }
+
     private func decoded(_ string: String) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(string.utf8)) as? [String: Any])
     }

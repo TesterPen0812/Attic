@@ -7,7 +7,7 @@ protocol AgentHelperTransmitting: AnyObject {
     var events: AsyncStream<AgentHelperFrame> { get }
     func start() async throws
     func startBackend(_ backend: String, instructions: String, mcpURL: String,
-                      mcpToken: String, sessionID: String?)
+                      mcpToken: String, sessionID: String?, model: String?, effort: String?)
     func writeLine(_ line: String)
     func interrupt()
     func stop()
@@ -205,6 +205,7 @@ final class AgentRunEngine: AgentRunning {
 
     init(
         selectedBackend: @escaping @MainActor () -> AgentBackend = { .claude },
+        selectedChoice: @escaping @MainActor (AgentBackend) -> AgentRunChoice? = { _ in nil },
         helper: @escaping HelperFactory = { try AgentHelperClient() },
         tools: @escaping ToolFactory,
         journalURL: URL? = nil,
@@ -346,7 +347,8 @@ final class AgentRunEngine: AgentRunning {
                     workingDirectory: FileManager.default.temporaryDirectory.path)
                 client.startBackend(backend.rawValue, instructions: Self.systemPrompt(),
                                     mcpURL: address.url, mcpToken: address.token,
-                                    sessionID: archive.sessions[backend.rawValue])
+                                    sessionID: archive.sessions[backend.rawValue],
+                                    model: nil, effort: nil)
                 newProcess = true
             }
             guard let helper else { throw AgentRunError.toolServer("Agent helper not available.") }

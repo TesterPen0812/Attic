@@ -116,6 +116,10 @@ enum SettingsVisibility {
         isEnabled
     }
 
+    static func agentThinkingChoices(backend: AgentBackend, model: String) -> [String] { [] }
+
+    static func showsAgentThinking(_ option: AgentModelOption?) -> Bool { true }
+
     /// The refused global shortcut Settings must explain, or nil while the
     /// shortcut is working or has not been attempted yet.
     static func globalShortcutFailure(_ registration: GlobalHotKeyRegistration) -> GlobalHotKeyFailure? {
