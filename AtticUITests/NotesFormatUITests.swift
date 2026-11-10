@@ -154,7 +154,9 @@ final class NotesFormatUITests: XCTestCase {
         require(pill, "⌘T turns the bottom row into the format row")
         XCTAssertFalse(element("notes-new-note").exists, "New note steps aside")
         pill.click()
-        let heading = element("notes-format-row-notes-format-heading2")
+        // Accepted N1 (2026-11-01): the style pill widens into five inline
+        // cells; the Heading cell now has the strip's stable identifier.
+        let heading = element("notes-format-strip-heading2")
         require(heading, "the style list")
         // E1 exposes menu-item semantics, but is a custom dropdown, not an
         // NSMenu. XCUIElement.click() otherwise attempts native menu traversal
