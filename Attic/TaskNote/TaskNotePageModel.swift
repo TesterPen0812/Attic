@@ -490,7 +490,7 @@ final class TaskNotePageModel: ObservableObject {
             return false
         }
         let next: TaskStatus = task.status == .done ? .todo : .done
-        let outcome = library.updateTask(id, status: next, in: historyID)
+        let outcome = AtticSounds.play(next == .done ? .done : .undone, after: library.updateTask(id, status: next, in: historyID))
         return settle(outcome) { [weak self] in self?.toggle(id) }
     }
 
@@ -638,7 +638,7 @@ final class TaskNotePageModel: ObservableObject {
     func deleteTask() -> Bool {
         guard store.listedTask(withID: taskID) != nil else { return report(.taskGone) }
         guard resolveFieldDrafts() else { return false }
-        return settle(library.deleteListedTasks([taskID], in: historyID)) { [weak self] in self?.deleteTask() }
+        return settle(AtticSounds.play(.trashed, after: library.deleteListedTasks([taskID], in: historyID))) { [weak self] in self?.deleteTask() }
     }
 
     /// "Task deleted · Restore": the live head comes back.
@@ -649,6 +649,7 @@ final class TaskNotePageModel: ObservableObject {
             return report(CommandFailure(String(localized: "Couldn't restore the task")), retry: { [weak self] in self?.restoreTask() })
         }
         clearFailure()
+        AtticSounds.play(.restored)
         refresh()
         return true
     }
@@ -662,7 +663,7 @@ final class TaskNotePageModel: ObservableObject {
         // § 2.6: completing completes the open subtasks in the same
         // operation (today's family operation, as the Tasks circle).
         let open = store.subtasks(of: taskID).filter { $0.status != .done }.count
-        guard settle(library.completeTask(taskID, in: historyID), retry: { [weak self] in self?.toggleTask() }) else { return false }
+        guard settle(AtticSounds.play(.done, after: library.completeTask(taskID, in: historyID)), retry: { [weak self] in self?.toggleTask() }) else { return false }
         onCompleted?(open, library.undo.undoStepID(in: historyID))
         return true
     }
@@ -886,7 +887,7 @@ final class TaskNotePageModel: ObservableObject {
         guard task.status == .done else { return true }
         // Back to what it was before it was finished, from the Done log too
         // (today's Reopen, as the Tasks circle).
-        guard settle(library.reopenTasks([taskID], in: historyID), retry: { [weak self] in self?.reopenTask() }) else { return false }
+        guard settle(AtticSounds.play(.undone, after: library.reopenTasks([taskID], in: historyID)), retry: { [weak self] in self?.reopenTask() }) else { return false }
         refresh()
         return true
     }
@@ -945,6 +946,7 @@ final class TaskNotePageModel: ObservableObject {
     private func report(_ failure: CommandFailure, retry: (() -> Void)? = nil) -> Bool {
         self.failure = Failure(message: failure.message, canRetry: failure.canRetry && retry != nil)
         self.retry = failure.canRetry ? retry : nil
+        AtticSounds.play(.failed)
         return false
     }
 

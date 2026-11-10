@@ -348,6 +348,7 @@ extension NoteEditorEngine {
     func copyTableAsMarkdown(_ attachment: NoteTableAttachment, to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(NoteTableText.markdown(attachment.table, cellText: Self.markdownCellText), forType: .string)
+        AtticSounds.play(.copied)
     }
 
     /// A cell's Markdown: its marks as Markdown, its dates as text.

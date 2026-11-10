@@ -252,7 +252,7 @@ extension NoteEditorEngine {
             let fragment = writeSelection(copied, to: board,
                 types: [Self.fragmentType, .rtf, .string, NSPasteboard.PasteboardType(contentType)])
             let imageData = board.setData(data, forType: NSPasteboard.PasteboardType(contentType))
-            return fragment && imageData
+            return AtticSounds.play(.copied, if: fragment && imageData)
         case .copyFile:
             guard let bytes = await objectBytes(object) else { return false }
             do {
@@ -262,7 +262,7 @@ extension NoteEditorEngine {
                 }.value
                 let board = NSPasteboard.general
                 board.clearContents()
-                return board.writeObjects([url as NSURL])
+                return AtticSounds.play(.copied, if: board.writeObjects([url as NSURL]))
             } catch { onNotice?(NoteNotice(kind: .notAdded, detail: error.localizedDescription)); return false }
         case let .exportCopy(destination):
             let name = objectFilename(object)

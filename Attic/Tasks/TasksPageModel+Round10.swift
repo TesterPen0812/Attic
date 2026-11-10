@@ -40,6 +40,7 @@ extension TasksPageModel {
     func copy(_ ids: [UUID], to pasteboard: NSPasteboard = .general) -> Bool {
         guard let export = export(ids) else { return false }
         export.write(to: pasteboard)
+        AtticSounds.play(.copied)
         AccessibilityNotification.Announcement(
             ids.count == 1 ? String(localized: "Copied") : String(localized: "Copied \(ids.count) tasks")
         ).post()

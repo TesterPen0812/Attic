@@ -158,7 +158,10 @@ final class NoteSession: ObservableObject, Identifiable {
         get { noticeValue?.detail }
         set { noticeValue = newValue.map { NoteNotice(kind: .notice, detail: $0) } }
     }
-    func showNotice(_ notice: NoteNotice) { noticeValue = notice }
+    func showNotice(_ notice: NoteNotice) {
+        noticeValue = notice
+        if notice.severity == .error { AtticSounds.play(.failed) }
+    }
     fileprivate(set) var lastEditAt: Date?
     fileprivate(set) var selection = NSRange(location: 0, length: 0)
     fileprivate(set) var scrollOffset: CGFloat = 0
@@ -3260,6 +3263,7 @@ final class NotesPageController: ObservableObject {
             }
             session.importBatch = nil
             session.importTask = nil
+            AtticSounds.play(.attached)
             _ = preserve(session)
         }
     }

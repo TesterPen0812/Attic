@@ -248,7 +248,7 @@ final class DrawPageModel: ObservableObject {
     /// The page's side of the library seam.
     var libraryActions: DrawLibraryActions {
         DrawLibraryActions(open: { [weak self] in self?.open($0) },
-                           newCanvas: { [weak self] in self?.newCanvas(name: $0) },
+                           newCanvas: { [weak self] in self?.newCanvas(name: $0); AtticSounds.play(.created) },
                            reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
                            close: { [weak self] in self?.closeFilter() },
                            canvasChanged: { [weak self] in self?.syncExternalChanges() },
@@ -1039,7 +1039,7 @@ final class DrawPageModel: ObservableObject {
             },
             AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: KeyboardShortcut("a", modifiers: .command),
                              isDisabled: empty, startsSection: true) { [weak self] in self?.selectAll() },
-            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in self?.newCanvas() },
+            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in self?.newCanvas(); AtticSounds.play(.created) },
             AtticMenuCommand(verbatim: String(localized: "Copy as Image"), isDisabled: empty) { [weak self] in
                 guard let self, let canvasID = self.canvasID else { return }
                 self.images.copyCanvas(canvasID)

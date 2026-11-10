@@ -1836,6 +1836,7 @@ struct TasksPage: View {
                             }
                             if model.report(move(), on: id, retry: move).isApplied {
                                 AtticHaptics.tick(enabled: design.hapticsEnabled)
+                                AtticSounds.play(.dropped)
                             }
                         }
                     )
@@ -3019,7 +3020,7 @@ struct TasksPage: View {
                 if let dayDrop {
                     let move = { [weak model] in model?.moveToDay(finished.id, dayDrop) ?? CommandOutcome.failed(.taskGone) }
                     let moved = model.report(move(), on: finished.id, retry: move)
-                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
+                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled); AtticSounds.play(.dropped) }
                 } else if finished.targetIndex != finished.startIndex {
                     // A filter or Find: among the rows shown (item 6).
                     // Among the rows shown: a filter, Find or a date group (item 6).
@@ -3031,7 +3032,7 @@ struct TasksPage: View {
                     }
                     let moved = model.report(move(), on: finished.id, retry: move)
                     // The tick confirms a move that saved, never a failed one.
-                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
+                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled); AtticSounds.play(.dropped) }
                 }
             }
         }
@@ -3190,6 +3191,7 @@ struct TasksPage: View {
                 guard let ids = await store.attachCopies(to: owner, of: {
                     try await TaskDroppedAttachmentCards.sources(from: providers, in: store)
                 }) else { return }
+                AtticSounds.play(.attached)
                 let title = store.task(withID: owner)?.title ?? ""
                 AccessibilityNotification.Announcement(
                     ids.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(ids.count) files to \(title)")
@@ -3210,6 +3212,7 @@ struct TasksPage: View {
         Task { @MainActor in
             // What arrived shows as the row's tiles.
             guard let ids = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) }) else { return }
+            AtticSounds.play(.attached)
             let title = store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 ids.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(ids.count) files to \(title)")

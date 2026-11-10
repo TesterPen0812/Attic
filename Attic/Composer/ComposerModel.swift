@@ -408,7 +408,7 @@ final class ComposerModel: ObservableObject {
             failedEventDrafts.removeAll { $0 == submitted || $0 == recovered }
             services.drafts?.saveFailedEvents(failedEventDrafts)
             recoveringFailedEvent = nil
-            guard generation == draftGeneration, current else { return true }
+            guard generation == draftGeneration, current else { AtticSounds.play(.created); return true }
             return finishCreation(true, openingPage: openingPage)
         }
     }
@@ -462,6 +462,7 @@ final class ComposerModel: ObservableObject {
     /// item's page, so the card folds.
     private func finishCreation(_ made: Bool, openingPage: Bool) -> Bool {
         failed = !made
+        AtticSounds.play(made ? .created : .failed)
         guard made else { return false }
         clearDraft()
         saveKeptDraft()
