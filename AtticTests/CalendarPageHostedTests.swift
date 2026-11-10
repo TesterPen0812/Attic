@@ -314,9 +314,9 @@ final class CalendarPageHostedTests: XCTestCase {
                 try press(page, "calendar-month-pill")
                 XCTAssertFalse(page.model.isDayView, "the title goes back")
                 XCTAssertNil(page.element("calendar-day-scroll"))
-                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5,
-                               "to Week, not Month")
-                XCTAssertEqual(page.value("calendar-month-pill"), "Week")
+                // Accepted 2026-11-10: back to the picked view, Month here.
+                XCTAssertEqual(page.offset, 0, accuracy: 0.5, "to the picked Month, at rest")
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month")
             }
         }
     }
@@ -327,13 +327,122 @@ final class CalendarPageHostedTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         PanelResumeScrollKeeper.remember(0, key: "calendar", in: defaults)
+        defaults.set(true, forKey: CalendarPageModel.weekPickedKey)
         try withReducedMotion {
             try withPage(events: [], height: 460, resumeDefaults: defaults) { page in
                 page.model.setDayView(true)
                 page.settle(0.5)
                 try press(page, "calendar-month-pill")
                 page.settle(0.5)
-                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
+                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: 1), accuracy: 0.5)
+            }
+        }
+    }
+
+    // MARK: The picked view decides the fold (Accepted 2026-11-10)
+
+    private static let selectedWeek = ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29",
+                                       "2026-10-30", "2026-10-31", "2026-11-01"]
+
+    /// Month, the default: the whole month at rest; scrolling the agenda up
+    /// folds the grid to the selected week, and the top unfolds it again.
+    func testMonthRestsUnfoldedScrollingFoldsAndTheTopUnfolds() throws {
+        try withReducedMotion {
+            try withPage(events: [], height: 460) { page in
+                XCTAssertFalse(page.model.isWeekPicked, "Month is the default")
+                XCTAssertEqual(page.offset, 0, accuracy: 0.5, "at rest, the whole month")
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month")
+                XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"), "every week of the month")
+                let fold = CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count)
+                page.scroll(to: fold + 40)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week", "scrolled up: folded to the week")
+                page.scroll(to: 0)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month", "back at the top: unfolded")
+                XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"))
+            }
+        }
+    }
+
+    /// Week: the grid is the selected week's seven days at every offset,
+    /// the top included, and after a search closes.
+    func testWeekNeverUnfoldsOnAnyScrollOrAfterSearch() throws {
+        try withReducedMotion {
+            try withPage(events: [], height: 460) { page in
+                page.model.pickWeek(true)
+                page.settle(0.5)
+                for y in [CGFloat(0), 120, 0, 2, 0] {
+                    page.scroll(to: y)
+                    XCTAssertEqual(page.value("calendar-month-pill"), "Week", "offset \(y)")
+                    XCTAssertEqual(page.ids("calendar-day-"), Self.selectedWeek, "only the selected week at offset \(y)")
+                }
+                XCTAssertTrue(page.element("calendar-search-button")?.accessibilityPerformPress?() ?? false)
+                page.settle()
+                XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: 1), accuracy: 0.5, "search folds to the week")
+                XCTAssertTrue(page.element(label: "End search")?.accessibilityPerformPress?() ?? false)
+                page.settle()
+                page.scroll(to: 0)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week", "search closed: still the week")
+                XCTAssertEqual(page.ids("calendar-day-"), Self.selectedWeek)
+                // ‹ › move a week; the title shows the month again.
+                try press(page, "calendar-next")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 11, 5))
+                XCTAssertEqual(page.ids("calendar-day-").count, 7)
+                try press(page, "calendar-month-pill")
+                XCTAssertFalse(page.model.isWeekPicked, "the title in Week shows the month")
+                XCTAssertEqual(page.offset, 0, accuracy: 0.5)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month")
+            }
+        }
+    }
+
+    /// Coming back from Day goes to the picked view, Week or Month.
+    func testComingBackFromDayReturnsToThePickedView() throws {
+        try withReducedMotion {
+            try withPage(events: [], height: 460) { page in
+                page.model.pickWeek(true)
+                page.settle(0.5)
+                page.model.setDayView(true)
+                page.settle(0.5)
+                try press(page, "calendar-month-pill")
+                XCTAssertFalse(page.model.isDayView)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week")
+                XCTAssertEqual(page.ids("calendar-day-"), Self.selectedWeek)
+                page.scroll(to: 0)
+                XCTAssertEqual(page.ids("calendar-day-"), Self.selectedWeek, "and it stays the week")
+
+                page.model.pickWeek(false)
+                page.settle(0.5)
+                page.model.setDayView(true)
+                page.settle(0.5)
+                try press(page, "calendar-month-pill")
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month")
+                XCTAssertEqual(page.offset, 0, accuracy: 0.5)
+                XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"))
+            }
+        }
+    }
+
+    /// The picked view is kept across a relaunch.
+    func testThePickedViewSurvivesARelaunch() throws {
+        let suite = "CalendarPickedView-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try withReducedMotion {
+            try withPage(events: [], height: 460, resumeDefaults: defaults) { page in
+                page.model.pickWeek(true)
+                page.settle(0.5)
+            }
+            try withPage(events: [], height: 460, resumeDefaults: defaults) { page in
+                XCTAssertTrue(page.model.isWeekPicked)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Week")
+                XCTAssertEqual(page.ids("calendar-day-"), Self.selectedWeek)
+                page.model.pickWeek(false)
+                page.settle(0.5)
+            }
+            try withPage(events: [], height: 460, resumeDefaults: defaults) { page in
+                XCTAssertFalse(page.model.isWeekPicked)
+                XCTAssertEqual(page.value("calendar-month-pill"), "Month")
+                XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"))
             }
         }
     }
@@ -863,7 +972,7 @@ final class CalendarPageHostedTests: XCTestCase {
         try seed(store)
         let source = CalendarEventSourceStub(events: events)
         let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) },
-                                      makeWriter: makeWriter)
+                                      makeWriter: makeWriter, resumeDefaults: resumeDefaults)
         let size = CGSize(width: 320, height: height)
         let layout = PanelPageLayout(cornerSize: 28, panelSize: size)
         var design = AtticDesignContext(mode: .light)

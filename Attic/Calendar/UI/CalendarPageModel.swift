@@ -54,6 +54,12 @@ final class CalendarPageModel: ObservableObject {
     @Published private(set) var isLoadingEvents = false
     /// The ••• menu's Day: the selected day by the clock (Accepted 2026-11-09).
     @Published private(set) var isDayView = false
+    /// The picked grid view (Accepted 2026-11-10, "the picked view decides
+    /// the fold"): Month folds to the selected week as the agenda scrolls
+    /// and unfolds at the top; Week keeps the grid to the selected week's
+    /// seven days on every scroll. Kept across launches.
+    @Published private(set) var isWeekPicked = false
+    static let weekPickedKey = "AtticCalendar.weekPicked"
     private var eventRequest: DateInterval? {
         didSet { isLoadingEvents = eventRequest != nil }
     }
@@ -99,6 +105,7 @@ final class CalendarPageModel: ObservableObject {
         dateEnvironment = DatePresentationEnvironment(calendar: currentCalendar, locale: locale ?? .current)
         self.now = now
         let today = DueDay(date: now(), calendar: currentCalendar)
+        isWeekPicked = resumeDefaults?.bool(forKey: Self.weekPickedKey) ?? false
         let selected = resumeDefaults?.data(forKey: "AtticCalendar.selectedDay")
             .flatMap { try? JSONDecoder().decode(DueDay.self, from: $0) }
             .flatMap { DueDay(year: $0.year, month: $0.month, day: $0.day) } ?? today
@@ -174,6 +181,13 @@ final class CalendarPageModel: ObservableObject {
 
     func setDayView(_ on: Bool) {
         if isDayView != on { isDayView = on }
+    }
+
+    /// Picks Week (true) or Month (false); the page folds or unfolds to it.
+    func pickWeek(_ on: Bool) {
+        guard isWeekPicked != on else { return }
+        isWeekPicked = on
+        resumeDefaults?.set(on, forKey: Self.weekPickedKey)
     }
 
     /// The Day view's ‹ ›: one day.

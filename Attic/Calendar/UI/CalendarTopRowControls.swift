@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The Calendar page's header (Accepted 2026-10-30, "Calendar page",
 /// Header): "October 2026" in plain bold text after the pin, with no ⌄;
-/// tapping it still folds the grid to the week and back.
+/// tapping it still folds the grid to the week and back. With Week picked
+/// it goes back to Month (2026-11-10), and from Day to the picked view.
 struct CalendarMonthTitle: View {
     let month: CalendarMonth
     let isWeekView: Bool
