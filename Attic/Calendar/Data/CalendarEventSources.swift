@@ -6,6 +6,9 @@ enum CalendarEventSources {
     /// `ATTIC_UI_TESTING`, so tests never meet a permission prompt.
     @MainActor
     static func makeDefault(environment: AppRuntimeEnvironment = AppRuntimeEnvironment()) -> CalendarEventSource {
+        #if DEBUG
+        if UITestingCalendar.isOn { return UITestingCalendarSource() }
+        #endif
         if environment.isRunningTests || environment.isUITesting {
             return CalendarEventSourceStub()
         }
