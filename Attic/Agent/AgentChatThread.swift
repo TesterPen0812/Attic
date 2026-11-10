@@ -352,19 +352,28 @@ private struct AgentStepRow: View {
     @ViewBuilder
     private func title(_ ink: Color) -> some View {
         if running, alive {
-            // The doing line's shimmer: a step is running, so this is work
-            // being done, never a thinking look.
-            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
-                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.7) / 1.7
-                let start = -2.34 + 4.68 * (1 - phase)
-                let highlight = AgentIris.shimmer(over: ink)
-                Text(step.title).foregroundStyle(LinearGradient(
-                    stops: [.init(color: ink, location: 0.32), .init(color: highlight.blue, location: 0.46),
-                            .init(color: highlight.pink, location: 0.54), .init(color: ink, location: 0.68)],
-                    startPoint: UnitPoint(x: start, y: 0.5), endPoint: UnitPoint(x: start + 2.8, y: 0.5)))
-            }
+            AgentChatShimmerText(text: step.title, ink: ink)
         } else {
             Text(step.title).foregroundStyle(ink)
+        }
+    }
+}
+
+/// The doing line's shimmer: a step is running, so this is work being done,
+/// never a thinking look. The tool row and the live label share it.
+struct AgentChatShimmerText: View {
+    let text: String
+    let ink: Color
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.7) / 1.7
+            let start = -2.34 + 4.68 * (1 - phase)
+            let highlight = AgentIris.shimmer(over: ink)
+            Text(text).foregroundStyle(LinearGradient(
+                stops: [.init(color: ink, location: 0.32), .init(color: highlight.blue, location: 0.46),
+                        .init(color: highlight.pink, location: 0.54), .init(color: ink, location: 0.68)],
+                startPoint: UnitPoint(x: start, y: 0.5), endPoint: UnitPoint(x: start + 2.8, y: 0.5)))
         }
     }
 }

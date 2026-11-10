@@ -22,10 +22,11 @@ final class ScriptedAgentRunner: AgentRunning {
         var target: AgentTarget { AgentTarget(page: .tasks, itemID: id, title: title) }
     }
 
-    /// One tool call that puts a change back.
+    /// One tool call that puts a change back, or a restore of its own.
     private struct Inverse {
-        let tool: String
-        let arguments: [String: Any]
+        var tool = ""
+        var arguments: [String: Any] = [:]
+        var restore: (() -> Bool)?
     }
 
     private let tools: AgentTaskTools
@@ -83,7 +84,13 @@ final class ScriptedAgentRunner: AgentRunning {
 
     func undo(changeSet id: UUID) async throws {
         guard let log = undoLog.removeValue(forKey: id) else { return }
-        for inverse in log.reversed() { _ = try tools.call(name: inverse.tool, arguments: inverse.arguments) }
+        for inverse in log.reversed() {
+            if let restore = inverse.restore {
+                guard restore() else { throw AgentActionsError.invalid("The note has changed since, so it was kept.") }
+            } else {
+                _ = try tools.call(name: inverse.tool, arguments: inverse.arguments)
+            }
+        }
     }
 
     func cancel() {
@@ -210,10 +217,11 @@ final class ScriptedAgentRunner: AgentRunning {
     private func note() async throws {
         emit(.progress(done: 0, total: 1))
         guard mode() != .readOnly else { return try await write("I can’t write in **Read only**. Nothing has been changed.") }
-        try await addChecklist()
+        let edited = try await addChecklist()
         emit(.progress(done: 1, total: 1))
         try await wait(0.65)
-        try await write("Your new note has a four-line **checklist**.")
+        try await write(edited ? "Your blog post note now ends with a four-line **checklist**. The dates come from your launch sketch."
+                               : "Your new note has a four-line **checklist**.")
     }
 
     private func book() async throws {
@@ -237,10 +245,11 @@ final class ScriptedAgentRunner: AgentRunning {
         try await addDentist()
         emit(.progress(done: 2, total: 3))
         try await wait(0.75)
-        try await addChecklist()
+        let edited = try await addChecklist()
         emit(.progress(done: 3, total: 3))
         try await wait(0.65)
-        try await write("Done in **two places**: Friday has the dentist, and a new note has a checklist.")
+        try await write(edited ? "Done in **two places**: Friday has the dentist, and your blog post note has a checklist."
+                               : "Done in **two places**: Friday has the dentist, and a new note has a checklist.")
     }
 
     // MARK: Steps
@@ -307,7 +316,40 @@ final class ScriptedAgentRunner: AgentRunning {
         }
     }
 
-    private func addChecklist() async throws {
+    /// The design's `noteAct`: a checklist at the end of the blog post note
+    /// (or the latest note). With no note at all, a new one has it.
+    @discardableResult
+    private func addChecklist() async throws -> Bool {
+        guard let store = tools.noteStore, let note = Self.noteToWriteIn(store),
+              let load = store.loadDocument(noteID: note.id), case let .editable(before) = load.content else {
+            try await createChecklist()
+            return false
+        }
+        let id = note.id
+        try await step("Writing in your note", done: "Added a checklist to your note", kind: .update,
+                       targets: [AgentTarget(page: .notes, itemID: id, title: note.title)], seconds: 0) {
+            try await self.wait(0.3)
+            let body = NoteTextExport.agentBody(before)
+            let add = "Launch checklist\n– Final copy by Thursday\n– Visuals by Friday\n– Press kit to Mira"
+            let result = try self.call("update_note", ["id": id.uuidString, "base_revision": note.revisionToken,
+                                                       "body": body.isEmpty ? add : body + "\n\n" + add])
+            guard result["status"] as? String == "applied",
+                  let revision = (result["note"] as? [String: Any])?["revision"] as? String else { return }
+            self.inverses.append(Inverse(restore: { [weak store] in
+                store?.agentRestore(noteID: id, document: before, revision: revision) == true
+            }))
+            self.note(page: .notes)
+        }
+        return true
+    }
+
+    static func noteToWriteIn(_ store: NoteStore) -> NoteItem? {
+        let notes = store.notes.filter { $0.deletedAt == nil && $0.taskID == nil && $0.usesDocumentFormat }
+        return notes.first { $0.title.localizedCaseInsensitiveContains("blog post") }
+            ?? notes.max { $0.updatedAt < $1.updatedAt }
+    }
+
+    private func createChecklist() async throws {
         try await step("Writing in your note", done: "Added a checklist to your note", kind: .create,
                        targets: [AgentTarget(page: .notes, itemID: nil, title: "Launch checklist")], seconds: 0) {
             try await self.wait(1.4)

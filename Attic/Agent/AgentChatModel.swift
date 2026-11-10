@@ -129,6 +129,9 @@ enum AgentChatEffect: Equatable {
     case approvalDenied
     case changesLanded(UUID)
     case undoing(AgentChatChanges)
+    /// A watched note edit's writing point, in window coordinates; `star`
+    /// lets a star go from it.
+    case writing(CGPoint, star: Bool)
 }
 
 /// How fast a reply writes itself. The HTML's values; tests use `.instant`.
@@ -203,6 +206,9 @@ final class AgentChatModel: ObservableObject {
     @Published private(set) var phase: AgentChatPhase = .idle
     @Published var draft = ""
     @Published var mode: AgentChatMode = .askFirst
+    /// While a watched run writes in a note: the label over the composer.
+    /// The chat steps aside for it (the blur and the thread go).
+    @Published private(set) var writingLabel: String?
 
     /// Bumped on every effect, so a view can follow them through `effects`.
     let effects = PassthroughSubject<AgentChatEffect, Never>()
@@ -211,6 +217,10 @@ final class AgentChatModel: ObservableObject {
     /// The page on show, and how to go to one while watching. Set by the shell.
     var currentPage: () -> AgentPage? = { nil }
     var openPage: ((AgentPage) -> Void)?
+    /// A note the agent has just written in, shown being written: Notes
+    /// forward on it, the text written in, then back. Nil when there is
+    /// nothing to show. Set by the shell; asked only while watching.
+    var writeInNote: ((UUID) -> (() async -> Void)?)?
     /// What the week strip shows, for the week holding a day.
     var weekDays: (Date) -> [AgentChatWeekDay] = { AgentChatModel.emptyWeek(holding: $0) }
     /// Told when the pages with a dot change.
@@ -311,6 +321,7 @@ final class AgentChatModel: ObservableObject {
     /// Closing never stops the run: it carries on, without touching the page.
     func close() {
         guard isOpen else { return }
+        if writingLabel != nil { writingLabel = nil }
         bar.isChatOpen = false
         runner?.setWatching(false)
         refreshBar()
@@ -331,6 +342,7 @@ final class AgentChatModel: ObservableObject {
     /// UI-testing seam: `ATTIC_UI_TEST_CHAT=seed;open@2;close@5;open@8`
     /// seeds an exchange and toggles the chat at those seconds after launch,
     /// so a recorder can watch openings with no click or key on screen.
+    /// `send:<text>@3` sends a message then.
     func runUITestingScript(_ script: String) {
         for part in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             if part == "seed" {
@@ -339,6 +351,14 @@ final class AgentChatModel: ObservableObject {
             }
             let pieces = part.split(separator: "@")
             guard pieces.count == 2, let seconds = Double(pieces[1]) else { continue }
+            if pieces[0].hasPrefix("send:") {
+                let text = String(pieces[0].dropFirst(5))
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    self?.draft = text
+                    self?.send()
+                }
+                continue
+            }
             let opens = pieces[0] == "open"
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
                 opens ? self?.open() : self?.close()
@@ -403,6 +423,7 @@ final class AgentChatModel: ObservableObject {
                 if skipped < replayed { skipped += 1; continue }
                 guard let self else { return }
                 await self.waitForReply(before: event)
+                if let write = self.noteWrite(before: event) { await write() }
                 self.apply(event)
             }
             if !Task.isCancelled { self?.runEnded() }
@@ -429,6 +450,7 @@ final class AgentChatModel: ObservableObject {
         runTask?.cancel()
         runTask = nil
         runner?.forgetThread()
+        if writingLabel != nil { writingLabel = nil }
         isRunning = false
         entries = []
         approval = nil
@@ -502,6 +524,33 @@ final class AgentChatModel: ObservableObject {
     }
 
     // MARK: Events
+
+    /// A watched note edit finishes once it has been seen being written:
+    /// its row turns done as the chat comes back. Closed, it lands as it is.
+    private func noteWrite(before event: AgentEvent) -> (() async -> Void)? {
+        guard case let .stepFinished(step) = event, isOpen, let noteID = Self.writtenNote(step),
+              let present = writeInNote?(noteID) else { return nil }
+        return { [weak self] in
+            guard let self else { return }
+            if self.currentPage() != .notes { self.agentGoingTo = .notes }
+            self.writingLabel = String(localized: "Writing in your note")
+            await present()
+            if self.writingLabel != nil { self.writingLabel = nil }
+        }
+    }
+
+    /// The note a finished step changed, when it is one edit of one note.
+    static func writtenNote(_ step: AgentStep) -> UUID? {
+        guard step.kind == .update, case .done = step.state else { return nil }
+        let notes = step.targets.filter { $0.page == .notes }
+        guard notes.count == 1, step.targets.count == 1 else { return nil }
+        return notes[0].itemID
+    }
+
+    /// The writing point moved; only an open chat draws it.
+    func writingAt(_ point: CGPoint, star: Bool) {
+        if isOpen { effects.send(.writing(point, star: star)) }
+    }
 
     /// What follows a reply waits for it to finish writing itself.
     private func waitForReply(before event: AgentEvent) async {
