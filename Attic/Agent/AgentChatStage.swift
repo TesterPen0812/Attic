@@ -130,6 +130,8 @@ struct AgentChatStage: View {
     /// The chat has stepped aside while the agent writes in a note: the blur,
     /// its colour, the thread and the floating controls go; the composer stays.
     @State private var aside = false
+    /// New chat: the old thread is leaving, upward (or, with Reduce Motion, fading).
+    @State private var dispersing = false
 
     private var alive: Bool { !design.reduceMotion }
     private var dark: Bool { design.tokens.context.mode == .dark }
@@ -154,7 +156,7 @@ struct AgentChatStage: View {
         #endif
         ZStack(alignment: .topTrailing) {
             AgentChatBackdrop(shown: shown, reveal: reveal, origin: star, tint: tint, fades: !alive, solid: solid,
-                              onEscape: { model.close() },
+                              onEscape: { model.escape() },
                               didMake: { view in DispatchQueue.main.async { backdropView = view } })
                 .opacity(aside ? 0 : 1)
                 // Still there to click: a click while watching closes the chat.
@@ -172,6 +174,10 @@ struct AgentChatStage: View {
                             .onTapGesture { model.close() }
                     } else {
                         AgentChatThread(model: model, fx: fx, alive: alive, onAway: { model.close() })
+                            .opacity(dispersing ? 0 : 1)
+                            .scaleEffect(dispersing && alive ? 0.98 : 1)
+                            .offset(y: dispersing && alive ? -23 : 0)
+                            .allowsHitTesting(!dispersing)
                     }
                 }
                 // The thread arrives with the blur under it, never over the
@@ -215,16 +221,36 @@ struct AgentChatStage: View {
         .onReceive(model.effects) { effect in if alive { play(effect) } else { settle(effect) } }
     }
 
-    /// New chat and Close, floating at the top once there is a thread.
+    /// Chats, New chat and Close, floating at the top once there is a thread.
     private var topControls: some View {
         HStack(spacing: 1) {
-            AgentChatIconButton(systemName: "square.and.pencil", label: String(localized: "New chat"), action: model.newChat)
+            AgentChatHistoryButton(model: model)
+            AgentChatIconButton(systemName: "square.and.pencil", label: String(localized: "New chat"), action: startNewChat)
+                .agentChatUITestTarget("agent-chat-new")
             AgentChatIconButton(systemName: "xmark", label: String(localized: "Close"), action: model.close)
         }
         .padding(2)
         .frame(height: AtticControlSize.headerControl)
         .background { Color.clear.atticRaisedMaterial(cornerRadius: 15, interactive: false) }
         .atticDesignCorners()
+    }
+
+    /// The design's reset: the old thread lifts 46 (23 here) and fades in
+    /// 240 ms, ease-in, with a burst of 22 at its middle; then the new chat.
+    /// Reduce Motion: a plain fade.
+    private func startNewChat() {
+        guard !dispersing else { return }
+        let duration = alive ? 0.24 : Self.fade
+        if alive, let composer = fx.composerFrame {
+            fx.burst(layout.panelSize.width / 2, composer.minY * 0.4, count: 22, speed: 120)
+        }
+        withAnimation(alive ? .easeIn(duration: duration) : .linear(duration: duration)) { dispersing = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            model.newChat()
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { dispersing = false }
+        }
     }
 
     private func appeared() {
@@ -511,6 +537,7 @@ struct AgentChatComposer: View {
         .animation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.3), value: model.phase)
         .onChange(of: shown, initial: true) { _, now in transition(now) }
         .onChange(of: focused) { _, now in setTyping(now) }
+        .onChange(of: model.pickingItem) { _, now in if !now { focusSoon() } }
         .onChange(of: model.draft) { old, new in if alive, new.count > old.count { fx.keystroke(count: new.count) } }
         .onReceive(model.effects) { effect in
             if effect == .approvalDenied, alive { deny() }
@@ -600,28 +627,46 @@ struct AgentChatComposer: View {
         let busy = model.phase != .idle
         let hasText = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return VStack(alignment: .leading, spacing: 3) {
-            TextField(String(localized: "Ask Attic"), text: $model.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11.5))
-                .lineLimit(1...4)
-                .lineSpacing(3)
-                .foregroundStyle(ink)
-                .focused($focused)
-                .padding(.horizontal, Self.textInset)
-                .padding(.vertical, 2)
-                .onSubmit(model.send)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        model.draft += "\n"
-                    } else {
-                        model.send()
-                    }
-                    return .handled
-                }
-                .accessibilityLabel(String(localized: "Message"))
-                .accessibilityIdentifier("agent-chat-field")
+            AgentChatContextChips(model: model)
+            if model.pickingItem {
+                AgentChatItemPicker(model: model, done: { model.pickingItem = false })
+            } else {
+                field
+            }
             HStack(spacing: 1) {
-                modePicker
+                addMenu
+                AgentChatPickerMenu(identifier: "agent-chat-agent", label: model.agent.shortTitle) {
+                    ForEach(AgentBackend.allCases, id: \.self) { choice in
+                        let reason = model.agentUnavailable[choice]
+                        Button {
+                            model.agent = choice
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(choice.shortTitle)
+                                    if let reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
+                                }
+                                if model.agent == choice { Image(systemName: "checkmark") }
+                            }
+                        }
+                        .disabled(reason != nil)
+                    }
+                }
+                AgentChatPickerMenu(identifier: "agent-chat-mode", label: model.mode.title) {
+                    ForEach(AgentChatMode.allCases) { choice in
+                        Button {
+                            model.mode = choice
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(choice.title)
+                                    Text(choice.description).font(.caption).foregroundStyle(.secondary)
+                                }
+                                if model.mode == choice { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                }
                 Spacer(minLength: 0)
                 Button { busy ? model.stop() : model.send() } label: {
                     Image(systemName: busy ? "stop.fill" : "arrow.up")
@@ -642,31 +687,87 @@ struct AgentChatComposer: View {
         }
         .padding(EdgeInsets(top: 7, leading: 9, bottom: 6, trailing: 6))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(alive ? .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.24) : .linear(duration: AgentChatStage.fade),
+                   value: model.pickingItem)
     }
 
-    private var modePicker: some View {
-        Menu {
-            ForEach(AgentChatMode.allCases) { choice in
-                Button {
-                    model.mode = choice
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(choice.title)
-                            Text(choice.description).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if model.mode == choice { Image(systemName: "checkmark") }
-                    }
+    private var field: some View {
+        TextField(String(localized: "Ask Attic"), text: $model.draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: 11.5))
+            .lineLimit(1...4)
+            .lineSpacing(3)
+            .foregroundStyle(ink)
+            .focused($focused)
+            .padding(.horizontal, Self.textInset)
+            .padding(.vertical, 2)
+            .onSubmit(model.send)
+            .onKeyPress(.return, phases: .down) { press in
+                if press.modifiers.contains(.shift) {
+                    model.draft += "\n"
+                } else {
+                    model.send()
                 }
+                return .handled
             }
+            .accessibilityLabel(String(localized: "Message"))
+            .accessibilityIdentifier("agent-chat-field")
+    }
+
+    /// The design's +: Task or note…, This page, File….
+    private var addMenu: some View {
+        Menu {
+            Button(String(localized: "Task or note…")) { model.pickingItem = true }
+            Button(String(localized: "This page")) { model.addPage() }
+            Button(String(localized: "File…")) { pickFile() }
         } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+                .frame(width: 21, height: 21)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(String(localized: "Add a task, note or file"))
+        .accessibilityLabel(String(localized: "Add a task, note or file"))
+        .accessibilityIdentifier("agent-chat-add")
+        .agentChatUITestTarget("agent-chat-add")
+    }
+
+    /// The standard open panel, text files only. Its grant covers the one
+    /// file picked, which is read at once (`AgentChatFiles`).
+    private func pickFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = AgentChatFiles.types
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.attachFile(at: url)
+            focusSoon()
+        }
+    }
+}
+
+/// One of the composer's labelled menus (the agent, the mode): its label and a chevron.
+private struct AgentChatPickerMenu<Content: View>: View {
+    let identifier: String
+    let label: String
+    @ViewBuilder let content: () -> Content
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        Menu(content: content) {
             HStack(spacing: 3) {
-                Text(model.mode.title).font(.system(size: 10, weight: .medium))
+                Text(label).font(.system(size: 10, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 6, weight: .bold))
             }
             .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
-            .padding(.leading, Self.textInset)
-            .padding(.trailing, 6)
+            .padding(.horizontal, 6)
             .frame(height: 21)
             .contentShape(Rectangle())
         }
@@ -674,7 +775,215 @@ struct AgentChatComposer: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityIdentifier("agent-chat-mode")
+        .accessibilityIdentifier(identifier)
+        .agentChatUITestTarget(identifier)
+    }
+}
+
+/// Over the field: the page chip (`Tasks ×`), then whatever + added, and a
+/// refused file's reason. Nothing at all when there is none.
+private struct AgentChatContextChips: View {
+    @ObservedObject var model: AgentChatModel
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let page = model.includesPage ? model.chipPage : nil
+        if page != nil || !model.attachments.isEmpty || model.attachmentRefusal != nil {
+            VStack(alignment: .leading, spacing: 3) {
+                if page != nil || !model.attachments.isEmpty {
+                    AgentChatChipFlow(spacing: 4) {
+                        if let page {
+                            chip(page.rawValue.capitalized, identifier: "agent-chat-page-chip") { model.removePage() }
+                        }
+                        ForEach(model.attachments) { attachment in
+                            chip(attachment.name, identifier: "agent-chat-chip") { model.removeAttachment(attachment.id) }
+                        }
+                    }
+                }
+                if let refusal = model.attachmentRefusal {
+                    Text(refusal)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+                        .padding(.leading, 3)
+                        .accessibilityIdentifier("agent-chat-file-refusal")
+                        .task(id: refusal) {
+                            try? await Task.sleep(for: .seconds(4))
+                            if !Task.isCancelled { model.clearAttachmentRefusal() }
+                        }
+                }
+            }
+            .padding(.bottom, 3)
+        }
+    }
+
+    private func chip(_ name: String, identifier: String, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 4) {
+            Text(name)
+                .font(.system(size: 9.5, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+            Button(action: remove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 6.5, weight: .semibold))
+                    .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+                    .frame(width: 11, height: 11)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(String(localized: "Remove"))
+            .accessibilityLabel(String(localized: "Remove"))
+            .agentChatUITestTarget(identifier + "-remove")
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 4)
+        .frame(height: 18)
+        .frame(maxWidth: 160, alignment: .leading)
+        .fixedSize()
+        .background(AgentChatFill.quiet(design), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Chips in a row, wrapping onto the next line when the row is full.
+private struct AgentChatChipFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.items {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [(items: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(items: [Int], width: CGFloat, height: CGFloat)] = []
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if var last = rows.last, last.width + spacing + size.width <= width {
+                last.items.append(index)
+                last.width += spacing + size.width
+                last.height = max(last.height, size.height)
+                rows[rows.count - 1] = last
+            } else {
+                rows.append(([index], size.width, size.height))
+            }
+        }
+        return rows
+    }
+}
+
+/// Task or note…: the field turns into a search over tasks and notes; a
+/// pick becomes a chip. Escape, or an empty field left, goes back.
+private struct AgentChatItemPicker: View {
+    @ObservedObject var model: AgentChatModel
+    let done: () -> Void
+    @Environment(\.atticDesign) private var design
+    @FocusState private var focused: Bool
+    @State private var query = ""
+    @State private var highlighted = 0
+
+    var body: some View {
+        let results = model.searchItems(query)
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(results.enumerated()), id: \.offset) { index, target in
+                Button { pick(target) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: target.page == .notes ? "note.text" : "circle")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
+                            .frame(width: 12)
+                        Text(target.title ?? "")
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .foregroundStyle(design.tokens.ink(.heading).color)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 4)
+                    .frame(height: 22)
+                    .background(index == highlighted ? AgentChatFill.quiet(design) : .clear,
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { if $0 { highlighted = index } }
+                .accessibilityIdentifier("agent-chat-pick-result")
+                .agentChatUITestTarget("agent-chat-pick-result-\(index)")
+            }
+            TextField(String(localized: "Task or note…"), text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(design.tokens.ink(.heading).color)
+                .focused($focused)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .onChange(of: query) { _, _ in highlighted = 0 }
+                .onKeyPress(.downArrow) { highlighted = min(highlighted + 1, max(0, results.count - 1)); return .handled }
+                .onKeyPress(.upArrow) { highlighted = max(highlighted - 1, 0); return .handled }
+                .onKeyPress(.return) {
+                    if results.indices.contains(highlighted) { pick(results[highlighted]) } else { done() }
+                    return .handled
+                }
+                .accessibilityIdentifier("agent-chat-pick-field")
+        }
+        .onAppear { DispatchQueue.main.async { focused = true } }
+        #if DEBUG
+        .onReceive(model.$uiTestQuery) { if let typed = $0 { query = typed } }
+        #endif
+    }
+
+    private func pick(_ target: AgentTarget) {
+        model.attach(target)
+        done()
+    }
+}
+
+/// The clock: the saved chats, newest first, each with its day; one reopens.
+struct AgentChatHistoryButton: View {
+    @ObservedObject var model: AgentChatModel
+    @Environment(\.atticDesign) private var design
+    @State private var hovered = false
+
+    var body: some View {
+        Menu {
+            ForEach(model.history) { chat in
+                Button { model.reopen(chat.id) } label: {
+                    Text(chat.title)
+                    Text(AgentChatModel.dayLabel(chat.updated))
+                }
+                .disabled(model.isBusy)
+            }
+        } label: {
+            Image(systemName: "clock")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+                .frame(width: 23, height: 23)
+                .background(hovered ? AgentChatFill.quiet(design) : .clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovered = $0 }
+        .help(String(localized: "Chats"))
+        .accessibilityLabel(String(localized: "Chats"))
+        .accessibilityIdentifier("agent-chat-history")
+        .agentChatUITestTarget("agent-chat-history")
     }
 }
 

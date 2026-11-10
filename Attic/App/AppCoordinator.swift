@@ -399,6 +399,8 @@ final class AppCoordinator: ObservableObject {
     private var menuNotificationTokens: [NSObjectProtocol] = []
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
+    /// The chat's agent menu and Settings' Agent row, kept as one setting.
+    private var agentChoiceObservation: AnyCancellable?
     private var globalShortcutObservation: AnyCancellable?
     private var quickCaptureObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
@@ -661,6 +663,13 @@ final class AppCoordinator: ObservableObject {
                 return uiState.selectedSection == section
             }
         )
+        agentChat.searchItems = { [weak agentActions] in agentActions?.pickerMatches($0) ?? [] }
+        agentChat.checkAgents = { [weak agentChat] in
+            Task { @MainActor in
+                guard let statuses = await AgentBackendDiscovery.statuses() else { return }
+                agentChat?.agentUnavailable = statuses.compactMapValues { AgentBackendDiscovery.reason($0) }
+            }
+        }
         let agentHandler = MCPRequestHandler(tools: agentTools, shellTools: shellTools, actions: agentActions)
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
@@ -685,7 +694,8 @@ final class AppCoordinator: ObservableObject {
                             : report.failures.joined(separator: "; ")
                     )
                 }
-            }
+            },
+            describeContext: { [weak agentActions] in agentActions?.requestContext($0) ?? AgentRunEngine.plainContext($0) }
         )
         agentChat.connect(agentRunner)
         #if DEBUG
@@ -702,7 +712,10 @@ final class AppCoordinator: ObservableObject {
             if parts.contains("motion:reduced") { settings.animations = .reduced }
             if parts.contains("motion:lively") { settings.animations = .lively }
             if parts.contains("scripted") {
-                agentChat.connect(ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst }))
+                let scripted = ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst })
+                if parts.contains("history") { scripted.seedHistoryForUITesting() }
+                agentChat.connect(scripted)
+                agentChat.refreshHistory()
             }
             agentChat.runUITestingScript(script)
         }
@@ -749,6 +762,7 @@ final class AppCoordinator: ObservableObject {
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
         self.agentRunner = agentRunner
+        agentChoiceObservation = uiState.agentChat.bindAgent(to: settings)
         self.newTaskHotKey = newTaskHotKey
         cleanupService = DailyCleanupService(
             store: store,

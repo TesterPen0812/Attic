@@ -336,6 +336,28 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         self.chromeInteractionState = chromeInteractionState
         let toasts = PanelToastCenter()
         self.toasts = toasts
+        // The Tasks page remembers its page and views (L7).
+        let tasksPageState = TasksPageState(memory: tasksMemory)
+        // The chat's page chip carries the open note, the one selected task
+        // or the canvas on show.
+        uiState.agentChat.currentItem = { [weak uiState, weak tasksPageState, weak store, weak noteStore,
+                                           weak noteDraft, weak canvasSession] in
+            switch uiState?.selectedSection {
+            case .tasks?, .backlog?:
+                guard let selection = tasksPageState?.builtModel?.selection, selection.count == 1,
+                      let id = selection.first, let task = store?.task(withID: id) else { return nil }
+                return AgentTarget(page: .tasks, itemID: id, title: task.title)
+            case .notes?:
+                guard let pages = noteDraft?.pages, !pages.isLibraryPresented,
+                      let id = pages.active?.noteID else { return nil }
+                return AgentTarget(page: .notes, itemID: id, title: noteStore?.note(withID: id)?.title)
+            case .canvas?:
+                guard let canvas = canvasSession?.selectedCanvas else { return nil }
+                return AgentTarget(page: .draw, itemID: canvas.id, title: canvas.name)
+            case .calendar?, nil:
+                return nil
+            }
+        }
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -352,8 +374,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 uiState: uiState,
                 settings: settings,
                 toasts: toasts,
-                // The Tasks page remembers its page and views (L7).
-                tasksPageState: TasksPageState(memory: tasksMemory),
+                tasksPageState: tasksPageState,
                 composerState: composerState
             ),
             panelCornerRadius: settings.panelCornerSize,
