@@ -379,7 +379,7 @@ final class AtticDropdownTests: XCTestCase {
         let tooTall = AtticDropdownLayout.place(idealWidth: 200, height: 400, anchor: anchor, bounds: bounds, prefer: .below,
                                                 current: .below)
         XCTAssertEqual(tooTall.side, .above, "the roomier side when neither holds it")
-        XCTAssertEqual(tooTall.heightLimit, 336)
+        XCTAssertEqual(tooTall.heightLimit, anchor.minY - bounds.minY - AtticDropdownMetrics.anchorGap)
         // The width rule is the same one.
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 150)
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 400, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 296)
@@ -611,13 +611,14 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The capture seam
 
-    /// The pickers stay solid (owner, 28 Oct): with the controls on Liquid
-    /// Glass, outside a capture, the priority picker's card is still the
-    /// opaque `popoverFill` over whatever lies behind it, in both modes.
-    func testAGlassConfiguredPickerStaysSolid() throws {
-        for mode in [AtticDesignContext.Mode.light, .dark] {
-            let design = AtticDesignContext(mode: mode, controls: .liquidGlass)
-            XCTAssertEqual(design.effectiveControls, .liquidGlass)
+    /// Planning.md, Accepted 2026-11-10 (Loam's menus): the picker cards
+    /// were opaque, which the glass rule forbids, so with the controls on
+    /// Liquid Glass the priority picker's card is glass, not the opaque
+    /// `popoverFill`; Reduce Transparency still gets the solid card.
+    func testAGlassConfiguredPickerIsGlassAndReduceTransparencyStaysSolid() throws {
+        for (mode, glass) in [(AtticDesignContext.Mode.light, true), (.dark, true), (.light, false), (.dark, false)] {
+            let design = AtticDesignContext(mode: mode, reduceTransparency: !glass, controls: .liquidGlass)
+            XCTAssertEqual(design.effectiveControls, glass ? .liquidGlass : .craft)
             let margin: CGFloat = 30
             let cardWidth = AtticDropdownMetrics.commandCardWidth
             // A swatch of `popoverFill` beside the card, through the same
@@ -645,6 +646,12 @@ final class AtticDropdownTests: XCTestCase {
             // Inside the card's top and bottom edges, clear of its corners and rows.
             for point in [CGPoint(x: margin + cardWidth / 2, y: margin + 1.5), CGPoint(x: margin + cardWidth / 2, y: height - margin - 1.5)] {
                 let c = try colour(point)
+                if glass {
+                    let apart = [abs(c.redComponent - fill.redComponent), abs(c.greenComponent - fill.greenComponent),
+                                 abs(c.blueComponent - fill.blueComponent)].max() ?? 0
+                    XCTAssertGreaterThan(apart, 0.05, "\(mode): glass, not popoverFill, at \(point)")
+                    continue
+                }
                 XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "\(mode): opaque at \(point)")
                 XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
                 XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
@@ -1007,13 +1014,15 @@ final class AtticDropdownTests: XCTestCase {
         defer { presenter.close(restoreFocus: false, immediately: true) }
         spin(0.1)
         let host = try XCTUnwrap(presenter.host)
-        XCTAssertEqual(host.contentRect.width, AtticDropdownMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
-        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzz", systemName: "plus")]
+        // Planning.md, Accepted 2026-11-10: a card out of a control is at
+        // least 216 pt.
+        XCTAssertEqual(host.contentRect.width, AtticMenuMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
+        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzzzzzzzzzzzzzzzzzz", systemName: "plus")]
         show(create)
         presenter.update()
         spin(0.1)
         let wanted = AtticDropdownLayout.width(ideal: AtticSuggestionList.idealWidth(create), available: 296)
-        XCTAssertGreaterThan(wanted, AtticDropdownMetrics.minWidth, "the create row needs more than the minimum")
+        XCTAssertGreaterThan(wanted, AtticMenuMetrics.minWidth, "the create row needs more than the minimum")
         XCTAssertEqual(host.contentRect.width, wanted, accuracy: 1, "the card grew to its row")
         XCTAssertEqual(presenter.stage.width, wanted)
     }
@@ -2535,40 +2544,40 @@ extension AtticDropdownTests {
 
 @MainActor
 extension AtticDropdownTests {
-    /// Draft C (owner, 2026-10-23) supersedes O14-02's unfold: the card
-    /// opens as one piece, as it closes (V-11), whole from its first frame,
-    /// fading in from 0.98 and 4 pt towards its anchor on the fast-out
-    /// curve in 180 ms, with no content blur. Closing runs back in 120 ms,
-    /// 3 pt towards the anchor.
-    func testR13TheUnfoldGrowsFromARowsHeightAndSharpensItsContentsJustAfter() {
+    /// The menus' motion (Accepted 2026-11-10, Loam's) for every card:
+    /// it opens as one piece, growing from its anchor's corner, 0.86 → 1,
+    /// and fading in on a spring of 0.30 s, bounce 0.28 (sampled on a
+    /// linear clock over its settling time); it closes with an ease-in
+    /// 0.12 s fade and shrink back toward the anchor. No travel, no blur.
+    func testR13TheCardGrowsFromItsCornerOnTheSpringAndShrinksBackEasingIn() {
         let r = AtticDropdownReveal.self
-        XCTAssertEqual(r.openDuration, 0.18, accuracy: 1e-9)
         XCTAssertEqual(r.closeDuration, 0.12, accuracy: 1e-9)
-        XCTAssertEqual(r.curve, AtticCubicBezier(0.16, 1, 0.3, 1))
+        XCTAssertEqual(r.springDuration, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(r.springBounce, 0.28, accuracy: 1e-9)
+        XCTAssertEqual(r.spring(at: 3), 1, accuracy: 1e-6)
+        XCTAssertEqual(r.spring(at: r.openDuration), 1, accuracy: 0.002, "settled by the end of its clock")
+        XCTAssertGreaterThan((0...45).map { r.spring(at: Double($0) / 100) }.max()!, 1, "a hint of overshoot")
         let shut = r.frame(time: 0, closing: false)
         XCTAssertEqual(shut.reveal, 1, "whole from the first frame: one piece")
         XCTAssertEqual(shut.opacity, 0)
-        XCTAssertEqual(shut.scale, 0.98, accuracy: 1e-6)
-        XCTAssertEqual(shut.travel, 4, accuracy: 1e-6, "it starts 4 pt towards its anchor and drops into place")
+        XCTAssertEqual(shut.scale, 0.86, accuracy: 1e-6)
+        XCTAssertEqual(shut.travel, 0, "it grows from its corner, no drop")
         XCTAssertEqual(shut.contentBlur, 0, "no blur: glass is never re-cut")
-        XCTAssertEqual(shut.shadow, 0, "the shadow comes with the card")
         XCTAssertEqual(r.frame(time: 1, closing: false), .rest)
-        var lastOpacity: CGFloat = -1
         for step in 0...40 {
             let f = r.frame(time: CGFloat(step) / 40, closing: false)
             XCTAssertEqual(f.reveal, 1, "whole, step \(step)")
-            XCTAssertGreaterThanOrEqual(f.scale, 0.98 - 1e-9, "never a zoom from nothing")
-            XCTAssertLessThanOrEqual(f.scale, 1 + 1e-9)
-            XCTAssertGreaterThanOrEqual(f.opacity, lastOpacity)
-            lastOpacity = f.opacity
+            XCTAssertGreaterThanOrEqual(f.scale, 0.86 - 1e-9, "never a zoom from nothing")
+            XCTAssertLessThanOrEqual(f.scale, 1.02)
         }
         XCTAssertEqual(r.frame(time: 0, closing: true), .rest, "closing starts from the open card")
         let gone = r.frame(time: 1, closing: true)
         XCTAssertEqual(gone.reveal, 1, "V-11: it leaves whole, never folded to its first row")
         XCTAssertEqual(gone.opacity, 0)
-        XCTAssertEqual(gone.travel, 3, accuracy: 1e-6, "it folds 3 pt back towards its anchor")
-        XCTAssertEqual(gone.scale, 0.98, accuracy: 1e-6)
-        XCTAssertEqual(gone.contentBlur, 0)
+        XCTAssertEqual(gone.travel, 0)
+        XCTAssertEqual(gone.scale, 0.86, accuracy: 1e-6, "shrinks back toward its anchor")
+        XCTAssertLessThan(r.frame(time: 0.5, closing: true).scale, 1, "an ease-in: slow to leave, quick to go")
+        XCTAssertGreaterThan(r.frame(time: 0.5, closing: true).opacity, 0.5)
     }
 
     /// The unfold's outline starts one row (28 pt) high at the edge by the
@@ -2590,14 +2599,13 @@ extension AtticDropdownTests {
         XCTAssertEqual(ring.width, 201, accuracy: 0.01, "the hairline sits just outside the face")
     }
 
-    func testR13TheCubicBezierSolvesTheOwnersCurve() {
+    func testR13TheCubicBezierSolvesTheCurves() {
         let linear = AtticCubicBezier(0.25, 0.25, 0.75, 0.75)
         for step in 0...10 { XCTAssertEqual(linear.y(at: Double(step) / 10), Double(step) / 10, accuracy: 1e-4) }
         let curve = AtticDropdownReveal.curve
+        XCTAssertEqual(curve, AtticCubicBezier(0.42, 0, 1, 1), "the close's ease-in")
         XCTAssertEqual(curve.y(at: 0), 0)
         XCTAssertEqual(curve.y(at: 1), 1)
-        XCTAssertEqual(curve.y(at: 0.2), 0.752, accuracy: 0.002)
-        XCTAssertEqual(curve.y(at: 0.5), 0.972, accuracy: 0.002)
         var last = 0.0
         for step in 1...100 {
             let y = curve.y(at: Double(step) / 100)
@@ -2774,16 +2782,14 @@ extension AtticDropdownTests {
 
 @MainActor
 extension AtticDropdownTests {
-    /// U-41, under draft C's one-piece opening (owner, 2026-10-23): the
-    /// card is opaque early in its fade (30 % of the curve), so the rows
-    /// under it never show through for long. Shut and gone stay clear.
-    func testU41TheUnfoldingCardIsOpaqueOnceItIsUnderway() {
+    /// U-41, under the menus' motion: glass is see-through, so the card
+    /// fades in with its spring; shut and gone stay clear.
+    func testU41TheUnfoldingCardFadesInWithItsSpring() {
         let r = AtticDropdownReveal.self
         XCTAssertEqual(r.frame(time: 0, closing: false).opacity, 0)
         XCTAssertEqual(r.frame(time: 1, closing: true).opacity, 0)
-        let frozen = r.frame(time: 0.3, closing: false)
-        XCTAssertEqual(frozen.opacity, 1, "the review's 30 % still: opaque")
-        XCTAssertEqual(r.opacity(progress: 0.15), 0.5, accuracy: 1e-9)
+        XCTAssertGreaterThan(r.frame(time: 0.3, closing: false).opacity, 0.9, "well underway by 30 % of the clock")
+        XCTAssertEqual(r.opacity(progress: 0.5), 0.5, accuracy: 1e-9)
     }
 
     /// V-11: a card closes as one piece, the native way: the whole card

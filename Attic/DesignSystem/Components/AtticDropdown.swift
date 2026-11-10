@@ -29,11 +29,12 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: always solid (owner, 28 Oct: the date, tag and
-/// priority pickers stay solid, whatever the controls' material), the
-/// opaque `popoverFill` with `popoverOuterRim` wholly outside it (1 pt
-/// under Increase Contrast) and its soft shadow, in the Shapes squircle.
-/// The command menus' glass is `AtticGlassMenu`'s own.
+/// The card's face: the menus' system glass (Accepted 2026-11-10: the
+/// picker cards take the glass menu's shell; the opaque card is only the
+/// fallback when Reduce Transparency or the solid controls ask for it),
+/// with its rim (1 pt under Increase Contrast) and soft shadow, in the
+/// menus' 18 pt squircle. The command menus' glass is `AtticGlassMenu`'s
+/// own.
 ///
 /// While the card fades in or out (`AtticDropdownReveal`) the face goes
 /// with it, as one piece.
@@ -52,9 +53,15 @@ struct AtticDropdownSurface: View {
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            shape.fill(tokens.popoverFill.color)
-            // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
-            shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            if design.effectiveControls == .liquidGlass {
+                Color.clear.glassEffect(.regular, in: shape)
+                shape.inset(by: edge / 2).stroke((design.increaseContrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark)
+                                                  : tokens.dropdownRim).color, lineWidth: edge)
+            } else {
+                shape.fill(tokens.popoverFill.color)
+                // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
+                shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -872,9 +879,12 @@ enum AtticDropdownLayout {
     /// margin) needs; `prefer`'s side when it fits there, else the other
     /// side, else the roomier one, kept inside `bounds`.
     static func frame(size: CGSize, anchor: CGRect, bounds: CGRect, prefer: Side,
-                      gap: CGFloat = AtticDropdownMetrics.anchorGap) -> (frame: CGRect, side: Side) {
+                      gap: CGFloat = AtticDropdownMetrics.anchorGap, alignTrailing: Bool = false) -> (frame: CGRect, side: Side) {
         let width = min(size.width, bounds.width)
-        let x = max(bounds.minX, min(anchor.minX, bounds.maxX - width))
+        // A control on the panel's right half: its trailing edge (the
+        // menus' placement, Accepted 2026-11-10).
+        let edge = alignTrailing ? anchor.maxX - width : anchor.minX
+        let x = max(bounds.minX, min(edge, bounds.maxX - width))
         let belowY = max(bounds.minY, min(anchor.maxY + gap, bounds.maxY))
         let aboveEnd = max(bounds.minY, min(anchor.minY - gap, bounds.maxY))
         let below = max(0, bounds.maxY - belowY)
@@ -904,6 +914,9 @@ enum AtticDropdownLayout {
         /// The card's height when its side can't hold all of it (it
         /// scrolls); nil when it fits.
         var heightLimit: CGFloat?
+        /// Lined up with its control's trailing edge (it grows from that
+        /// corner).
+        var trailing = false
         /// The width rule's width.
         var width: CGFloat { frame.width }
     }
@@ -913,12 +926,19 @@ enum AtticDropdownLayout {
     /// side when it fits there. Once open (`current`, its side so far) it
     /// keeps that side, and flips only when the side can't hold it (a
     /// filter, a calendar month, a scroll).
+    /// `fromControl`: a picker card opened by a control (the presenter):
+    /// as wide as the control and at least 216 pt, lined up with its
+    /// trailing edge when it sits on the right half of `bounds` (the
+    /// menus' placement, Accepted 2026-11-10).
     static func place(idealWidth: CGFloat, height: CGFloat, anchor: CGRect, bounds: CGRect,
-                      prefer: Side, current: Side? = nil) -> Placement {
-        let width = width(ideal: idealWidth, available: bounds.width)
-        let placed = frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: current ?? prefer)
+                      prefer: Side, current: Side? = nil, fromControl: Bool = false) -> Placement {
+        var width = width(ideal: idealWidth, available: bounds.width)
+        if fromControl { width = min(max(width, AtticMenuMetrics.minWidth, anchor.width.rounded(.up)), max(0, bounds.width.rounded(.down))) }
+        let trailing = fromControl && anchor.midX > bounds.midX
+        let placed = frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: current ?? prefer,
+                           alignTrailing: trailing)
         return Placement(frame: placed.frame, side: placed.side,
-                         heightLimit: placed.frame.height < height ? placed.frame.height : nil)
+                         heightLimit: placed.frame.height < height ? placed.frame.height : nil, trailing: trailing)
     }
 
     /// A card cut short to fit (`heightLimit`) through a scroll or a move:
@@ -937,7 +957,7 @@ enum AtticDropdownLayout {
         frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
         frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
         guard !(frame.minY <= anchor.minY && frame.maxY >= anchor.maxY) else { return nil }
-        return Placement(frame: frame, side: placement.side, heightLimit: placement.heightLimit)
+        return Placement(frame: frame, side: placement.side, heightLimit: placement.heightLimit, trailing: placement.trailing)
     }
 }
 
@@ -1033,9 +1053,9 @@ struct AtticDropdownSpace {
 
     /// `AtticDropdownLayout.place` within these bounds.
     func place(idealWidth: CGFloat, height: CGFloat, anchor: CGRect, prefer: AtticDropdownLayout.Side,
-               current: AtticDropdownLayout.Side? = nil) -> AtticDropdownLayout.Placement {
+               current: AtticDropdownLayout.Side? = nil, fromControl: Bool = false) -> AtticDropdownLayout.Placement {
         AtticDropdownLayout.place(idealWidth: idealWidth, height: height, anchor: anchor, bounds: bounds,
-                                  prefer: prefer, current: current)
+                                  prefer: prefer, current: current, fromControl: fromControl)
     }
 
     /// Puts a card's host (the card and its shadow room) where `placement`
@@ -1245,6 +1265,8 @@ final class AtticDropdownStageModel: ObservableObject {
     @Published var focusRequest = 0
     /// Solid on every frame (`atticDropdown(opaqueMotion:)`).
     @Published var opaque = false
+    /// Lined up with its control's trailing edge: it grows from there.
+    @Published var trailing = false
 }
 
 private struct AtticDropdownFocusRequestKey: EnvironmentKey {
@@ -1345,52 +1367,59 @@ struct AtticCubicBezier: Equatable, Sendable {
     }
 }
 
-/// How every Attic-drawn dropdown, menu and pop-over opens and closes: the
-/// owner's "unfold" (O14-02, owner 2026-10-14; it replaces N-4 B's mask
-/// reveal and option A's grow). The card unfolds from the edge by its
-/// anchor rather than zooming: its height grows from one row's (28 pt) to
-/// its own, it fades in, grows from 0.98 at that edge's leading corner and
-/// drops 4 pt into place; its shadow grows with it. Its contents follow
-/// 30 ms later, from a 5 pt blur to sharp over 130 ms. 180 ms in all on the
-/// fast-out curve (0.16, 1, 0.3, 1). Closing runs the same path back, faster
-/// (120 ms): towards one row's height, to clear, 3 pt back towards the
-/// anchor. Reduced: a short fade only.
+/// How every Attic-drawn dropdown and pop-over opens and closes: the glass
+/// menus' motion (Accepted 2026-11-10, Loam's): opening, the card grows
+/// from its anchor's corner, 0.86 → 1, and fades in on a spring of 0.30 s,
+/// bounce 0.28; closing is an ease-in 0.12 s fade and shrink back toward
+/// it. It opens and closes as one piece (V-11), never re-cut. Reduced: a
+/// short fade only.
 ///
 /// Cheap by construction: the card is laid out once at its full size. Only
-/// the effect's own modifiers (opacity, scale, offset) and two leaves (the
-/// surface's shape and shadow, `AtticDropdownSurface`; the contents' mask
-/// and blur, `AtticUnfoldContent`) change per frame; the rows never re-run.
+/// the effect's own modifiers (opacity, scale) and the surface's shadow
+/// change per frame; the rows never re-run. The clock runs linearly over
+/// the spring's settling time; `frame` samples the spring.
 enum AtticDropdownReveal {
-    static let openDuration: Double = 0.18
-    static let closeDuration: Double = 0.12
+    /// The spring's settling time (0.30 s perceptual, bounce 0.28).
+    static let openDuration: Double = 0.45
+    static let closeDuration: Double = AtticMenuMetrics.closeFade
+    static let springDuration: Double = AtticMenuMetrics.openDuration
+    static let springBounce: Double = Double(AtticMenuMetrics.openBounce)
     /// The contents start this long after the card…
-    static let contentDelay: Double = 0.03
+    static let contentDelay: Double = 0
     /// …and sharpen over this long.
-    static let contentDuration: Double = 0.13
+    static let contentDuration: Double = 0
     /// The height a card unfolds from (one row's) and closes back towards.
     static let startHeight: CGFloat = 28
-    static let startScale: CGFloat = 0.98
-    /// Towards the anchor as it opens (the drop) and as it closes.
-    static let openTravel: CGFloat = 4
-    static let closeTravel: CGFloat = 3
-    static let contentBlur: CGFloat = 5
-    /// The card is wholly opaque by this point of its unfold (U-41): its
-    /// face hides the rows under it from its first frames while its height
-    /// keeps growing and its contents sharpen, never a see-through card
-    /// over the list (and the same on the way back, until the last of it).
-    static let opaqueBy: CGFloat = 0.3
+    static let startScale: CGFloat = AtticMenuMetrics.startScale
+    /// No drop: it grows from its corner.
+    static let openTravel: CGFloat = 0
+    static let closeTravel: CGFloat = 0
+    static let contentBlur: CGFloat = 0
+    /// Glass is see-through anyway: the card fades in with the spring.
+    static let opaqueBy: CGFloat = 1
 
-    /// The card's opacity at `progress` (0...1 of the curve).
+    /// The card's opacity at `progress` (0...1 of the motion).
     static func opacity(progress: CGFloat) -> CGFloat { min(1, max(0, progress) / opaqueBy) }
-    /// The owner's fast-out curve.
-    static let curve = AtticCubicBezier(0.16, 1, 0.3, 1)
+    /// The close's ease-in.
+    static let curve = AtticCubicBezier(0.42, 0, 1, 1)
 
-    /// The effect's clock runs linearly; `frame` applies the curve, so the
-    /// card and its contents can keep their own timings on one clock.
+    /// SwiftUI's `spring(duration:bounce:)` at `seconds` (0 → 1, with its
+    /// overshoot): ω = 2π / duration, damping ratio 1 − bounce.
+    static func spring(at seconds: Double, duration: Double = springDuration, bounce: Double = springBounce) -> Double {
+        guard seconds > 0 else { return 0 }
+        let omega = 2 * Double.pi / duration
+        let zeta = 1 - max(0, min(bounce, 0.99))
+        if zeta >= 1 { return 1 - exp(-omega * seconds) * (1 + omega * seconds) }
+        let damped = omega * (1 - zeta * zeta).squareRoot()
+        return 1 - exp(-zeta * omega * seconds) * (cos(damped * seconds) + zeta * omega / damped * sin(damped * seconds))
+    }
+
+    /// The effect's clock runs linearly; `frame` applies the spring and the
+    /// ease-in.
     static var openAnimation: Animation { .linear(duration: openDuration) }
-    /// The card's opacity on its own, 0 → 1 on the curve: what an inserted
-    /// card fades in by (`AtticUnfoldPresence`).
-    static var openOpacityAnimation: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: openDuration) }
+    /// The card's opacity on its own: what an inserted card fades in by
+    /// (`AtticUnfoldPresence`).
+    static var openOpacityAnimation: Animation { .spring(duration: springDuration, bounce: springBounce) }
     static var closeAnimation: Animation { .linear(duration: closeDuration) }
     /// The motion's opening animation (callers that animate the presenting
     /// state alongside it).
@@ -1417,21 +1446,16 @@ enum AtticDropdownReveal {
         let t = Double(max(0, min(1, time)))
         if closing ? t <= 0 : t >= 1 { return .rest }
         if closing {
-            // V-11: the card leaves as one piece, the native way: whole,
-            // fading with its shadow, 0.98 and 3 pt towards its anchor. It
-            // never folds back to its first row (the tag card's "Find or
-            // add a tag" field stood alone for frames), as a removed card
-            // never has (`AtticUnfoldPresence`).
+            // An ease-in fade and shrink toward the anchor's corner.
             let e = CGFloat(curve.y(at: t))
-            return Frame(reveal: 1, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
-                         contentBlur: 0, shadow: 1 - e)
+            return Frame(reveal: 1, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: 0, contentBlur: 0, shadow: 1 - e)
         }
-        // Draft C (owner, 2026-10-23): the card opens as one piece too, as
-        // it closes (V-11): whole, a quick fade from 0.98 and 4 pt towards
-        // its anchor, never unfolding row by row (glass is never re-cut).
-        let e = CGFloat(curve.y(at: t))
-        return Frame(reveal: 1, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
-                     contentBlur: 0, shadow: e)
+        // The spring, sampled: it grows from 0.86 (with its overshoot) and
+        // fades in with it.
+        let p = CGFloat(spring(at: t * openDuration))
+        let shown = min(1, max(0, p))
+        return Frame(reveal: 1, opacity: opacity(progress: shown), scale: startScale + (1 - startScale) * p, travel: 0,
+                     contentBlur: 0, shadow: shown)
     }
 
     #if DEBUG
@@ -1576,6 +1600,9 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     var clock: CGFloat
     let closing: Bool
     let fromTop: Bool
+    /// Grows from the leading corner (a card lined up with its control's
+    /// trailing edge grows from the trailing one).
+    var fromLeading = true
     /// Reduce Motion: the clock is a fade alone.
     var reduced = false
     /// It tells the card's leaves (the surface, the rows' cut and blur) the
@@ -1602,7 +1629,7 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
         // rest must not clear the moving one's state.
         return content
             .transformEnvironment(\.atticUnfold) { if let state { $0 = state } }
-            .scaleEffect(f.scale, anchor: fromTop ? .topLeading : .bottomLeading)
+            .scaleEffect(f.scale, anchor: UnitPoint(x: fromLeading ? 0 : 1, y: fromTop ? 0 : 1))
             .offset(y: fromTop ? -f.travel : f.travel)
             .opacity(reduced ? clock : (appliesOpacity ? f.opacity : 1))
     }
@@ -1760,7 +1787,7 @@ struct AtticDropdownStage: View {
             .environment(\.atticDropdownWidth, model.width)
             .animation(reduce ? nil : (closing ? AtticDropdownReveal.closeAnimation : AtticDropdownReveal.openAnimation)) {
                 $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop,
-                                              appliesOpacity: !model.opaque))
+                                              fromLeading: !model.trailing, appliesOpacity: !model.opaque))
             }
             // Reduced: no motion at all, opening or closing (draft C).
             .animation(nil) {
@@ -1871,13 +1898,14 @@ final class AtticDropdownPresenter {
         let ideal = contentWidth ?? (fitting.width - room * 2)
         let height = contentHeight ?? max(0, fitting.height - room * 2)
         let anchorRect = space.anchor(anchor.bounds, in: anchor)
-        let placed = space.place(idealWidth: ideal, height: height, anchor: anchorRect, prefer: prefer)
+        let placed = space.place(idealWidth: ideal, height: height, anchor: anchorRect, prefer: prefer, fromControl: true)
         lastPlacement = (placed, anchorRect, space.bounds)
         if contentHasCard || placed.width != ideal.rounded(.up) { stage.width = placed.width }
         openWidth = placed.width
         openIdealWidth = ideal
         naturalHeight = height
         stage.side = placed.side
+        stage.trailing = placed.trailing
         stage.height = placed.heightLimit
         host.menuLabel = label
         space.show(host, at: placed)
@@ -1966,7 +1994,7 @@ final class AtticDropdownPresenter {
         naturalHeight = height
         let anchorRect = space.anchor(anchor.bounds, in: anchor)
         let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: anchorRect,
-                                 prefer: prefer, current: stage.side)
+                                 prefer: prefer, current: stage.side, fromControl: true)
         lastPlacement = (placed, anchorRect, space.bounds)
         if let width {
             openIdealWidth = width
@@ -1976,6 +2004,7 @@ final class AtticDropdownPresenter {
             }
         }
         if stage.side != placed.side { stage.side = placed.side }
+        if stage.trailing != placed.trailing { stage.trailing = placed.trailing }
         if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
         space.show(host, at: placed)
     }
@@ -1990,12 +2019,13 @@ final class AtticDropdownPresenter {
         openIdealWidth = width
         let anchorRect = space.anchor(anchor.bounds, in: anchor)
         let placed = space.place(idealWidth: width, height: naturalHeight, anchor: anchorRect,
-                                 prefer: prefer, current: stage.side)
+                                 prefer: prefer, current: stage.side, fromControl: true)
         guard placed.width > openWidth + 0.5 else { return }
         lastPlacement = (placed, anchorRect, space.bounds)
         openWidth = placed.width
         stage.width = placed.width
         if stage.side != placed.side { stage.side = placed.side }
+        if stage.trailing != placed.trailing { stage.trailing = placed.trailing }
         if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
         space.show(host, at: placed)
     }
@@ -2138,7 +2168,7 @@ final class AtticDropdownPresenter {
                 return
             }
             let placed = space.place(idealWidth: self.openIdealWidth, height: self.naturalHeight,
-                                     anchor: anchorRect, prefer: self.prefer, current: self.stage.side)
+                                     anchor: anchorRect, prefer: self.prefer, current: self.stage.side, fromControl: true)
             self.lastPlacement = (placed, anchorRect, space.bounds)
             if self.stage.side != placed.side { self.stage.side = placed.side }
             if self.stage.height != placed.heightLimit {

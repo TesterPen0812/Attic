@@ -78,7 +78,7 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(NotesLibraryRowMetrics.radius, 12)
         XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
         XCTAssertEqual(AtticRadius.popover, 16)
-        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 16, "the solid pickers: 32 px")
+        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 18, "the picker cards: the glass menu's 18 pt (Accepted 2026-11-10)")
         XCTAssertEqual(AtticDropdownMetrics.inset, 3, "6 px padding")
         XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 13, "concentric rows: 16 − 3")
         XCTAssertEqual(AtticDropdownMetrics.clearRadius, 13, "Clear Date as a row")
@@ -204,15 +204,15 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
-    /// Shapes on the solid pickers: the cards and their rows are surface
-    /// squircles at the menu radius (16 pt, rows 13 pt), and the date
+    /// Shapes on the pickers: the cards are surface squircles at the glass
+    /// menu's 18 pt (Accepted 2026-11-10), their rows still 13 pt, and the date
     /// picker's day marks whole superellipses on curve 1.4.
     func testPickerCardsRowsAndDayMarksFollowShapes() {
         let d = AtticDropdownMetrics.self
         let card = CGRect(x: 0, y: 0, width: 224, height: 260)
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
-                       Squircle(cornerRadius: 16, exponent: AtticShape.surfaceExponent).path(in: card),
-                       "the card: a surface squircle at the menu radius")
+                       Squircle(cornerRadius: 18, exponent: AtticShape.surfaceExponent).path(in: card),
+                       "the card: a surface squircle at the glass menu's radius")
         let row = CGRect(x: 3, y: 3, width: 218, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
                        Squircle(cornerRadius: 13, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 13 pt squircle")
@@ -812,7 +812,8 @@ final class PanelChromeTests: XCTestCase {
             let d = AtticDropdownMetrics.self
             let surface = AtticShape.surfaceExponent
             assertOutline(d.fieldShape, in: CGSize(width: 220, height: d.fieldHeight),
-                          radius: AtticRadius.concentric(outer: d.cornerRadius, padding: d.inset + d.fieldInset),
+                          // The card's shell took the glass menu's 18 pt; its contents stay as they were.
+                          radius: AtticRadius.concentric(outer: AtticRadius.menu, padding: d.inset + d.fieldInset),
                           exponent: surface, "the field")
             // The composer's short lists light their rows like the menus.
             let fill = AtticControlSize.smallHeight - AtticPickerMetrics.highlightGap

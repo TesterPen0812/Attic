@@ -1,16 +1,22 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Glass menus (draft C)
+// MARK: - Glass menus (Loam's, Accepted 2026-11-10)
+//
+// The look, placement and motion follow Loam's `GlassMenu.swift` (MIT,
+// commit e2e1f56, https://github.com/Azilone/Loam.md); its values are
+// ported here onto Attic's own AppKit card (no Loam code is copied).
 
-/// Attic's command menus on glass (owner, 2026-10-23: draft C, "the menus
-/// look good"; superseding the native `NSMenu` look for row menus): the
-/// right-click menus, ⋯ and ⇧⌘I, and every other menu built from
-/// `AtticMenuCommand`s. Each level is its own floating card of real system
-/// glass (regular) with the Accepted squircle corners and draft C’s rim, rows,
-/// icons, hairline separators and section headers; a submenu is a separate
-/// card beside its row. Shortcut hints are not drawn (as drawn in draft C);
-/// the shortcuts still work, in the menu and outside it.
+/// Attic's command menus on glass: the right-click menus, ⋯ and ⇧⌘I, and
+/// every other menu built from `AtticMenuCommand`s, in Loam's glass menu
+/// (Accepted 2026-11-10). Each level is its own floating card of real
+/// system glass with 18 pt corners, 6 pt padding, 32 pt rows, a 20 pt icon
+/// column, a shortcut or value at the trailing edge and a highlight that
+/// slides from row to row; a submenu is a separate card beside its row.
+/// A card comes out of the control that opened it (leading or trailing
+/// edge by the control's side of the panel, 8 pt away, opening toward the
+/// panel's middle), grows from that corner on a spring while its rows
+/// arrive one after another, and shrinks back toward it as it closes.
 ///
 /// Parity with a native menu: it tracks in its own event loop, as `NSMenu`
 /// does, so nothing under it sees the keys or the clicks; ↑ ↓ move the
@@ -25,8 +31,7 @@ final class AtticGlassMenu {
     enum Placement: Equatable {
         /// Its top-left corner at the point (a right-click).
         case point(CGPoint)
-        /// Under the rect, its leading edge on the rect's (a button);
-        /// above it when there is no room below.
+        /// Out of the rect (a button): see `rootPlacement`.
         case below(NSRect)
     }
 
@@ -34,6 +39,15 @@ final class AtticGlassMenu {
     enum ScreenPlacement: Equatable {
         case point(CGPoint)
         case below(NSRect)
+    }
+
+    /// The corner of a card it grows from and shrinks toward: the one by
+    /// the control (or the pointer) that opened it.
+    enum Corner: Equatable {
+        case topLeading, topTrailing, bottomLeading, bottomTrailing
+
+        var isTop: Bool { self == .topLeading || self == .topTrailing }
+        var isLeading: Bool { self == .topLeading || self == .bottomLeading }
     }
 
     /// The menu tracking now (one at a time, as with `NSMenu`).
@@ -109,7 +123,7 @@ final class AtticGlassMenu {
         }
         let menu = AtticGlassMenu(commands, appearance: window.effectiveAppearance, opener: opener)
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
-        menu.open(screen, visible: visible, source: window)
+        menu.open(screen, visible: visible, source: window, container: window.frame)
         current = menu
         let info: [AnyHashable: Any]? = opener.map { [openerKey: $0] }
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackingObject, userInfo: info)
@@ -141,47 +155,81 @@ final class AtticGlassMenu {
     }
 
     /// Builds and shows the root card (no event loop: `track` runs it).
-    func open(_ placement: ScreenPlacement, visible: NSRect, source: NSWindow?) {
+    /// `container`: the source window's frame, whose halves decide which
+    /// edge of a control the card lines up with and which way it opens.
+    func open(_ placement: ScreenPlacement, visible: NSRect, source: NSWindow?, container: NSRect? = nil) {
         self.visible = visible
         self.source = source
-        let card = AtticGlassMenuCard(commands: commands, menu: self, level: 0)
-        card.place(Self.rootFrame(size: card.size, placement: placement, visible: visible))
+        var minimum: CGFloat = 0
+        if case let .below(rect) = placement { minimum = rect.width }
+        let card = AtticGlassMenuCard(commands: commands, menu: self, level: 0, minimumWidth: minimum)
+        let placed = Self.rootPlacement(size: card.size, placement: placement, visible: visible, container: container)
+        card.place(placed.frame)
         cards = [card]
         focus = 0
         isOpen = true
-        card.show(fading: !style.reduceMotion)
+        card.show(animated: true, from: placed.corner)
         NSAccessibility.post(element: card.view, notification: Self.menuOpened)
     }
 
     // MARK: Placement (pure; tested)
 
-    /// The root card's frame: its top-left at the point, or under the rect
-    /// (above it when only that fits); flipped to the left of the point at
-    /// the screen's right edge, and moved up at its bottom; never past the
-    /// visible frame's margin.
-    static func rootFrame(size: CGSize, placement: ScreenPlacement, visible: NSRect) -> NSRect {
+    /// The root card's frame.
+    static func rootFrame(size: CGSize, placement: ScreenPlacement, visible: NSRect, container: NSRect? = nil) -> NSRect {
+        rootPlacement(size: size, placement: placement, visible: visible, container: container).frame
+    }
+
+    /// The root card's frame and the corner it grows from. From a point
+    /// (a right-click): its top-left at the point, flipped to the left of
+    /// it at the screen's right edge, moved up at its bottom. From a
+    /// control (Accepted 2026-11-10): 8 pt out of it, lined up with its
+    /// leading edge, or its trailing edge when the control is on the
+    /// right half of `container` (the panel); opening toward the panel's
+    /// middle (up from a control on its lower half, down from one on its
+    /// upper half), on the other side when only that fits, else kept
+    /// inside the screen over the control, as before. Never past the
+    /// visible frame's margin; a card taller than the screen is capped
+    /// (its rows scroll).
+    static func rootPlacement(size: CGSize, placement: ScreenPlacement, visible: NSRect,
+                              container: NSRect? = nil) -> (frame: NSRect, corner: Corner) {
         let m = AtticMenuMetrics.screenMargin
         let height = min(size.height, visible.height - m * 2)
         var x: CGFloat
         var top: CGFloat
+        let leading: Bool
+        let fromTop: Bool
         switch placement {
         case let .point(point):
             x = point.x
             top = point.y
             if x + size.width > visible.maxX - m { x = point.x - size.width }
             if top - height < visible.minY + m { top = visible.minY + m + height }
+            leading = x >= point.x - 0.5
+            fromTop = top <= point.y + 0.5
         case let .below(rect):
-            x = rect.minX
-            top = rect.minY - AtticMenuMetrics.anchorGap
-            if top - height < visible.minY + m {
-                let above = rect.maxY + AtticMenuMetrics.anchorGap + height
-                top = above <= visible.maxY - m ? above : visible.minY + m + height
+            let gap = AtticMenuMetrics.anchorGap
+            let trailing = container.map { rect.midX > $0.midX } ?? false
+            let upward = container.map { rect.midY < $0.midY } ?? false
+            x = trailing ? rect.maxX - size.width : rect.minX
+            let belowTop = rect.minY - gap
+            let aboveBottom = rect.maxY + gap
+            let fitsBelow = belowTop - height >= visible.minY + m
+            let fitsAbove = aboveBottom + height <= visible.maxY - m
+            var up = upward
+            if up, !fitsAbove, fitsBelow { up = false } else if !up, !fitsBelow, fitsAbove { up = true }
+            if up {
+                top = fitsAbove ? aboveBottom + height : visible.maxY - m
+            } else {
+                top = fitsBelow ? belowTop : visible.minY + m + height
             }
             if x + size.width > visible.maxX - m { x = visible.maxX - m - size.width }
+            leading = !trailing
+            fromTop = !up
         }
         x = max(visible.minX + m, min(x, visible.maxX - m - size.width))
         top = min(top, visible.maxY - m)
-        return NSRect(x: x, y: top - height, width: size.width, height: height)
+        let corner: Corner = fromTop ? (leading ? .topLeading : .topTrailing) : (leading ? .bottomLeading : .bottomTrailing)
+        return (NSRect(x: x, y: top - height, width: size.width, height: height), corner)
     }
 
     /// A submenu's frame: 4 pt beside its parent, on the right, or on the
@@ -404,7 +452,7 @@ final class AtticGlassMenu {
     }
 
     func cardIndex(at point: NSPoint) -> Int? {
-        cards.indices.reversed().first { cards[$0].window.frame.contains(point) }
+        cards.indices.reversed().first { cards[$0].frame.contains(point) }
     }
 
     func pointerMoved(to point: NSPoint, afterGrace: Bool = false) {
@@ -500,12 +548,14 @@ final class AtticGlassMenu {
                                        width: command.menuWidth)
         child.parentRow = row
         let rowTop = parent.screenTop(ofRow: row)
-        child.place(Self.submenuFrame(size: child.size, parent: parent.window.frame, rowTop: rowTop,
-                                      firstRowOffset: child.firstRowOffset, visible: visible))
+        let frame = Self.submenuFrame(size: child.size, parent: parent.frame, rowTop: rowTop,
+                                      firstRowOffset: child.firstRowOffset, visible: visible)
+        child.place(frame)
         parent.child = child
         cards.append(child)
-        parent.view.needsDisplay = true
-        child.show(fading: false)
+        parent.refreshHighlight(animated: false)
+        // It grows out of its row: from its top corner by the parent.
+        child.show(animated: true, from: frame.minX >= parent.frame.midX ? .topLeading : .topTrailing)
         parent.view.updateAccessibility()
         NSAccessibility.post(element: child.view, notification: Self.menuOpened)
     }
@@ -513,12 +563,12 @@ final class AtticGlassMenu {
     private func closeCards(after index: Int) {
         guard cards.count > index + 1 else { return }
         for card in cards[(index + 1)...] {
-            card.hide(fading: false)
+            card.hide(animated: true)
             NSAccessibility.post(element: card.view, notification: Self.menuClosed)
         }
         cards.removeSubrange((index + 1)...)
         cards[index].child = nil
-        cards[index].view.needsDisplay = true
+        cards[index].refreshHighlight(animated: false)
         cards[index].view.updateAccessibility()
         focus = min(focus, index)
     }
@@ -531,7 +581,7 @@ final class AtticGlassMenu {
         cancelGrace()
         cancelSubmenuTimer()
         for card in cards.reversed() {
-            card.hide(fading: animated && !style.reduceMotion && card.level == 0 && chosen == nil)
+            card.hide(animated: animated)
             NSAccessibility.post(element: card.view, notification: Self.menuClosed)
         }
         cards.forEach { $0.child = nil }
@@ -638,7 +688,8 @@ enum AtticMenuSymbols {
 
 // MARK: - Style
 
-/// The colours and fonts a glass menu draws with: draft C on Attic's tokens.
+/// The colours and fonts a glass menu draws with: Loam's menu on Attic's
+/// tokens.
 @MainActor
 struct AtticGlassMenuStyle {
     let design: AtticDesignContext
@@ -660,7 +711,10 @@ struct AtticGlassMenuStyle {
     var header: NSColor { secondary(.groupHeader) }
     var disabled: NSColor { secondary(.meta) }
     var destructive: NSColor { colourInk(tokens.ink(.dueText)).nsColor }
-    var highlight: NSColor { tokens.dropdownHighlight.nsColor }
+    /// The highlight: 8 % ink (16 % under Increase Contrast).
+    var highlight: NSColor {
+        title.withAlphaComponent(design.increaseContrast ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha)
+    }
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var fill: NSColor { tokens.popoverFill.nsColor }
     var rim: NSColor {
@@ -668,6 +722,7 @@ struct AtticGlassMenuStyle {
         return (design.increaseContrast ? AtticGlassModel.contrastEdge(dark: dark) : tokens.dropdownRim).nsColor
     }
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
+    var shadow: NSColor { tokens.dropdownShadow.nsColor }
 
     /// The card's material controls its inks, independently of the panel.
     private func secondary(_ tone: AtticPanelTone) -> NSColor {
@@ -681,9 +736,9 @@ struct AtticGlassMenuStyle {
         isGlass ? AtticSurfaceInk.vivid(colour, tokens: tokens) : colour
     }
 
-    static let titleFont = NSFont.systemFont(ofSize: AtticTextStyle.dropdownRow.spec.size)
-    static let detailFont = NSFont.systemFont(ofSize: AtticTextStyle.shortcut.spec.size)
-    static let headerFont = NSFont.systemFont(ofSize: AtticTextStyle.dropdownSection.spec.size, weight: .semibold)
+    static let titleFont = NSFont.systemFont(ofSize: AtticMenuMetrics.titleSize, weight: .medium)
+    static let detailFont = NSFont.systemFont(ofSize: AtticMenuMetrics.detailSize)
+    static let headerFont = NSFont.systemFont(ofSize: AtticMenuMetrics.headerSize, weight: .semibold)
 
     /// An SF Symbol in one colour, cached.
     @MainActor static func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor) -> NSImage? {
@@ -700,12 +755,43 @@ struct AtticGlassMenuStyle {
     @MainActor private static var symbols: [String: NSImage] = [:]
 }
 
-/// The menus' radius (owner, 2026-10-31: 16 pt, as before Shapes), with
-/// the dropdown cards' padding and concentric rows.
+/// The menus' shape (Accepted 2026-11-10): 18 pt continuous corners, 6 pt
+/// padding and 12 pt rows' highlight.
 enum AtticGlassMenuShape {
-    static let radius: CGFloat = AtticRadius.menu
-    static let inset: CGFloat = AtticRadius.menuPadding
-    static let rowRadius: CGFloat = AtticRadius.menuRow
+    static let radius: CGFloat = AtticMenuMetrics.cardRadius
+    static let inset: CGFloat = AtticMenuMetrics.cardPadding
+    static let rowRadius: CGFloat = AtticMenuMetrics.highlightRadius
+}
+
+extension AtticMenuCommand {
+    /// The shortcut drawn at a row's trailing edge (⇧⌘I), for a command
+    /// whose shortcut has a modifier; a bare key's is a hint of the list's.
+    var glassShortcut: String? {
+        guard let shortcut = menuShortcut else { return nil }
+        let m = shortcut.modifiers
+        var text = ""
+        if m.contains(.control) { text += "⌃" }
+        if m.contains(.option) { text += "⌥" }
+        if m.contains(.shift) { text += "⇧" }
+        if m.contains(.command) { text += "⌘" }
+        switch shortcut.key {
+        case .return: text += "↩"
+        case .space: text += String(localized: "Space")
+        case .delete: text += "⌫"
+        case .deleteForward: text += "⌦"
+        case .upArrow: text += "↑"
+        case .downArrow: text += "↓"
+        case .leftArrow: text += "←"
+        case .rightArrow: text += "→"
+        case .escape: text += "⎋"
+        case .tab: text += "⇥"
+        default: text += String(shortcut.key.character).uppercased()
+        }
+        return text
+    }
+
+    /// What a row shows at its trailing edge: its value, else its shortcut.
+    var glassTrailingText: String? { detail ?? glassShortcut }
 }
 
 // MARK: - Card
@@ -728,6 +814,11 @@ final class AtticGlassMenuCard {
             if case let .item(command) = kind { return !command.isDisabled }
             return false
         }
+
+        var isItem: Bool {
+            if case .item = kind { return true }
+            return false
+        }
     }
 
     let level: Int
@@ -737,16 +828,23 @@ final class AtticGlassMenuCard {
     let hasIcons: Bool
     let window: AtticGlassMenuWindow
     let view: AtticGlassMenuView
+    /// The card on screen (its window adds a margin for the shadow and
+    /// the spring's overshoot).
+    private(set) var frame: NSRect = .zero
     private(set) var highlighted: Int?
     var child: AtticGlassMenuCard?
     var parentRow: Int?
     private(set) var scrollOffset: CGFloat = 0
+    /// The corner it grew from, which it shrinks back toward.
+    private var corner: AtticGlassMenu.Corner = .topLeading
+    private var isHidden = false
     unowned let menu: AtticGlassMenu
 
-    init(commands: [AtticMenuCommand], menu: AtticGlassMenu, level: Int, title: String? = nil, width: CGFloat? = nil) {
+    init(commands: [AtticMenuCommand], menu: AtticGlassMenu, level: Int, title: String? = nil, width: CGFloat? = nil,
+         minimumWidth: CGFloat = 0) {
         self.menu = menu
         self.level = level
-        let layout = Self.layout(commands, width: width)
+        let layout = Self.layout(commands, width: width, minimum: minimumWidth)
         entries = layout.entries
         size = layout.size
         contentHeight = layout.size.height
@@ -756,6 +854,7 @@ final class AtticGlassMenuCard {
         view.card = self
         view.setAccessibilityLabel(title)
         window.install(view, style: menu.style)
+        view.build()
     }
 
     /// The selectable rows, in order.
@@ -764,7 +863,7 @@ final class AtticGlassMenuCard {
     /// Room above the first row (the inset and a leading header), so a
     /// submenu's first row lines up with the row that opened it.
     var firstRowOffset: CGFloat {
-        guard let first = entries.firstIndex(where: { if case .item = $0.kind { return true } else { return false } }) else { return 0 }
+        guard let first = entries.firstIndex(where: \.isItem) else { return 0 }
         return entries[first].frame.minY
     }
 
@@ -776,14 +875,13 @@ final class AtticGlassMenuCard {
         let hasIcons: Bool
     }
 
-    /// Draft C's 32 pt rows, 3 pt in per Accepted Shapes; a separator (0.5 pt with 4 pt
-    /// above and below) before each new section; a header row (26 pt) for
-    /// a titled section. Two widths, not content-fit (Dropdown content:
-    /// answers, owner, 2026-10-24, rule 1): `width` when the menu names one
-    /// (Tags ›, Date ›), else 184 pt, or 224 pt when a row needs more; a
-    /// longer row is cut short.
-    static func layout(_ commands: [AtticMenuCommand], width declared: CGFloat? = nil) -> Layout {
-        let m = AtticDropdownMetrics.self
+    /// Loam's 32 pt rows inside 6 pt of padding; an 11 pt band with a
+    /// hairline before each new section; a 26 pt title for a titled
+    /// section. As wide as `minimum` (the control that opened it) and at
+    /// least 216 pt, or `width` when the menu names one; wider when its
+    /// rows need it, up to 280 pt, past which a row is cut short.
+    static func layout(_ commands: [AtticMenuCommand], width declared: CGFloat? = nil, minimum: CGFloat = 0) -> Layout {
+        let m = AtticMenuMetrics.self
         let hasIcons = commands.contains {
             AtticMenuSymbols.symbol(for: $0) != nil || $0.image != nil || $0.swatch != nil || $0.priority != nil
         }
@@ -804,13 +902,13 @@ final class AtticGlassMenuCard {
         }
         var y = AtticGlassMenuShape.inset
         var entries: [Entry] = []
-        let width = declared ?? (ceil(widest + AtticGlassMenuShape.inset * 2) <= AtticMenuMetrics.commandWidth
-                                 ? AtticMenuMetrics.commandWidth : AtticMenuMetrics.wideWidth)
+        let fit = min(m.maxWidth, ceil(widest + AtticGlassMenuShape.inset * 2))
+        let width = max(m.minWidth, minimum.rounded(.up), declared ?? fit)
         for kind in kinds {
             let height: CGFloat
             switch kind {
             case .item: height = m.rowHeight
-            case .header: height = m.sectionHeaderHeight
+            case .header: height = m.headerHeight
             case .separator: height = m.separatorHeight
             }
             entries.append(Entry(kind: kind, frame: NSRect(x: AtticGlassMenuShape.inset, y: y, width: width - AtticGlassMenuShape.inset * 2, height: height)))
@@ -819,12 +917,13 @@ final class AtticGlassMenuCard {
         return Layout(entries: entries, size: CGSize(width: width, height: y + AtticGlassMenuShape.inset), hasIcons: hasIcons)
     }
 
-    /// What follows a row's title: a submenu's chevron, a detail, a tick.
+    /// What follows a row's title: a value or shortcut, a tick, a
+    /// submenu's chevron.
     static func trailingWidth(_ command: AtticMenuCommand) -> CGFloat {
         let m = AtticDropdownMetrics.self
         var width: CGFloat = 0
         if !command.children.isEmpty { width += AtticMenuMetrics.trailingGap + AtticMenuMetrics.chevronSize }
-        if let detail = command.detail { width += m.detailGap + ceil(measure(detail, AtticGlassMenuStyle.detailFont)) }
+        if let text = command.glassTrailingText { width += m.detailGap + ceil(measure(text, AtticGlassMenuStyle.detailFont)) }
         if let state = command.state, state != .off { width += AtticMenuMetrics.trailingGap + m.checkSlot }
         return width
     }
@@ -835,14 +934,17 @@ final class AtticGlassMenuCard {
 
     // MARK: Geometry
 
+    /// Puts the card at `frame` (screen); its window takes the margin.
     func place(_ frame: NSRect) {
-        window.setFrame(frame, display: false)
-        view.frame = NSRect(origin: .zero, size: frame.size)
+        self.frame = frame
+        let margin = AtticMenuMetrics.windowMargin
+        window.setFrame(frame.insetBy(dx: -margin, dy: -margin), display: false)
+        window.layoutCard(size: frame.size)
+        view.layoutContent()
     }
 
     /// The row under a screen point, if any.
     func row(at point: NSPoint) -> Int? {
-        let frame = window.frame
         guard frame.contains(point) else { return nil }
         let y = frame.maxY - point.y + scrollOffset
         let x = point.x - frame.minX
@@ -861,25 +963,30 @@ final class AtticGlassMenuCard {
 
     /// A row's top edge in screen coordinates.
     func screenTop(ofRow row: Int) -> CGFloat {
-        window.frame.maxY - (entries[row].frame.minY - scrollOffset)
+        frame.maxY - (entries[row].frame.minY - scrollOffset)
     }
 
     func scroll(by delta: CGFloat) {
-        let most = max(0, contentHeight - window.frame.height)
+        let most = max(0, contentHeight - frame.height)
         let next = max(0, min(most, scrollOffset - delta))
         guard next != scrollOffset else { return }
         scrollOffset = next
-        view.needsDisplay = true
+        view.layoutContent()
+        view.updateAccessibility()
     }
 
     private func scrollToShow(_ row: Int) {
-        let height = window.frame.height
+        let height = frame.height
         guard contentHeight > height else { return }
-        let frame = entries[row].frame
-        let inset = AtticDropdownMetrics.inset
-        if frame.minY - scrollOffset < inset { scrollOffset = frame.minY - inset }
-        if frame.maxY - scrollOffset > height - inset { scrollOffset = frame.maxY - height + inset }
-        scrollOffset = max(0, min(contentHeight - height, scrollOffset))
+        let rowFrame = entries[row].frame
+        let inset = AtticGlassMenuShape.inset
+        var offset = scrollOffset
+        if rowFrame.minY - offset < inset { offset = rowFrame.minY - inset }
+        if rowFrame.maxY - offset > height - inset { offset = rowFrame.maxY - height + inset }
+        offset = max(0, min(contentHeight - height, offset))
+        guard offset != scrollOffset else { return }
+        scrollOffset = offset
+        view.layoutContent()
     }
 
     // MARK: State
@@ -888,8 +995,7 @@ final class AtticGlassMenuCard {
         guard row != highlighted else { return }
         highlighted = row
         if let row { scrollToShow(row) }
-        view.needsDisplay = true
-        view.displayIfNeeded()
+        refreshHighlight(animated: true)
         view.updateAccessibility()
         if let row, let element = view.element(for: row) {
             NSAccessibility.post(element: element, notification: AtticGlassMenu.menuItemSelected)
@@ -897,42 +1003,133 @@ final class AtticGlassMenuCard {
         }
     }
 
+    /// The lit row: the highlighted one, else the row whose submenu is out.
+    var litRow: Int? {
+        let row = highlighted ?? child?.parentRow
+        guard let row, entries.indices.contains(row), entries[row].isSelectable else { return nil }
+        return row
+    }
+
+    func refreshHighlight(animated: Bool) {
+        view.moveHighlight(to: litRow.map { entries[$0].frame }, animated: animated && !menu.style.reduceMotion)
+    }
+
     func closeSubmenu(of menu: AtticGlassMenu) {
         guard child != nil, let index = menu.cards.firstIndex(where: { $0 === self }) else { return }
         menu.openSubmenuClosing(after: index)
     }
 
-    func show(fading: Bool) {
+    // MARK: Motion
+
+    /// Orders the card in: it grows from `corner` (0.86 → 1) and fades in
+    /// on the spring while its rows arrive one after another; under Reduce
+    /// Motion it only fades.
+    func show(animated: Bool, from corner: AtticGlassMenu.Corner) {
+        self.corner = corner
+        window.alphaValue = 1
         #if DEBUG
-        guard AtticGlassMenu.ordersCardsFront else { return }
+        // Tests: built and animated, never ordered on screen.
+        if AtticGlassMenu.ordersCardsFront { window.orderFront(nil) }
+        #else
+        window.orderFront(nil)
         #endif
-        if fading {
-            window.alphaValue = 0
-            window.orderFront(nil)
-            window.invalidateShadow()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = AtticMenuMetrics.openFade
-                window.animator().alphaValue = 1
-            }
-        } else {
-            window.alphaValue = 1
-            window.orderFront(nil)
-            window.invalidateShadow()
+        guard animated else { return }
+        let lift: AtticGlassMenuLiftView = window.lift
+        let reduce = menu.style.reduceMotion
+        if reduce {
+            lift.layer?.add(AtticMenuMotion.fade(from: 0, to: 1, duration: AtticMenuMetrics.openFade, easeIn: false), forKey: "attic.open.fade")
+            return
         }
+        lift.layer?.add(AtticMenuMotion.spring("opacity", from: 0, to: 1, duration: AtticMenuMetrics.openDuration,
+                                               bounce: AtticMenuMetrics.openBounce), forKey: "attic.open.fade")
+        if let layer = lift.layer {
+            let small = AtticMenuMotion.scale(AtticMenuMetrics.startScale, about: corner, in: layer)
+            layer.add(AtticMenuMotion.spring("transform", from: NSValue(caTransform3D: small),
+                                             to: NSValue(caTransform3D: CATransform3DIdentity),
+                                             duration: AtticMenuMetrics.openDuration, bounce: AtticMenuMetrics.openBounce),
+                      forKey: "attic.open.grow")
+        }
+        view.playEntrance(fromTop: corner.isTop)
     }
 
-    func hide(fading: Bool) {
+    /// Orders the card out: an ease-in 0.12 s fade and shrink toward the
+    /// corner it grew from (a fade only under Reduce Motion); at once when
+    /// not `animated`.
+    func hide(animated: Bool) {
+        guard !isHidden else { return }
+        isHidden = true
         let window = self.window
-        guard fading else {
+        window.ignoresMouseEvents = true
+        guard animated, window.isVisible, let layer = window.lift.layer else {
             window.orderOut(nil)
             return
         }
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = AtticMenuMetrics.closeFade
-            window.animator().alphaValue = 0
-        }, completionHandler: {
+        CATransaction.begin()
+        CATransaction.setCompletionBlock {
             MainActor.assumeIsolated { window.orderOut(nil) }
-        })
+        }
+        let fade = AtticMenuMotion.fade(from: layer.presentation()?.opacity ?? 1, to: 0, duration: AtticMenuMetrics.closeFade, easeIn: true)
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
+        layer.add(fade, forKey: "attic.close.fade")
+        if !menu.style.reduceMotion {
+            let from = layer.presentation()?.transform ?? CATransform3DIdentity
+            let shrink = CABasicAnimation(keyPath: "transform")
+            shrink.fromValue = NSValue(caTransform3D: from)
+            shrink.toValue = NSValue(caTransform3D: AtticMenuMotion.scale(AtticMenuMetrics.startScale, about: corner, in: layer))
+            shrink.duration = AtticMenuMetrics.closeFade
+            shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            shrink.fillMode = .forwards
+            shrink.isRemovedOnCompletion = false
+            layer.removeAnimation(forKey: "attic.open.grow")
+            layer.add(shrink, forKey: "attic.close.shrink")
+        }
+        layer.removeAnimation(forKey: "attic.open.fade")
+        CATransaction.commit()
+    }
+}
+
+/// The menus' Core Animation: springs with SwiftUI's duration and bounce
+/// (`CASpringAnimation(perceptualDuration:bounce:)`), fades, and a scale
+/// about a corner of a layer.
+@MainActor
+enum AtticMenuMotion {
+    static func spring(_ keyPath: String, from: Any, to: Any, duration: TimeInterval, bounce: CGFloat,
+                       delay: TimeInterval = 0) -> CASpringAnimation {
+        let animation = CASpringAnimation(perceptualDuration: duration, bounce: bounce)
+        animation.keyPath = keyPath
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = animation.settlingDuration
+        if delay > 0 { animation.beginTime = CACurrentMediaTime() + delay }
+        animation.fillMode = .backwards
+        return animation
+    }
+
+    static func fade(from: Float, to: Float, duration: TimeInterval, easeIn: Bool) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: easeIn ? .easeIn : .easeOut)
+        animation.fillMode = .backwards
+        return animation
+    }
+
+    /// `scale` about `corner` of `layer` (its own coordinates, whatever its
+    /// anchor point and flip).
+    static func scale(_ scale: CGFloat, about corner: AtticGlassMenu.Corner, in layer: CALayer) -> CATransform3D {
+        let bounds = layer.bounds
+        let flipped = layer.contentsAreFlipped()
+        let top = flipped ? bounds.minY : bounds.maxY
+        let bottom = flipped ? bounds.maxY : bounds.minY
+        let point = CGPoint(x: corner.isLeading ? bounds.minX : bounds.maxX, y: corner.isTop ? top : bottom)
+        let anchor = CGPoint(x: bounds.minX + layer.anchorPoint.x * bounds.width, y: bounds.minY + layer.anchorPoint.y * bounds.height)
+        let dx = point.x - anchor.x
+        let dy = point.y - anchor.y
+        var transform = CATransform3DMakeTranslation(-dx, -dy, 0)
+        transform = CATransform3DConcat(transform, CATransform3DMakeScale(scale, scale, 1))
+        return CATransform3DConcat(transform, CATransform3DMakeTranslation(dx, dy, 0))
     }
 }
 
@@ -941,9 +1138,10 @@ extension AtticGlassMenu {
     /// row).
     fileprivate func openSubmenuClosing(after index: Int) {
         guard cards.count > index + 1 else { return }
-        for card in cards[(index + 1)...] { card.hide(fading: false) }
+        for card in cards[(index + 1)...] { card.hide(animated: true) }
         cards.removeSubrange((index + 1)...)
         cards[index].child = nil
+        cards[index].refreshHighlight(animated: false)
         cards[index].view.updateAccessibility()
         if focus > index { focus = index }
     }
@@ -952,14 +1150,20 @@ extension AtticGlassMenu {
 // MARK: - Window
 
 /// A card's borderless, non-activating window: transparent, above the
-/// panel, with the system's shadow following the card's rounded shape.
+/// panel, with room around the card for its own shadow (drawn by the card,
+/// so it grows and fades with it) and the spring's overshoot.
 final class AtticGlassMenuWindow: NSPanel {
+    /// The card's moving layer (it scales and fades), its shadow with it.
+    private(set) var lift: AtticGlassMenuLiftView!
+    private var root: AtticGlassMenuRootView!
+
     init(size: CGSize) {
-        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
-                   backing: .buffered, defer: true)
+        let margin = AtticMenuMetrics.windowMargin
+        super.init(contentRect: NSRect(origin: .zero, size: CGSize(width: size.width + margin * 2, height: size.height + margin * 2)),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         level = .popUpMenu
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
@@ -977,31 +1181,85 @@ final class AtticGlassMenuWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    /// The rows' view (the card's menu for accessibility).
+    var rows: AtticGlassMenuView? { root?.subviews.lazy.compactMap { $0 as? AtticGlassMenuView }.first }
+    /// The card's clipping view (its squircle mask).
+    var cardView: NSView? { root }
+
     /// The pointer's accessibility hit is the row's menu item, as over an
     /// `NSMenu` (VoiceOver's pointer, a UI test's hit point). The rows'
     /// view takes no AppKit hits, so the window's own hit test stopped at
     /// the material's hosting view, which is hidden from accessibility.
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
-        guard frame.contains(point), let rows = contentView?.subviews.lazy.compactMap({ $0 as? AtticGlassMenuView }).first
-        else { return super.accessibilityHitTest(point) }
+        guard frame.contains(point), let rows else { return super.accessibilityHitTest(point) }
         return rows.accessibilityHitTest(point)
     }
 
-    /// The card: glass (or the opaque fallback), its rim, then the rows.
+    /// The card: glass (or the opaque fallback), its rim, then the rows,
+    /// in a lift with its shadow, inside the margin.
     @MainActor func install(_ rows: AtticGlassMenuView, style: AtticGlassMenuStyle) {
-        let root = AtticGlassMenuRootView(frame: rows.frame)
+        let margin = AtticMenuMetrics.windowMargin
+        let stage = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        stage.wantsLayer = true
+        let lift = AtticGlassMenuLiftView(frame: NSRect(x: margin, y: margin, width: rows.frame.width, height: rows.frame.height))
+        lift.shadowColor = style.shadow
+        let root = AtticGlassMenuRootView(frame: lift.bounds)
         root.wantsLayer = true
         root.autoresizingMask = [.width, .height]
+        rows.frame = root.bounds
         rows.autoresizingMask = [.width, .height]
         // SwiftUI supplies the shaped system material; rows remain AppKit's
-        // single drawn view with the existing native menu accessibility.
+        // views with the existing native menu accessibility.
         let face = NSHostingView(rootView: AtticGlassMenuSurface(style: style))
         face.frame = root.bounds
         face.autoresizingMask = [.width, .height]
         root.addSubview(face)
         root.addSubview(rows)
-        contentView = root
+        lift.addSubview(root)
+        stage.addSubview(lift)
+        contentView = stage
+        self.lift = lift
+        self.root = root
         appearance = NSAppearance(named: style.dark ? .darkAqua : .aqua)
+    }
+
+    /// The card at `size` inside the margin (a capped card is shorter).
+    @MainActor func layoutCard(size: CGSize) {
+        let margin = AtticMenuMetrics.windowMargin
+        contentView?.frame = NSRect(origin: .zero, size: frame.size)
+        lift.frame = NSRect(x: margin, y: margin, width: size.width, height: size.height)
+        lift.layoutSubtreeIfNeeded()
+    }
+}
+
+/// The card's moving part: it scales from its corner and fades, with its
+/// shadow (the glass's own shape), as one layer.
+final class AtticGlassMenuLiftView: NSView {
+    var shadowColor: NSColor = .clear
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.masksToBounds = false
+        let colour = shadowColor.usingColorSpace(.sRGB) ?? shadowColor
+        layer.shadowColor = colour.withAlphaComponent(1).cgColor
+        layer.shadowOpacity = Float(colour.alphaComponent)
+        layer.shadowRadius = AtticShadows.dropdown.radius
+        layer.shadowOffset = CGSize(width: 0, height: layer.contentsAreFlipped() ? AtticShadows.dropdown.y : -AtticShadows.dropdown.y)
+        layer.shadowPath = Squircle(cornerRadius: AtticGlassMenuShape.radius).path(in: bounds).cgPath
+        CATransaction.commit()
     }
 }
 
@@ -1055,11 +1313,16 @@ struct AtticGlassMenuSurface: View {
 
 // MARK: - View
 
-/// A card's rows, drawn in one view (one layer for the whole list), with an
-/// accessibility element per row: a menu of menu items, as `NSMenu`'s.
+/// A card's rows: one view per entry inside a scrolling content view, and
+/// the highlight as its own layer under them (it slides from row to row);
+/// with an accessibility element per row: a menu of menu items, as
+/// `NSMenu`'s.
 final class AtticGlassMenuView: NSView {
     weak var card: AtticGlassMenuCard?
     private var elements: [Int: AtticGlassMenuItemElement] = [:]
+    private let content = AtticGlassMenuFlippedView()
+    private let highlight = AtticGlassMenuFlippedView()
+    private var entryViews: [AtticGlassMenuEntryView] = []
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -1067,6 +1330,7 @@ final class AtticGlassMenuView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        wantsLayer = true
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                   owner: self, userInfo: nil)
         addTrackingArea(area)
@@ -1075,55 +1339,124 @@ final class AtticGlassMenuView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// The entries' views and the highlight, once the card is set.
+    func build() {
         guard let card else { return }
-        let style = card.menu.style
-        let m = AtticDropdownMetrics.self
-        NSGraphicsContext.current?.saveGraphicsState()
-        let transform = NSAffineTransform()
-        transform.translateX(by: 0, yBy: -card.scrollOffset)
-        transform.concat()
-        for (index, entry) in card.entries.enumerated() {
-            let frame = entry.frame
-            switch entry.kind {
-            case .separator:
-                style.separator.setFill()
-                NSRect(x: frame.minX + m.separatorInset, y: frame.minY + m.separatorGap,
-                       width: frame.width - m.separatorInset * 2, height: m.separator).fill()
-            case let .header(title):
-                let font = AtticGlassMenuStyle.headerFont
-                let y = frame.maxY - m.sectionHeaderBottom - (font.ascender - font.descender)
-                drawText(title, in: NSRect(x: frame.minX + m.rowPadding, y: y, width: frame.width - m.rowPadding * 2,
-                                           height: font.ascender - font.descender), font: font, color: style.header)
-            case let .item(command):
-                let lit = card.highlighted == index || card.child?.parentRow == index
-                if lit, !command.isDisabled {
-                    style.highlight.setFill()
-                    NSBezierPath(cgPath: Squircle(cornerRadius: AtticGlassMenuShape.rowRadius).path(in: frame).cgPath).fill()
-                }
-                drawItem(command, in: frame, card: card, style: style)
-            }
+        content.wantsLayer = true
+        addSubview(content)
+        highlight.wantsLayer = true
+        highlight.isHidden = true
+        highlight.layer?.cornerRadius = AtticGlassMenuShape.rowRadius
+        highlight.layer?.cornerCurve = .continuous
+        highlight.layer?.backgroundColor = card.menu.style.highlight.cgColor
+        content.addSubview(highlight)
+        for index in card.entries.indices {
+            let entry = AtticGlassMenuEntryView(frame: card.entries[index].frame)
+            entry.index = index
+            entry.menuView = self
+            entry.wantsLayer = true
+            content.addSubview(entry)
+            entryViews.append(entry)
         }
-        NSGraphicsContext.current?.restoreGraphicsState()
+        layoutContent()
+    }
+
+    /// The content at the card's scroll.
+    func layoutContent() {
+        guard let card else { return }
+        content.frame = NSRect(x: 0, y: -card.scrollOffset, width: bounds.width, height: max(card.contentHeight, bounds.height))
+    }
+
+    /// The highlight onto `frame` (content coordinates), sliding there on
+    /// 0.20 s without bounce when `animated` and already shown; nil hides
+    /// it.
+    func moveHighlight(to frame: NSRect?, animated: Bool) {
+        guard let frame else {
+            highlight.isHidden = true
+            return
+        }
+        guard let layer = highlight.layer, animated, !highlight.isHidden, highlight.frame != frame else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            highlight.frame = frame
+            highlight.isHidden = false
+            CATransaction.commit()
+            return
+        }
+        let fromPosition = (layer.presentation() ?? layer).position
+        let fromBounds = (layer.presentation() ?? layer).bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        highlight.frame = frame
+        CATransaction.commit()
+        let duration = AtticMenuMetrics.highlightDuration
+        layer.add(AtticMenuMotion.spring("position", from: NSValue(point: fromPosition), to: NSValue(point: layer.position),
+                                         duration: duration, bounce: 0), forKey: "attic.highlight.position")
+        layer.add(AtticMenuMotion.spring("bounds", from: NSValue(rect: fromBounds), to: NSValue(rect: layer.bounds),
+                                         duration: duration, bounce: 0), forKey: "attic.highlight.bounds")
+    }
+
+    /// The rows arrive one after another, 30 ms apart (at most 240 ms),
+    /// each fading in and sliding 6 pt from the side of the control.
+    func playEntrance(fromTop: Bool) {
+        guard let card else { return }
+        var number = 0
+        for view in entryViews where card.entries[view.index].isItem {
+            guard let layer = view.layer else { continue }
+            let delay = AtticMenuMetrics.stagger(number)
+            number += 1
+            // Toward the control: up for a card opening down. "Up" in the
+            // row's superlayer depends on its effective flip.
+            let up: CGFloat = (layer.superlayer?.contentsAreFlipped() ?? false) ? -1 : 1
+            let travel = AtticMenuMetrics.rowTravel * up * (fromTop ? 1 : -1)
+            layer.add(AtticMenuMotion.spring("opacity", from: 0, to: 1, duration: AtticMenuMetrics.rowDuration,
+                                             bounce: AtticMenuMetrics.rowBounce, delay: delay), forKey: "attic.row.fade")
+            layer.add(AtticMenuMotion.spring("transform", from: NSValue(caTransform3D: CATransform3DMakeTranslation(0, travel, 0)),
+                                             to: NSValue(caTransform3D: CATransform3DIdentity), duration: AtticMenuMetrics.rowDuration,
+                                             bounce: AtticMenuMetrics.rowBounce, delay: delay), forKey: "attic.row.slide")
+        }
+    }
+
+    /// Draws entry `index` in its own view's coordinates.
+    func drawEntry(_ index: Int) {
+        guard let card, card.entries.indices.contains(index) else { return }
+        let style = card.menu.style
+        let m = AtticMenuMetrics.self
+        let entry = card.entries[index]
+        let frame = NSRect(origin: .zero, size: entry.frame.size)
+        switch entry.kind {
+        case .separator:
+            style.separator.setFill()
+            let line = AtticHairline.width
+            NSRect(x: frame.minX + m.separatorInset, y: frame.midY - line / 2, width: frame.width - m.separatorInset * 2, height: line).fill()
+        case let .header(title):
+            let font = AtticGlassMenuStyle.headerFont
+            let y = frame.maxY - m.headerBottom - (font.ascender - font.descender)
+            drawText(title, in: NSRect(x: frame.minX + m.rowPadding, y: y, width: frame.width - m.rowPadding * 2,
+                                       height: font.ascender - font.descender), font: font, color: style.header)
+        case let .item(command):
+            drawItem(command, in: frame, card: card, style: style)
+        }
     }
 
     private func drawItem(_ command: AtticMenuCommand, in frame: NSRect, card: AtticGlassMenuCard, style: AtticGlassMenuStyle) {
-        let m = AtticDropdownMetrics.self
+        let m = AtticMenuMetrics.self
+        let d = AtticDropdownMetrics.self
         let ink: NSColor = command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.title)
         let iconInk: NSColor = command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.icon)
         var x = frame.minX + m.rowPadding
         if card.hasIcons {
             let slot = NSRect(x: x, y: frame.midY - m.iconSlot / 2, width: m.iconSlot, height: m.iconSlot)
             if command.state == .mixed, command.systemImage != nil {
-                drawImage(AtticGlassMenuStyle.symbol("minus", size: m.iconSize, color: iconInk), centeredIn: slot)
+                drawImage(AtticGlassMenuStyle.symbol("minus", size: m.iconSize, weight: .medium, color: iconInk), centeredIn: slot)
             } else if let name = AtticMenuSymbols.symbol(for: command) {
-                drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, color: iconInk), centeredIn: slot)
+                drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, weight: .medium, color: iconInk), centeredIn: slot)
             } else if let image = command.image {
                 drawImage(image, centeredIn: slot)
             } else if let priority = command.priority {
                 drawPriority(priority, in: slot, disabled: command.isDisabled, style: style)
             } else if let swatch = command.swatch {
-                let dot = NSRect(x: slot.midX - m.dotSize / 2, y: slot.midY - m.dotSize / 2, width: m.dotSize, height: m.dotSize)
+                let dot = NSRect(x: slot.midX - d.dotSize / 2, y: slot.midY - d.dotSize / 2, width: d.dotSize, height: d.dotSize)
                 style.colourInk(style.tokens.tagInk(swatch)).nsColor.setFill()
                 NSBezierPath(ovalIn: dot).fill()
             }
@@ -1131,23 +1464,23 @@ final class AtticGlassMenuView: NSView {
         }
         var trailing = frame.maxX - m.rowPadding
         if !command.children.isEmpty {
-            let size = AtticMenuMetrics.chevronSize
+            let size = m.chevronSize
             drawImage(AtticGlassMenuStyle.symbol("chevron.right", size: size, weight: .medium, color: command.isDisabled ? style.disabled : style.detail),
                       centeredIn: NSRect(x: trailing - size, y: frame.midY - size / 2, width: size, height: size))
-            trailing -= size + AtticMenuMetrics.trailingGap
+            trailing -= size + m.trailingGap
         }
         if let state = command.state, state != .off {
-            let slot = NSRect(x: trailing - m.checkSlot, y: frame.midY - m.checkSlot / 2, width: m.checkSlot, height: m.checkSlot)
-            drawImage(AtticGlassMenuStyle.symbol(state == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, color: ink),
+            let slot = NSRect(x: trailing - d.checkSlot, y: frame.midY - d.checkSlot / 2, width: d.checkSlot, height: d.checkSlot)
+            drawImage(AtticGlassMenuStyle.symbol(state == .on ? "checkmark" : "minus", size: d.checkSize, weight: .semibold, color: ink),
                       centeredIn: slot)
-            trailing -= m.checkSlot + AtticMenuMetrics.trailingGap
+            trailing -= d.checkSlot + m.trailingGap
         }
-        if let detail = command.detail {
+        if let text = command.glassTrailingText {
             let font = AtticGlassMenuStyle.detailFont
-            let width = ceil(AtticGlassMenuCard.measure(detail, font))
-            drawText(detail, in: NSRect(x: trailing - width, y: frame.midY - (font.ascender - font.descender) / 2, width: width,
-                                        height: font.ascender - font.descender), font: font, color: style.detail)
-            trailing -= width + m.detailGap
+            let width = ceil(AtticGlassMenuCard.measure(text, font))
+            drawText(text, in: NSRect(x: trailing - width, y: frame.midY - (font.ascender - font.descender) / 2, width: width,
+                                      height: font.ascender - font.descender), font: font, color: command.isDisabled ? style.disabled : style.detail)
+            trailing -= width + d.detailGap
         }
         let font = command.titleFont ?? AtticGlassMenuStyle.titleFont
         drawText(command.title, in: NSRect(x: x, y: frame.midY - (font.ascender - font.descender) / 2, width: max(0, trailing - x),
@@ -1222,6 +1555,28 @@ final class AtticGlassMenuView: NSView {
     override func mouseMoved(with event: NSEvent) {}
     override func mouseEntered(with event: NSEvent) {}
     override func mouseExited(with event: NSEvent) {}
+}
+
+/// A flipped, layer-backed view that takes no hits (the rows' content and
+/// the highlight).
+final class AtticGlassMenuFlippedView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// One entry of a card (a row, a title, a separator) in its own layer, so
+/// the rows can arrive one after another.
+final class AtticGlassMenuEntryView: NSView {
+    var index = 0
+    weak var menuView: AtticGlassMenuView?
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        menuView?.drawEntry(index)
+    }
 }
 
 /// One row for VoiceOver: a menu item with its title, its enabled state,

@@ -724,38 +724,29 @@ struct AgentChatComposer: View {
             }
             HStack(spacing: 1) {
                 addMenu
-                AgentChatPickerMenu(identifier: "agent-chat-agent", label: model.agent.shortTitle) {
-                    ForEach(AgentBackend.allCases, id: \.self) { choice in
-                        let reason = model.agentUnavailable[choice]
-                        Button {
-                            model.agent = choice
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(choice.shortTitle)
-                                    if let reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
-                                }
-                                if model.agent == choice { Image(systemName: "checkmark") }
-                            }
-                        }
-                        .disabled(reason != nil)
+                // The glass menu (Accepted 2026-11-10): the same choices,
+                // the current one ticked, a reason or description as the
+                // row's trailing value.
+                AgentChatPickerMenu(identifier: "agent-chat-agent", label: model.agent.shortTitle,
+                                    commands: AgentBackend.allCases.map { choice in
+                    var command = AtticMenuCommand(verbatim: choice.shortTitle, state: model.agent == choice ? .on : .off) {
+                        model.agent = choice
                     }
-                }
-                AgentChatPickerMenu(identifier: "agent-chat-mode", label: model.mode.title) {
-                    ForEach(AgentChatMode.allCases) { choice in
-                        Button {
-                            model.mode = choice
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(choice.title)
-                                    Text(choice.description).font(.caption).foregroundStyle(.secondary)
-                                }
-                                if model.mode == choice { Image(systemName: "checkmark") }
-                            }
-                        }
+                    if let reason = model.agentUnavailable[choice] {
+                        command.detail = reason
+                        command.isDisabled = true
+                        command.disabledReason = reason
                     }
-                }
+                    return command
+                })
+                AgentChatPickerMenu(identifier: "agent-chat-mode", label: model.mode.title,
+                                    commands: AgentChatMode.allCases.map { choice in
+                    var command = AtticMenuCommand(verbatim: choice.title, state: model.mode == choice ? .on : .off) {
+                        model.mode = choice
+                    }
+                    command.detail = choice.description
+                    return command
+                })
                 Spacer(minLength: 0)
                 Button { busy ? model.stop() : model.send() } label: {
                     Image(systemName: busy ? "stop.fill" : "arrow.up")
@@ -842,15 +833,16 @@ struct AgentChatComposer: View {
     }
 }
 
-/// One of the composer's labelled menus (the agent, the mode): its label and a chevron.
-private struct AgentChatPickerMenu<Content: View>: View {
+/// One of the composer's labelled menus (the agent, the mode): its label
+/// and a chevron, opening Attic's glass menu.
+private struct AgentChatPickerMenu: View {
     let identifier: String
     let label: String
-    @ViewBuilder let content: () -> Content
+    let commands: [AtticMenuCommand]
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        Menu(content: content) {
+        AtticCommandMenu(commands: commands, accessibilityLabel: label) {
             HStack(spacing: 3) {
                 Text(label).font(.system(size: 10, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 6, weight: .bold))
@@ -860,10 +852,6 @@ private struct AgentChatPickerMenu<Content: View>: View {
             .frame(height: 21)
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .accessibilityIdentifier(identifier)
         .agentChatUITestTarget(identifier)
     }
