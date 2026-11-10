@@ -418,7 +418,9 @@ enum AtticPopoverMetrics {
 /// the `/` list and the rest) and the glass menus (`AtticGlassMenu`).
 /// Every value of the look is here, so it is tuned in one place.
 enum AtticDropdownMetrics {
-    static let cornerRadius: CGFloat = AtticRadius.menu
+    /// The card's corners: the glass menus' 18 pt (Accepted 2026-11-10);
+    /// the contents keep their concentric radii from `AtticRadius.menu`.
+    static let cornerRadius: CGFloat = AtticMenuMetrics.cardRadius
     /// Rows and fields sit this far in from the card's edge.
     static let inset: CGFloat = AtticRadius.menuPadding
     static let rowHeight: CGFloat = 32
@@ -444,7 +446,7 @@ enum AtticDropdownMetrics {
     /// concentric with it (16 − 5 = 11 pt corners), in a 40 pt header
     /// ruled off by a full-width hairline.
     static let fieldHeight: CGFloat = 30
-    static let fieldRadius: CGFloat = AtticRadius.concentric(outer: cornerRadius, padding: inset + fieldInset)
+    static let fieldRadius: CGFloat = AtticRadius.concentric(outer: AtticRadius.menu, padding: inset + fieldInset)
     /// The field's outline (the Date field and the dropdowns' text fields):
     /// a surface squircle, concentric with the card like the rows'
     /// highlights (Shapes, Accepted 2026-10-30).
@@ -482,8 +484,9 @@ enum AtticDropdownMetrics {
     static let commandCardWidth: CGFloat = 184
     static let fieldCardWidth: CGFloat = 224
     static let panelMargin: CGFloat = 12
-    /// From the anchor (the caret's line, a strip button) to the card.
-    static let anchorGap: CGFloat = 6
+    /// From the anchor (the caret's line, a strip button) to the card:
+    /// the menus' 8 pt (Accepted 2026-11-10).
+    static let anchorGap: CGFloat = AtticMenuMetrics.anchorGap
     /// Room around the card for its shadow (6 down plus a 16 pt blur).
     static let shadowRoom: CGFloat = 44
     /// The date card (draft C on the Craft spec): 224 pt wide, its body
@@ -516,33 +519,89 @@ enum AtticDropdownMetrics {
 }
 
 /// The glass menus (`AtticGlassMenu`): right-click, ⋯ and the other
-/// command menus, on `AtticDropdownMetrics`' card and rows. Submenus are
-/// their own floating cards, 4 pt to the side, their first row level with
-/// the row that opened them; they open after 180 ms of hover and keep
-/// 250 ms of grace for a pointer on its way to them (the Craft spec).
+/// command menus, Loam's glass menu (Accepted 2026-11-10, "Menus: Loam's
+/// glass menu, its motion and its placement"; Loam `GlassMenu.swift`, MIT,
+/// commit e2e1f56). Submenus are their own floating cards, 4 pt to the
+/// side, their first row level with the row that opened them; they open
+/// after 180 ms of hover and keep 250 ms of grace for a pointer on its way
+/// to them (the Craft spec).
 enum AtticMenuMetrics {
-    /// Two widths instead of content-fit (Dropdown content: answers, owner,
-    /// 2026-10-24, rule 1): 184 pt for a command menu (draft C's), 224 pt
-    /// (the date card's) for a list whose rows need it, such as Tags ›.
-    /// Date › is 200 pt (its detail and the tick). A row wider than 224 pt
-    /// is cut short with an ellipsis, never widening the card.
-    static let commandWidth: CGFloat = 184
+    // MARK: Look
+    /// System glass, 18 pt continuous corners, 6 pt padding.
+    static let cardRadius: CGFloat = 18
+    static let cardPadding: CGFloat = 6
+    /// 32 pt rows, 10 pt in; a 20 pt icon column and a 10 pt gap.
+    static let rowHeight: CGFloat = 32
+    static let rowPadding: CGFloat = 10
+    static let iconSlot: CGFloat = 20
+    static let iconSize: CGFloat = 14
+    static let columnGap: CGFloat = 10
+    /// 13 pt medium titles; 11 pt values and shortcuts; 11.5 pt semibold
+    /// section titles on a 26 pt band.
+    static let titleSize: CGFloat = 13
+    static let detailSize: CGFloat = 11
+    static let headerSize: CGFloat = 11.5
+    static let headerHeight: CGFloat = 26
+    static let headerBottom: CGFloat = 5
+    /// A hairline, 10 pt in, centred on an 11 pt band between groups.
+    static let separatorHeight: CGFloat = 11
+    static let separatorInset: CGFloat = 10
+    /// The highlight: a 12 pt rounded fill at 8 % ink (16 % under
+    /// Increase Contrast).
+    static let highlightRadius: CGFloat = 12
+    static let highlightAlpha: CGFloat = 0.08
+    static let highlightAlphaIncreased: CGFloat = 0.16
+
+    // MARK: Size and placement
+    /// As wide as the control that opened it and at least 216 pt; a menu
+    /// whose rows need more grows to fit them, up to `maxWidth`, past
+    /// which a row is cut short.
+    static let minWidth: CGFloat = 216
+    static let maxWidth: CGFloat = 280
+    /// Kept for the menus that name their own width (Tags ›, Date ›):
+    /// the minimum still applies.
+    static let commandWidth: CGFloat = minWidth
     static let wideWidth: CGFloat = AtticDropdownMetrics.fieldCardWidth
     static let dateMenuWidth: CGFloat = 200
-    static let trailingGap: CGFloat = 16
+    static let trailingGap: CGFloat = 10
     static let chevronSize: CGFloat = 10
     static let submenuGap: CGFloat = 4
     static let submenuDelay: TimeInterval = 0.18
     static let pointerGrace: TimeInterval = 0.25
     /// Kept clear of the screen's visible edges.
     static let screenMargin: CGFloat = 6
-    /// From the point or the anchor to the menu.
-    static let anchorGap: CGFloat = 4
+    /// From the control to the menu.
+    static let anchorGap: CGFloat = 8
+    /// Room around a card's glass in its window, for its shadow and the
+    /// spring's overshoot.
+    static let windowMargin: CGFloat = 24
     /// Type-to-select forgets what was typed after this long.
     static let typeAheadReset: TimeInterval = 1
-    /// The open and close fades (none under Reduce Motion).
-    static let openFade: TimeInterval = 0.1
+
+    // MARK: Motion (Core Animation, so it never waits on SwiftUI)
+    /// Opening: the card grows from the control's corner, 0.86 → 1, and
+    /// fades in, on a spring of 0.30 s, bounce 0.28.
+    static let openDuration: TimeInterval = 0.30
+    static let openBounce: CGFloat = 0.28
+    static let startScale: CGFloat = 0.86
+    /// The rows arrive one after another, 30 ms apart (at most 240 ms),
+    /// each fading in and sliding 6 pt on a spring of 0.34 s, bounce 0.12.
+    static let rowStagger: TimeInterval = 0.03
+    static let maxStagger: TimeInterval = 0.24
+    static let rowTravel: CGFloat = 6
+    static let rowDuration: TimeInterval = 0.34
+    static let rowBounce: CGFloat = 0.12
+    /// The highlight slides from row to row: 0.20 s, no bounce.
+    static let highlightDuration: TimeInterval = 0.20
+    /// Closing: an ease-in 0.12 s fade and shrink toward the control.
     static let closeFade: TimeInterval = 0.12
+    /// Reduce Motion: fades only, this long.
+    static let openFade: TimeInterval = 0.12
+
+    /// The delay of row `index` (0 for the first) in the cascade.
+    static func stagger(_ index: Int) -> TimeInterval {
+        min(Double(max(index, 0) + 1) * rowStagger, maxStagger)
+    }
 }
 
 /// The title that opens a native menu (a note's or a page's title).
