@@ -199,6 +199,48 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertEqual(model.objects.count, 1)
     }
 
+    /// Repeatable event-to-live-layer timings. Recorded before and after an
+    /// ink change on the Air, with enough existing content to keep the raster
+    /// worker busy. This logs measurements; it imposes no invented speed gate.
+    func testInkTimingOnPopulatedBoard() throws {
+        model.thumbnailSettleDelay = 60
+        let canvasID = try XCTUnwrap(model.canvasID)
+        let imageData = Draw3Images.encoded(width: 20, height: 20)
+        let populated: [DrawObject] = (0..<440).map { index in
+            let x = Double((index % 22) * 15), y = Double((index / 22) * 17)
+            let content: DrawContent
+            switch index % 11 {
+            case 0: content = .text("Canvas text \(index)")
+            case 1: content = .shape(.rectangle)
+            case 2: content = .image(DrawImage(original: imageData, pixelWidth: 20, pixelHeight: 20))
+            default: content = .stroke((0..<32).map { n in DrawPoint(x: x + Double(n), y: y + sin(Double(n) / 6) * 8) })
+            }
+            return DrawObject(frame: DrawFrame(x: x, y: y, width: 40, height: 20), zIndex: Int64(index), content: content)
+        }
+        XCTAssertTrue(store.perform(.put(populated), on: canvasID).isSaved)
+        model.open(canvasID)
+        _ = waitForInstall(after: board.rasterInstalls)
+        model.setTool(.pen)
+        for run in 0..<3 {
+            model.pointerDown(at: CGPoint(x: 40, y: 160))
+            var durations: [Double] = []
+            for i in 0..<1_200 {
+                let x = 40 + Double(i % 800) * 0.35
+                let y = 160 + sin(Double(i) * 0.06) * 25
+                let begin = DispatchTime.now().uptimeNanoseconds
+                model.pointerDragged(to: CGPoint(x: x, y: y))
+                durations.append(Double(DispatchTime.now().uptimeNanoseconds - begin) / 1_000_000)
+            }
+            let finish = DispatchTime.now().uptimeNanoseconds
+            model.pointerUp()
+            let finishMS = Double(DispatchTime.now().uptimeNanoseconds - finish) / 1_000_000
+            durations.sort()
+            print("CANVAS_INK_TIMING run=\(run) objects=440 samples=1200 p50_ms=\(durations[600]) p95_ms=\(durations[1140]) max_ms=\(durations.last!) finish_ms=\(finishMS)")
+            XCTAssertEqual(model.objects.count, 441)
+            model.undo()
+        }
+    }
+
     func testPressAfterAPanIsHandledAtOnce() {
         model.setTool(.pen)
         board.keyDown(with: key(.keyDown, " ", code: 49))
@@ -213,6 +255,19 @@ final class DrawBoardViewTests: XCTestCase {
         guard case .ink = model.live else { return XCTFail("The press right after a pan starts the stroke") }
         board.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 90, y: 80)))
         XCTAssertEqual(model.objects.count, 1)
+    }
+
+    func testSecondBoardClickStillDrawsAndErasesWhenNotSelecting() {
+        model.setTool(.pen)
+        let point = CGPoint(x: 85, y: 120)
+        board.mouseDown(with: mouse(.leftMouseDown, point, clicks: 2))
+        board.mouseUp(with: mouse(.leftMouseUp, point, clicks: 2))
+        XCTAssertEqual(model.objects.count, 1, "double-clicking the board with Pen draws a dot")
+
+        model.setTool(.eraser)
+        board.mouseDown(with: mouse(.leftMouseDown, point, clicks: 2))
+        board.mouseUp(with: mouse(.leftMouseUp, point, clicks: 2))
+        XCTAssertTrue(model.objects.isEmpty, "double-clicking a stroke with Eraser removes it")
     }
 
     func testNothingRendersWhileHidden() {

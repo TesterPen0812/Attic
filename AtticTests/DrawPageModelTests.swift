@@ -170,6 +170,70 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
+    func testEraserRespectsThinPressureNibAndCrossesStrokesUnderShapes() throws {
+        let light = DrawObject(frame: DrawFrame(x: 60, y: 100, width: 40, height: 0),
+                               style: DrawStyle(colour: .blue, size: .small, corners: .square),
+                               content: .stroke([DrawPoint(x: 60, y: 100, pressure: 0), DrawPoint(x: 100, y: 100, pressure: 0)]))
+        let covered = DrawObject(frame: DrawFrame(x: 60, y: 150, width: 40, height: 0),
+                                 style: DrawStyle(colour: .green, size: .large, corners: .square),
+                                 content: .stroke([DrawPoint(x: 60, y: 150, pressure: 1), DrawPoint(x: 100, y: 150, pressure: 1)]))
+        let shape = DrawObject(frame: DrawFrame(x: 50, y: 140, width: 70, height: 30),
+                               zIndex: 100, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([light, covered, shape])).isSaved)
+        model.setTool(.eraser)
+        // 5pt cursor reach + 0.375pt half-width of a 0-pressure thin pen.
+        drag([CGPoint(x: 65, y: 105.5), CGPoint(x: 105, y: 105.5)])
+        XCTAssertTrue(stored.contains(where: { $0.id == light.id }), "outside the visible thin nib must not erase")
+        drag([CGPoint(x: 80, y: 133), CGPoint(x: 80, y: 170)])
+        XCTAssertFalse(stored.contains(where: { $0.id == covered.id }), "fast crossing must erase under a shape")
+        XCTAssertTrue(stored.contains(where: { $0.id == shape.id }), "eraser never removes shapes")
+    }
+
+    func testPenPressureSmoothsAndSurvivesMoveAndResize() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100), pressure: 0)
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.5)
+        model.pointerUp(at: CGPoint(x: 130, y: 100), pressure: 1)
+        let original = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = original.content else { return XCTFail("Not a stroke") }
+        XCTAssertGreaterThan(points.count, 3)
+        XCTAssertEqual(points.first?.pressure, 0)
+        XCTAssertEqual(points.last?.pressure, 1)
+        XCTAssertTrue(points.contains { ($0.pressure ?? 0) > 0 && ($0.pressure ?? 0) < 1 })
+        let moved = original.translated(by: DrawPoint(x: 12, y: 20), id: original.id)
+        guard case .stroke(let translated) = moved.content else { return XCTFail("Move lost ink") }
+        XCTAssertEqual(translated.map(\.pressure), points.map(\.pressure))
+        let resized = DrawPageModel.resized([moved], handle: .bottomRight,
+                                           delta: CGPoint(x: 50, y: 20), shift: false)
+        guard case .stroke(let stretched) = resized.first?.content else { return XCTFail("Resize lost ink") }
+        XCTAssertEqual(stretched.map(\.pressure), points.map(\.pressure))
+        let data = try JSONEncoder().encode(moved)
+        let roundTripped = try JSONDecoder().decode(DrawObject.self, from: data)
+        XCTAssertEqual(roundTripped, moved)
+    }
+
+    func testPressureInkRendersThinAtLightContactAndBroadAtFirmContact() {
+        let outline = DrawInk.pressureOutline([
+            DrawPoint(x: 20, y: 20, pressure: 0),
+            DrawPoint(x: 120, y: 20, pressure: 1),
+        ], baseWidth: 10)
+        XCTAssertFalse(outline.contains(CGPoint(x: 30, y: 25)), "light nib stays narrower than 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 110, y: 25)), "firm nib grows beyond 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 20, y: 20)))
+        XCTAssertTrue(outline.contains(CGPoint(x: 120, y: 20)))
+    }
+
+    func testTabletPressureIsNotResetByAnInterleavedMouseRelease() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.8)
+        model.pointerDragged(to: CGPoint(x: 100, y: 110))
+        model.pointerUp(at: CGPoint(x: 130, y: 100))
+        let saved = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = saved.content else { return XCTFail("Not a stroke") }
+        XCTAssertEqual(try XCTUnwrap(points.last?.pressure), 0.8, accuracy: 0.0001)
+    }
+
     func testTextPlacesABoxAndTypesStraightAway() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -353,6 +417,41 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.count, 4)
     }
 
+    func testInkEraseColourAndWidthUndoRedoThirtyStepsExactly() {
+        var history: [[DrawObject]] = [stored]
+        for index in 0..<25 {
+            model.setTool(.pen)
+            drag([CGPoint(x: 60, y: 100 + CGFloat(index) * 18),
+                  CGPoint(x: 90, y: 105 + CGFloat(index) * 18),
+                  CGPoint(x: 130, y: 100 + CGFloat(index) * 18)])
+            history.append(stored)
+        }
+        let target = stored[0].id
+        model.setTool(.select)
+        model.select([target])
+        model.styleSelection(colour: .red)
+        history.append(stored)
+        model.styleSelection(size: .large)
+        history.append(stored)
+        model.setTool(.eraser)
+        drag([CGPoint(x: 90, y: 90), CGPoint(x: 90, y: 108)])
+        XCTAssertLessThan(stored.count, 25, "eraser removes whole strokes")
+        history.append(stored)
+
+        for index in stride(from: history.count - 2, through: 0, by: -1) {
+            XCTAssertTrue(key("z", command: true))
+            XCTAssertEqual(stored, history[index], "undo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canUndo)
+        for index in 1..<history.count {
+            XCTAssertTrue(key("z", command: true, shift: true))
+            XCTAssertEqual(stored, history[index], "redo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canRedo)
+        model.undo() // The toolbar's action is the same undo path.
+        XCTAssertEqual(stored, history[history.count - 2])
+    }
+
     func testDeleteReturnAndEscape() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -439,8 +538,8 @@ final class DrawPageModelTests: XCTestCase {
         model.setBoard(size: CGSize(width: 360, height: 500), clearInsets: model.clearInsets)
         model.scroll(dx: 10, dy: 10, command: false, at: .zero)
         model.pointerDragged(to: CGPoint(x: 140, y: 130))
-        guard case .ink(let points) = model.live else { return XCTFail("The stroke is still live") }
-        XCTAssertEqual(points.count, 4)
+        guard case .ink(let trace) = model.live else { return XCTFail("The stroke is still live") }
+        XCTAssertEqual(trace.samples.count, 4)
         model.pointerUp()
         XCTAssertEqual(stored.count, 1)
     }

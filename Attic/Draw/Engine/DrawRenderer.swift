@@ -149,6 +149,10 @@ enum DrawRaster {
     static func draw(_ object: DrawObject, in context: CGContext, palette: DrawPalette, fullResolution: Bool = false) {
         let colour = palette.cgColor(object.style.colour)
         switch object.content {
+        case .stroke(let points) where points.contains(where: { $0.pressure != nil }):
+            context.addPath(DrawInk.pressureOutline(points, baseWidth: CGFloat(object.style.size.strokeWidth)))
+            context.setFillColor(colour)
+            context.fillPath()
         case .stroke, .shape:
             guard let path = DrawGeometry.path(object) else { return }
             context.addPath(path)

@@ -3,6 +3,31 @@ import Foundation
 struct DrawPoint: Codable, Equatable, Sendable {
     var x: Double = 0
     var y: Double = 0
+    /// Nil for mouse/trackpad strokes. Tablet pressure is normalized to 0...1.
+    /// Optional so old drawings keep their original constant-width rendering.
+    var pressure: Double? = nil
+
+    init(x: Double = 0, y: Double = 0, pressure: Double? = nil) {
+        self.x = x
+        self.y = y
+        self.pressure = pressure
+    }
+
+    private enum CodingKeys: String, CodingKey { case x, y, pressure }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        x = try values.decode(Double.self, forKey: .x)
+        y = try values.decode(Double.self, forKey: .y)
+        pressure = try values.decodeIfPresent(Double.self, forKey: .pressure)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(x, forKey: .x)
+        try values.encode(y, forKey: .y)
+        try values.encodeIfPresent(pressure, forKey: .pressure)
+    }
 }
 
 struct DrawFrame: Codable, Equatable, Sendable {
@@ -79,7 +104,7 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
         result.frame.x += offset.x
         result.frame.y += offset.y
         if case .stroke(let points) = content {
-            result.content = .stroke(points.map { DrawPoint(x: $0.x + offset.x, y: $0.y + offset.y) })
+            result.content = .stroke(points.map { DrawPoint(x: $0.x + offset.x, y: $0.y + offset.y, pressure: $0.pressure) })
         }
         return result
     }

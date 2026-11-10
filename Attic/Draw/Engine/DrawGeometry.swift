@@ -30,6 +30,13 @@ struct DrawPalette: Equatable, Sendable {
     }
 }
 
+/// A raw pen event. Mouse/trackpad events have no pressure and keep a
+/// constant-width stroke; tablet events retain their pressure through smoothing.
+struct DrawInkSample: Equatable {
+    var point: CGPoint
+    var pressure: CGFloat? = nil
+}
+
 /// Ink: the pointer's raw samples become the finished, smoothed samples the
 /// store keeps (`DrawContent.stroke`). The live layer draws the same
 /// quadratic midpoint curve, so a stroke looks the same before and after
@@ -50,6 +57,86 @@ enum DrawInk {
         }
         appendLine(from: start, to: raw[raw.count - 1], into: &out)
         return out.map { DrawPoint(x: $0.x, y: $0.y) }
+    }
+
+    static func smooth(_ raw: [DrawInkSample]) -> [DrawPoint] {
+        func stored(_ sample: DrawInkSample) -> DrawPoint {
+            DrawPoint(x: sample.point.x, y: sample.point.y, pressure: sample.pressure.map(Double.init))
+        }
+        guard raw.count > 2 else { return raw.map(stored) }
+        var out = [stored(raw[0])]
+        var start = raw[0]
+        for index in 1..<(raw.count - 1) {
+            let control = raw[index]
+            let end = midpoint(control, raw[index + 1])
+            let a = start.point, c = control.point, b = end.point
+            let length = hypot(c.x - a.x, c.y - a.y) + hypot(b.x - c.x, b.y - c.y)
+            let steps = max(1, Int((length / sampleSpacing).rounded(.up)))
+            for step in 1...steps {
+                let t = CGFloat(step) / CGFloat(steps), u = 1 - t
+                let p = CGPoint(x: u * u * a.x + 2 * u * t * c.x + t * t * b.x,
+                                y: u * u * a.y + 2 * u * t * c.y + t * t * b.y)
+                let pressure: CGFloat?
+                if start.pressure == nil && control.pressure == nil && end.pressure == nil {
+                    pressure = nil
+                } else {
+                    pressure = u * u * (start.pressure ?? 0.5) + 2 * u * t * (control.pressure ?? 0.5)
+                        + t * t * (end.pressure ?? 0.5)
+                }
+                out.append(DrawPoint(x: p.x, y: p.y, pressure: pressure.map(Double.init)))
+            }
+            start = end
+        }
+        out.append(stored(raw[raw.count - 1]))
+        return out
+    }
+
+    private static func midpoint(_ a: DrawInkSample, _ b: DrawInkSample) -> DrawInkSample {
+        let pressure: CGFloat? = a.pressure == nil && b.pressure == nil ? nil : ((a.pressure ?? 0.5) + (b.pressure ?? 0.5)) / 2
+        return DrawInkSample(point: mid(a.point, b.point), pressure: pressure)
+    }
+
+    /// Pressure 0...1 maps to 50...150% of the selected pen width.
+    static func pressureWidth(_ pressure: Double?, base: CGFloat) -> CGFloat {
+        guard let pressure, pressure.isFinite else { return base }
+        return base * (0.5 + CGFloat(max(0, min(1, pressure))))
+    }
+
+    /// A filled ribbon with round ends. The same geometry is used for the
+    /// in-progress layer and the committed bitmap, so the width never jumps.
+    static func pressureOutline(_ samples: [DrawPoint], baseWidth: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        guard let first = samples.first else { return path }
+        let firstRadius = pressureWidth(first.pressure, base: baseWidth) / 2
+        if samples.count == 1 {
+            path.addEllipse(in: CGRect(x: first.x - firstRadius, y: first.y - firstRadius,
+                                       width: firstRadius * 2, height: firstRadius * 2))
+            return path
+        }
+        var left: [CGPoint] = [], right: [CGPoint] = []
+        left.reserveCapacity(samples.count)
+        right.reserveCapacity(samples.count)
+        for index in samples.indices {
+            let point = samples[index]
+            let previous = samples[max(0, index - 1)]
+            let next = samples[min(samples.count - 1, index + 1)]
+            let dx = next.x - previous.x, dy = next.y - previous.y
+            let length = max(0.00001, hypot(dx, dy))
+            let radius = pressureWidth(point.pressure, base: baseWidth) / 2
+            let offset = CGPoint(x: -dy / length * radius, y: dx / length * radius)
+            left.append(CGPoint(x: point.x + offset.x, y: point.y + offset.y))
+            right.append(CGPoint(x: point.x - offset.x, y: point.y - offset.y))
+        }
+        path.move(to: left[0])
+        left.dropFirst().forEach { path.addLine(to: $0) }
+        right.reversed().forEach { path.addLine(to: $0) }
+        path.closeSubpath()
+        let last = samples[samples.count - 1]
+        for (point, radius) in [(first, firstRadius), (last, pressureWidth(last.pressure, base: baseWidth) / 2)] {
+            path.addEllipse(in: CGRect(x: point.x - radius, y: point.y - radius,
+                                       width: radius * 2, height: radius * 2))
+        }
+        return path
     }
 
     static func mid(_ a: CGPoint, _ b: CGPoint) -> CGPoint { CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2) }
@@ -80,6 +167,19 @@ enum DrawInk {
             path.addQuadCurve(to: mid(list[index], list[index + 1]), control: list[index])
         }
         path.addLine(to: list[list.count - 1])
+    }
+
+    /// The live buffer uses typed pen samples; avoid allocating a copy of
+    /// the entire long gesture just to draw its last 32 points.
+    static func livePath(start: CGPoint, points: ArraySlice<DrawInkSample>, into path: CGMutablePath) {
+        path.move(to: start)
+        guard let first = points.first else { path.addLine(to: start); return }
+        guard points.count > 1 else { path.addLine(to: first.point); return }
+        let last = points.endIndex - 1
+        for index in points.startIndex..<last {
+            path.addQuadCurve(to: mid(points[index].point, points[index + 1].point), control: points[index].point)
+        }
+        path.addLine(to: points[last].point)
     }
 }
 
@@ -149,7 +249,11 @@ enum DrawText {
 
 /// Bounds, hit tests and paths for the store's objects (world points).
 enum DrawGeometry {
-    static func strokeWidth(_ object: DrawObject) -> CGFloat { CGFloat(object.style.size.strokeWidth) }
+    static func strokeWidth(_ object: DrawObject) -> CGFloat {
+        let base = CGFloat(object.style.size.strokeWidth)
+        guard case .stroke(let points) = object.content, !points.isEmpty else { return base }
+        return points.reduce(CGFloat.zero) { max($0, DrawInk.pressureWidth($1.pressure, base: base)) }
+    }
 
     static func frame(_ frame: DrawFrame) -> CGRect {
         CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height).standardized
@@ -202,16 +306,56 @@ enum DrawGeometry {
         return hypot(p.x - a.x - t * dx, p.y - a.y - t * dy)
     }
 
+    /// Distance between the entire eraser drag and a stroke segment. Testing
+    /// the two continuous segments avoids skipping thin ink on fast drags.
+    static func segmentDistance(_ a: CGPoint, _ b: CGPoint, to c: CGPoint, _ d: CGPoint) -> CGFloat {
+        let rx = b.x - a.x, ry = b.y - a.y
+        let sx = d.x - c.x, sy = d.y - c.y
+        let cross = rx * sy - ry * sx
+        if abs(cross) > 1e-12 {
+            let qx = c.x - a.x, qy = c.y - a.y
+            let t = (qx * sy - qy * sx) / cross
+            let u = (qx * ry - qy * rx) / cross
+            if (0...1).contains(t), (0...1).contains(u) { return 0 }
+        }
+        return min(segmentDistance(a, c, d), segmentDistance(b, c, d),
+                   segmentDistance(c, a, b), segmentDistance(d, a, b))
+    }
+
+    /// Actual nib contact, including pressure. Other objects' z-order is
+    /// deliberately irrelevant: an eraser can reach an obscured stroke.
+    static func eraserTouches(_ samples: [DrawPoint], size: DrawSize,
+                              from start: CGPoint, to end: CGPoint, tolerance: CGFloat) -> Bool {
+        guard let first = samples.first else { return false }
+        let base = CGFloat(size.strokeWidth)
+        func position(_ point: DrawPoint) -> CGPoint { CGPoint(x: point.x, y: point.y) }
+        func radius(_ point: DrawPoint) -> CGFloat { DrawInk.pressureWidth(point.pressure, base: base) / 2 }
+        if samples.count == 1 {
+            return segmentDistance(position(first), start, end) <= tolerance + radius(first)
+        }
+        for index in 1..<samples.count {
+            let before = samples[index - 1], after = samples[index]
+            let nib = max(radius(before), radius(after))
+            if segmentDistance(start, end, to: position(before), position(after)) <= tolerance + nib {
+                return true
+            }
+        }
+        return false
+    }
+
     static func hits(_ object: DrawObject, _ point: CGPoint, tolerance: CGFloat) -> Bool {
         let half = strokeWidth(object) / 2
         switch object.content {
         case .stroke(let samples):
             guard let first = samples.first else { return false }
-            if samples.count == 1 { return hypot(point.x - first.x, point.y - first.y) <= tolerance + half * 2 }
+            if samples.count == 1 { return hypot(point.x - first.x, point.y - first.y) <= tolerance + half }
             for index in 0..<(samples.count - 1) {
                 let a = CGPoint(x: samples[index].x, y: samples[index].y)
                 let b = CGPoint(x: samples[index + 1].x, y: samples[index + 1].y)
-                if segmentDistance(point, a, b) <= tolerance + half { return true }
+                let base = CGFloat(object.style.size.strokeWidth)
+                let radius = max(DrawInk.pressureWidth(samples[index].pressure, base: base),
+                                 DrawInk.pressureWidth(samples[index + 1].pressure, base: base)) / 2
+                if segmentDistance(point, a, b) <= tolerance + radius { return true }
             }
             return false
         case .shape(let shape) where shape == .line || shape == .arrow:

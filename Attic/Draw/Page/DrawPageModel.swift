@@ -48,10 +48,32 @@ struct DrawTextEdit: Equatable {
     var pointSize: CGFloat { CGFloat(style.size.textSize) * scale }
 }
 
+/// Mutable live samples: AppKit can deliver thousands of drag events before
+/// mouse-up. Keep one buffer so extending a stroke never copies its prefix.
+final class DrawInkTrace: Equatable {
+    private(set) var samples: [DrawInkSample]
+    private(set) var hasPressure: Bool
+
+    init(_ sample: DrawInkSample) {
+        samples = [sample]
+        hasPressure = sample.pressure != nil
+    }
+
+    func append(_ sample: DrawInkSample) {
+        // AppKit can interleave ordinary mouse-drag/up events with tablet
+        // points. Do not let an unpressured event reset the stylus nib.
+        let pressure = sample.pressure ?? (hasPressure ? samples.last?.pressure : nil)
+        samples.append(DrawInkSample(point: sample.point, pressure: pressure))
+        if pressure != nil { hasPressure = true }
+    }
+
+    static func == (lhs: DrawInkTrace, rhs: DrawInkTrace) -> Bool { lhs.samples == rhs.samples }
+}
+
 /// What the pointer is doing on the board right now (never published: the
 /// board view reads it on each event).
 enum DrawLive: Equatable {
-    case ink([CGPoint])
+    case ink(DrawInkTrace)
     case shape(DrawShape, start: CGPoint, end: CGPoint)
     case erase(gone: Set<UUID>, last: CGPoint)
     case move(from: CGPoint, offset: CGPoint, moved: Bool)
