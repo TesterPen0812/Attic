@@ -29,6 +29,21 @@ struct AgentWordAttribute: TextAttribute {
     var key: Int?
 }
 
+/// The underlined phrases' rects, by paragraph, as the renderer last laid
+/// them out (the renderer may draw off the main thread).
+final class AgentMarkProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rects: [Int: [(key: Int, rect: CGRect)]] = [:]
+
+    func report(paragraph: Int, _ marks: [(key: Int, rect: CGRect)]) {
+        lock.withLock { rects[paragraph] = marks }
+    }
+
+    func key(at point: CGPoint, paragraph: Int) -> Int? {
+        lock.withLock { rects[paragraph]?.first { $0.rect.insetBy(dx: -2, dy: -3).contains(point) }?.key }
+    }
+}
+
 /// Writes a reply word by word, each coming out of a blur, then draws the key
 /// words' underlines. One `Text`, so wrapping and spacing stay native.
 struct AgentWordRenderer: TextRenderer {
@@ -37,6 +52,8 @@ struct AgentWordRenderer: TextRenderer {
     var marksStart: Date?
     var paragraph: Int
     var probe: AgentWordProbe?
+    /// Where the underlined phrases are, for the hover ping.
+    var marks: AgentMarkProbe?
 
     var displayPadding: EdgeInsets { EdgeInsets(top: 4, leading: 3, bottom: 5, trailing: 3) }
 
@@ -73,6 +90,7 @@ struct AgentWordRenderer: TextRenderer {
             }
         }
         if let newest { probe?.report(paragraph: paragraph, rect: newest, time: now) }
+        self.marks?.report(paragraph: paragraph, marks)
         guard let marksStart else { return }
         for (order, mark) in marks.enumerated() {
             let age = now.timeIntervalSince(marksStart) - Double(order) * 0.17
@@ -250,7 +268,7 @@ struct AgentChatThread: View {
             AgentWeekStrip(id: entry.id, week: week, first: first, alive: alive,
                            running: model.phase != .idle && model.runWeek == entry.id, fx: fx)
         case let .reply(reply):
-            AgentReplyView(reply: reply, fx: fx).modifier(AgentChatEdge(dark: dark))
+            AgentReplyView(reply: reply, fx: fx, ping: { model.pingPhrase($0) }).modifier(AgentChatEdge(dark: dark))
         case let .changes(changes):
             AgentChangesRow(changes: changes, first: first, alive: alive, fx: fx,
                             toggle: { model.toggleChanges(entry.id) }, undo: { model.undo(entry.id) })
@@ -406,6 +424,11 @@ private struct AgentTick: Shape {
 private struct AgentReplyView: View {
     let reply: AgentChatReply
     let fx: AgentChatFX
+    /// Hovering an underlined phrase: its Tasks row lights up (the design's
+    /// hover ping, at most once in 900 ms a phrase).
+    var ping: (String) -> Void = { _ in }
+    @State private var marks = AgentMarkProbe()
+    @State private var pinged: [Int: Date] = [:]
 
     @Environment(\.atticDesign) private var design
     @State private var settled = false
@@ -426,7 +449,13 @@ private struct AgentReplyView: View {
                 ForEach(paragraphs.indices, id: \.self) { index in
                     text(paragraphs[index], first: starts[index])
                         .textRenderer(AgentWordRenderer(now: timeline.date, times: reply.wordTimes, marksStart: reply.marksStart,
-                                                        paragraph: index, probe: fx.word))
+                                                        paragraph: index, probe: fx.word, marks: marks))
+                        .onContinuousHover { phase in
+                            guard case let .active(at) = phase, let key = marks.key(at: at, paragraph: index),
+                                  Date().timeIntervalSince(pinged[key] ?? .distantPast) > 0.9 else { return }
+                            pinged[key] = Date()
+                            ping(paragraphs[index].filter { $0.key == key }.map(\.text).joined(separator: " "))
+                        }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { fx.paragraphFrames[index] = $0 }
                 }
             }

@@ -106,6 +106,11 @@ struct CalendarPage: View {
         .onDisappear { model.setVisible(false) }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
+        // The agent picks a day while you watch (the spark taps its key).
+        .onReceive(AgentWatchBoard.shared.$dayRequest.compactMap { $0 }) { request in
+            AgentWatchBoard.shared.consumeDay(request.id)
+            model.select(request.day)
+        }
         .onChange(of: snapshot.weeks.count) { _, count in
             // The week view stays the week view when the month changes
             // (a month of another length has another offset).

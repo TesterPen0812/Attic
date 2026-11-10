@@ -87,6 +87,9 @@ final class PanelUIState: ObservableObject {
     /// The floating agent chat. Here so a run outlives every view; only the
     /// docked panel's is ever connected to a runner.
     let agentChat = AgentChatModel()
+    /// Shows the agent's watched changes on the real pages; the panel
+    /// controller gives it the island.
+    var agentWatcher: PanelAgentWatcher?
     /// The pages another panel hosts (Accepted "Tall island", "Pull a page
     /// out, snap it back in"): on the docked panel, the pages that are out;
     /// on a floating panel, every page but its own. A page lives in one

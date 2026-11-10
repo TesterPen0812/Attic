@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -1591,7 +1592,8 @@ final class AgentNoteWritingTests: XCTestCase {
         model.pacing = .instant
         model.currentPage = { .tasks }
         model.openPage = { [unowned self] in pagesOpened.append($0) }
-        model.writeInNote = { [unowned self] id in
+        model.presentWatched = { [unowned self] action in
+            guard case let .note(id) = action else { return nil }
             presented.append(id)
             return { await withCheckedContinuation { self.gate = $0 } }
         }
@@ -1631,18 +1633,18 @@ final class AgentNoteWritingTests: XCTestCase {
 
     func testTheEditIsSavedBeforeItIsShownBeingWritten() async {
         var back = 0
-        let watch = model.effects.sink { if $0 == .wroteInNote { back += 1 } }
+        let watch = model.effects.sink { if $0 == .watchEnded { back += 1 } }
         defer { watch.cancel() }
         model.open()
         await run()
         XCTAssertEqual(presented, [noteID], "Watching, the note is shown being written")
         XCTAssertNotNil(gate, "The writing is under way")
         XCTAssertTrue(savedBody().contains(checklist), "Mid-way, the whole edit is already saved")
-        XCTAssertEqual(model.writingLabel, "Writing in your note")
+        XCTAssertEqual(model.liveLabel, "Writing in your note")
         XCTAssertEqual(steps.last?.state, .running, "The row turns done once it has been written")
         XCTAssertEqual(back, 0, "The keyboard stays put while it is written")
         await release()
-        XCTAssertNil(model.writingLabel, "Then the chat comes back")
+        XCTAssertNil(model.liveLabel, "Then the chat comes back")
         XCTAssertEqual(back, 1, "and the composer has the keyboard again")
         XCTAssertEqual(steps.last?.state, .done)
         XCTAssertEqual(steps.last?.title, "Added a checklist to your note")
@@ -1688,7 +1690,7 @@ final class AgentNoteWritingTests: XCTestCase {
         await settle()
         XCTAssertTrue(presented.isEmpty, "Closed: nothing is shown being written")
         XCTAssertTrue(pagesOpened.isEmpty, "Closed: no page comes forward")
-        XCTAssertNil(model.writingLabel)
+        XCTAssertNil(model.liveLabel)
         XCTAssertTrue(savedBody().contains(checklist), "The change lands as before")
         XCTAssertEqual(model.bar.state, .changes(1), "The ✦ counts it")
     }
@@ -1696,9 +1698,9 @@ final class AgentNoteWritingTests: XCTestCase {
     func testClosingWhileWritingLetsTheRunGoOn() async {
         model.open()
         await run()
-        XCTAssertEqual(model.writingLabel, "Writing in your note")
+        XCTAssertEqual(model.liveLabel, "Writing in your note")
         model.close()
-        XCTAssertNil(model.writingLabel, "The label goes with the chat")
+        XCTAssertNil(model.liveLabel, "The label goes with the chat")
         await release()
         XCTAssertEqual(steps.last?.state, .done)
     }
@@ -1783,6 +1785,378 @@ final class AgentNoteWritingTests: XCTestCase {
         XCTAssertEqual(NoteEditorEngine.agentInsertion(from: "Title\nOld", to: "Title\nNew")?.replaces, true)
         XCTAssertNil(NoteEditorEngine.agentInsertion(from: "Same", to: "Same"))
     }
+}
+
+/// Watching (Accepted 2026-11-06, "open means watching"; gaps 09, 14–22):
+/// one mechanism shows every change the agent makes on a page, each saved
+/// before any of it shows.
+@MainActor
+final class AgentChatWatchingTests: XCTestCase {
+    private var tasks: TaskStore!
+    private var backend: FakeCalendarEventWriteStore!
+    private var draw: DrawPersistentStore!
+    private var actions: AgentActions!
+    private var model: AgentChatModel!
+    private var canvasID: UUID!
+    private var launchDay: DrawObject!
+    private var gate: CheckedContinuation<Void, Never>?
+    private var presented: [AgentWatchedAction] = []
+    private var pagesOpened: [AgentPage] = []
+
+    override func setUp() async throws {
+        tasks = try makeTestStore()
+        let library = AtticLibrary(tasks: tasks)
+        backend = FakeCalendarEventWriteStore()
+        backend.availableCalendars = [CalendarWriteCalendar(
+            id: "home", title: "Home", colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+            sourceID: "local", sourceTitle: "Local", isWritable: true)]
+        let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(), undoRoute: library.undo)
+        draw = DrawPersistentStore(container: try ModelContainer(
+            for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
+        canvasID = draw.create(name: "Launch plan").id
+        // Launch day, already sketched.
+        launchDay = DrawObject(frame: DrawFrame(x: 240, y: 160, width: 100, height: 44), zIndex: 1, content: .text("Launch day"))
+        XCTAssertTrue(draw.perform(.put([launchDay]), on: canvasID).isSaved)
+        let tools = AgentTaskTools(store: tasks, library: library)
+        actions = AgentActions(tasks: tools, calendarSource: CalendarEventSourceStub(), calendarWriter: writer, draw: draw)
+        model = AgentChatModel()
+        model.pacing = .instant
+        model.currentPage = { .tasks }
+        model.openPage = { [unowned self] in pagesOpened.append($0) }
+        model.presentWatched = { [unowned self] action in
+            presented.append(action)
+            return { await withCheckedContinuation { self.gate = $0 } }
+        }
+        model.connect(ScriptedAgentRunner(tools: tools, actions: actions, mode: { [unowned self] in model.mode }, pace: 0))
+    }
+
+    private func settle() async {
+        for _ in 0..<200 { await Task.yield() }
+    }
+
+    private func run(_ text: String) async {
+        model.draft = text
+        model.send()
+        await settle()
+    }
+
+    private func release() async {
+        gate?.resume()
+        gate = nil
+        await settle()
+    }
+
+    private var steps: [AgentStep] {
+        model.entries.compactMap { if case let .step(step) = $0.content { step } else { nil } }
+    }
+
+    private var changes: (id: UUID, value: AgentChatChanges)? {
+        model.entries.compactMap { if case let .changes(value) = $0.content { ($0.id, value) } else { nil } }.last
+    }
+
+    /// The canvas as saved, read through a store of its own: what a relaunch finds.
+    private func savedObjects() throws -> [DrawObject] {
+        try DrawPersistentStore(container: draw.container).open(canvasID).objects.filter { $0.deletedAt == nil }
+    }
+
+    // MARK: Committed before shown
+
+    func testACalendarEventIsSavedBeforeItIsShown() async throws {
+        model.mode = .auto
+        model.open()
+        await run("Put the dentist on Friday morning")
+        guard case let .calendarEvent(target)? = presented.last else { return XCTFail("The event is shown being added: \(presented)") }
+        XCTAssertNotNil(gate, "It is on screen now")
+        XCTAssertEqual(backend.events.values.map(\.draft.title), ["Dentist"], "Mid-way, the event is already saved")
+        XCTAssertEqual(target.externalID, backend.events.values.first?.occurrenceID)
+        XCTAssertEqual(model.watch, .watching, "The glass has cleared")
+        XCTAssertEqual(model.liveLabel, "Adding it to your calendar", "The step's own words over the composer")
+        XCTAssertEqual(steps.last?.state, .running, "The row turns done once it has been seen")
+        await release()
+        XCTAssertEqual(model.watch, .none, "Then the chat comes back")
+        XCTAssertNil(model.liveLabel)
+        XCTAssertEqual(steps.last?.title, "Added Dentist to Friday")
+        XCTAssertEqual(changes?.value.items.map(\.title), ["Dentist"])
+    }
+
+    func testASketchIsSavedBeforeItIsShown() async throws {
+        model.open()
+        await run("Add a press kit step to my launch sketch")
+        guard case let .sketch(canvas, objects)? = presented.last else { return XCTFail("The sketch is shown being drawn: \(presented)") }
+        XCTAssertEqual(canvas, canvasID)
+        XCTAssertEqual(objects.count, 4, "The box, the arrow's two strokes and its words")
+        XCTAssertNotNil(gate)
+        // A quit now leaves the whole sketch saved.
+        XCTAssertEqual(Set(try savedObjects().map(\.id)), Set(objects + [launchDay.id]))
+        XCTAssertEqual(Set(try savedObjects().map(\.text).filter { !$0.isEmpty }), ["Launch day", "Press kit"])
+        XCTAssertEqual(model.liveLabel, "Sketching on Launch plan")
+        await release()
+        XCTAssertEqual(model.watch, .none)
+        XCTAssertEqual(steps.last?.title, "Added Press kit to your sketch")
+    }
+
+    // MARK: Not watching
+
+    func testAClosedRunShowsNothingAndCountsTheChanges() async throws {
+        model.mode = .auto
+        await run("Put the dentist on Friday morning")
+        await settle()
+        XCTAssertTrue(presented.isEmpty, "Closed: nothing is shown being made")
+        XCTAssertTrue(pagesOpened.isEmpty, "Closed: no page comes forward")
+        XCTAssertEqual(model.watch, .none)
+        XCTAssertNil(model.liveLabel)
+        XCTAssertEqual(backend.events.count, 1, "The change lands as it would")
+        XCTAssertEqual(model.bar.state, .changes(1), "The ✦ counts it")
+        await run("Add a press kit step to my launch sketch")
+        await settle()
+        XCTAssertTrue(presented.isEmpty)
+        XCTAssertEqual(try savedObjects().count, 5)
+    }
+
+    // MARK: Undo
+
+    func testUndoRemovesTheEvent() async throws {
+        model.mode = .auto
+        model.open()
+        await run("Put the dentist on Friday morning")
+        await release()
+        await settle()
+        let id = try XCTUnwrap(changes?.id)
+        model.undo(id)
+        for _ in 0..<10 { await settle() }
+        XCTAssertEqual(changes?.value.state, .undone)
+        XCTAssertTrue(backend.events.isEmpty, "Undo takes the event off the calendar")
+    }
+
+    func testUndoRemovesTheSketch() async throws {
+        model.open()
+        await run("Add a press kit step to my launch sketch")
+        await release()
+        await settle()
+        let id = try XCTUnwrap(changes?.id)
+        model.undo(id)
+        for _ in 0..<10 { await settle() }
+        XCTAssertEqual(changes?.value.state, .undone)
+        XCTAssertEqual(try savedObjects().map(\.id), [launchDay.id], "Undo takes the sketch off the canvas, and only it")
+    }
+
+    func testUndoWhileOnScreenLeavesNothingHidden() async throws {
+        // The watcher hides what it is about to show; Undo while it is on
+        // screen, or a close part-way, never leaves it hidden.
+        let board = AgentWatchBoard()
+        let chat = AgentChatModel()
+        chat.connect(ScriptedAgentRunner(tools: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), pace: 0))
+        chat.open()
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }), board: board)
+        watcher.pace = .instant
+        watcher.currentPage = { .calendar }
+        let occurrence = "dentist@\(Date().timeIntervalSinceReferenceDate)"
+        let present = watcher.presentation(for: .calendarEvent(AgentTarget(page: .calendar, externalID: occurrence)))
+        XCTAssertTrue(board.hiddenEvents.contains(occurrence), "Hidden before the page draws it")
+        chat.close()
+        await present?()
+        XCTAssertTrue(board.hiddenEvents.isEmpty, "Closed part-way: it shows at once")
+        XCTAssertTrue(board.growingEvents.isEmpty)
+    }
+
+    // MARK: Mode
+
+    func testAskFirstShowsTheApprovalBeforeTheEvent() async throws {
+        model.mode = .askFirst
+        model.open()
+        await run("Put the dentist on Friday morning")
+        XCTAssertNotNil(model.approval, "The approval card comes first")
+        XCTAssertTrue(presented.isEmpty, "Nothing is shown before it is allowed")
+        XCTAssertTrue(backend.events.isEmpty, "Nor saved")
+        XCTAssertEqual(model.watch, .none, "The chat stays as it is for the card")
+        model.resolveApproval(allow: true)
+        await settle()
+        guard case .calendarEvent? = presented.last else { return XCTFail("Allowed, it is shown being added") }
+        XCTAssertEqual(backend.events.count, 1)
+        await release()
+    }
+
+    // MARK: Step beats
+
+    func testTheStepQueueNeverDelaysTheRunsResult() async throws {
+        let runner = BurstRunner()
+        let chat = AgentChatModel()
+        chat.pacing = AgentChatPacing()
+        chat.connect(runner)
+        chat.open()
+        chat.draft = "Tidy"
+        let sent = Date()
+        chat.send()
+        // The run finished at once; the thread's beats catch up within the
+        // catch-up time, never one beat per step (8 × 0.96 s).
+        while chat.isBusy, Date().timeIntervalSince(sent) < 6 { try await Task.sleep(for: .milliseconds(20)) }
+        let caughtUp = Date().timeIntervalSince(sent)
+        XCTAssertFalse(chat.isBusy)
+        XCTAssertLessThan(caughtUp, chat.pacing.catchUp + 0.8, "The steps catch up with the run")
+        XCTAssertEqual(stepStates(chat),
+                       Array(repeating: .done, count: 8))
+        // Closed, nothing is held at all.
+        let closed = AgentChatModel()
+        closed.pacing = AgentChatPacing()
+        closed.connect(BurstRunner())
+        closed.draft = "Tidy"
+        let start = Date()
+        closed.send()
+        while closed.isBusy, Date().timeIntervalSince(start) < 3 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.3)
+    }
+
+    private func stepStates(_ chat: AgentChatModel) -> [AgentStepState] {
+        chat.entries.compactMap { entry -> AgentStepState? in
+            if case let .step(step) = entry.content { return step.state }
+            return nil
+        }
+    }
+
+    func testAStepShowsRunningForItsBeatWhenTheRunIsSlow() async throws {
+        let runner = BurstRunner()
+        runner.steps = 1
+        let chat = AgentChatModel()
+        chat.pacing = AgentChatPacing()
+        chat.connect(runner)
+        chat.open()
+        chat.draft = "Read"
+        chat.send()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(stepStates(chat), [.running],
+                       "A step that finished at once still shows running for its beat")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(stepStates(chat), [.done])
+    }
+
+    // MARK: Glass, label, hover
+
+    func testReadingTasksThinsTheGlass() async throws {
+        let runner = BurstRunner()
+        runner.steps = 0
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.open()
+        chat.draft = "Read"
+        chat.send()
+        let step = AgentStep(id: UUID(), title: "Reading 7 overdue tasks", kind: .read,
+                             targets: [AgentTarget(page: .tasks, itemID: UUID(), title: "A")], state: .running)
+        runner.continuation?.yield(.stepStarted(step))
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(chat.watch, .glance, "The rows being read show through")
+        var done = step
+        done.state = .done
+        runner.continuation?.yield(.stepFinished(done))
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(chat.watch, .none)
+    }
+
+    func testTheGlassLevels() {
+        XCTAssertEqual(AgentWatchLevel.blurRadius(clearing: AgentWatchLevel.none.clearing), 5)
+        XCTAssertEqual(AgentWatchLevel.blurRadius(clearing: AgentWatchLevel.glance.clearing), 1.5, accuracy: 0.001)
+        XCTAssertEqual(AgentWatchLevel.blurRadius(clearing: AgentWatchLevel.watching.clearing), 0)
+        XCTAssertEqual(AgentWatchLevel.tintShare(clearing: AgentWatchLevel.glance.clearing), 0.5)
+    }
+
+    func testHoveringAnUnderlinedPhrasePingsItsRow() {
+        let row = UUID()
+        model.rowTitles = { [(UUID(), "Call the dentist"), (row, "Renew the parking permit"), (UUID(), "Parking fine")] }
+        var pings: [[UUID]] = []
+        let sink = model.effects.sink { if case let .pingRows(ids) = $0 { pings.append(ids) } }
+        defer { sink.cancel() }
+        model.pingPhrase("parking permit")
+        XCTAssertTrue(pings.isEmpty, "Closed, nothing to light")
+        model.open()
+        model.pingPhrase("parking permit")
+        XCTAssertEqual(pings, [[row]], "The first row naming the phrase's first word, as drawn")
+    }
+
+    // MARK: The watcher
+
+    func testReducedMotionBringsThePageWithoutTravel() async {
+        let chat = AgentChatModel()
+        chat.connect(ScriptedAgentRunner(tools: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), pace: 0))
+        chat.open()
+        var opened: [AgentPage] = []
+        chat.openPage = { opened.append($0) }
+        var effects: [AgentChatEffect] = []
+        let sink = chat.effects.sink { effects.append($0) }
+        defer { sink.cancel() }
+        let board = AgentWatchBoard()
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }), board: board)
+        watcher.pace = .instant
+        watcher.reducesMotion = { true }
+        watcher.islandPoint = { _ in CGPoint(x: 10, y: 10) }
+        var page: AgentPage = .tasks
+        watcher.currentPage = { page }
+        chat.openPage = { opened.append($0); page = $0 }
+        let occurrence = "dentist@\(Date().timeIntervalSinceReferenceDate)"
+        let present = watcher.presentation(for: .calendarEvent(AgentTarget(page: .calendar, externalID: occurrence)))
+        XCTAssertFalse(board.hiddenEvents.contains(occurrence), "Reduced: the event is there at once")
+        await present?()
+        XCTAssertEqual(opened, [.calendar], "The page still comes forward")
+        XCTAssertNotNil(board.dayRequest, "On its day")
+        XCTAssertTrue(effects.isEmpty, "No travel, taps or bursts: \(effects)")
+    }
+
+    func testTheSparkTapsTheIslandBeforeThePageSwitches() async {
+        let chat = AgentChatModel()
+        chat.connect(ScriptedAgentRunner(tools: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), pace: 0))
+        chat.open()
+        var log: [String] = []
+        let sink = chat.effects.sink { effect in
+            switch effect {
+            case .pointer: log.append("pointer")
+            case .tap: log.append("tap")
+            default: break
+            }
+        }
+        defer { sink.cancel() }
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }),
+                                        board: AgentWatchBoard())
+        watcher.pace = .instant
+        watcher.islandPoint = { _ in CGPoint(x: 400, y: 300) }
+        watcher.islandTap = { _ in log.append("island") }
+        watcher.currentPage = { .tasks }
+        chat.openPage = { log.append("switch \($0.rawValue)") }
+        await watcher.presentation(for: .openPage(.calendar))?()
+        XCTAssertEqual(log, ["pointer", "tap", "island", "switch calendar"])
+        chat.close()
+        XCTAssertNil(watcher.presentation(for: .openPage(.draw)), "Closed: nothing comes forward")
+    }
+}
+
+/// A run that does all its work at once: steps, then its changes and the end.
+@MainActor
+private final class BurstRunner: AgentRunning {
+    var steps = 8
+    var continuation: AsyncStream<AgentEvent>.Continuation?
+    var retainsThread = false
+
+    func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> {
+        AsyncStream { continuation in
+            self.continuation = continuation
+            guard steps > 0 else { return }
+            for index in 0..<steps {
+                var step = AgentStep(id: UUID(), title: "Step \(index)", kind: .read, targets: [], state: .running)
+                continuation.yield(.stepStarted(step))
+                step.state = .done
+                continuation.yield(.stepFinished(step))
+            }
+            continuation.yield(.finished)
+            continuation.finish()
+        }
+    }
+
+    func setWatching(_ watching: Bool) {}
+    func resolve(approval id: UUID, allow: Bool) {}
+    func undo(changeSet id: UUID) async throws {}
+    func cancel() { continuation?.finish() }
+    func observe() -> AsyncStream<AgentEvent> { AsyncStream { $0.finish() } }
+    func threadSnapshot() -> AgentThreadSnapshot { AgentThreadSnapshot(entries: [], events: [], isRunning: false) }
+    func forgetThread() {}
 }
 
 private extension Result {

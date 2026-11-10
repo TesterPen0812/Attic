@@ -92,6 +92,8 @@ final class AgentChatFX: ObservableObject {
     var turnTop: CGFloat?
     /// Where the blur's wipe opens from; the colour opens from there too.
     var wipeOrigin: CGPoint?
+    /// The stage's origin in the panel's global space, for frames the pages report.
+    var stageOrigin: CGPoint = .zero
     var paragraphFrames: [Int: CGRect] = [:]
     let word = AgentWordProbe()
 
@@ -162,6 +164,8 @@ final class AgentChatFX: ObservableObject {
         rings = []
         flights = []
         scans = []
+        pings = []
+        pointer = nil
         spark = Spark()
         landing = false
         wake()
@@ -321,6 +325,49 @@ final class AgentChatFX: ObservableObject {
         wake()
     }
 
+    // MARK: Watching (the design's `fx.act`, `tap`, `ping`, `drawAct`)
+
+    /// Where the spark goes as the agent's pointer, until let go.
+    private var pointer: CGPoint?
+    private struct Ping {
+        var rect: CGRect
+        var age = 0.0
+        var duration: Double
+        /// A hover ping fades out from its peak; a landing holds it.
+        var holds: Bool
+    }
+    private var pings: [Ping] = []
+    private var sketches: [(replay: AgentSketchReplay, transform: CGAffineTransform)] = []
+
+    func point(at point: CGPoint?) {
+        pointer = point
+        wake()
+    }
+
+    /// The design's `tap`: a ring of 40 px in 0.42 s and seven stars.
+    func tap(at point: CGPoint) {
+        ring(point.x, point.y, radius: 20, duration: 0.42)
+        burst(point.x, point.y, count: 7, speed: 35)
+    }
+
+    /// A row lit up: the design's `ping` (a landed card, held) or the hover's.
+    func ping(_ rect: CGRect, duration: Double, holds: Bool) {
+        pings.append(Ping(rect: rect, duration: duration, holds: holds))
+        wake()
+    }
+
+    /// A sketch drawn in over Draw; its paths are in window coordinates and
+    /// `transform` takes them to this layer's.
+    func sketch(_ replay: AgentSketchReplay, transform: CGAffineTransform) {
+        sketches.append((replay, transform))
+        wake()
+    }
+
+    #if DEBUG
+    var pointerGoal: CGPoint? { pointer }
+    var pingCount: Int { pings.count }
+    #endif
+
     // MARK: Frames
 
     private struct Goal {
@@ -337,6 +384,9 @@ final class AgentChatFX: ObservableObject {
         guard acting || needsYou else { return nil }
         if let writing, Date().timeIntervalSince(writing.time) < 0.25 {
             return Goal(x: writing.point.x, y: writing.point.y, scale: 0.44, pinch: 0.12, kind: .write)
+        }
+        if let pointer {
+            return Goal(x: pointer.x, y: pointer.y, scale: 0.5, pinch: 0.16, kind: .tool)
         }
         if needsYou, let frame = composerFrame {
             return Goal(x: frame.maxX - 23, y: frame.minY + 22 + sin(time * 3.2) * 2, scale: 0.68,
@@ -392,6 +442,12 @@ final class AgentChatFX: ObservableObject {
             r.age += dt
             return r.age < r.duration ? r : nil
         }
+        pings = pings.compactMap { ping in
+            var p = ping
+            p.age += dt
+            return p.age < p.duration ? p : nil
+        }
+        sketches.removeAll { $0.replay.finished }
         scans = scans.compactMap { scan in
             var s = scan
             s.age += dt
@@ -417,7 +473,8 @@ final class AgentChatFX: ObservableObject {
             DispatchQueue.main.async { actions.forEach { $0() } }
         }
         let busy = acting || needsYou || spark.on || landing || emptyThread || !particles.isEmpty || !rings.isEmpty
-            || !flights.isEmpty || !scans.isEmpty || abs(energy - energyGoal) > 0.01 || flash > 0.01
+            || !flights.isEmpty || !scans.isEmpty || !pings.isEmpty || !sketches.isEmpty || pointer != nil
+            || abs(energy - energyGoal) > 0.01 || flash > 0.01
         if !busy, !isIdle { DispatchQueue.main.async { [weak self] in self?.isIdle = true } }
     }
 
@@ -484,7 +541,43 @@ final class AgentChatFX: ObservableObject {
             }
         }
         for flight in flights where flight.age >= flight.delay { drawChip(flight, in: &context) }
+        for ping in pings { drawPing(ping, in: &context) }
+        for sketch in sketches { drawSketch(sketch.replay, transform: sketch.transform, in: &context) }
         drawSpark(in: &context)
+    }
+
+    /// The design's ping: an iris wash with a rim, 12 pt round.
+    private func drawPing(_ ping: Ping, in context: inout GraphicsContext) {
+        let t = ping.age / ping.duration
+        let opacity = ping.holds ? (t < 0.2 ? t / 0.2 : t < 0.6 ? 1 : (1 - t) / 0.4)
+                                 : (t < 0.25 ? t / 0.25 : (1 - t) / 0.75)
+        let rect = ping.holds ? ping.rect.insetBy(dx: 2, dy: 1) : ping.rect.insetBy(dx: 3, dy: 1.5)
+        let shape = Path(roundedRect: rect, cornerRadius: 12, style: .continuous)
+        var layer = context
+        layer.opacity = max(0, min(1, opacity))
+        let strong = ping.holds ? 0.24 : 0.3
+        layer.fill(shape, with: .linearGradient(Gradient(colors: [AgentIris.blue.opacity(strong), AgentIris.pink.opacity(strong / 2)]),
+                                                startPoint: CGPoint(x: rect.minX, y: rect.midY),
+                                                endPoint: CGPoint(x: rect.maxX, y: rect.midY)))
+        layer.stroke(Path(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), cornerRadius: 11.25, style: .continuous),
+                     with: .color(AgentIris.blue.opacity(0.45)), lineWidth: 1.5)
+    }
+
+    /// The sketch so far: each stroke drawn up to where the spark is, then
+    /// the labels rising 3 pt as they fade in.
+    private func drawSketch(_ replay: AgentSketchReplay, transform: CGAffineTransform, in context: inout GraphicsContext) {
+        for stroke in replay.strokes where stroke.drawn > 0 {
+            let path = Path(stroke.path).applying(transform).trimmedPath(from: 0, to: stroke.drawn)
+            context.stroke(path, with: .color(stroke.colour),
+                           style: StrokeStyle(lineWidth: stroke.width, lineCap: .round, lineJoin: .round))
+        }
+        for label in replay.labels where label.shown > 0 {
+            var layer = context
+            layer.opacity = Double(label.shown)
+            let at = label.origin.applying(transform)
+            layer.draw(Text(label.text).font(.system(size: label.size)).foregroundColor(label.colour),
+                       at: CGPoint(x: at.x, y: at.y + 3 * (1 - label.shown)), anchor: .topLeading)
+        }
     }
 
     private func drawScan(_ scan: Scan, in context: inout GraphicsContext, width: CGFloat) {

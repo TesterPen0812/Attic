@@ -88,6 +88,7 @@ struct CalendarAgendaDay: View {
                         .accessibilityIdentifier("calendar-task-\(task.id.uuidString)")
                     case let .event(event):
                         CalendarEventRow(event: event, day: group.day, today: today, rows: eventRows)
+                            .modifier(AgentEventArrival(id: event.id))
                     case .now:
                         CalendarNowLine()
                     }

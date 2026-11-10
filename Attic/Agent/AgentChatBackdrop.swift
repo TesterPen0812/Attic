@@ -13,6 +13,8 @@ import SwiftUI
 struct AgentChatBackdrop: View, Animatable {
     var shown: Bool
     var reveal: CGFloat
+    /// How far the glass has cleared for watching (`AgentWatchLevel.clearing`).
+    var clearing: CGFloat = 0
     var origin: CGPoint
     var tint: NSColor
     var fades: Bool
@@ -22,13 +24,13 @@ struct AgentChatBackdrop: View, Animatable {
 
     /// A representable is handed only an animation's end value; a view's body
     /// gets every frame of it, and passes each one on.
-    var animatableData: CGFloat {
-        get { reveal }
-        set { reveal = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(reveal, clearing) }
+        set { reveal = newValue.first; clearing = newValue.second }
     }
 
     var body: some View {
-        AgentChatBackdropRepresentable(shown: shown, reveal: reveal, origin: origin, tint: tint, fades: fades, solid: solid,
+        AgentChatBackdropRepresentable(shown: shown, reveal: reveal, clearing: clearing, origin: origin, tint: tint, fades: fades, solid: solid,
                                        onEscape: onEscape, didMake: didMake)
     }
 }
@@ -38,6 +40,7 @@ struct AgentChatBackdropRepresentable: NSViewRepresentable {
     var shown: Bool
     /// 0: a point at the ✦ (or clear, when fading); 1: open.
     var reveal: CGFloat
+    var clearing: CGFloat = 0
     /// Where the circle opens from, in this view's top-left coordinates.
     var origin: CGPoint
     var tint: NSColor
@@ -58,6 +61,7 @@ struct AgentChatBackdropRepresentable: NSViewRepresentable {
         view.onEscape = onEscape
         view.isShown = shown
         view.configure(tint: tint, solid: solid)
+        view.setClearing(clearing)
         view.apply(reveal: reveal, origin: origin, fades: fades)
     }
 
@@ -139,6 +143,8 @@ final class AgentChatBackdropView: NSView {
               filterClass.responds(to: NSSelectorFromString("filterWithType:")) else { return nil }
         let filter = filterClass.perform(NSSelectorFromString("filterWithType:"), with: type)?.takeUnretainedValue() as? NSObject
         filter?.setValue(value.1, forKey: value.0)
+        // Named, so watching can reach it by key path ("filters.gaussianBlur…").
+        filter?.setValue(type, forKey: "name")
         return filter
     }
 
@@ -167,12 +173,38 @@ final class AgentChatBackdropView: NSView {
 
     private var last: (reveal: CGFloat, origin: CGPoint, fades: Bool)?
 
+    private var tint: NSColor = .clear
+    private var clearing: CGFloat = 0
+    #if DEBUG
+    /// Test seam: the blur's radius last applied.
+    private(set) var appliedBlurRadius: CGFloat = AgentChatBackdropView.blurRadius
+    #endif
+
     func configure(tint: NSColor, solid: Bool) {
+        self.tint = tint
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        tintLayer.backgroundColor = tint.cgColor
+        tintLayer.backgroundColor = tint.withAlphaComponent(tint.alphaComponent * AgentWatchLevel.tintShare(clearing: clearing)).cgColor
         backdrop?.isHidden = solid
         CATransaction.commit()
+    }
+
+    /// Watching: the blur thins to nothing and the tint with it, so the page
+    /// shows (the design's blur 10 → 3 → 0). Called on every frame of its
+    /// animation, with no implicit motion of its own.
+    func setClearing(_ value: CGFloat) {
+        guard value != clearing else { return }
+        clearing = value
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let radius = AgentWatchLevel.blurRadius(clearing: value)
+        backdrop?.setValue(radius, forKeyPath: "filters.gaussianBlur.inputRadius")
+        backdrop?.setValue(AgentWatchLevel.saturation(clearing: value), forKeyPath: "filters.colorSaturate.inputAmount")
+        tintLayer.backgroundColor = tint.withAlphaComponent(tint.alphaComponent * AgentWatchLevel.tintShare(clearing: value)).cgColor
+        #if DEBUG
+        appliedBlurRadius = radius
+        #endif
     }
 
     /// Sets the blur and tint to `reveal`: a circle from `origin` with a soft

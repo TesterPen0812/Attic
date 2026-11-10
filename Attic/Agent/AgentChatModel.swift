@@ -140,8 +140,20 @@ enum AgentChatEffect: Equatable {
     /// A watched note edit's writing point, in window coordinates; `star`
     /// lets a star go from it.
     case writing(CGPoint, star: Bool)
-    /// The chat is back from a note it wrote in.
-    case wroteInNote
+    /// The spark as the agent's pointer: where it goes, or nil to let go.
+    case pointer(AgentWatchPoint?)
+    /// The pointer taps: the design's ring (40, 0.42 s) and seven stars.
+    case tap(AgentWatchPoint)
+    /// Stars and a ring from a point: the design's burst where a change lands.
+    case burst(AgentWatchPoint, count: Int, speed: Double, ring: CGFloat)
+    /// A row lights up: the design's ping, for `duration` seconds.
+    case ping(AgentWatchRect, duration: Double)
+    /// A sketch drawn in over Draw.
+    case sketch(AgentSketchReplay)
+    /// Task rows matching a reply's underlined phrase light up.
+    case pingRows([UUID])
+    /// The chat is back from watching the agent work on a page.
+    case watchEnded
 }
 
 /// How fast a reply writes itself. The HTML's values; tests use `.instant`.
@@ -154,8 +166,22 @@ struct AgentChatPacing: Equatable, Sendable {
     var settle: TimeInterval = 0.3
     /// The gap between dots leaving the week strip on Undo.
     var dotRetreat: TimeInterval = 0.11
+    /// Step beats (the design's step transitions, not its demo timings): a
+    /// step shows running at least this long (its 200 ms arrival, then a
+    /// readable shimmer) before it turns done…
+    var stepRun: TimeInterval = 0.5
+    /// …and its check (400 ms ring, tick to 460 ms) finishes before the next
+    /// step arrives. Beats only hold what is shown; the run never waits.
+    var stepHandover: TimeInterval = 0.46
+    /// Events that waited longer than this skip their beats until the chat
+    /// has caught up with the run.
+    var catchUp: TimeInterval = 1.0
+    /// After a watched action, how long the chat stays aside for the next
+    /// one before it comes back.
+    var watchReturn: TimeInterval = 0.4
 
-    static let instant = AgentChatPacing(word: 0, comma: 0, sentence: 0, settle: 0, dotRetreat: 0)
+    static let instant = AgentChatPacing(word: 0, comma: 0, sentence: 0, settle: 0, dotRetreat: 0,
+                                         stepRun: 0, stepHandover: 0, catchUp: 0, watchReturn: 0)
 }
 
 /// A reply split into words for the writing motion.
@@ -226,9 +252,12 @@ final class AgentChatModel: ObservableObject {
             }
         }
     }
-    /// While a watched run writes in a note: the label over the composer.
-    /// The chat steps aside for it (the blur and the thread go).
-    @Published private(set) var writingLabel: String?
+    /// How far the glass has cleared for the agent's work on the page. At
+    /// `watching` the chat steps aside: the thread goes, the composer stays.
+    @Published private(set) var watch: AgentWatchLevel = .none
+    /// While watching: what the agent is doing, over the composer, in the
+    /// step's own words ("Opening Tasks", "Writing in your note").
+    @Published private(set) var liveLabel: String?
 
     // MARK: The composer's controls
 
@@ -273,10 +302,13 @@ final class AgentChatModel: ObservableObject {
     /// The page on show, and how to go to one while watching. Set by the shell.
     var currentPage: () -> AgentPage? = { nil }
     var openPage: ((AgentPage) -> Void)?
-    /// A note the agent has just written in, shown being written: Notes
-    /// forward on it, the text written in, then back. Nil when there is
-    /// nothing to show. Set by the shell; asked only while watching.
-    var writeInNote: ((UUID) -> (() async -> Void)?)?
+    /// A change the agent has just made, shown being made on its page: the
+    /// page forward, the change played in, then back. Nil when there is
+    /// nothing to show. Set by the shell; asked only while watching, and only
+    /// once the change is saved.
+    var presentWatched: ((AgentWatchedAction) -> (() async -> Void)?)?
+    /// The Tasks rows on show, with their titles, for a reply's hover ping.
+    var rowTitles: () -> [(id: UUID, title: String)] = { [] }
     /// What the week strip shows, for the week holding a day.
     var weekDays: (Date) -> [AgentChatWeekDay] = { AgentChatModel.emptyWeek(holding: $0) }
     /// Told when the pages with a dot change.
@@ -304,6 +336,16 @@ final class AgentChatModel: ObservableObject {
     private(set) var runWeek: UUID?
     /// The page the agent itself is going to: arriving there keeps the chat open.
     private var agentGoingTo: AgentPage?
+    /// The run's events, stamped as they arrive, for the step beats.
+    private var feedTask: Task<Void, Never>?
+    /// When each shown step started, and when the last one turned done.
+    private var stepShownAt: [UUID: Date] = [:]
+    private var lastStepDone: Date?
+    /// A watched action ended: the chat comes back unless the next event
+    /// is another one to watch.
+    private var returnPending: UUID?
+    /// The glance step the glass thinned for.
+    private var glanceStep: UUID?
     /// Entries already drawn once: a reopened thread does not replay them.
     private var presented: Set<UUID> = []
     private var nextWordTime: Date?
@@ -396,7 +438,7 @@ final class AgentChatModel: ObservableObject {
     /// Closing never stops the run: it carries on, without touching the page.
     func close() {
         guard isOpen else { return }
-        if writingLabel != nil { writingLabel = nil }
+        stopWatching()
         if pickingItem { pickingItem = false }
         bar.isChatOpen = false
         runner?.setWatching(false)
@@ -468,6 +510,10 @@ final class AgentChatModel: ObservableObject {
                 }
                 continue
             }
+            if pieces[0] == "allow" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.resolveApproval(allow: true) }
+                continue
+            }
             let opens = pieces[0] == "open"
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
                 opens ? self?.open() : self?.close()
@@ -528,20 +574,185 @@ final class AgentChatModel: ObservableObject {
         listen(to: stream)
     }
 
+    /// The run's events reach the thread in order. They are stamped as they
+    /// arrive, so the thread can hold a step for its beat or a watched change
+    /// while the run goes on: the run never waits for what is shown, and
+    /// events that queued up behind skip their beats until it catches up.
     private func listen(to stream: AsyncStream<AgentEvent>, skipping replayed: Int = 0) {
         runTask?.cancel()
+        feedTask?.cancel()
+        let (stamped, feed) = AsyncStream.makeStream(of: (event: AgentEvent, arrived: Date).self)
+        if pacing.stepRun > 0 || pacing.stepHandover > 0 {
+            feedTask = Task { [now] in
+                for await event in stream { feed.yield((event, now())) }
+                feed.finish()
+            }
+        } else {
+            // No beats to hold (tests' `.instant`): the events as they come.
+            feedTask = nil
+            feed.finish()
+            runTask = Task { [weak self] in
+                var skipped = 0
+                for await event in stream {
+                    guard !Task.isCancelled else { return }
+                    if skipped < replayed { skipped += 1; continue }
+                    guard let self else { return }
+                    await self.handle(event, arrived: self.now())
+                }
+                if !Task.isCancelled { self?.runEnded() }
+            }
+            return
+        }
         runTask = Task { [weak self] in
             var skipped = 0
-            for await event in stream {
+            for await (event, arrived) in stamped {
                 guard !Task.isCancelled else { return }
                 if skipped < replayed { skipped += 1; continue }
                 guard let self else { return }
-                await self.waitForReply(before: event)
-                if let write = self.noteWrite(before: event) { await write() }
-                self.apply(event)
+                await self.handle(event, arrived: arrived)
             }
             if !Task.isCancelled { self?.runEnded() }
         }
+    }
+
+    /// One event: its reply's words and its beat first, then the chat steps
+    /// aside for it if it is watched, then it lands.
+    private func handle(_ event: AgentEvent, arrived: Date) async {
+        await waitForReply(before: event)
+        await beat(before: event, arrived: arrived)
+        guard !Task.isCancelled else { return }
+        watchBefore(event)
+        if let present = watched(before: event) { await present() }
+        guard !Task.isCancelled else { return }
+        apply(event)
+        watchAfter(event)
+    }
+
+    // MARK: Step beats
+
+    /// Holds a step's turn: running for `stepRun`, and the last one's check
+    /// drawn before the next arrives. Only while open, with motion, and only
+    /// for an event that has not already waited `catchUp`.
+    private func beat(before event: AgentEvent, arrived: Date) async {
+        guard isOpen, !reducesMotion() else { return }
+        let due: Date?
+        switch event {
+        case let .stepStarted(step) where step.kind != .openPage:
+            due = lastStepDone?.addingTimeInterval(pacing.stepHandover)
+        case let .stepFinished(step):
+            due = stepShownAt[step.id]?.addingTimeInterval(pacing.stepRun)
+        default:
+            due = nil
+        }
+        guard let due, now().timeIntervalSince(arrived) < pacing.catchUp else { return }
+        // Never longer than the catch-up allows from the event's arrival.
+        let until = min(due, arrived.addingTimeInterval(pacing.catchUp))
+        let wait = until.timeIntervalSince(now())
+        if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+    }
+
+    // MARK: Watching
+
+    /// The chat steps aside for a step that works on a page you can watch,
+    /// and thins its glass for rows being read or moved on Tasks. A watched
+    /// action that just ended stays aside only for the next one.
+    private func watchBefore(_ event: AgentEvent) {
+        if case .approvalNeeded = event {
+            // The approval card comes first, over the chat as it is.
+            stopWatching()
+            return
+        }
+        guard isOpen else { return }
+        if case let .stepStarted(step) = event, AgentWatchedAction.watchable(step),
+           !(step.kind == .openPage && step.targets.first?.page == currentPage()) {
+            returnPending = nil
+            setWatch(.watching, label: step.title)
+            return
+        }
+        if returnPending != nil {
+            returnPending = nil
+            let glance = Self.glances(event)
+            setWatch(glance ? .glance : .none, label: nil)
+            effects.send(.watchEnded)
+            if glance, case let .stepStarted(step) = event { glanceStep = step.id }
+            return
+        }
+        if watch == .none, case let .stepStarted(step) = event, Self.glances(event) {
+            glanceStep = step.id
+            setWatch(.glance, label: nil)
+        }
+    }
+
+    private func watchAfter(_ event: AgentEvent) {
+        switch event {
+        case let .stepStarted(step):
+            if isOpen { stepShownAt[step.id] = now() }
+        case let .stepFinished(step):
+            stepShownAt[step.id] = nil
+            if isOpen { lastStepDone = now() }
+            if step.id == glanceStep {
+                glanceStep = nil
+                if watch == .glance { setWatch(.none, label: nil) }
+            }
+            if watch == .watching, isOpen { endWatching() }
+        case .failed:
+            stopWatching()
+        case .finished:
+            if watch == .watching { endWatching() } else if watch == .glance { setWatch(.none, label: nil) }
+        default:
+            break
+        }
+    }
+
+    /// Steps whose rows show through a thinned glass: Tasks rows read, moved
+    /// or deleted.
+    private static func glances(_ event: AgentEvent) -> Bool {
+        guard case let .stepStarted(step) = event else { return false }
+        switch step.kind {
+        case .read: return step.targets.contains { $0.page == .tasks }
+        case .move, .delete: return true
+        default: return false
+        }
+    }
+
+    /// A watched action is done: back after `watchReturn`, unless another
+    /// one starts first.
+    private func endWatching() {
+        let token = UUID()
+        returnPending = token
+        let wait = pacing.watchReturn
+        Task { [weak self] in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard let self, self.returnPending == token else { return }
+            self.returnPending = nil
+            self.setWatch(.none, label: nil)
+            if self.isOpen { self.effects.send(.watchEnded) }
+        }
+    }
+
+    /// Back at once: closed, a new chat, an approval.
+    private func stopWatching() {
+        returnPending = nil
+        glanceStep = nil
+        setWatch(.none, label: nil)
+    }
+
+    private func setWatch(_ level: AgentWatchLevel, label: String?) {
+        if watch != level { watch = level }
+        if liveLabel != label { liveLabel = label }
+    }
+
+    /// The pointer and the page's motion, sent only while the chat is open.
+    func watchEffect(_ effect: AgentChatEffect) {
+        if isOpen { effects.send(effect) }
+    }
+
+    /// Hovering a reply's underlined phrase: the Tasks rows it names light
+    /// up (the design matches the phrase's first word).
+    func pingPhrase(_ phrase: String) {
+        guard isOpen, let word = phrase.split(whereSeparator: \.isWhitespace).first?.lowercased(), !word.isEmpty else { return }
+        let ids = rowTitles().filter { $0.title.lowercased().contains(word) }.map(\.id)
+        if let first = ids.first { effects.send(.pingRows([first])) }
     }
 
     func stop() {
@@ -563,8 +774,10 @@ final class AgentChatModel: ObservableObject {
         if isRunning { runner?.cancel() }
         runTask?.cancel()
         runTask = nil
+        feedTask?.cancel()
+        feedTask = nil
         runner?.forgetThread()
-        if writingLabel != nil { writingLabel = nil }
+        stopWatching()
         isRunning = false
         entries = []
         approval = nil
@@ -597,7 +810,9 @@ final class AgentChatModel: ObservableObject {
         guard !isRunning, let runner, runner.reopen(chat: id) else { return }
         runTask?.cancel()
         runTask = nil
-        if writingLabel != nil { writingLabel = nil }
+        feedTask?.cancel()
+        feedTask = nil
+        stopWatching()
         approval = nil
         queuedApprovals.removeAll()
         phase = .idle
@@ -732,18 +947,40 @@ final class AgentChatModel: ObservableObject {
 
     // MARK: Events
 
-    /// A watched note edit finishes once it has been seen being written:
-    /// its row turns done as the chat comes back. Closed, it lands as it is.
-    private func noteWrite(before event: AgentEvent) -> (() async -> Void)? {
-        guard case let .stepFinished(step) = event, isOpen, let noteID = Self.writtenNote(step),
-              let present = writeInNote?(noteID) else { return nil }
+    /// A watched change finishes once it has been seen being made: its row
+    /// turns done as the chat comes back. The change is saved already (a
+    /// step finishes only once its action has committed). Closed, it lands
+    /// as it is.
+    private func watched(before event: AgentEvent) -> (() async -> Void)? {
+        guard isOpen, let presentWatched else { return nil }
+        let action: AgentWatchedAction
+        let label: String
+        switch event {
+        case let .stepStarted(step) where step.kind == .openPage,
+             let .stepFinished(step) where step.kind == .openPage:
+            // A run's open_page knows its page once it has answered.
+            guard let page = step.targets.first?.page, page != currentPage() else { return nil }
+            action = .openPage(page)
+            label = liveLabel ?? step.title
+        case let .stepFinished(step):
+            guard let finished = AgentWatchedAction.finished(step) else { return nil }
+            action = finished
+            // The step's running words, as the thread shows them.
+            label = entries.first { $0.id == step.id }.flatMap { entry -> String? in
+                if case let .step(shown) = entry.content { shown.title } else { nil }
+            } ?? step.title
+        default:
+            return nil
+        }
+        guard let present = presentWatched(action) else { return nil }
         return { [weak self] in
-            guard let self else { return }
-            if self.currentPage() != .notes { self.agentGoingTo = .notes }
-            self.writingLabel = String(localized: "Writing in your note")
+            guard let self, self.isOpen else { return }
+            if self.currentPage() != action.page { self.agentGoingTo = action.page }
+            self.returnPending = nil
+            self.setWatch(.watching, label: label)
             await present()
-            if self.writingLabel != nil { self.writingLabel = nil }
-            if self.isOpen { self.effects.send(.wroteInNote) }
+            // An open-page step ends here; a change ends with its step.
+            if case .openPage = action, self.watch == .watching, self.isOpen { self.endWatching() }
         }
     }
 
@@ -865,6 +1102,14 @@ final class AgentChatModel: ObservableObject {
     }
 
     private func stepFinished(_ step: AgentStep) {
+        if step.kind == .openPage {
+            // Watching with no watcher to show it: the page comes forward as it is.
+            if isOpen, let page = step.targets.first?.page, page != currentPage() {
+                agentGoingTo = page
+                openPage?(page)
+            }
+            return
+        }
         update(step.id) { $0 = .step(step) }
         if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             updateWeek { $0.read = true }

@@ -493,9 +493,16 @@ final class DrawPageModel: ObservableObject {
 
     func object(_ id: UUID) -> DrawObject? { objects.first { $0.id == id } }
 
+    /// Objects the agent saved but has not drawn in yet: the chat's sketch
+    /// replay draws them over the board, then lets them show (Accepted
+    /// 2026-11-06, "the living spark does the work"). Presentation only.
+    var agentVeil: Set<UUID> = [] {
+        didSet { if agentVeil != oldValue { board?.drawContentChanged() } }
+    }
+
     /// What the next raster leaves out or draws moved.
     var rasterHidden: Set<UUID> {
-        var hidden: Set<UUID> = []
+        var hidden: Set<UUID> = agentVeil
         if let editing { hidden.insert(editing.id) }
         if case .erase(let gone, _) = live { hidden.formUnion(gone) }
         return hidden
