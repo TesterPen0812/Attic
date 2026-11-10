@@ -127,6 +127,9 @@ struct AgentChatStage: View {
     /// The wipe's progress, 0 to 1: the one clock the blur, its colour and
     /// the thread share. It starts at 0 and animates on the wipe's curve.
     @State private var reveal: CGFloat = 0
+    /// The chat has stepped aside while the agent writes in a note: the blur,
+    /// its colour, the thread and the floating controls go; the composer stays.
+    @State private var aside = false
 
     private var alive: Bool { !design.reduceMotion }
     private var dark: Bool { design.tokens.context.mode == .dark }
@@ -153,11 +156,13 @@ struct AgentChatStage: View {
             AgentChatBackdrop(shown: shown, reveal: reveal, origin: star, tint: tint, fades: !alive, solid: solid,
                               onEscape: { model.close() },
                               didMake: { view in DispatchQueue.main.async { backdropView = view } })
+                .opacity(aside ? 0 : 1)
+                // Still there to click: a click while watching closes the chat.
                 .overlay { Color.clear.contentShape(Rectangle()).onTapGesture { model.close() } }
                 .accessibilityHidden(true)
             if alive {
                 // Only the fade is eased here: the circle keeps the wipe's curve.
-                AgentChatAuraLayer(fx: fx, reveal: reveal).animation(.easeOut(duration: 0.3)) { $0.opacity(shown ? 1 : 0) }
+                AgentChatAuraLayer(fx: fx, reveal: reveal).animation(.easeOut(duration: 0.3)) { $0.opacity(shown && !aside ? 1 : 0) }
             }
             VStack(spacing: 0) {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) {
@@ -173,10 +178,14 @@ struct AgentChatStage: View {
                 // page's still readable rows (screen 9): the wipe's circle,
                 // or its fade.
                 .modifier(AgentChatWipeReveal(reveal: reveal, wipe: AgentChatWipe(origin: star, size: layout.panelSize), fades: !alive))
+                .opacity(aside ? 0 : 1)
+                .allowsHitTesting(!aside)
                 AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, alive: alive, setTyping: setTyping, didClose: didClose)
             }
             if !model.entries.isEmpty {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) { topControls }
+                    .opacity(aside ? 0 : 1)
+                    .allowsHitTesting(!aside)
                     .padding(.top, layout.chromeInsets.top)
                     .padding(.trailing, PanelSharedBottomBar.plusInsets(layout: layout).trailing)
                     .transition(.opacity)
@@ -199,6 +208,10 @@ struct AgentChatStage: View {
             wipe(to: now)
         }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
+        .onChange(of: model.writingLabel != nil) { _, now in
+            // The design's 280 ms; Reduce Motion's plain fade.
+            withAnimation(alive ? .easeOut(duration: 0.28) : .linear(duration: Self.fade)) { aside = now }
+        }
         .onReceive(model.effects) { effect in if alive { play(effect) } else { settle(effect) } }
     }
 
@@ -261,12 +274,15 @@ struct AgentChatStage: View {
             if let card = fx.composerFrame { fx.dust(card, count: 130) }
             let at = fx.sparkPoint
             fx.ring(at.x, at.y, radius: 45, duration: 0.5)
-        case .approvalDenied:
+        case .approvalDenied, .wroteInNote:
             break
         case .changesLanded:
             fx.landOnChanges()
         case let .undoing(changes):
             fx.undo(steps: changes.steps)
+        case let .writing(point, star):
+            guard let backdropView else { return }
+            fx.write(at: backdropView.convert(point, from: nil), star: star)
         }
     }
 
@@ -308,6 +324,30 @@ struct AgentChatStage: View {
         if let slot = fx.weekSlots[key] { return body(slot) }
         guard tries > 0 else { return body(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { whenWeekSlotIsReady(key, tries: tries - 1, body) }
+    }
+}
+
+/// What the agent is doing on the page while the chat steps aside, over
+/// the composer: the running step's shimmer on a small raised pill.
+struct AgentChatLiveLabel: View {
+    let text: String
+    let alive: Bool
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let ink = design.tokens.ink(.heading).color
+        Group {
+            if alive { AgentChatShimmerText(text: text, ink: ink) } else { Text(text).foregroundStyle(ink) }
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .background { Color.clear.atticRaisedMaterial(cornerRadius: 10, interactive: false) }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }
 
@@ -451,6 +491,15 @@ struct AgentChatComposer: View {
             }
         }
         .offset(x: shake)
+        .overlay(alignment: .top) {
+            if let label = model.writingLabel {
+                AgentChatLiveLabel(text: label, alive: alive)
+                    .alignmentGuide(.top) { $0[.bottom] + 7 }
+                    .transition(alive ? .opacity.combined(with: .scale(scale: 0.97)).combined(with: .offset(y: 4)) : .opacity)
+            }
+        }
+        .animation(alive ? .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.34) : .linear(duration: AgentChatStage.fade),
+                   value: model.writingLabel)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { frame in
             fx.composerFrame = frame
         }
@@ -463,7 +512,10 @@ struct AgentChatComposer: View {
         .onChange(of: shown, initial: true) { _, now in transition(now) }
         .onChange(of: focused) { _, now in setTyping(now) }
         .onChange(of: model.draft) { old, new in if alive, new.count > old.count { fx.keystroke(count: new.count) } }
-        .onReceive(model.effects) { effect in if effect == .approvalDenied, alive { deny() } }
+        .onReceive(model.effects) { effect in
+            if effect == .approvalDenied, alive { deny() }
+            if effect == .wroteInNote { focusSoon() }
+        }
     }
 
     private func transition(_ open: Bool) {

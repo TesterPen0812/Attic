@@ -311,6 +311,16 @@ final class AgentChatFX: ObservableObject {
 
     var sparkPoint: CGPoint { CGPoint(x: spark.x, y: spark.y) }
 
+    /// Where a watched note edit is being written, and when it got there.
+    private var writing: (point: CGPoint, time: Date)?
+
+    /// The spark is the writing point in a note; a star now and then.
+    func write(at point: CGPoint, star: Bool) {
+        writing = (point, Date())
+        if star { self.star(point.x, point.y, vy: rnd(-20, -5), life: rnd(0.3, 0.6), size: rnd(1, 2.25)) }
+        wake()
+    }
+
     // MARK: Frames
 
     private struct Goal {
@@ -325,6 +335,9 @@ final class AgentChatFX: ObservableObject {
             landing = false
         }
         guard acting || needsYou else { return nil }
+        if let writing, Date().timeIntervalSince(writing.time) < 0.25 {
+            return Goal(x: writing.point.x, y: writing.point.y, scale: 0.44, pinch: 0.12, kind: .write)
+        }
         if needsYou, let frame = composerFrame {
             return Goal(x: frame.maxX - 23, y: frame.minY + 22 + sin(time * 3.2) * 2, scale: 0.68,
                         pinch: 0.55 + 0.2 * sin(time * 3.2), kind: .need)

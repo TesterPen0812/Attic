@@ -617,6 +617,20 @@ final class AppCoordinator: ObservableObject {
         // Slice 2: the workspace tools run through the app's task-note pages.
         agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
         let agentChat = uiState.agentChat
+        // Watched note edits are shown being written: Notes forward on the
+        // note, then back. Only ever asked while the chat is open.
+        let noteWriter = AgentNoteWriter(
+            open: { [weak uiState, weak pages = noteDraft.pages] id, before in
+                await AgentNoteWriter.openInNotes(id, before: before, pages: pages,
+                                                  select: { uiState?.selectSection(.notes) })
+            },
+            base: { [weak noteStore] id in noteStore?.takeAgentWriteBase(id) }
+        )
+        noteWriter.reducesMotion = { AtticMotionPreference.reducesMotion }
+        agentChat.writeInNote = { [weak agentChat, noteWriter] id in
+            noteWriter.presentation(for: id, watching: { agentChat?.isOpen == true },
+                                    point: { agentChat?.writingAt($0, star: $1) })
+        }
         let calendarSource = CalendarEventSources.makeDefault(environment: runtime)
         agentChat.weekDays = { [weak store, weak calendarSource] day in
             let week = AgentChatModel.emptyWeek(holding: day)
@@ -675,7 +689,23 @@ final class AppCoordinator: ObservableObject {
         )
         agentChat.connect(agentRunner)
         #if DEBUG
-        if isUITesting, let script = environment["ATTIC_UI_TEST_CHAT"] { agentChat.runUITestingScript(script) }
+        if isUITesting, let script = environment["ATTIC_UI_TEST_CHAT"] {
+            // `scripted` runs the design's scripts on the in-memory store;
+            // `note` adds the design's blog post note; `motion:reduced` or
+            // `motion:lively` sets Animations. Then the timed parts.
+            let parts = Set(script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) })
+            if parts.contains("note") {
+                _ = try? agentTools.call(name: "create_note", arguments: [
+                    "title": "Write the launch blog post",
+                    "body": "Draft 3: Attic keeps your tasks and notes one keystroke away."])
+            }
+            if parts.contains("motion:reduced") { settings.animations = .reduced }
+            if parts.contains("motion:lively") { settings.animations = .lively }
+            if parts.contains("scripted") {
+                agentChat.connect(ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst }))
+            }
+            agentChat.runUITestingScript(script)
+        }
         #endif
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.

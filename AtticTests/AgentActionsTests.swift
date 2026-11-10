@@ -442,6 +442,41 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: try XCTUnwrap(UUID(uuidString: id)))?.title, "Original")
     }
 
+    func testUndoPutsBackANoteLeftOnScreenByAWatchedWriteOnlyWhenItsEditorIsClean() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let original = try payload(tools.call(name: "create_note", arguments: ["title": "Blog post", "body": "Draft"]))
+        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap((original["note"] as? [String: Any])?["id"] as? String)))
+        for clean in [false, true] {
+            let request = actions.beginRequest(title: "Checklist")
+            let revision = try XCTUnwrap(notes.note(withID: id)?.revisionToken)
+            notes.agentWriteDisposition = { _ in .direct }
+            _ = try performed(await actions.call(name: "update_note", arguments: [
+                "id": id.uuidString, "base_revision": revision, "body": "Draft\n\nLaunch checklist"
+            ], watching: true, requestID: request))
+            XCTAssertNotNil(notes.takeAgentWriteBase(id), "The text before is kept for the writing")
+            // The watched write left the note open on the Notes page.
+            notes.agentWriteDisposition = { _ in .proposal }
+            notes.agentUndoMayReplaceOnScreen = { _ in clean }
+            var reloaded: [UUID] = []
+            notes.agentUndoReplacedOnScreen = { reloaded.append($0) }
+            let undone = await actions.undo(changeSet: request)
+            if clean {
+                XCTAssertEqual(undone.undone, 1)
+                XCTAssertEqual(notes.note(withID: id)?.body, "Draft")
+                XCTAssertEqual(reloaded, [id])
+            } else {
+                XCTAssertEqual(undone.undone, 0, "Unsaved text in its editor is never replaced")
+                XCTAssertTrue(reloaded.isEmpty)
+                notes.agentWriteDisposition = { _ in .direct }
+                _ = await actions.undo(changeSet: request)
+            }
+            XCTAssertTrue(notes.pendingEdits(noteID: id).isEmpty)
+        }
+    }
+
     func testUndoDiscardsUnappliedNoteProposalWithoutTouchingSavedContent() async throws {
         let tasks = try makeTestStore()
         let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())

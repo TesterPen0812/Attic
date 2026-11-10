@@ -1375,3 +1375,241 @@ final class AgentChatDrawFoldTests: XCTestCase {
         XCTAssertNotNil(find("draw-tool-bar", in: host))
     }
 }
+
+/// A surface that records what the writer did to it.
+@MainActor
+private final class FakeNoteSurface: AgentNoteSurface {
+    var insertion: NoteAgentInsertion?
+    var text = ""
+    var veils: [Int] = []
+    var lifts = 0
+
+    func agentInsertion(since before: NoteDocument) -> NoteAgentInsertion? { insertion }
+    func agentText(in range: NSRange) -> String { text }
+    func veilAgentWriting(_ range: NSRange, shown: Int) -> CGRect? {
+        veils.append(shown)
+        return CGRect(x: CGFloat(shown), y: 10, width: 0, height: 14)
+    }
+    func liftAgentVeil() { lifts += 1 }
+}
+
+/// A watched run's note edit: saved at once, then shown being written
+/// (Accepted 2026-11-06, "the living spark does the work").
+@MainActor
+final class AgentNoteWritingTests: XCTestCase {
+    private var tasks: TaskStore!
+    private var notes: NoteStore!
+    private var tools: AgentTaskTools!
+    private var model: AgentChatModel!
+    private var noteID: UUID!
+    private let checklist = "Press kit to Mira"
+    /// The presentation the model is waiting on, held until released.
+    private var gate: CheckedContinuation<Void, Never>?
+    private var presented: [UUID] = []
+    private var pagesOpened: [AgentPage] = []
+
+    override func setUp() async throws {
+        tasks = try makeTestStore()
+        notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let made = try JSONSerialization.jsonObject(with: Data(tools.call(name: "create_note", arguments: [
+            "title": "Write the launch blog post", "body": "Draft 3: Attic keeps your tasks and notes one keystroke away."
+        ]).utf8)) as? [String: Any]
+        noteID = try XCTUnwrap(((made?["note"] as? [String: Any])?["id"] as? String).flatMap(UUID.init(uuidString:)))
+        model = AgentChatModel()
+        model.pacing = .instant
+        model.currentPage = { .tasks }
+        model.openPage = { [unowned self] in pagesOpened.append($0) }
+        model.writeInNote = { [unowned self] id in
+            presented.append(id)
+            return { await withCheckedContinuation { self.gate = $0 } }
+        }
+        model.connect(ScriptedAgentRunner(tools: tools, pace: 0))
+    }
+
+    private func settle() async {
+        for _ in 0..<40 { await Task.yield() }
+    }
+
+    private func run() async {
+        model.draft = "Add a launch checklist to my blog post note"
+        model.send()
+        await settle()
+    }
+
+    private func release() async {
+        gate?.resume()
+        gate = nil
+        await settle()
+    }
+
+    private var steps: [AgentStep] {
+        model.entries.compactMap { if case let .step(step) = $0.content { step } else { nil } }
+    }
+
+    private var changes: (id: UUID, value: AgentChatChanges)? {
+        model.entries.compactMap { if case let .changes(value) = $0.content { ($0.id, value) } else { nil } }.last
+    }
+
+    /// The note as saved, read through a store of its own.
+    private func savedBody() -> String {
+        let other = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        guard let load = other.loadDocument(noteID: noteID), case let .editable(document) = load.content else { return "" }
+        return NoteTextExport.agentBody(document)
+    }
+
+    func testTheEditIsSavedBeforeItIsShownBeingWritten() async {
+        var back = 0
+        let watch = model.effects.sink { if $0 == .wroteInNote { back += 1 } }
+        defer { watch.cancel() }
+        model.open()
+        await run()
+        XCTAssertEqual(presented, [noteID], "Watching, the note is shown being written")
+        XCTAssertNotNil(gate, "The writing is under way")
+        XCTAssertTrue(savedBody().contains(checklist), "Mid-way, the whole edit is already saved")
+        XCTAssertEqual(model.writingLabel, "Writing in your note")
+        XCTAssertEqual(steps.last?.state, .running, "The row turns done once it has been written")
+        XCTAssertEqual(back, 0, "The keyboard stays put while it is written")
+        await release()
+        XCTAssertNil(model.writingLabel, "Then the chat comes back")
+        XCTAssertEqual(back, 1, "and the composer has the keyboard again")
+        XCTAssertEqual(steps.last?.state, .done)
+        XCTAssertEqual(steps.last?.title, "Added a checklist to your note")
+        XCTAssertEqual(changes?.value.items.map(\.title), ["Write the launch blog post"])
+    }
+
+    func testUndoPutsTheNoteBackWhileItIsOnScreen() async throws {
+        let before = savedBody()
+        model.open()
+        await run()
+        await release()
+        await settle()
+        // The watched write left the note open on the Notes page.
+        notes.agentWriteDisposition = { _ in .proposal }
+        notes.agentUndoMayReplaceOnScreen = { _ in true }
+        var reloaded: [UUID] = []
+        notes.agentUndoReplacedOnScreen = { reloaded.append($0) }
+        let id = try XCTUnwrap(changes?.id)
+        model.undo(id)
+        await settle()
+        XCTAssertEqual(changes?.value.state, .undone)
+        XCTAssertEqual(savedBody(), before, "Undo restores the note as before")
+        XCTAssertEqual(reloaded, [noteID], "Its clean editor reloads")
+        XCTAssertTrue(notes.pendingEdits(noteID: noteID).isEmpty, "Never a proposal of its own")
+    }
+
+    func testUndoKeepsAnEditorsUnsavedText() async throws {
+        model.open()
+        await run()
+        await release()
+        await settle()
+        notes.agentWriteDisposition = { _ in .proposal }
+        notes.agentUndoMayReplaceOnScreen = { _ in false }
+        let id = try XCTUnwrap(changes?.id)
+        model.undo(id)
+        await settle()
+        XCTAssertEqual(changes?.value.state, .ready)
+        XCTAssertTrue(savedBody().contains(checklist))
+    }
+
+    func testAClosedRunBringsNoPageForwardAndCountsTheChange() async {
+        await run()
+        await settle()
+        XCTAssertTrue(presented.isEmpty, "Closed: nothing is shown being written")
+        XCTAssertTrue(pagesOpened.isEmpty, "Closed: no page comes forward")
+        XCTAssertNil(model.writingLabel)
+        XCTAssertTrue(savedBody().contains(checklist), "The change lands as before")
+        XCTAssertEqual(model.bar.state, .changes(1), "The ✦ counts it")
+    }
+
+    func testClosingWhileWritingLetsTheRunGoOn() async {
+        model.open()
+        await run()
+        XCTAssertEqual(model.writingLabel, "Writing in your note")
+        model.close()
+        XCTAssertNil(model.writingLabel, "The label goes with the chat")
+        await release()
+        XCTAssertEqual(steps.last?.state, .done)
+    }
+
+    // MARK: The writer
+
+    private func writer(_ surface: FakeNoteSurface?, opened: @escaping (UUID) -> Void = { _ in }) -> AgentNoteWriter {
+        let writer = AgentNoteWriter(open: { id, _ in opened(id); return surface }, base: { _ in NoteDocument(blocks: [.text("Before")]) })
+        writer.pace = .init(character: 0.001, newline: 0.002, cap: 3, arrive: 0, settle: 0, hold: 0.01, frame: 0.001)
+        return writer
+    }
+
+    func testTheWriterWritesTheAddedTextInAndLiftsTheVeil() async {
+        let surface = FakeNoteSurface()
+        surface.text = "Launch checklist\n– Visuals by Friday"
+        surface.insertion = NoteAgentInsertion(range: NSRange(location: 10, length: (surface.text as NSString).length), replaces: false)
+        var points: [CGPoint] = []
+        let present = writer(surface).presentation(for: UUID(), watching: { true }, point: { p, _ in points.append(p) })
+        await present?()
+        XCTAssertEqual(surface.veils.first, 0, "Nothing written yet when the note comes forward")
+        XCTAssertEqual(surface.veils.last, (surface.text as NSString).length, "All of it in the end")
+        XCTAssertEqual(surface.veils, surface.veils.sorted(), "Written in order")
+        XCTAssertGreaterThan(surface.lifts, 0, "The veil is gone at the end")
+        XCTAssertFalse(points.isEmpty, "The spark is the writing point")
+    }
+
+    func testReducedShowsTheNoteWithoutWriting() async {
+        let surface = FakeNoteSurface()
+        surface.text = "Launch checklist"
+        surface.insertion = NoteAgentInsertion(range: NSRange(location: 0, length: 16), replaces: false)
+        var opened = 0
+        let writer = writer(surface, opened: { _ in opened += 1 })
+        writer.reducesMotion = { true }
+        await writer.presentation(for: UUID(), watching: { true }, point: { _, _ in })?()
+        XCTAssertEqual(opened, 1, "The page still comes forward")
+        XCTAssertTrue(surface.veils.isEmpty, "No typing: the text is there at once")
+    }
+
+    func testReplacedTextIsShownPlainly() async {
+        let surface = FakeNoteSurface()
+        surface.text = "New"
+        surface.insertion = NoteAgentInsertion(range: NSRange(location: 0, length: 3), replaces: true)
+        await writer(surface).presentation(for: UUID(), watching: { true }, point: { _, _ in })?()
+        XCTAssertTrue(surface.veils.isEmpty)
+    }
+
+    func testNotWatchingTheWriterOpensNothing() async {
+        var opened = 0
+        let present = writer(FakeNoteSurface(), opened: { _ in opened += 1 })
+            .presentation(for: UUID(), watching: { false }, point: { _, _ in })
+        XCTAssertNil(present)
+        XCTAssertEqual(opened, 0)
+    }
+
+    func testClosingMidWritingShowsItAllAtOnce() async {
+        let surface = FakeNoteSurface()
+        surface.text = String(repeating: "word ", count: 200)
+        surface.insertion = NoteAgentInsertion(range: NSRange(location: 0, length: 1000), replaces: false)
+        let writer = writer(surface)
+        writer.pace = .init()
+        var frames = 0
+        let started = Date()
+        await writer.presentation(for: UUID(), watching: { frames += 1; return frames < 6 }, point: { _, _ in })?()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.6, "It stops at once")
+        XCTAssertGreaterThan(surface.lifts, 0, "Lifting the veil shows the whole edit")
+    }
+
+    func testALongEditIsWrittenWithinTheCap() {
+        let pace = AgentNoteWriter.Pace()
+        let long = AgentNoteWriter.schedule(String(repeating: "A long line of text.\n", count: 200), pace: pace)
+        XCTAssertLessThanOrEqual(long.last?.at ?? 0, pace.cap + 0.001)
+        let design = AgentNoteWriter.schedule("\n\nLaunch checklist\n– Final copy by Thursday\n– Visuals by Friday\n– Press kit to Mira", pace: pace)
+        XCTAssertEqual(design.last?.at ?? 0, 77 * 0.026 + 5 * 0.15, accuracy: 0.001, "The design's checklist keeps the design's pace")
+        XCTAssertEqual(design.last?.end, ("\n\nLaunch checklist\n– Final copy by Thursday\n– Visuals by Friday\n– Press kit to Mira" as NSString).length)
+    }
+
+    func testTheAddedSpanIsFoundAgainstTheTextBefore() {
+        let append = NoteEditorEngine.agentInsertion(from: "Title\nDraft", to: "Title\nDraft\nLaunch checklist")
+        XCTAssertEqual(append, NoteAgentInsertion(range: NSRange(location: 11, length: 17), replaces: false))
+        let middle = NoteEditorEngine.agentInsertion(from: "A\nC", to: "A\nB\nC")
+        XCTAssertEqual(middle?.range, NSRange(location: 2, length: 2))
+        XCTAssertEqual(NoteEditorEngine.agentInsertion(from: "Title\nOld", to: "Title\nNew")?.replaces, true)
+        XCTAssertNil(NoteEditorEngine.agentInsertion(from: "Same", to: "Same"))
+    }
+}

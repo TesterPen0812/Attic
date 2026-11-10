@@ -840,6 +840,12 @@ final class NotesPageController: ObservableObject {
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
+        store.agentUndoMayReplaceOnScreen = { [weak self] id in
+            guard let self, let session = self.cache[id] else { return false }
+            return !session.usesWorkspaceBinding && session.workspacePage == nil && !session.isImporting
+                && !NoteSessionPolicy.hasPendingWork(session.state) && session.engine.activity == .idle
+        }
+        store.agentUndoReplacedOnScreen = { [weak self] id in self?.reloadAfterExternalChange(id) }
         store.recoveryReferencedAttachmentIDs = { [weak self, journal] in
             // One live-byte rule for purge: every checkpoint, open draft,
             // pending payload and both sides of editor history own bytes.

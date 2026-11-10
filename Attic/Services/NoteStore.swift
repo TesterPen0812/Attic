@@ -188,6 +188,15 @@ final class NoteStore: ObservableObject {
     let container: ModelContainer
     /// The Notes page decides whether an agent edit can reach this note.
     var agentWriteDisposition: (UUID) -> NoteAgentWriteDisposition = { _ in .direct }
+    /// Whether an agent Undo may put a note back while it is on screen: only
+    /// when its editor holds nothing unsaved. The Notes page decides.
+    var agentUndoMayReplaceOnScreen: (UUID) -> Bool = { _ in false }
+    /// Told when an agent Undo replaced a note on screen: a clean editor reloads.
+    var agentUndoReplacedOnScreen: (UUID) -> Void = { _ in }
+    /// Each note's text from just before the agent's last applied write, so a
+    /// watched run can show what it added (presentation only). Taken once.
+    var agentWriteBases: [UUID: NoteDocument] = [:]
+    func takeAgentWriteBase(_ noteID: UUID) -> NoteDocument? { agentWriteBases.removeValue(forKey: noteID) }
     /// Observes the editor's revision check in unit tests; absent in normal use.
     var documentSaveAttempt: ((UUID?, UUID?) -> Void)?
     var documentSaveCommitted: ((UUID?, UUID?) -> Void)?

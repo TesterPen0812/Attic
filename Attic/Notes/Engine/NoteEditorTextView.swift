@@ -1118,6 +1118,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func viewWillDraw() {
         super.viewWillDraw()
+        applyPendingAgentVeil()
         marquee?.layoutChanged()
         engine?.updateHeadingControls()
         engine?.refreshViewportImages()
