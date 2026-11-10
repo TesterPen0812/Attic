@@ -51,6 +51,7 @@ struct AgentChangeSet: Identifiable, Sendable, Equatable, Codable {
 enum AgentEvent: Sendable, Equatable {
     case textDelta(String)
     case stepStarted(AgentStep)
+    case stepReworded(AgentStep)
     case stepFinished(AgentStep)
     case progress(done: Int, total: Int)
     case approvalNeeded(AgentApproval)

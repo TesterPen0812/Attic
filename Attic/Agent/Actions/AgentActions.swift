@@ -136,8 +136,8 @@ final class AgentActions {
 
     func refusalStep(name: String, arguments: [String: Any], reason: String) -> AgentStep {
         let targets = targetsForArguments(name, arguments)
-        let title = targets.compactMap(\.title).first ?? name.replacingOccurrences(of: "_", with: " ")
-        return AgentStep(id: UUID(), title: String(("Refused: \(title)").prefix(43)),
+        let title = targets.compactMap(\.title).first ?? AgentActionWords.running(name, arguments)
+        return AgentStep(id: UUID(), title: AgentActionWords.clip("Refused: \(title)"),
                          kind: .read, targets: targets, state: .failed(reason))
     }
 
@@ -234,7 +234,10 @@ final class AgentActions {
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
         })
-        let step: AgentStep
+        let priorTargets = targetsForArguments(name, arguments)
+        let noteBefore = ["update_note", "update_note_table"].contains(name)
+            ? noteSnapshot(for: arguments) : nil
+        var step: AgentStep
         let text: String
         var extraEntries: [UndoEntry] = []
         if name == "open_page" {
@@ -257,8 +260,6 @@ final class AgentActions {
             text = result.0; step = result.1
             if let snapshot = result.2 { extraEntries.append(.draw(snapshot.canvas.id, snapshot, step.title)) }
         } else {
-            let noteBefore = ["update_note", "update_note_table"].contains(name)
-                ? noteSnapshot(for: arguments) : nil
             text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
                 try await tasks.callAsync(name: name, arguments: arguments)
             } else {
@@ -288,6 +289,16 @@ final class AgentActions {
                 extraEntries.append(.proposal(noteID: noteID, editID: editID, name: step.title))
             }
         }
+        step.targets = step.targets.map { target in
+            guard target.title == nil else { return target }
+            var enriched = target
+            enriched.title = priorTargets.first(where: {
+                $0.itemID != nil && $0.itemID == target.itemID && $0.page == target.page
+            })?.title
+            return enriched
+        }
+        step.title = AgentActionWords.completed(name, arguments, response: text, targets: step.targets,
+                                               previousNoteBody: noteBefore?.body)
         var entries: [UndoEntry] = []
         for history in route.retainedHistories {
             let current = route.steps(in: history, redo: false)
@@ -465,7 +476,17 @@ final class AgentActions {
     }
 
     private func targetsForArguments(_ name: String, _ arguments: [String: Any]) -> [AgentTarget] {
-        Self.targetsFromResponse("{}", name: name, arguments: arguments)
+        Self.targetsFromResponse("{}", name: name, arguments: arguments).map { target in
+            guard target.title == nil, let id = target.itemID else { return target }
+            var enriched = target
+            switch target.page {
+            case .tasks: enriched.title = tasks.store.task(withID: id)?.title
+            case .notes: enriched.title = tasks.noteStore?.note(withID: id)?.title
+            case .draw: enriched.title = (try? draw?.open(id))?.canvas.name
+            case .calendar: enriched.title = arguments["_resolved_title"] as? String
+            }
+            return enriched
+        }
     }
 
     private static func targetsFromResponse(_ text: String, name: String, arguments: [String: Any]) -> [AgentTarget] {

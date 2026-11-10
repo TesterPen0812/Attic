@@ -1,5 +1,216 @@
 import Foundation
 
+/// One vocabulary for CLI progress and the trusted action receipt. Running
+/// words use only supplied inputs; completed words use the actual store result.
+enum AgentActionWords {
+    static let coveredNames: Set<String> = [
+        "list_tasks", "create_task", "update_task", "delete_task", "duplicate_task",
+        "move_subtask", "get_task_workspace", "list_notes", "create_note", "update_note",
+        "update_note_table", "delete_note", "delete_item", "restore_item", "restore_items",
+        "list_deleted", "list_tags", "update_tags", "link", "get_settings", "update_settings",
+        "make_subtask", "make_note_checkbox", "add_to_tasks", "remove_from_tasks",
+        "make_task_from_note", "restore", "move_files_into_note", "search_items",
+        "create_tasks", "update_tasks", "open_page", "calendar_search", "calendar_read",
+        "calendar_list_calendars", "calendar_create", "calendar_update", "calendar_delete",
+        "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes",
+        "agent_approval_status"
+    ]
+
+    static func running(_ name: String, _ args: [String: Any] = [:]) -> String {
+        let title = subject(args)
+        let day = destination(name, args)
+        let batch = (name == "create_tasks" ? args["tasks"] : args["updates"]) as? [[String: Any]]
+        switch name {
+        case "list_tasks": return clip("Reading \(taskFilter(args))")
+        case "list_notes": return "Reading notes"
+        case "list_deleted": return "Reading recently deleted items"
+        case "list_tags": return "Reading tags"
+        case "get_settings": return "Reading settings"
+        case "get_task_workspace": return clip("Reading \(title ?? "task") workspace")
+        case "search_items": return clip("Finding \(subject(args, key: "query") ?? "items")")
+        case "calendar_search": return clip("Finding \(subject(args, key: "query") ?? "events") in Calendar")
+        case "calendar_read": return "Reading calendar event"
+        case "calendar_list_calendars": return "Reading calendars"
+        case "draw_list_canvases": return "Reading sketches"
+        case "agent_approval_status": return "Checking approval"
+        case "create_tasks": return clip("Creating \(quantity(batch?.count, "task", "tasks"))")
+        case "update_tasks":
+            return clip("\(day == nil ? "Updating" : "Moving") \(quantity(batch?.count, "task", "tasks"))\(day.map { " to \($0)" } ?? "")")
+        case "create_task": return clip("Adding \(title ?? "a task")")
+        case "update_task": return clip("\(day == nil ? "Updating" : "Moving") \(title ?? "a task")\(day.map { " to \($0)" } ?? "")")
+        case "delete_task", "delete_item", "delete_note":
+            return clip("Deleting \(title ?? (name == "delete_note" ? "a note" : "an item"))")
+        case "duplicate_task": return clip("Duplicating \(title ?? "a task")")
+        case "move_subtask": return clip("Moving \(title ?? "a subtask")")
+        case "create_note": return clip("Creating \(title ?? "a note")")
+        case "update_note": return clip("Writing in \(title ?? "your note")")
+        case "update_note_table": return clip("Editing a table in \(title ?? "your note")")
+        case "restore_item", "restore_items", "restore": return clip("Restoring \(title ?? "items")")
+        case "update_tags": return "Updating tags"
+        case "link": return "Linking items"
+        case "update_settings": return "Updating settings"
+        case "make_subtask": return clip("Making \(quantity((args["lines"] as? [String])?.count, "subtask", "subtasks"))")
+        case "make_note_checkbox": return "Moving a subtask into its note"
+        case "add_to_tasks", "make_task_from_note": return "Adding a note to Tasks"
+        case "remove_from_tasks": return "Moving a task into Notes"
+        case "move_files_into_note": return "Moving files into a note"
+        case "open_page": return clip("Opening \(subject(args, key: "page") ?? "a page")")
+        case "calendar_create": return clip("Adding \(title ?? "an event") to Calendar")
+        case "calendar_update": return clip("Updating \(title ?? "a calendar event")")
+        case "calendar_delete": return clip("Deleting \(title ?? "a calendar event")")
+        case "draw_add_text", "draw_add_shape", "draw_add_strokes":
+            let object = name == "draw_add_text" ? subject(args, key: "text") :
+                name == "draw_add_shape" ? subject(args, key: "shape") : "strokes"
+            let canvas = subject(args, key: "canvas_name")
+            return clip(canvas.map { "Sketching on \($0)" } ?? "Sketching \(object ?? "on your sketch")")
+        default: return clip(name.replacingOccurrences(of: "_", with: " ").capitalized)
+        }
+    }
+
+    static func completed(_ name: String, _ args: [String: Any],
+                          response: String, targets: [AgentTarget], previousNoteBody: String? = nil) -> String {
+        let row = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any] ?? [:]
+        let actualName = targets.first?.title ?? (row["title"] as? String) ?? subject(args)
+        let day = destination(name, args)
+        let count = (row["count"] as? Int)
+            ?? ((row["tasks"] as? [Any])?.count)
+            ?? ((row["notes"] as? [Any])?.count)
+            ?? ((row["events"] as? [Any])?.count)
+            ?? targets.count
+        switch name {
+        case "list_tasks":
+            let filter = taskFilter(args)
+            if filter == "overdue tasks" { return clip("Read \(count) overdue tasks") }
+            return clip("Read \(quantity(count, "task", "tasks"))\(filter == "tasks" ? "" : " · \(filter)")")
+        case "list_notes": return clip("Read \(quantity(count, "note", "notes"))")
+        case "list_deleted": return clip("Read \(quantity(count, "deleted item", "deleted items"))")
+        case "list_tags": return clip("Read \(quantity(count, "tag", "tags"))")
+        case "get_settings": return "Read settings"
+        case "get_task_workspace": return clip("Read \(actualName ?? "task") workspace")
+        case "search_items": return clip("Found \(quantity(count, "item", "items"))")
+        case "calendar_search": return clip("Found \(quantity(count, "calendar event", "calendar events"))")
+        case "calendar_read": return clip("Read \(actualName ?? "calendar event")")
+        case "calendar_list_calendars": return clip("Read \(quantity(count, "calendar", "calendars"))")
+        case "draw_list_canvases": return clip("Read \(quantity(count, "sketch", "sketches"))")
+        case "agent_approval_status": return "Checked approval"
+        case "create_tasks":
+            return clip("Added \(quantity(row["created"] as? Int ?? count, "task", "tasks"))")
+        case "update_tasks":
+            return clip("\(day == nil ? "Updated" : "Moved") \(quantity(row["updated"] as? Int ?? count, "task", "tasks"))\(day.map { " to \($0)" } ?? "")")
+        case "create_task": return clip("Added \(actualName ?? "a task")")
+        case "update_task": return clip("\(day == nil ? "Updated" : "Moved") \(actualName ?? "task")\(day.map { " to \($0)" } ?? "")")
+        case "delete_task", "delete_note", "delete_item": return clip("Deleted \(actualName ?? "item")")
+        case "duplicate_task": return clip("Duplicated \(actualName ?? "task")")
+        case "move_subtask": return clip("Moved \(actualName ?? "subtask")")
+        case "create_note": return clip("Created \(actualName ?? "note")")
+        case "update_note":
+            if row["status"] as? String == "pending" { return clip("Proposed an edit to \(actualName ?? "your note")") }
+            if let body = args["body"] as? String, let previousNoteBody,
+               body.contains("- [ ]"), !previousNoteBody.contains("- [ ]") {
+                return clip("Added a checklist to \(actualName ?? "your note")")
+            }
+            return clip("Updated \(actualName ?? "your note")")
+        case "update_note_table":
+            return clip("\(row["status"] as? String == "pending" ? "Proposed a table edit for" : "Updated a table in") \(actualName ?? "your note")")
+        case "restore_item", "restore_items", "restore": return clip("Restored \(actualName ?? quantity(count, "item", "items"))")
+        case "update_tags": return "Updated tags"
+        case "link": return "Linked items"
+        case "update_settings": return "Updated settings"
+        case "make_subtask": return clip("Made \(quantity((args["lines"] as? [String])?.count, "subtask", "subtasks"))")
+        case "make_note_checkbox": return "Added a checkbox to your note"
+        case "add_to_tasks", "make_task_from_note": return "Added a note to Tasks"
+        case "remove_from_tasks": return "Moved a task to Notes"
+        case "move_files_into_note": return "Moved files into a note"
+        case "open_page": return clip("Opened \(subject(args, key: "page") ?? "page")")
+        case "calendar_create": return clip("Added \(actualName ?? "event")\(day.map { " to \($0)" } ?? "")")
+        case "calendar_update": return clip("Updated \(actualName ?? "event")\(day.map { " on \($0)" } ?? "")")
+        case "calendar_delete": return clip("Deleted \(actualName ?? "event")")
+        case "draw_add_text", "draw_add_shape", "draw_add_strokes":
+            let saved = row["object"] as? [String: Any] ?? [:]
+            let object = name == "draw_add_text" ? (saved["text"] as? String)
+                : name == "draw_add_shape" ? subject(args, key: "shape") : "strokes"
+            let canvas = (saved["canvas_name"] as? String) ?? targets.first?.title
+                ?? subject(args, key: "canvas_name")
+            return clip("Added \(object ?? "drawing") to \(canvas ?? "your sketch")")
+        default: return clip(running(name, args))
+        }
+    }
+
+    private static func subject(_ args: [String: Any], key: String = "title") -> String? {
+        for candidate in [key, "query"] {
+            if let value = args[candidate] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return nil
+    }
+
+    private static func quantity(_ number: Int?, _ singular: String, _ plural: String) -> String {
+        guard let number else { return plural }
+        return "\(number) \(number == 1 ? singular : plural)"
+    }
+
+    private static func taskFilter(_ args: [String: Any]) -> String {
+        if let text = subject(args, key: "text"), args["text"] != nil { return "tasks matching \(text)" }
+        if let before = args["due_before"] as? String,
+           let day = date(before), day < Calendar.current.startOfDay(for: Date()) {
+            return "overdue tasks"
+        }
+        if let status = (args["status"] ?? args["state"]) as? String { return "\(status) tasks" }
+        return "tasks"
+    }
+
+    private static func destination(_ name: String, _ args: [String: Any]) -> String? {
+        var input: Any? = args["due"]
+        if name == "update_tasks", let updates = args["updates"] as? [[String: Any]],
+           !updates.isEmpty, updates.allSatisfy({ "\($0["due"] ?? "")" == "\(updates[0]["due"] ?? "")" }) {
+            input = updates[0]["due"]
+        }
+        if name.hasPrefix("calendar_") { input = args["start"] }
+        guard let input = input as? String, !input.isEmpty else { return nil }
+        if let date = date(input) { return weekday(date) }
+        if Calendar.current.weekdaySymbols.contains(where: { $0.localizedCaseInsensitiveCompare(input) == .orderedSame }) {
+            return input.capitalized
+        }
+        return nil
+    }
+
+    private static func date(_ value: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: value) { return d }
+        iso.formatOptions = [.withFullDate]
+        return iso.date(from: value)
+    }
+
+    private static func weekday(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE"
+        return formatter.string(from: date)
+    }
+
+    static func clip(_ words: String) -> String {
+        let clean = words.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.count <= 43 ? clean : String(clean.prefix(42)) + "…"
+    }
+
+    static func finishedWithoutReceipt(_ running: String) -> String {
+        for (prefix, past) in [
+            ("Reading", "Read"), ("Moving", "Moved"), ("Creating", "Created"),
+            ("Adding", "Added"), ("Updating", "Updated"), ("Deleting", "Deleted"),
+            ("Duplicating", "Duplicated"), ("Finding", "Found"), ("Sketching", "Sketched"),
+            ("Writing", "Wrote"), ("Editing", "Edited"), ("Restoring", "Restored"),
+            ("Checking", "Checked"), ("Opening", "Opened"), ("Linking", "Linked"),
+            ("Making", "Made")
+        ] where running.hasPrefix(prefix + " ") {
+            return clip(past + running.dropFirst(prefix.count))
+        }
+        return running
+    }
+}
+
 /// Run-only conveniences. The original AgentTaskTools contracts remain intact
 /// for long-lived external MCP clients.
 extension AgentActions {

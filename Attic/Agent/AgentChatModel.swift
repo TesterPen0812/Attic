@@ -537,6 +537,7 @@ final class AgentChatModel: ObservableObject {
         switch event {
         case let .textDelta(text): appendText(text)
         case let .stepStarted(step): stepStarted(step)
+        case let .stepReworded(step): update(step.id) { $0 = .step(step) }
         case let .stepFinished(step): stepFinished(step)
         case let .progress(done, total):
             progress = (done, total)
