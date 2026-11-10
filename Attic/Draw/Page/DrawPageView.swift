@@ -59,7 +59,10 @@ struct DrawPageHost: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus),
-                        actions: PanelBottomBarActions(plus: { [weak model] in model?.newCanvas(); AtticSounds.play(.created) }))
+                        actions: PanelBottomBarActions(plus: { [weak model] in
+                            guard let model else { return }
+                            AtticSounds.play(.created, if: model.newCanvas())
+                        }))
         .onAppear { model.start() }
         .onChange(of: isCurrent, initial: true) { _, _ in updateShown() }
         .onReceive(uiState.$hideCount.dropFirst()) { _ in panelHidden = true; updateShown() }

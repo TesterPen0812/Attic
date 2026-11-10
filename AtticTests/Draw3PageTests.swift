@@ -173,6 +173,44 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, "Saved on first attempt")
     }
 
+    /// E-3: neither entry point may announce a created canvas while a
+    /// failed rename has stopped newCanvas() before creation.
+    func testE3NewCanvasCommandsAreSilentWhenRenameCannotSave() throws {
+        struct Injected: Error {}
+        var fail = false
+        let persistent = try persistentStore { context in
+            if fail { throw Injected() }
+            try context.save()
+        }
+        use(persistent)
+        let original = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("Original"))])).isSaved)
+        model.library.perform(.rename)
+        model.library.nameDraft = "Cannot save"
+        fail = true
+
+        var cues: [AtticSounds.Cue] = []
+        let sounds = AtticSounds.shared
+        sounds.lastPlayed = -.infinity
+        sounds.settingEnabled = { true }
+        sounds.systemAllows = { true }
+        sounds.clock = { 20_000 + Double(cues.count) }
+        sounds.output = { cues.append($0) }
+        defer {
+            sounds.settingEnabled = nil
+            sounds.output = nil
+            sounds.systemAllows = { true }
+            sounds.clock = { ProcessInfo.processInfo.systemUptime }
+            sounds.lastPlayed = -.infinity
+        }
+
+        model.libraryActions.newCanvas(name: "From library")
+        try XCTUnwrap(model.moreCommands().first { $0.title == "New Canvas" }).action()
+        XCTAssertTrue(model.library.isRenaming)
+        XCTAssertEqual(model.canvasID, original)
+        XCTAssertFalse(cues.contains(.created), "neither aborted command created a canvas")
+    }
+
     func testEscapeAfterFailedRenameAbandonsThePendingName() throws {
         struct Injected: Error {}
         var fail = false
