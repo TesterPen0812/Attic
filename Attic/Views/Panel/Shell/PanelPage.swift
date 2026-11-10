@@ -93,7 +93,8 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 /// fades, so two pages never show through each other; the old page goes
 /// once the slide has settled. The top row changes in place: what differs
 /// fades out, then in (`PanelInPlaceFade`). Reduce Motion and Animations:
-/// Reduced switch at once.
+/// Reduced switch at once, or, with Reduced motion: Fade (Accepted
+/// 2026-11-10), cross-fade in 0.12 s without travelling.
 ///
 /// A20 crossfaded the two pages while they travelled (both see-through for
 /// about 100 ms, the owner's recording, 2 Nov); option A moved the new
@@ -101,8 +102,12 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 struct PanelPageMotion: Equatable {
     /// The spring, or nil for an instant switch.
     let spring: AtticMotionSpring?
+    /// Reduced motion's Fade: no travel, the pages and the top row
+    /// cross-fade on the Reduced fade.
+    var fades = false
 
     static let instant = PanelPageMotion(spring: nil)
+    static let fade = PanelPageMotion(spring: nil, fades: true)
 
     /// "Slightly faster" than A20's slide: the feel's navigation spring at
     /// 83 % of its duration, so it settles about 17 % sooner (same bounce).
@@ -116,7 +121,7 @@ struct PanelPageMotion: Equatable {
 
     /// The motion for a switch now, in the current feel.
     static func current(reduceMotion: Bool, tuning: AtticMotionTuning = .current) -> PanelPageMotion {
-        guard !reduceMotion else { return .instant }
+        guard !reduceMotion else { return AtticReducedMotionStyle.current == .fade ? .fade : .instant }
         let base = AtticMotionPreset.pageSwitch.spring(in: tuning)
         return PanelPageMotion(spring: AtticMotionSpring(response: base.response * speed, bounce: base.bounce))
     }
@@ -131,7 +136,8 @@ struct PanelPageMotion: Equatable {
     /// The switch's transaction, which moves the pages (and the top row's
     /// counter-move with them).
     var animation: Animation? {
-        spring.map { Animation.spring(duration: $0.response, bounce: $0.bounce) }
+        if fades { return AtticMotionScale.reducedFade }
+        return spring.map { Animation.spring(duration: $0.response, bounce: $0.bounce) }
     }
 
     /// How long the slide takes to settle (0 when instant).
@@ -142,6 +148,7 @@ struct PanelPageMotion: Equatable {
     /// A page's own visibility: the page coming in shows at once (it starts
     /// outside the glass), the page going stays drawn until it is out.
     func pageOpacityAnimation(incoming: Bool) -> Animation? {
+        if fades { return AtticMotionScale.reducedFade }
         guard travels else { return nil }
         return incoming ? nil : .linear(duration: 0.001).delay(settleDuration)
     }
@@ -149,6 +156,7 @@ struct PanelPageMotion: Equatable {
     /// The top row's in-place fade: both begin at once; the new header keeps
     /// its 160 ms entrance while the outgoing header fades out in 90 ms.
     func inPlaceOpacityAnimation(incoming: Bool) -> Animation? {
+        if fades { return AtticMotionScale.reducedFade }
         guard travels else { return nil }
         if incoming {
             let fade = Animation.easeOut(duration: Self.fadeIn)

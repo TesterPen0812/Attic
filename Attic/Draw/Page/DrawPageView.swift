@@ -33,7 +33,7 @@ struct DrawPageHost: View {
 
     var body: some View {
         let dim = model.isDrawingLive ? DrawPageMetrics.dimmed : 1
-        let dimAnimation = design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast)
+        let dimAnimation = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast)
         ZStack(alignment: .topLeading) {
             DrawBoardRepresentable(model: model, clearInsets: clearInsets)
             // The page's floating controls fold away under the chat, as the

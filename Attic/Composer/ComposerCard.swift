@@ -20,7 +20,7 @@ private struct ComposerChipFace<Label: View>: View {
                 Squircle(cornerRadius: ComposerMetrics.chipHeight / 2, exponent: AtticShape.controlExponent)
                     .fill(ComposerChipLook.fill(open: open, hovered: hovered, tokens: design.tokens).color)
                     // On the wash alone: the card's own frame never animates from here.
-                    .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: hovered)
+                    .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: hovered)
             }
             .onHover { pointerInside = $0 }
     }

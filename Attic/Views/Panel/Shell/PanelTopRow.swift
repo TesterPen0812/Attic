@@ -183,7 +183,7 @@ struct PanelHeaderDim: ViewModifier {
         let dimmed = state.dimmedPages.contains(page)
         content
             .opacity(dimmed ? 0.35 : 1)
-            .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: dimmed)
+            .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: dimmed)
     }
 }
 

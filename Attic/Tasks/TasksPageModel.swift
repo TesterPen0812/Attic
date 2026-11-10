@@ -1716,7 +1716,7 @@ final class TasksPageModel: ObservableObject {
         // Reduce Motion: no travel at all (review 22); a shorter slide is
         // still a slide.
         let reduceMotion = AtticMotionPreference.reducesMotion
-        withAnimation(reduceMotion ? nil : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
+        withAnimation(reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
             _ = held.removeValue(forKey: id)
         }
     }
