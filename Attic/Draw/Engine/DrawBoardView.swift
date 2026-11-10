@@ -403,7 +403,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func mouseDown(with event: NSEvent) {
         if model.editing == nil { window?.makeFirstResponder(self) }
         let point = boardPoint(event)
-        if event.clickCount == 2, model.live == nil {
+        if event.clickCount == 2, model.tool == .select, model.live == nil {
             model.doubleClick(at: point)
             return
         }

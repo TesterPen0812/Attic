@@ -215,6 +215,19 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertEqual(model.objects.count, 1)
     }
 
+    func testSecondBoardClickStillDrawsAndErasesWhenNotSelecting() {
+        model.setTool(.pen)
+        let point = CGPoint(x: 85, y: 120)
+        board.mouseDown(with: mouse(.leftMouseDown, point, clicks: 2))
+        board.mouseUp(with: mouse(.leftMouseUp, point, clicks: 2))
+        XCTAssertEqual(model.objects.count, 1, "double-clicking the board with Pen draws a dot")
+
+        model.setTool(.eraser)
+        board.mouseDown(with: mouse(.leftMouseDown, point, clicks: 2))
+        board.mouseUp(with: mouse(.leftMouseUp, point, clicks: 2))
+        XCTAssertTrue(model.objects.isEmpty, "double-clicking a stroke with Eraser removes it")
+    }
+
     func testNothingRendersWhileHidden() {
         XCTAssertTrue(waitForInstall(after: 0))
         model.setShown(false)
