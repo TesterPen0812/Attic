@@ -438,12 +438,17 @@ final class AgentChatModel: ObservableObject {
             let command = String(pieces[0])
             if command.hasPrefix("tap:") || command.hasPrefix("menu-pick:") || command == "menu-cancel"
                 || command.hasPrefix("search:") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-                    if command.hasPrefix("tap:") { AgentChatUITestSeams.tap(String(command.dropFirst(4))) }
-                    else if command.hasPrefix("menu-pick:") { AgentChatUITestSeams.pick(Int(command.dropFirst(10)) ?? 0) }
-                    else if command == "menu-cancel" { AgentChatUITestSeams.cancel() }
-                    else { self?.uiTestQuery = String(command.dropFirst(7)) }
+                // A timer in the common modes: it still fires while a menu
+                // this seam opened is tracking (a main-queue block would not).
+                let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        if command.hasPrefix("tap:") { AgentChatUITestSeams.tap(String(command.dropFirst(4))) }
+                        else if command.hasPrefix("menu-pick:") { AgentChatUITestSeams.pick(Int(command.dropFirst(10)) ?? 0) }
+                        else if command == "menu-cancel" { AgentChatUITestSeams.cancel() }
+                        else { self?.uiTestQuery = String(command.dropFirst(7)) }
+                    }
                 }
+                RunLoop.main.add(timer, forMode: .common)
                 continue
             }
             if pieces[0] == "undo" {
