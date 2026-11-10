@@ -379,7 +379,7 @@ final class AtticDropdownTests: XCTestCase {
         let tooTall = AtticDropdownLayout.place(idealWidth: 200, height: 400, anchor: anchor, bounds: bounds, prefer: .below,
                                                 current: .below)
         XCTAssertEqual(tooTall.side, .above, "the roomier side when neither holds it")
-        XCTAssertEqual(tooTall.heightLimit, 336)
+        XCTAssertEqual(tooTall.heightLimit, anchor.minY - bounds.minY - AtticDropdownMetrics.anchorGap)
         // The width rule is the same one.
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 150)
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 400, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 296)
@@ -611,13 +611,14 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The capture seam
 
-    /// The pickers stay solid (owner, 28 Oct): with the controls on Liquid
-    /// Glass, outside a capture, the priority picker's card is still the
-    /// opaque `popoverFill` over whatever lies behind it, in both modes.
-    func testAGlassConfiguredPickerStaysSolid() throws {
-        for mode in [AtticDesignContext.Mode.light, .dark] {
-            let design = AtticDesignContext(mode: mode, controls: .liquidGlass)
-            XCTAssertEqual(design.effectiveControls, .liquidGlass)
+    /// Planning.md, Accepted 2026-11-10 (Loam's menus): the picker cards
+    /// were opaque, which the glass rule forbids, so with the controls on
+    /// Liquid Glass the priority picker's card is glass, not the opaque
+    /// `popoverFill`; Reduce Transparency still gets the solid card.
+    func testAGlassConfiguredPickerIsGlassAndReduceTransparencyStaysSolid() throws {
+        for (mode, glass) in [(AtticDesignContext.Mode.light, true), (.dark, true), (.light, false), (.dark, false)] {
+            let design = AtticDesignContext(mode: mode, reduceTransparency: !glass, controls: .liquidGlass)
+            XCTAssertEqual(design.effectiveControls, glass ? .liquidGlass : .craft)
             let margin: CGFloat = 30
             let cardWidth = AtticDropdownMetrics.commandCardWidth
             // A swatch of `popoverFill` beside the card, through the same
@@ -645,6 +646,12 @@ final class AtticDropdownTests: XCTestCase {
             // Inside the card's top and bottom edges, clear of its corners and rows.
             for point in [CGPoint(x: margin + cardWidth / 2, y: margin + 1.5), CGPoint(x: margin + cardWidth / 2, y: height - margin - 1.5)] {
                 let c = try colour(point)
+                if glass {
+                    let apart = [abs(c.redComponent - fill.redComponent), abs(c.greenComponent - fill.greenComponent),
+                                 abs(c.blueComponent - fill.blueComponent)].max() ?? 0
+                    XCTAssertGreaterThan(apart, 0.05, "\(mode): glass, not popoverFill, at \(point)")
+                    continue
+                }
                 XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "\(mode): opaque at \(point)")
                 XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
                 XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
@@ -1007,13 +1014,15 @@ final class AtticDropdownTests: XCTestCase {
         defer { presenter.close(restoreFocus: false, immediately: true) }
         spin(0.1)
         let host = try XCTUnwrap(presenter.host)
-        XCTAssertEqual(host.contentRect.width, AtticDropdownMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
-        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzz", systemName: "plus")]
+        // Planning.md, Accepted 2026-11-10: a card out of a control is at
+        // least 216 pt.
+        XCTAssertEqual(host.contentRect.width, AtticMenuMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
+        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzzzzzzzzzzzzzzzzzz", systemName: "plus")]
         show(create)
         presenter.update()
         spin(0.1)
         let wanted = AtticDropdownLayout.width(ideal: AtticSuggestionList.idealWidth(create), available: 296)
-        XCTAssertGreaterThan(wanted, AtticDropdownMetrics.minWidth, "the create row needs more than the minimum")
+        XCTAssertGreaterThan(wanted, AtticMenuMetrics.minWidth, "the create row needs more than the minimum")
         XCTAssertEqual(host.contentRect.width, wanted, accuracy: 1, "the card grew to its row")
         XCTAssertEqual(presenter.stage.width, wanted)
     }
