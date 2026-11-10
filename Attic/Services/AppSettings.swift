@@ -447,7 +447,7 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
-        panelDismissMode = PanelDismissMode(rawValue: defaults.string(forKey: Key.panelDismissMode) ?? "") ?? .moveCursorAway
+        panelDismissMode = PanelDismissMode(rawValue: defaults.string(forKey: Key.panelDismissMode) ?? "") ?? .clickAway
         // Before any appearance key is read: the retired translucency /
         // glass-style / gradient preferences become Surface and Tint
         // exactly once, and a fresh install receives the new defaults.
