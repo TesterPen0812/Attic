@@ -12,7 +12,9 @@ enum AgentActionWords {
         "make_task_from_note", "restore", "move_files_into_note", "search_items",
         "create_tasks", "update_tasks", "open_page", "calendar_search", "calendar_read",
         "calendar_list_calendars", "calendar_create", "calendar_update", "calendar_delete",
-        "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes",
+        "draw_list_canvases", "draw_read_canvas", "draw_edit_text", "draw_move_object",
+        "draw_rename_canvas", "draw_delete_canvas",
+        "draw_add_text", "draw_add_shape", "draw_add_strokes",
         "agent_approval_status"
     ]
 
@@ -297,10 +299,15 @@ extension AgentActions {
                 args["base_workspace_token"] = workspace["workspace_token"]
             }
         }
-        if name.hasPrefix("draw_add_"), args["canvas_id"] == nil {
+        if (name.hasPrefix("draw_add_") || ["draw_read_canvas", "draw_edit_text", "draw_move_object",
+                                              "draw_rename_canvas", "draw_delete_canvas"].contains(name)),
+           args["canvas_id"] == nil {
             args["canvas_id"] = try uniqueCanvas(named: args["canvas_name"]).id.uuidString
         }
-        if name.hasPrefix("draw_add_") { args.removeValue(forKey: "canvas_name") }
+        if name.hasPrefix("draw_add_") || ["draw_read_canvas", "draw_edit_text", "draw_move_object",
+                                                "draw_rename_canvas", "draw_delete_canvas"].contains(name) {
+            args.removeValue(forKey: "canvas_name")
+        }
         return args
     }
 

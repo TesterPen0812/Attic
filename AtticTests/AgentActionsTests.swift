@@ -190,7 +190,8 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "create_tasks", "update_tasks",
                                              "search_items", "open_page", "calendar_search",
                                              "calendar_read", "calendar_create", "calendar_update", "calendar_delete",
-                                             "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes"]))
+                                             "draw_list_canvases", "draw_read_canvas", "draw_move_object",
+                                             "draw_add_text", "draw_add_shape", "draw_add_strokes"]))
         for definition in defs {
             let schema = try XCTUnwrap(definition["inputSchema"] as? [String: Any])
             XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
@@ -471,6 +472,261 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: try XCTUnwrap(UUID(uuidString: id)))?.title, "Original")
     }
 
+    #if !ATTIC_GENERATED_TESTS
+    func testUndoCreatedNoteRefusesToDeleteARevisionEditedByTheOwner() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create an outline")
+        let result = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Outline", "body": "Agent draft"
+        ], watching: false, requestID: request))
+        let created = try XCTUnwrap(try payload(result.text)["note"] as? [String: Any])
+        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(created["id"] as? String)))
+        let revision = try XCTUnwrap(notes.note(withID: id)?.revisionToken)
+
+        let ownerEdit = try payload(tools.call(name: "update_note", arguments: [
+            "id": id.uuidString, "base_revision": revision, "body": "Owner's important changes"
+        ]))
+        XCTAssertEqual(ownerEdit["status"] as? String, "applied")
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertFalse(undone.failures.isEmpty)
+        XCTAssertEqual(notes.note(withID: id)?.body, "Owner's important changes")
+        XCTAssertNotNil(undone.remaining)
+    }
+
+    func testUndoCreatedNoteAfterAnAgentEditStillRemovesIt() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Write a note")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Draft", "body": "First version"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "id": id.uuidString, "body": "Second version"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(actions.changeSet(for: request)?.count, 2)
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 2)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertNil(notes.note(withID: id))
+    }
+
+    func testUndoCreatedNoteKeepsDivergentPhysicalReplica() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create note")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Draft", "body": "Agent content"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        let original = try XCTUnwrap(notes.note(withID: id))
+        let ownerCopy = NoteItem(id: id, title: original.title, body: "Owner's divergent content")
+        ownerCopy.revisionID = UUID()
+        let seed = ModelContext(tasks.container)
+        seed.insert(ownerCopy)
+        try seed.save()
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertEqual(undone.remaining?.count, 1)
+        let physical = try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>(
+            predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(physical.count, 2)
+        XCTAssertTrue(physical.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testUndoCreatedNoteKeepsOwnerTagsThatDidNotChangeRevision() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let request = actions.beginRequest(title: "Create outline")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Outline", "body": "A draft"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        let initial = try XCTUnwrap(notes.note(withID: id))
+        let revision = initial.revisionToken
+        XCTAssertTrue(notes.setTags(["important"], for: initial))
+        XCTAssertEqual(notes.note(withID: id)?.revisionToken, revision)
+
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertNotNil(undone.remaining)
+        XCTAssertEqual(notes.note(withID: id)?.tags, ["important"])
+    }
+
+    func testDrawReadAndMoveObjectRespectReadOnlyAndUndo() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Plan")
+        let points = [DrawPoint(x: 10, y: 20), DrawPoint(x: 30, y: 50)]
+        let object = DrawObject(frame: DrawFrame(x: 10, y: 20, width: 20, height: 30),
+                                content: .stroke(points))
+        XCTAssertTrue(f.draw.perform(.put([object]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Position the sketch")
+        try f.actions.setMode(.readOnly, for: request)
+        let read = try performed(await f.actions.call(name: "draw_read_canvas", arguments: [
+            "canvas_name": "Plan"
+        ], watching: false, requestID: request))
+        let response = try payload(read.text)
+        let objects = try XCTUnwrap(response["objects"] as? [[String: Any]])
+        XCTAssertEqual(objects.count, 1)
+        XCTAssertEqual(objects.first?["id"] as? String, object.id.uuidString)
+        XCTAssertEqual(objects.first?["point_count"] as? Int, 2)
+        XCTAssertEqual(f.actions.changeSet(for: request)?.count, nil)
+        let arguments: [String: Any] = ["canvas_id": canvas.id.uuidString,
+            "object_id": object.id.uuidString, "expected_x": 10, "expected_y": 20,
+            "x": 50, "y": 70]
+        do {
+            _ = try await f.actions.call(name: "draw_move_object", arguments: arguments,
+                                         watching: false, requestID: request)
+            XCTFail("Read only must refuse object movement")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Read only"))
+        }
+        try f.actions.setMode(.askFirst, for: request)
+        _ = try performed(await f.actions.call(name: "draw_move_object", arguments: arguments,
+                                               watching: false, requestID: request))
+        let moved = try XCTUnwrap(f.draw.open(canvas.id).objects.first)
+        XCTAssertEqual(moved.frame.x, 50)
+        XCTAssertEqual(moved.frame.y, 70)
+        if case let .stroke(movedPoints) = moved.content {
+            XCTAssertEqual(movedPoints.map(\.x), [50, 70])
+            XCTAssertEqual(movedPoints.map(\.y), [70, 100])
+        } else { XCTFail("The stroke should stay a stroke") }
+        let undo = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 1)
+        XCTAssertTrue(undo.failures.isEmpty)
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.first, object)
+    }
+
+    func testDrawMoveRefusesAnObjectPositionChangedSinceReading() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Board")
+        let original = DrawObject(frame: DrawFrame(x: 4, y: 8), content: .text("Owner"))
+        XCTAssertTrue(f.draw.perform(.put([original]), on: canvas.id).isSaved)
+        var changed = original
+        changed.frame.x = 16
+        XCTAssertTrue(f.draw.perform(.put([changed]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Move text")
+        do {
+            _ = try await f.actions.call(name: "draw_move_object", arguments: [
+                "canvas_id": canvas.id.uuidString, "object_id": original.id.uuidString,
+                "expected_x": 4, "expected_y": 8, "x": 70, "y": 80
+            ], watching: false, requestID: request)
+            XCTFail("An agent must re-read an object changed by its owner")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("moved since"))
+        }
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.first, changed)
+        XCTAssertNil(f.actions.changeSet(for: request))
+    }
+
+    func testDrawTextEditRefusesStaleTextAndUndoesTheAcceptedEdit() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Draft board")
+        let object = DrawObject(content: .text("First draft"))
+        XCTAssertTrue(f.draw.perform(.put([object]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Improve text")
+        do {
+            _ = try await f.actions.call(name: "draw_edit_text", arguments: [
+                "canvas_name": "Draft board", "object_id": object.id.uuidString,
+                "expected_text": "Outdated draft", "text": "Agent version"
+            ], watching: false, requestID: request)
+            XCTFail("A stale text edit must be refused")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("text changed"))
+        }
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.first, object)
+
+        _ = try performed(await f.actions.call(name: "draw_edit_text", arguments: [
+            "canvas_id": canvas.id.uuidString, "object_id": object.id.uuidString,
+            "expected_text": "First draft", "text": "Agent version"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.first?.text, "Agent version")
+        let undone = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.first, object)
+    }
+
+    func testDrawUndoNeverConsumesANewerOwnerHistoryStepWithUnchangedObjects() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Sketch")
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Owner's draft"))]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Add to sketch")
+        _ = try performed(await f.actions.call(name: "draw_add_text", arguments: [
+            "canvas_id": canvas.id.uuidString, "text": "Agent addition", "x": 10, "y": 25
+        ], watching: false, requestID: request))
+        let agentObjects = try f.draw.open(canvas.id).objects
+
+        // Tags change the canvas history without changing visible objects or its name.
+        // Undo of the agent request must never consume this later owner command.
+        XCTAssertTrue(f.draw.perform(.tags(["owner"]), on: canvas.id).isSaved)
+        let ownerStep = try XCTUnwrap(f.draw.undoStepID(on: canvas.id))
+        let result = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(result.undone, 0)
+        XCTAssertNotNil(result.remaining)
+        XCTAssertEqual(try f.draw.open(canvas.id).canvas.tags, ["owner"])
+        XCTAssertEqual(try f.draw.open(canvas.id).objects, agentObjects)
+        XCTAssertEqual(f.draw.undoStepID(on: canvas.id), ownerStep)
+    }
+
+    func testDrawRenameAndApprovedDeleteUndoInReverseOrder() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Original canvas")
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Work"))]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Organise sketch")
+        let renamed = try performed(await f.actions.call(name: "draw_rename_canvas", arguments: [
+            "canvas_id": canvas.id.uuidString, "expected_name": "Original canvas", "name": "Updated canvas"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(renamed.step.targets.first?.itemID, canvas.id)
+        XCTAssertEqual(try f.draw.open(canvas.id).canvas.name, "Updated canvas")
+        let removal = try approval(await f.actions.call(name: "draw_delete_canvas", arguments: [
+            "canvas_name": "Updated canvas"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(removal.targets.first?.title, "Updated canvas")
+        XCTAssertNil(try f.draw.open(canvas.id).canvas.deletedAt)
+        _ = try await f.actions.resolve(approval: removal.id, allow: true)
+        XCTAssertNotNil(try f.draw.open(canvas.id).canvas.deletedAt)
+
+        let undone = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 2)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertEqual(try f.draw.open(canvas.id).canvas.name, "Original canvas")
+        XCTAssertNil(try f.draw.open(canvas.id).canvas.deletedAt)
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.count, 1)
+    }
+
+    func testDrawRenameRefusesAnInterveningOwnerChange() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "First")
+        XCTAssertTrue(f.draw.perform(.put([DrawObject(content: .text("Work"))]), on: canvas.id).isSaved)
+        XCTAssertTrue(f.draw.perform(.rename("Owner's name"), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Rename sketch")
+        do {
+            _ = try await f.actions.call(name: "draw_rename_canvas", arguments: [
+                "canvas_id": canvas.id.uuidString, "expected_name": "First", "name": "Agent's name"
+            ], watching: false, requestID: request)
+            XCTFail("A stale canvas name must not be overwritten")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("name changed"))
+        }
+        XCTAssertEqual(try f.draw.open(canvas.id).canvas.name, "Owner's name")
+        XCTAssertNil(f.actions.changeSet(for: request))
+    }
+    #endif
+
     func testUndoPutsBackANoteLeftOnScreenByAWatchedWriteOnlyWhenItsEditorIsClean() async throws {
         let tasks = try makeTestStore()
         let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
@@ -565,7 +821,8 @@ final class AgentActionsTests: XCTestCase {
         let names = Set(definitions.compactMap { $0["name"] as? String })
         XCTAssertTrue(names.isSuperset(of: ["list_tasks", "create_task", "open_page", "calendar_search",
                                               "calendar_read", "calendar_create", "calendar_update", "calendar_delete",
-                                              "draw_list_canvases", "draw_add_text", "draw_add_shape", "draw_add_strokes",
+                                              "draw_list_canvases", "draw_read_canvas", "draw_move_object",
+                                              "draw_add_text", "draw_add_shape", "draw_add_strokes",
                                               "agent_approval_status"]))
         for definition in definitions {
             XCTAssertEqual((definition["inputSchema"] as? [String: Any])?["additionalProperties"] as? Bool, false)

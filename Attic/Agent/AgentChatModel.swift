@@ -324,6 +324,10 @@ final class AgentChatModel: ObservableObject {
 
     private var runner: AgentRunning?
     private var runTask: Task<Void, Never>?
+    /// A stopped run still drains committed action receipts before its thread
+    /// can be archived. Keep an immediate next message until that completes.
+    private var newChatDrainTask: Task<Void, Never>?
+    private var newChatQueuedSend: (text: String, context: AgentRequestContext)?
     private var queuedApprovals: [AgentApproval] = []
     private var progress: (done: Int, total: Int)?
     private var isRunning = false
@@ -367,6 +371,9 @@ final class AgentChatModel: ObservableObject {
     /// The one place a runner comes in. `AppCoordinator` calls it.
     func connect(_ runner: AgentRunning) {
         runTask?.cancel()
+        newChatDrainTask?.cancel()
+        newChatDrainTask = nil
+        newChatQueuedSend = nil
         self.runner = runner
         runner.setMode(mode)
         approval = nil
@@ -579,6 +586,15 @@ final class AgentChatModel: ObservableObject {
         // What was added went with this message; the page chip stays.
         attachments = []
         attachmentRefusal = nil
+        if newChatDrainTask != nil {
+            newChatQueuedSend = (text, context)
+            return
+        }
+        sendToRunner(text, context: context)
+    }
+
+    private func sendToRunner(_ text: String, context: AgentRequestContext) {
+        guard let runner else { runEnded(); return }
         let sent = runner.send(text, context: context, watching: isOpen)
         let stream = runner.retainsThread ? runner.observe() : sent
         listen(to: stream)
@@ -785,12 +801,30 @@ final class AgentChatModel: ObservableObject {
 
     /// Starts over. A run still going is stopped first.
     func newChat() {
-        if isRunning { runner?.cancel() }
+        newChatDrainTask?.cancel()
+        newChatDrainTask = nil
+        newChatQueuedSend = nil
+        let draining = runner?.retainsThread == true && runner?.threadSnapshot().isRunning == true
+        if isRunning || draining { runner?.cancel() }
         runTask?.cancel()
         runTask = nil
         feedTask?.cancel()
         feedTask = nil
         runner?.forgetThread()
+        if draining, let runner {
+            newChatDrainTask = Task { [weak self] in
+                // The runner finishes this stream only after action receipts
+                // are committed and the previous conversation is archived.
+                for await _ in runner.observe() {}
+                guard !Task.isCancelled, let self else { return }
+                self.newChatDrainTask = nil
+                self.refreshHistory()
+                if let queued = self.newChatQueuedSend {
+                    self.newChatQueuedSend = nil
+                    self.sendToRunner(queued.text, context: queued.context)
+                }
+            }
+        }
         stopWatching()
         isRunning = false
         entries = []

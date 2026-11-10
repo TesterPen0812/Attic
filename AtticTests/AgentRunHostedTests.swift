@@ -453,6 +453,55 @@ final class AgentRunHostedTests: XCTestCase {
         helper.completeStart()
     }
 
+    #if !ATTIC_GENERATED_TESTS
+    func testSystemPromptNamesTheLocalClockAndTimeZone() throws {
+        let london = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        let winter = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-10T18:15:00Z"))
+        let summer = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-10T18:15:00Z"))
+        XCTAssertTrue(AgentRunEngine.systemPrompt(date: winter, timeZone: london)
+            .contains("2026-11-10T18:15:00Z (Europe/London)"))
+        XCTAssertTrue(AgentRunEngine.systemPrompt(date: summer, timeZone: london)
+            .contains("2026-08-10T19:15:00+01:00 (Europe/London)"))
+    }
+
+    func testSendImmediatelyAfterNewChatWaitsForOldReceiptAndKeepsTheNewMessage() async {
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: {
+            let helper = FakeRunHelper()
+            helpers.append(helper)
+            return helper
+        }, tools: { tools }, journalURL: journalURL())
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+
+        chat.draft = "Original chat"
+        chat.send()
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+        chat.newChat()
+        chat.draft = "Follow-up in new chat"
+        chat.send()
+        tools.releaseDrain()
+
+        await wait { helpers.count == 2 && helpers[1].inputs.count == 1 }
+        guard helpers.count > 1 else { return }
+        XCTAssertEqual(runner.threadSnapshot().entries.filter { $0.role == "user" }.map(\.text),
+                       ["Follow-up in new chat"])
+        XCTAssertEqual(chat.entries.filter {
+            if case .asked("Follow-up in new chat") = $0.content { return true }
+            return false
+        }.count, 1)
+        helpers[1].emitLine(Self.text("New chat reply."))
+        helpers[1].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertTrue(runner.threadSnapshot().entries.contains {
+            $0.role == "assistant" && $0.text == "New chat reply."
+        })
+    }
+    #endif
+
     private func journalURL() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("attic-agent-hosted-\(UUID().uuidString).json")
     }

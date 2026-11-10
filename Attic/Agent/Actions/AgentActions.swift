@@ -32,7 +32,8 @@ enum AgentActionsError: Error, LocalizedError {
 enum AgentActionApprovalPolicy {
     static let names: Set<String> = [
         "delete_task", "delete_note", "delete_item", "make_note_checkbox",
-        "remove_from_tasks", "calendar_create", "calendar_update", "calendar_delete"
+        "remove_from_tasks", "calendar_create", "calendar_update", "calendar_delete",
+        "draw_delete_canvas"
     ]
 
     static func requiresApproval(_ name: String, arguments: [String: Any]) -> Bool {
@@ -68,6 +69,7 @@ enum AgentApprovalWords {
         case "calendar_create": return "Add \(subject ?? "this event") to Calendar?"
         case "calendar_update": return "Change \(subject ?? "this event") in Calendar?"
         case "calendar_delete": return "Delete \(subject ?? "this event") from Calendar?"
+        case "draw_delete_canvas": return phrase("Delete", "canvas")
         case "update_note_table":
             let deletions = (arguments["operations"] as? [[String: Any]] ?? [])
                 .compactMap { $0["op"] as? String }.filter { $0.hasPrefix("delete_") }
@@ -91,8 +93,8 @@ final class AgentActions {
 
     enum UndoEntry {
         case history(UndoHistoryID, UUID, String)
-        case draw(UUID, DrawSnapshot, String)
-        case createdNote(UUID, String)
+        case draw(UUID, DrawSnapshot, UUID, String)
+        case createdNote(UUID, revision: String, name: String)
         case updatedNote(UUID, document: NoteDocument?, title: String, body: String,
                          revision: String, name: String)
         case proposal(noteID: UUID, editID: UUID, name: String)
@@ -100,7 +102,7 @@ final class AgentActions {
 
         var title: String {
             switch self {
-            case let .history(_, _, name), let .draw(_, _, name), let .createdNote(_, name),
+            case let .history(_, _, name), let .draw(_, _, _, name), let .createdNote(_, _, name),
                  let .proposal(_, _, name),
                  let .updatedNote(_, _, _, _, _, name), let .unavailable(name): name
             }
@@ -154,7 +156,7 @@ final class AgentActions {
     static func isReadOnlyAction(_ name: String) -> Bool {
         ["list_tasks", "get_task_workspace", "list_notes", "list_deleted", "list_tags",
          "get_settings", "search_items", "calendar_search", "calendar_read",
-         "calendar_list_calendars", "draw_list_canvases"].contains(name)
+         "calendar_list_calendars", "draw_list_canvases", "draw_read_canvas"].contains(name)
     }
 
     func setMode(_ mode: AgentChatMode, for requestID: UUID) throws {
@@ -295,7 +297,13 @@ final class AgentActions {
         } else if name.hasPrefix("draw_") {
             let result = try drawAction(name, arguments)
             text = result.0; step = result.1
-            if let snapshot = result.2 { extraEntries.append(.draw(snapshot.canvas.id, snapshot, step.title)) }
+            if let snapshot = result.2 {
+                if let undoID = draw?.undoStepID(on: snapshot.canvas.id) {
+                    extraEntries.append(.draw(snapshot.canvas.id, snapshot, undoID, step.title))
+                } else {
+                    extraEntries.append(.unavailable("\(step.title): Draw's Undo step is unavailable"))
+                }
+            }
         } else {
             text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
                 try await tasks.callAsync(name: name, arguments: arguments)
@@ -306,7 +314,11 @@ final class AgentActions {
             step = AgentStep(id: UUID(), title: Self.stepTitle(name, arguments),
                              kind: Self.stepKind(name, arguments), targets: targets, state: .done)
             if name == "create_note", let id = targets.first?.itemID {
-                extraEntries.append(.createdNote(id, step.title))
+                if let revision = tasks.noteStore?.note(withID: id)?.revisionToken {
+                    extraEntries.append(.createdNote(id, revision: revision, name: step.title))
+                } else {
+                    extraEntries.append(.unavailable("\(step.title): the created note could not be read back"))
+                }
             }
             if let before = noteBefore,
                let response = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
@@ -401,18 +413,20 @@ final class AgentActions {
                     success = result == .applied
                     if !success { failures.append("\(entry.title): \(String(describing: result))") }
                 }
-            case let .draw(canvasID, snapshot, _):
+            case let .draw(canvasID, snapshot, expectedStepID, _):
                 if let draw, let current = try? draw.open(canvasID),
                    current.objects == snapshot.objects && current.canvas.name == snapshot.canvas.name,
-                   draw.canUndo(on: canvasID) {
+                   draw.undoStepID(on: canvasID) == expectedStepID {
                     success = draw.undo(on: canvasID).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
-            case let .createdNote(noteID, _):
-                if tasks.noteStore?.note(withID: noteID) != nil {
+            case let .createdNote(noteID, revision, _):
+                if tasks.noteStore?.agentCreatedNoteIsUnchanged(
+                    noteID, revision: noteRevisions[noteID] ?? revision
+                ) == true {
                     success = tasks.library.delete(AtticItemRef(.note, noteID))
                 }
-                if !success { failures.append("\(entry.title): the note could not be removed") }
+                if !success { failures.append("\(entry.title): the note changed or could not be removed") }
             case let .updatedNote(noteID, document, title, body, revision, _):
                 if let noteStore = tasks.noteStore, let document {
                     // A note the chat wrote in while watched is on screen: a
@@ -495,7 +509,7 @@ final class AgentActions {
         name.hasPrefix("create_") || name.hasPrefix("update_") || name.hasPrefix("delete_") ||
         name.hasPrefix("duplicate_") || name.hasPrefix("move_") || name.hasPrefix("restore_") ||
         name == "link" || AgentTaskTools.asyncToolNames.contains(name) ||
-        name.hasPrefix("draw_add_")
+        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas"].contains(name)
     }
 
     private func noteSnapshot(for arguments: [String: Any]) -> (
@@ -529,6 +543,18 @@ final class AgentActions {
 
     private static func targetsFromResponse(_ text: String, name: String, arguments: [String: Any]) -> [AgentTarget] {
         let payload = ((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]) ?? [:]
+        if name.hasPrefix("draw_") {
+            let canvasID = ((payload["canvas_id"] ?? arguments["canvas_id"]) as? String)
+                .flatMap(UUID.init(uuidString:))
+            let objectID = ((payload["object_id"] ?? arguments["object_id"]) as? String)
+                .flatMap(UUID.init(uuidString:))
+            if let id = objectID ?? canvasID {
+                return [AgentTarget(page: .draw, itemID: id,
+                                    title: (payload["canvas_name"] ?? arguments["canvas_name"]) as? String,
+                                    containerID: canvasID)]
+            }
+            return []
+        }
         if name.hasPrefix("calendar_") {
             let id = ((payload["id"] ?? arguments["id"]) as? String).flatMap(UUID.init(uuidString:))
             let occurrence = (payload["occurrence_id"] ?? arguments["occurrence_id"]) as? String
