@@ -326,7 +326,12 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertEqual(model.editing?.text, "alpha 👩🏽‍🚀\nsecond")
         XCTAssertEqual(editor.string, model.editing?.text)
         let font = try XCTUnwrap(editor.textStorage?.attribute(.font, at: 6, effectiveRange: nil) as? NSFont)
-        XCTAssertEqual(font, expectedAttributes[.font] as? NSFont, "Text boxes have one size even when rich text is inserted")
+        // The emoji itself is drawn from the emoji font (font fallback), so
+        // the box's one size is what must hold, not the font's name.
+        XCTAssertEqual(font.pointSize, (expectedAttributes[.font] as? NSFont)?.pointSize,
+                       "Text boxes have one size even when rich text is inserted")
+        let after = try XCTUnwrap(editor.textStorage?.attribute(.font, at: editor.string.utf16.count - 1, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(after, expectedAttributes[.font] as? NSFont, "Text after the insertion keeps the box's font")
         let colour = try XCTUnwrap(editor.textStorage?.attribute(.foregroundColor, at: 6, effectiveRange: nil) as? NSColor)
         XCTAssertEqual(colour, expectedAttributes[.foregroundColor] as? NSColor, "Text boxes use the swatch's colour")
     }

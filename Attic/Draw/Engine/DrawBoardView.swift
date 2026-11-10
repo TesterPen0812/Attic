@@ -1196,6 +1196,12 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
         return String(new.dropLast(suffix)).utf16.count
     }
 
+    /// A text box has one font and one colour: rich text inserted by the
+    /// Character Viewer or an input method takes the box's style.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText((string as? NSAttributedString)?.string ?? string, replacementRange: replacementRange)
+    }
+
     func textDidChange(_ notification: Notification) {
         guard !applying, !hasMarkedText() else { return }
         owner?.editorTextChanged(string)
