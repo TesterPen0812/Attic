@@ -650,8 +650,11 @@ struct AtticStaggeredArrival: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(y: shown ? 0 : AtticMotionScale.overlayRise)
             .onAppear {
-                guard !arrived, !design.reduceMotion,
-                      let spring = AtticMotionPreset.popover.animation(reduceMotion: false) else { return }
+                guard !arrived else { return }
+                // A mounted item has already arrived under Reduced. Keep that
+                // state when normal motion is switched on without a remount.
+                if design.reduceMotion { arrived = true; return }
+                guard let spring = AtticMotionPreset.popover.animation(reduceMotion: false) else { return }
                 withAnimation(spring.delay(AtticMotionScale.stagger(index: index, reduceMotion: false))) { arrived = true }
             }
     }

@@ -35,6 +35,9 @@ struct CalendarPage: View {
     /// The scroller's last offset, read without publishing view state, so
     /// swapping the month for the week keeps everything where it was.
     @State private var lastOffset = OffsetBox()
+    /// A later view pick invalidates an earlier fold's delayed completion.
+    @State private var foldToken: UInt64 = 0
+    @State private var foldingIntoWeek = false
     @State private var searchOpen = false
     @State private var searchFocused = false
     /// The keyboard's task row in the agenda (Return renames, ⇧⌘I opens).
@@ -381,7 +384,20 @@ struct CalendarPage: View {
     /// frame. Month picked: the weeks come back at that same frame, and the
     /// grid unfolds to the month. Neither changes the fold's motion.
     private func foldToPickedView(week: Bool) {
-        guard weekOnly != week else { return }
+        foldToken &+= 1
+        let token = foldToken
+        let interruptedWeekFold = foldingIntoWeek
+        foldingIntoWeek = false
+        guard weekOnly != week else {
+            // Week was still animating when Month was picked. The grid is
+            // already a month, but the old scroll target must be reversed.
+            if !week && interruptedWeekFold {
+                withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                    scrollPosition.scrollTo(y: 0)
+                }
+            }
+            return
+        }
         let count = model.snapshot.weeks.count
         // Every row but the selected week's: what the swap adds or removes
         // above the agenda, so the agenda stays put across it.
@@ -396,7 +412,8 @@ struct CalendarPage: View {
         if week {
             // The agenda keeps its place: at least folded, less the rows that go.
             let toWeek = {
-                guard model.isWeekPicked, !weekOnly else { return }
+                guard token == foldToken, model.isWeekPicked, !weekOnly else { return }
+                foldingIntoWeek = false
                 weekOnly = true
                 flags.weekView = true
                 scrollPosition.scrollTo(y: max(lastOffset.y, folded) - above)
@@ -411,11 +428,12 @@ struct CalendarPage: View {
             withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
                 scrollPosition.scrollTo(y: folded)
             }
+            foldingIntoWeek = true
             Task { @MainActor in
                 var still = 0
                 for _ in 0..<120 where still < 3 {
                     try? await Task.sleep(nanoseconds: 16_000_000)
-                    guard model.isWeekPicked, !weekOnly else { return }
+                    guard token == foldToken, model.isWeekPicked, !weekOnly else { return }
                     still = abs(lastOffset.y - folded) < 0.25 ? still + 1 : 0
                 }
                 toWeek()
@@ -424,7 +442,7 @@ struct CalendarPage: View {
             weekOnly = false
             scrollPosition.scrollTo(y: lastOffset.y + above)
             Task { @MainActor in
-                guard !model.isWeekPicked, !weekOnly else { return }
+                guard token == foldToken, !model.isWeekPicked, !weekOnly else { return }
                 withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
                     scrollPosition.scrollTo(y: 0)
                 }

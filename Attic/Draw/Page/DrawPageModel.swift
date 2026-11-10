@@ -250,7 +250,10 @@ final class DrawPageModel: ObservableObject {
     /// The page's side of the library seam.
     var libraryActions: DrawLibraryActions {
         DrawLibraryActions(open: { [weak self] in self?.open($0) },
-                           newCanvas: { [weak self] in self?.newCanvas(name: $0); AtticSounds.play(.created) },
+                           newCanvas: { [weak self] in
+                               guard let self else { return }
+                               AtticSounds.play(.created, if: self.newCanvas(name: $0))
+                           },
                            reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
                            close: { [weak self] in self?.closeFilter() },
                            canvasChanged: { [weak self] in self?.syncExternalChanges() },
@@ -591,15 +594,17 @@ final class DrawPageModel: ObservableObject {
     }
 
     /// "+": a new, empty canvas straight away (a draft until its first content).
-    func newCanvas(name: String? = nil) {
+    @discardableResult
+    func newCanvas(name: String? = nil) -> Bool {
         if library.isRenaming {
             library.commitRename()
-            guard !library.isRenaming else { return }
+            guard !library.isRenaming else { return false }
         }
         let canvas = store.create(name: name)
         viewports[canvas.id] = DrawViewport()
         open(canvas.id)
         setTool(.pen)
+        return canvasID == canvas.id
     }
 
     /// The library's "reveal": open the canvas, bring the text box into view
@@ -1044,7 +1049,10 @@ final class DrawPageModel: ObservableObject {
             },
             AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: KeyboardShortcut("a", modifiers: .command),
                              isDisabled: empty, startsSection: true) { [weak self] in self?.selectAll() },
-            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in self?.newCanvas(); AtticSounds.play(.created) },
+            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in
+                guard let self else { return }
+                AtticSounds.play(.created, if: self.newCanvas())
+            },
             AtticMenuCommand(verbatim: String(localized: "Copy as Image"), isDisabled: empty) { [weak self] in
                 guard let self, let canvasID = self.canvasID else { return }
                 self.images.copyCanvas(canvasID)

@@ -566,19 +566,26 @@ final class RecentlyDeletedModel: ObservableObject {
     func confirmEmpty() {
         guard let request = emptyRequest else { return }
         emptyRequest = nil
-        if !request.drawn.isEmpty { _ = draw()?.purge(request.drawn) }
-        AtticSounds.play(.emptied)
-        guard let library, !request.selection.isEmpty else { return finishEmpty(request) }
-        library.emptyRecentlyDeleted(request.selection)
+        let drawRemoved = request.drawn.isEmpty ? 0 : draw()?.purge(request.drawn).removed ?? 0
+        guard let library, !request.selection.isEmpty else {
+            finishEmpty(request)
+            if drawRemoved > 0 { AtticSounds.play(.emptied) }
+            return
+        }
+        let report = library.emptyRecentlyDeleted(request.selection)
+        let removed = drawRemoved + report.itemCount + report.attachmentCount
         finishEmpty(request)
         let feedbackAtStart = messageGeneration
         // Deleted tasks with notes finish through the coordinated purge
         // (Phase 3); the list and its message follow when they are done.
         if library.taskNotePurge != nil, !request.selection.items(.task).isEmpty || !request.selection.items(.note).isEmpty {
             Task { @MainActor [weak self] in
-                guard !(await library.emptyTaskNoteFamilies(request.selection)).isEmpty else { return }
-                self?.finishEmpty(request, onlyIfFeedbackIs: feedbackAtStart)
+                let families = await library.emptyTaskNoteFamilies(request.selection)
+                if !families.isEmpty { self?.finishEmpty(request, onlyIfFeedbackIs: feedbackAtStart) }
+                if removed > 0 || !families.isEmpty { AtticSounds.play(.emptied) }
             }
+        } else if removed > 0 {
+            AtticSounds.play(.emptied)
         }
     }
 

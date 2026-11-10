@@ -8,6 +8,50 @@ import XCTest
 /// offers Fade as well as Instant.
 @MainActor
 final class LoamMotionTests: XCTestCase {
+    private final class ArrivalState: ObservableObject {
+        @Published var reduced = true
+    }
+
+    private struct ArrivalSurface: View {
+        @ObservedObject var state: ArrivalState
+
+        var body: some View {
+            let design = AtticDesignContext(mode: .light, reduceMotion: state.reduced)
+            Color.black.frame(width: 40, height: 40)
+                .modifier(AtticStaggeredArrival(index: 3))
+                .frame(width: 80, height: 80)
+                .background(Color.white)
+                .atticDesign(design)
+        }
+    }
+
+    /// E-2: an arrival first displayed under Reduced must remain opaque
+    /// when motion is re-enabled without unmounting the existing view.
+    func testE2StaggeredArrivalStaysVisibleWhenReductionTurnsOff() throws {
+        let state = ArrivalState()
+        let host = NSHostingView(rootView: ArrivalSurface(state: state))
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 80, height: 80),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+        func centreRed() throws -> CGFloat {
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let colour = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+            return try XCTUnwrap(colour.usingColorSpace(.deviceRGB)).redComponent
+        }
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertLessThan(try centreRed(), 0.25, "Reduced arrives visible")
+        state.reduced = false
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertLessThan(try centreRed(), 0.25, "turning off Reduced cannot hide an existing button")
+    }
+
     private var savedTuning = AtticMotionTuning.current
     private var savedStyle = AtticReducedMotionStyle.current
 
