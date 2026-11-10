@@ -9,6 +9,8 @@ enum AgentBackend: String, Codable, CaseIterable, Sendable {
     case codex
 
     var title: String { self == .claude ? "Claude Code" : "Codex" }
+    /// The chat's agent menu says just the name.
+    var shortTitle: String { self == .claude ? "Claude" : "Codex" }
     var loginCommand: String { self == .claude ? "claude auth login" : "codex login" }
 }
 

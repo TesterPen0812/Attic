@@ -175,10 +175,89 @@ enum AgentRunError: LocalizedError {
     }
 }
 
+/// One chat: its thread, the CLI sessions that can continue it, and when it
+/// last had a message. The current chat lives in the journal file; the others
+/// in the history folder beside it, one file each.
 private struct AgentRunArchive: Codable {
+    var id = UUID()
+    var updated: Date? = nil
     var entries: [AgentThreadEntry] = []
     var sessions: [String: String] = [:]
     var activeRun: UUID? = nil
+
+    init() {}
+
+    // Journals written before history had no id or date.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        updated = try values.decodeIfPresent(Date.self, forKey: .updated)
+        entries = try values.decodeIfPresent([AgentThreadEntry].self, forKey: .entries) ?? []
+        sessions = try values.decodeIfPresent([String: String].self, forKey: .sessions) ?? [:]
+        activeRun = try values.decodeIfPresent(UUID.self, forKey: .activeRun)
+    }
+
+    var hasMessage: Bool { entries.contains { $0.role == "user" } }
+
+    var summary: AgentChatSummary {
+        let first = entries.first { $0.role == "user" }?.text ?? ""
+        let line = first.split(whereSeparator: \.isNewline).first.map(String.init) ?? first
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let title = trimmed.count > 60 ? String(trimmed.prefix(59)) + "…" : trimmed
+        return AgentChatSummary(id: id, title: title, updated: updated ?? .distantPast)
+    }
+}
+
+/// The chats that are not the current one: `<id>.json` each, and `index.json`
+/// listing their titles and days so the list never reads every thread.
+private struct AgentChatHistoryStore {
+    let directory: URL
+    private var indexURL: URL { directory.appendingPathComponent("index.json") }
+
+    func list() -> [AgentChatSummary] {
+        if let data = try? Data(contentsOf: indexURL),
+           let index = try? JSONDecoder().decode([AgentChatSummary].self, from: data) {
+            return index
+        }
+        // A missing or damaged index is rebuilt from the chats themselves.
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        let rebuilt = files.filter { $0.pathExtension == "json" && $0 != indexURL }
+            .compactMap { try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: $0)) }
+            .filter(\.hasMessage).map(\.summary)
+        if !rebuilt.isEmpty { _ = write(index: rebuilt) }
+        return rebuilt
+    }
+
+    func load(_ id: UUID) -> AgentRunArchive? {
+        try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: url(id)))
+    }
+
+    /// The chat first, then the index: a chat is never listed before it is saved.
+    func save(_ archive: AgentRunArchive) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(archive).write(to: url(archive.id), options: .atomic)
+        } catch { return false }
+        var index = list().filter { $0.id != archive.id }
+        index.append(archive.summary)
+        return write(index: index)
+    }
+
+    /// The index first: a chat that stays on disk is never listed twice.
+    func remove(_ id: UUID) {
+        _ = write(index: list().filter { $0.id != id })
+        try? FileManager.default.removeItem(at: url(id))
+    }
+
+    private func url(_ id: UUID) -> URL { directory.appendingPathComponent("\(id.uuidString).json") }
+
+    private func write(index: [AgentChatSummary]) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(index).write(to: indexURL, options: .atomic)
+            return true
+        } catch { return false }
+    }
 }
 
 /// Owned by the app coordinator, never by the chat view. All state, CLI
@@ -195,9 +274,15 @@ final class AgentRunEngine: AgentRunning {
     private let makeHelper: HelperFactory
     private let makeTools: ToolFactory
     private let undoChanges: (@MainActor (UUID) async throws -> Void)?
+    private let describeContext: @MainActor (AgentRequestContext) -> String
     private let journalURL: URL
+    private let history: AgentChatHistoryStore
 
     private var archive: AgentRunArchive
+    /// New chat while a run was still ending: it is kept and cleared once it ends.
+    private var forgetWhenEnded = false
+    /// The current chat was reopened from history and has not sent since.
+    private var reopened = false
     private var helper: (any AgentHelperTransmitting)?
     private var tools: (any AgentRunToolServing)?
     private var decoder: AgentCLIStreamDecoder?
@@ -223,15 +308,18 @@ final class AgentRunEngine: AgentRunning {
         helper: @escaping HelperFactory = { try AgentHelperClient() },
         tools: @escaping ToolFactory,
         journalURL: URL? = nil,
-        undo: (@MainActor (UUID) async throws -> Void)? = nil
+        undo: (@MainActor (UUID) async throws -> Void)? = nil,
+        describeContext: @escaping @MainActor (AgentRequestContext) -> String = AgentRunEngine.plainContext
     ) {
         self.selectedBackend = selectedBackend
         self.selectedChoice = selectedChoice
         makeHelper = helper
         makeTools = tools
         undoChanges = undo
+        self.describeContext = describeContext
         let resolvedJournalURL = journalURL ?? Self.defaultJournalURL
         self.journalURL = resolvedJournalURL
+        history = AgentChatHistoryStore(directory: Self.historyDirectory(beside: resolvedJournalURL))
         archive = (try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: resolvedJournalURL)))
             ?? AgentRunArchive()
         if archive.activeRun != nil {
@@ -243,11 +331,19 @@ final class AgentRunEngine: AgentRunning {
     }
 
     func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> {
+        send(text, context: .none, watching: watching)
+    }
+
+    /// The thread keeps the text; the CLI gets the context before it.
+    func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent> {
         guard !isRunning else { return singleEvent(.failed("The agent is already answering.")) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return singleEvent(.failed("Write a message first."))
         }
         self.watching = watching
+        let described = context.isEmpty ? "" : describeContext(context)
+        let prompt = described.isEmpty ? text : described + "\n\n" + text
+        archive.updated = Date()
         archive.entries.append(AgentThreadEntry(id: UUID(), role: "user", text: text))
         let reply = AgentThreadEntry(id: UUID(), role: "assistant", text: "")
         archive.entries.append(reply)
@@ -267,7 +363,9 @@ final class AgentRunEngine: AgentRunning {
             endRun(.failed("The agent thread could not be saved."))
             return stream
         }
-        work = Task { [weak self] in await self?.run(text, id: runID) }
+        let wasReopened = reopened
+        reopened = false
+        work = Task { [weak self] in await self?.run(title: text, prompt: prompt, id: runID, reopened: wasReopened) }
         return stream
     }
 
@@ -317,13 +415,50 @@ final class AgentRunEngine: AgentRunning {
         AgentThreadSnapshot(entries: archive.entries, events: currentEvents, isRunning: isRunning)
     }
 
+    /// The current chat goes to history (once it has a message) and a new one
+    /// starts. A run still ending is kept until its receipt is saved.
     func forgetThread() {
-        guard !isRunning else { return }
+        guard !isRunning else {
+            forgetWhenEnded = true
+            return
+        }
+        guard keepCurrentInHistory() else { return }
         archive = AgentRunArchive()
         currentEvents = []
         activeReplyID = nil
-        archive.activeRun = nil
+        reopened = false
         _ = persist()
+    }
+
+    func chats() -> [AgentChatSummary] {
+        var all = history.list().filter { $0.id != archive.id }
+        if archive.hasMessage { all.append(archive.summary) }
+        return all.sorted { $0.updated > $1.updated }
+    }
+
+    /// The chosen chat becomes the current one; the current one goes to history.
+    /// Its sessions come with it, so the next message continues it.
+    func reopen(chat id: UUID) -> Bool {
+        guard !isRunning else { return false }
+        if id == archive.id { return true }
+        guard var chosen = history.load(id), keepCurrentInHistory() else { return false }
+        chosen.activeRun = nil
+        let previous = archive
+        archive = chosen
+        guard persist() else {
+            archive = previous
+            return false
+        }
+        history.remove(id)
+        currentEvents = []
+        activeReplyID = nil
+        reopened = true
+        return true
+    }
+
+    private func keepCurrentInHistory() -> Bool {
+        guard archive.hasMessage else { return true }
+        return history.save(archive)
     }
 
     /// Called on app termination. Closing the parent socket also causes the
@@ -333,7 +468,7 @@ final class AgentRunEngine: AgentRunning {
         else { shutdownTransport() }
     }
 
-    private func run(_ prompt: String, id runID: UUID) async {
+    private func run(title: String, prompt: String, id runID: UUID, reopened: Bool) async {
         do {
             guard currentRunID == runID else { return }
             let backend = selectedBackend()
@@ -341,13 +476,12 @@ final class AgentRunEngine: AgentRunning {
             // message and never touches a run already going.
             let choice = AgentModelCatalog.normalized(selectedChoice(backend), for: backend)
             if activeBackend != backend { shutdownTransport() }
-            var newProcess = false
             if tools == nil {
                 tools = makeTools()
             }
             guard let tools else { throw AgentRunError.toolServer("Attic's tools are unavailable.") }
             tools.setMode(mode)
-            let address = try await tools.open(title: prompt, watching: watching)
+            let address = try await tools.open(title: title, watching: watching)
             guard currentRunID == runID else { tools.close(); return }
             try Task.checkCancellation()
             approvalWatch = Task { [weak self] in
@@ -358,68 +492,100 @@ final class AgentRunEngine: AgentRunning {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                 }
             }
-            if helper == nil {
-                let client = try makeHelper()
-                helper = client // cancel() can now interrupt a helper still starting.
-                try await client.start()
-                guard currentRunID == runID else { client.stop(); return }
-                try Task.checkCancellation()
-                activeBackend = backend
-                decoder = AgentCLIStreamDecoder(
-                    backend: backend, instructions: Self.systemPrompt(),
-                    sessionID: archive.sessions[backend.rawValue],
-                    workingDirectory: FileManager.default.temporaryDirectory.path,
-                    choice: choice)
-                client.startBackend(backend.rawValue, instructions: Self.systemPrompt(),
-                                    mcpURL: address.url, mcpToken: address.token,
-                                    sessionID: archive.sessions[backend.rawValue],
-                                    model: choice.model, effort: choice.effort)
-                newProcess = true
-            }
-            guard let helper else { throw AgentRunError.toolServer("Agent helper not available.") }
-            if !newProcess, var decoder {
-                let transition = decoder.beginTurn(prompt)
-                self.decoder = decoder
-                transition.outbound.forEach(helper.writeLine)
-            }
-
-            for await frame in helper.events {
-                guard currentRunID == runID else { return }
-                try Task.checkCancellation()
-                switch frame.type {
-                case "started":
-                    if newProcess, var decoder {
-                        let transition = decoder.beginTurn(prompt)
-                        self.decoder = decoder
-                        transition.outbound.forEach(helper.writeLine)
-                        newProcess = false
-                    }
-                case "line":
-                    guard let line = frame.line, var decoder else { continue }
-                    let transition = decoder.accept(line)
-                    self.decoder = decoder
-                    if let session = transition.sessionID {
-                        archive.sessions[backend.rawValue] = session
-                        _ = persist()
-                    }
-                    transition.outbound.forEach(helper.writeLine)
-                    for event in transition.events { emit(event) }
-                    if let error = transition.failure {
-                        endRun(.failed(error))
-                        return
-                    }
-                    if transition.turnEnded {
-                        endRun(.finished)
-                        return
-                    }
-                case "failed":
-                    throw AgentRunError.toolServer(frame.message ?? "The agent helper failed.")
-                case "exited":
-                    throw AgentRunError.toolServer("The \(backend.title) process exited early.")
-                default: break
+            // A reopened chat with earlier messages but no session for this
+            // agent cannot be continued by it: say so, and start afresh.
+            let hadThread = archive.entries.filter { $0.role == "user" }.count > 1
+            var refusedResume = reopened && hadThread && archive.sessions[backend.rawValue] == nil
+            var mayRetry = true
+            attempts: while true {
+                let resuming = archive.sessions[backend.rawValue]
+                var confirmed = false
+                var newProcess = false
+                if helper == nil {
+                    let client = try makeHelper()
+                    helper = client // cancel() can now interrupt a helper still starting.
+                    try await client.start()
+                    guard currentRunID == runID else { client.stop(); return }
+                    try Task.checkCancellation()
+                    activeBackend = backend
+                    decoder = AgentCLIStreamDecoder(
+                        backend: backend, instructions: Self.systemPrompt(),
+                        sessionID: resuming,
+                        workingDirectory: FileManager.default.temporaryDirectory.path,
+                        choice: choice)
+                    client.startBackend(backend.rawValue, instructions: Self.systemPrompt(),
+                                        mcpURL: address.url, mcpToken: address.token,
+                                        sessionID: resuming,
+                                        model: choice.model, effort: choice.effort)
+                    newProcess = true
                 }
+                guard let helper else { throw AgentRunError.toolServer("Agent helper not available.") }
+                if !newProcess, var decoder {
+                    let transition = decoder.beginTurn(prompt)
+                    self.decoder = decoder
+                    transition.outbound.forEach(helper.writeLine)
+                }
+                /// The CLI refused the session it was asked to continue
+                /// before confirming any: drop it and start a new one once.
+                func retryFresh() -> Bool {
+                    guard resuming != nil, !confirmed, mayRetry else { return false }
+                    mayRetry = false
+                    refusedResume = true
+                    archive.sessions[backend.rawValue] = nil
+                    _ = persist()
+                    helper.stop()
+                    self.helper = nil
+                    decoder = nil
+                    return true
+                }
+
+                for await frame in helper.events {
+                    guard currentRunID == runID else { return }
+                    try Task.checkCancellation()
+                    switch frame.type {
+                    case "started":
+                        if newProcess, var decoder {
+                            let transition = decoder.beginTurn(prompt)
+                            self.decoder = decoder
+                            transition.outbound.forEach(helper.writeLine)
+                            newProcess = false
+                        }
+                    case "line":
+                        guard let line = frame.line, var decoder else { continue }
+                        let transition = decoder.accept(line)
+                        self.decoder = decoder
+                        if transition.failure != nil, retryFresh() { continue attempts }
+                        if let session = transition.sessionID {
+                            confirmed = true
+                            archive.sessions[backend.rawValue] = session
+                            _ = persist()
+                            if refusedResume {
+                                refusedResume = false
+                                emit(.notice(Self.freshSessionNotice(backend)))
+                            }
+                        }
+                        transition.outbound.forEach(helper.writeLine)
+                        for event in transition.events { emit(event) }
+                        if let error = transition.failure {
+                            endRun(.failed(error))
+                            return
+                        }
+                        if transition.turnEnded {
+                            endRun(.finished)
+                            return
+                        }
+                    case "failed":
+                        if retryFresh() { continue attempts }
+                        throw AgentRunError.toolServer(frame.message ?? "The agent helper failed.")
+                    case "exited":
+                        if retryFresh() { continue attempts }
+                        throw AgentRunError.toolServer("The \(backend.title) process exited early.")
+                    default: break
+                    }
+                }
+                if isRunning { throw AgentRunError.toolServer("The agent helper disconnected.") }
+                return
             }
-            if isRunning { throw AgentRunError.toolServer("The agent helper disconnected.") }
         } catch is CancellationError {
             // cancel() owns the visible terminal state and tears down the CLI.
             if currentRunID == runID { endRun(.failed("Agent request cancelled.")) }
@@ -428,6 +594,10 @@ final class AgentRunEngine: AgentRunning {
                 endRun(.failed(error.localizedDescription))
             }
         }
+    }
+
+    static func freshSessionNotice(_ backend: AgentBackend) -> String {
+        "\(backend.shortTitle) couldn’t continue this chat, so it started a new session."
     }
 
     /// Closing the bearer immediately rejects new calls. The already admitted
@@ -459,6 +629,10 @@ final class AgentRunEngine: AgentRunning {
         _ = persist()
         completeSubscribers()
         work = nil
+        if forgetWhenEnded {
+            forgetWhenEnded = false
+            forgetThread()
+        }
     }
 
     private func shutdownTransport() {
@@ -494,6 +668,9 @@ final class AgentRunEngine: AgentRunning {
             _ = persist()
         } else if case let .failed(message) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
+        } else if case let .notice(message) = event {
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "notice", text: message))
+            _ = persist()
         }
         for subscriber in subscribers.values { subscriber.yield(event) }
     }
@@ -529,6 +706,24 @@ final class AgentRunEngine: AgentRunning {
             try JSONEncoder().encode(archive).write(to: journalURL, options: .atomic)
             return true
         } catch { return false }
+    }
+
+    /// The saved chats sit beside the journal: `AtticAgentThread.json` keeps
+    /// the others in `AtticAgentThread Chats/`.
+    static func historyDirectory(beside journal: URL) -> URL {
+        journal.deletingLastPathComponent()
+            .appendingPathComponent(journal.deletingPathExtension().lastPathComponent + " Chats", isDirectory: true)
+    }
+
+    /// Without an action layer: the page and items by name only.
+    static func plainContext(_ context: AgentRequestContext) -> String {
+        var lines: [String] = []
+        if let page = context.page { lines.append("The person is on the \(page.rawValue.capitalized) page.") }
+        for item in [context.pageItem].compactMap({ $0 }) + context.items {
+            lines.append("\(item.page.rawValue.capitalized) item: \(item.title ?? item.itemID?.uuidString ?? "")")
+        }
+        for file in context.files { lines.append("File \(file.name):\n\(file.text)") }
+        return lines.joined(separator: "\n")
     }
 
     static var defaultJournalURL: URL {

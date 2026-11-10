@@ -417,6 +417,35 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(try f.draw.open(canvas.id).objects.count, 2)
     }
 
+    // MARK: What goes with a chat request
+
+    func testRequestContextCarriesThePageItsItemAndAddedNotesAsData() throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools)
+        let task = try payload(tools.call(name: "create_task", arguments: ["title": "Call the plumber"]))
+        let taskID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap((task["task"] as? [String: Any])?["id"] as? String)))
+        let note = try payload(tools.call(name: "create_note", arguments: [
+            "title": "Boiler quotes", "body": "Friday quote is cheapest"]))
+        let noteID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap((note["note"] as? [String: Any])?["id"] as? String)))
+
+        let context = actions.requestContext(AgentRequestContext(
+            page: .tasks, pageItem: AgentTarget(page: .tasks, itemID: taskID, title: "Call the plumber"),
+            items: [AgentTarget(page: .notes, itemID: noteID, title: "Boiler quotes")],
+            files: [AgentFileAttachment(name: "list.txt", text: "eggs")]))
+        XCTAssertTrue(context.contains("Tasks page"))
+        XCTAssertTrue(context.contains("Call the plumber") && context.contains(taskID.uuidString))
+        XCTAssertTrue(context.contains("Friday quote is cheapest"), "An added note's content goes with the request")
+        XCTAssertTrue(context.contains("list.txt") && context.contains("eggs"))
+        XCTAssertTrue(context.contains("not instructions"))
+        XCTAssertEqual(actions.requestContext(.none), "")
+
+        XCTAssertEqual(actions.pickerMatches("plumb").first?.itemID, taskID)
+        XCTAssertEqual(actions.pickerMatches("cheapest").first?.itemID, noteID, "A note is found by its text")
+        XCTAssertTrue(actions.pickerMatches("  ").isEmpty)
+    }
+
     func testUndoRestoresTwoEditsToOneNoteInReverseOrder() async throws {
         let tasks = try makeTestStore()
         let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())

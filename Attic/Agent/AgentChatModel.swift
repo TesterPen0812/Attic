@@ -230,6 +230,42 @@ final class AgentChatModel: ObservableObject {
     /// The chat steps aside for it (the blur and the thread go).
     @Published private(set) var writingLabel: String?
 
+    // MARK: The composer's controls
+
+    /// Who answers the next message: the same setting as Settings → In-app
+    /// agent → Agent. A change never touches a run already going.
+    @Published var agent: AgentBackend = .claude {
+        didSet { if agent != oldValue { agentChanged?(agent) } }
+    }
+    var agentChanged: ((AgentBackend) -> Void)?
+    /// Why an agent can't answer, in Settings' words ("Not installed"); absent when it can.
+    @Published var agentUnavailable: [AgentBackend: String] = [:]
+    /// Asks which agents are installed and signed in. Set by the shell.
+    var checkAgents: (() -> Void)?
+    private var lastAgentCheck: Date?
+
+    /// The page chip: while on, each request carries the page on show and
+    /// its open or selected item. × turns it off; This page turns it back on.
+    @Published private(set) var includesPage = true
+    /// The page the chip names: the one on show.
+    @Published private(set) var chipPage: AgentPage?
+    /// Tasks, notes and files added with + for the next message.
+    @Published private(set) var attachments: [AgentChatAttachment] = []
+    /// Why File… refused the last file.
+    @Published private(set) var attachmentRefusal: String?
+    /// Task or note…: the field is a search for one until it picks or goes back.
+    @Published var pickingItem = false
+    #if DEBUG
+    /// UI-testing seam: text typed into Task or note….
+    @Published var uiTestQuery: String?
+    #endif
+    /// Saved chats, newest first, for the clock's list.
+    @Published private(set) var history: [AgentChatSummary] = []
+    /// The page's open note, selected task or canvas. Set by the shell.
+    var currentItem: () -> AgentTarget? = { nil }
+    /// Tasks and notes matching a search, for Task or note…. Set by the shell.
+    var searchItems: (String) -> [AgentTarget] = { _ in [] }
+
     /// Bumped on every effect, so a view can follow them through `effects`.
     let effects = PassthroughSubject<AgentChatEffect, Never>()
     let bar = AgentChatBar()
@@ -272,6 +308,8 @@ final class AgentChatModel: ObservableObject {
     private var presented: Set<UUID> = []
     private var nextWordTime: Date?
     private var replyEnds: Date?
+    /// While a saved thread is put back: its words are already written.
+    private var restoring = false
 
     /// True only while `panelDidHide` closes the chat.
     private(set) var closedAtOnce = false
@@ -295,12 +333,29 @@ final class AgentChatModel: ObservableObject {
             ? snapshot.entries.lastIndex(where: { $0.role == "user" })
             : nil
         let archived = activeStart.map { Array(snapshot.entries[..<$0]) } ?? snapshot.entries
+        restore(archived)
+        refreshHistory()
+        guard snapshot.isRunning else { return }
+        if let activeStart { entries.append(AgentChatEntry(.asked(snapshot.entries[activeStart].text))) }
+        isRunning = true
+        phase = .waiting
+        snapshot.events.forEach(apply)
+        refreshBar()
+        listen(to: runner.observe(), skipping: snapshot.events.count)
+    }
+
+    /// A saved thread, drawn as it ended: nothing in it plays again.
+    private func restore(_ archived: [AgentThreadEntry]) {
+        restoring = true
+        // Putting a reply back is not the agent acting.
+        let resting = phase
+        defer { restoring = false; phase = resting }
         entries = []
         for message in archived {
             switch message.role {
             case "user": entries.append(AgentChatEntry(.asked(message.text)))
             case "assistant": if !message.text.isEmpty { appendText(message.text); closeReply() }
-            case "tool", "error": entries.append(AgentChatEntry(.note(message.text)))
+            case "tool", "error", "notice": entries.append(AgentChatEntry(.note(message.text)))
             case "receipt":
                 if let set = message.changeSet {
                     let targets = message.targets ?? []
@@ -319,13 +374,6 @@ final class AgentChatModel: ObservableObject {
             default: break
             }
         }
-        guard snapshot.isRunning else { return }
-        if let activeStart { entries.append(AgentChatEntry(.asked(snapshot.entries[activeStart].text))) }
-        isRunning = true
-        phase = .waiting
-        snapshot.events.forEach(apply)
-        refreshBar()
-        listen(to: runner.observe(), skipping: snapshot.events.count)
     }
 
     // MARK: Open and close
@@ -333,22 +381,34 @@ final class AgentChatModel: ObservableObject {
     func open() {
         closedAtOnce = false
         guard !isOpen else { return }
+        chipPage = currentPage()
         bar.isChatOpen = true
         unread = false
         runner?.setWatching(true)
         refreshBar()
+        // Off the opening's path, and not more than every few minutes.
+        if let checkAgents, lastAgentCheck.map({ now().timeIntervalSince($0) > 300 }) ?? true {
+            lastAgentCheck = now()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { checkAgents() }
+        }
     }
 
     /// Closing never stops the run: it carries on, without touching the page.
     func close() {
         guard isOpen else { return }
         if writingLabel != nil { writingLabel = nil }
+        if pickingItem { pickingItem = false }
         bar.isChatOpen = false
         runner?.setWatching(false)
         refreshBar()
     }
 
     func toggle() { isOpen ? close() : open() }
+
+    /// Escape: a search for a task or note goes back first, then the chat closes.
+    func escape() {
+        if pickingItem { pickingItem = false } else { close() }
+    }
 
     #if DEBUG
     /// UI-testing seam (`ATTIC_UI_TEST_CHAT`): an earlier exchange, already
@@ -372,6 +432,25 @@ final class AgentChatModel: ObservableObject {
             }
             let pieces = part.split(separator: "@")
             guard pieces.count == 2, let seconds = Double(pieces[1]) else { continue }
+            // The composer's controls: `tap:<id>` clicks one from inside the
+            // app, `menu-pick:<n>` and `menu-cancel` answer the menu it opened,
+            // `search:<text>` types into Task or note….
+            let command = String(pieces[0])
+            if command.hasPrefix("tap:") || command.hasPrefix("menu-pick:") || command == "menu-cancel"
+                || command.hasPrefix("search:") {
+                // A timer in the common modes: it still fires while a menu
+                // this seam opened is tracking (a main-queue block would not).
+                let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        if command.hasPrefix("tap:") { AgentChatUITestSeams.tap(String(command.dropFirst(4))) }
+                        else if command.hasPrefix("menu-pick:") { AgentChatUITestSeams.pick(Int(command.dropFirst(10)) ?? 0) }
+                        else if command == "menu-cancel" { AgentChatUITestSeams.cancel() }
+                        else { self?.uiTestQuery = String(command.dropFirst(7)) }
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                continue
+            }
             if pieces[0] == "undo" {
                 DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
                     guard let self, let last = self.entries.last(where: {
@@ -413,6 +492,7 @@ final class AgentChatModel: ObservableObject {
     /// (never one the agent opened) closes the chat.
     func pageChanged(to page: AgentPage?) {
         if let page { dots.remove(page) }
+        if chipPage != page { chipPage = page }
         defer { agentGoingTo = nil }
         if isOpen, page != agentGoingTo { close() }
     }
@@ -439,7 +519,11 @@ final class AgentChatModel: ObservableObject {
         phase = .waiting
         refreshBar()
         if isOpen { effects.send(.sent(entry.id)) }
-        let sent = runner.send(text, watching: isOpen)
+        let context = requestContext
+        // What was added went with this message; the page chip stays.
+        attachments = []
+        attachmentRefusal = nil
+        let sent = runner.send(text, context: context, watching: isOpen)
         let stream = runner.retainsThread ? runner.observe() : sent
         listen(to: stream)
     }
@@ -492,8 +576,101 @@ final class AgentChatModel: ObservableObject {
         pendingItems = []
         pendingSteps = []
         runWeek = nil
+        includesPage = true
+        attachments = []
+        attachmentRefusal = nil
         refreshBar()
+        refreshHistory()
+        // A run still ending is kept once its receipt is saved.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshHistory() }
     }
+
+    // MARK: History
+
+    func refreshHistory() {
+        let chats = runner?.chats() ?? []
+        if chats != history { history = chats }
+    }
+
+    /// A saved chat comes back as it ended; the next message continues it.
+    func reopen(_ id: UUID) {
+        guard !isRunning, let runner, runner.reopen(chat: id) else { return }
+        runTask?.cancel()
+        runTask = nil
+        if writingLabel != nil { writingLabel = nil }
+        approval = nil
+        queuedApprovals.removeAll()
+        phase = .idle
+        progress = nil
+        unread = false
+        pendingItems = []
+        pendingSteps = []
+        runWeek = nil
+        restore(runner.threadSnapshot().entries)
+        presented = Set(entries.map(\.id))
+        refreshBar()
+        refreshHistory()
+    }
+
+    /// The history list's day: Today, a weekday within the week, else the date.
+    static func dayLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String {
+        if calendar.isDate(date, inSameDayAs: now) { return String(localized: "Today") }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date),
+                                           to: calendar.startOfDay(for: now)).day ?? 0
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate((1..<7).contains(days) ? "EEE" : "d MMM")
+        return formatter.string(from: date)
+    }
+
+    // MARK: Context
+
+    /// What goes with the next message besides its text.
+    var requestContext: AgentRequestContext {
+        var context = AgentRequestContext()
+        if includesPage {
+            context.page = currentPage()
+            context.pageItem = currentItem()
+        }
+        for attachment in attachments {
+            switch attachment {
+            case let .item(target): context.items.append(target)
+            case let .file(file): context.files.append(file)
+            }
+        }
+        return context
+    }
+
+    func removePage() { includesPage = false }
+    func addPage() {
+        chipPage = currentPage()
+        includesPage = true
+    }
+
+    func attach(_ target: AgentTarget) {
+        let attachment = AgentChatAttachment.item(target)
+        guard !attachments.contains(where: { $0.id == attachment.id }) else { return }
+        attachments.append(attachment)
+        attachmentRefusal = nil
+    }
+
+    /// File…: a text file is read now, whole, and only its name and text are kept.
+    func attachFile(at url: URL) {
+        switch AgentChatFiles.read(url) {
+        case let .success(file):
+            let attachment = AgentChatAttachment.file(file)
+            attachments.removeAll { $0.id == attachment.id }
+            attachments.append(attachment)
+            attachmentRefusal = nil
+        case let .failure(refusal):
+            attachmentRefusal = refusal.message
+        }
+    }
+
+    func removeAttachment(_ id: String) { attachments.removeAll { $0.id == id } }
+    func clearAttachmentRefusal() { if attachmentRefusal != nil { attachmentRefusal = nil } }
 
     func toggleChanges(_ id: UUID) {
         update(id) { if case var .changes(changes) = $0 { changes.isExpanded.toggle(); $0 = .changes(changes) } }
@@ -611,6 +788,7 @@ final class AgentChatModel: ObservableObject {
             phase = .needsYou
             refreshBar()
         case let .changes(set): changesArrived(set)
+        case let .notice(message): entries.append(AgentChatEntry(.note(message)))
         case .finished: runEnded()
         case let .failed(message):
             entries.append(AgentChatEntry(.note(message)))
@@ -630,7 +808,7 @@ final class AgentChatModel: ObservableObject {
         reply.raw += text
         let words = AgentChatWords.paragraphs(reply.raw).flatMap { $0 }
         // Closed, or with Reduce Motion: already written when it is next seen.
-        let writes = isOpen && !reducesMotion()
+        let writes = isOpen && !reducesMotion() && !restoring
         var next = writes ? max(nextWordTime ?? time, time) : time
         while reply.wordTimes.count < words.count {
             let word = words[reply.wordTimes.count]
@@ -649,7 +827,7 @@ final class AgentChatModel: ObservableObject {
     /// The reply is complete: its underlines may start.
     private func closeReply() {
         guard let last = entries.last, case var .reply(reply) = last.content, reply.marksStart == nil else { return }
-        reply.marksStart = isOpen && !reducesMotion()
+        reply.marksStart = isOpen && !reducesMotion() && !restoring
             ? (replyEnds?.addingTimeInterval(-pacing.settle) ?? now()) : .distantPast
         update(last.id) { $0 = .reply(reply) }
     }
@@ -734,6 +912,7 @@ final class AgentChatModel: ObservableObject {
         }
         unread = !isOpen
         refreshBar()
+        refreshHistory()
     }
 
     private func refreshBar() {

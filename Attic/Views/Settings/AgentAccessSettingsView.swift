@@ -137,16 +137,7 @@ struct AgentAccessSettingsView: View {
     private func backendLabel(_ backend: AgentBackend) -> String {
         guard didCheckBackends else { return backend.title }
         guard let status = backendStatuses?[backend] else { return "\(backend.title) · Unavailable" }
-        let label: String
-        switch status {
-        case "ready": label = "Ready"
-        case "missing": label = "Not installed"
-        case "signedOut": label = "Sign in"
-        case "update": label = "Update needed"
-        case "timedOut": label = "Check timed out"
-        default: label = "Unavailable"
-        }
-        return "\(backend.title) · \(label)"
+        return "\(backend.title) · \(AgentBackendDiscovery.reason(status) ?? "Ready")"
     }
 
     private var endpoint: String {

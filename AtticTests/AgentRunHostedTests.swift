@@ -99,6 +99,99 @@ final class AgentRunHostedTests: XCTestCase {
         reopenedRunner.cancel()
     }
 
+    // MARK: Chat history and context
+
+    private static let done = #"{"type":"result","is_error":false}"#
+    private static func session(_ id: String) -> String { #"{"type":"system","subtype":"init","session_id":""# + id + #""}"# }
+    private static func text(_ text: String) -> String {
+        #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""# + text + #""}}}"#
+    }
+
+    func testChatsAreKeptListedReopenedAndSurviveRelaunch() async {
+        let url = journalURL()
+        var helpers: [FakeRunHelper] = []
+        let make = { () -> FakeRunHelper in let helper = FakeRunHelper(); helpers.append(helper); return helper }
+        let runner = AgentRunEngine(helper: { make() }, tools: { FakeRunTools() }, journalURL: url)
+        XCTAssertTrue(runner.chats().isEmpty)
+        _ = runner.send("Boiler quotes", watching: true)
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+        helpers[0].emitLine(Self.session("claude-boiler"))
+        helpers[0].emitLine(Self.text("Three quotes."))
+        helpers[0].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        runner.forgetThread()
+        XCTAssertTrue(runner.threadSnapshot().entries.isEmpty, "New chat starts empty")
+        XCTAssertEqual(runner.chats().map(\.title), ["Boiler quotes"], "and the old one is kept")
+
+        _ = runner.send("Plan the move", watching: true)
+        await wait { helpers.count == 2 && helpers[1].inputs.count == 1 }
+        XCTAssertEqual(helpers[1].startedSession, "first", "A new chat starts a new session")
+        helpers[1].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertEqual(runner.chats().map(\.title), ["Plan the move", "Boiler quotes"], "Newest first, current included")
+        runner.shutdown()
+
+        let relaunched = AgentRunEngine(helper: { make() }, tools: { FakeRunTools() }, journalURL: url)
+        let chats = relaunched.chats()
+        XCTAssertEqual(chats.map(\.title), ["Plan the move", "Boiler quotes"], "History survives relaunch")
+        XCTAssertTrue(relaunched.reopen(chat: chats[1].id))
+        XCTAssertEqual(relaunched.threadSnapshot().entries.first?.text, "Boiler quotes")
+        XCTAssertEqual(relaunched.threadSnapshot().entries.first { $0.role == "assistant" }?.text, "Three quotes.")
+        XCTAssertEqual(Set(relaunched.chats().map(\.id)), Set(chats.map(\.id)), "Reopening moves a chat, never copies it")
+        _ = relaunched.send("And the cheapest?", watching: true)
+        await wait { helpers.count == 3 && helpers[2].startedSession != nil }
+        XCTAssertEqual(helpers[2].startedSession, "claude-boiler", "A reopened chat continues its session")
+        XCTAssertEqual(relaunched.chats().first?.title, "Boiler quotes")
+        relaunched.cancel()
+    }
+
+    func testAChatTheCLICannotContinueStartsAFreshSessionAndSaysSo() async {
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: {
+            let helper = FakeRunHelper()
+            helper.exitWhenResuming = true
+            helpers.append(helper)
+            return helper
+        }, tools: { FakeRunTools() }, journalURL: journalURL())
+        _ = runner.send("First", watching: true)
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+        helpers[0].emitLine(Self.session("gone-session"))
+        helpers[0].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+
+        _ = runner.send("Second", watching: true)
+        await wait { helpers.count == 3 && helpers[2].inputs.count == 1 }
+        XCTAssertEqual(helpers[1].startedSession, "gone-session")
+        XCTAssertTrue(helpers[1].stopped)
+        XCTAssertEqual(helpers[2].startedSession, "first", "The retry starts a new session")
+        helpers[2].emitLine(Self.session("fresh"))
+        helpers[2].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let entries = runner.threadSnapshot().entries
+        XCTAssertTrue(entries.contains { $0.role == "notice" && $0.text == AgentRunEngine.freshSessionNotice(.claude) },
+                      "The thread says the old session could not be continued")
+        XCTAssertFalse(entries.contains { $0.role == "error" })
+    }
+
+    func testTheRequestCarriesItsContextButTheThreadKeepsOnlyTheMessage() async {
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: { let helper = FakeRunHelper(); helpers.append(helper); return helper },
+                                    tools: { FakeRunTools() }, journalURL: journalURL(),
+                                    describeContext: { "PAGE=\($0.page?.rawValue ?? "none")" })
+        _ = runner.send("Tidy these", context: AgentRequestContext(page: .tasks), watching: true)
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+        XCTAssertTrue(helpers[0].inputs[0].contains("PAGE=tasks"), "The page goes with the request")
+        XCTAssertTrue(helpers[0].inputs[0].contains("Tidy these"))
+        XCTAssertEqual(runner.threadSnapshot().entries.last { $0.role == "user" }?.text, "Tidy these")
+        helpers[0].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+
+        _ = runner.send("No page", context: .none, watching: true)
+        await wait { helpers.count == 2 && helpers[1].inputs.count == 1 }
+        XCTAssertFalse(helpers[1].inputs[0].contains("PAGE="), "No chip, no page context")
+        runner.cancel()
+    }
+
     func testEachMessageStartsWithTheModelChosenBeforeIt() async {
         var choice = AgentRunChoice(model: "opus", effort: "high")
         var helpers: [FakeRunHelper] = []
@@ -413,6 +506,9 @@ private final class FakeRunHelper: AgentHelperTransmitting {
     var stopped = false
     var onInput: ((String, FakeRunHelper) -> Void)?
     var deferStart = false
+    /// Exits at once when asked to continue a session, as a CLI does whose
+    /// session is gone.
+    var exitWhenResuming = false
     var startContinuation: CheckedContinuation<Void, Error>?
 
     init() { (events, continuation) = AsyncStream.makeStream(of: AgentHelperFrame.self) }
@@ -431,7 +527,8 @@ private final class FakeRunHelper: AgentHelperTransmitting {
                       mcpToken: String, sessionID: String?, model: String?, effort: String?) {
         startedSession = sessionID ?? "first"
         startedChoice = model.map { AgentRunChoice(model: $0, effort: effort) }
-        if let startFailure { continuation.yield(AgentHelperFrame(["type": "failed", "message": startFailure])) }
+        if exitWhenResuming, sessionID != nil { continuation.yield(AgentHelperFrame(["type": "exited"])) }
+        else if let startFailure { continuation.yield(AgentHelperFrame(["type": "failed", "message": startFailure])) }
         else { continuation.yield(AgentHelperFrame(["type": "started", "backend": backend])) }
     }
     func writeLine(_ line: String) {
