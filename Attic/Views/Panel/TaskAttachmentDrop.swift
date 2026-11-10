@@ -42,16 +42,21 @@ enum TaskDropContent: Equatable {
     /// A task drag first, then a card; then files: a listed type, or any
     /// other data that is not text, a link or an Attic marker. Folders are
     /// not data, so a promised folder is never offered.
-    static func classify(_ conforms: ([UTType]) -> Bool) -> TaskDropContent {
+    static func classify(_ conforms: ([UTType]) -> Bool, nativeAttachmentMarker: Bool = false) -> TaskDropContent {
         if conforms([TaskDragPayload.internalTaskType]) { return .task }
         if conforms([attachmentCardType]) { return .attachmentCard }
+        // The native bridge can leave a tile as a file promise, or with an
+        // opaque provider type. Recover only while its private marker lives
+        // on the drag pasteboard; text-only selections and links stay out.
+        if nativeAttachmentMarker, conforms(fileTypes) || !conforms(nonFileTypes) { return .attachmentCard }
         if conforms(fileTypes) { return .files }
         if conforms([.data]), !conforms(nonFileTypes), !conforms(internalMarkerTypes) { return .files }
         return .unsupported
     }
 
     static func classify(_ info: DropInfo) -> TaskDropContent {
-        classify { info.hasItemsConforming(to: $0) }
+        let marker = NSPasteboard(name: .drag).availableType(from: [NSPasteboard.PasteboardType(attachmentCardType.identifier)]) != nil
+        return classify({ info.hasItemsConforming(to: $0) }, nativeAttachmentMarker: marker)
     }
 
     /// The same rule for a single provider.
@@ -63,10 +68,33 @@ enum TaskDropContent: Equatable {
     /// the rule above accepted.
     static func providers(for content: TaskDropContent, in info: DropInfo) -> [NSItemProvider] {
         switch content {
-        case .files: info.itemProviders(for: dropTypes).filter { classify($0) == .files }
-        case .attachmentCard: info.itemProviders(for: [attachmentCardType])
-        case .task, .unsupported: []
+        case .files: return info.itemProviders(for: dropTypes).filter { classify($0) == .files }
+        case .attachmentCard:
+            return attachmentCardProviders(info.itemProviders(for: dropTypes),
+                                           nativePasteboard: NSPasteboard(name: .drag))
+        case .task, .unsupported: return []
         }
+    }
+
+    /// Capture the marker while performDrop still owns the native session.
+    /// SwiftUI may hand back an empty provider (or no provider) even though
+    /// the drag pasteboard carries the card's private type. The captured
+    /// provider survives the async store copy after that pasteboard clears.
+    static func attachmentCardProviders(_ providers: [NSItemProvider], nativePasteboard: NSPasteboard) -> [NSItemProvider] {
+        guard providers.count <= 1,
+              !providers.contains(where: { $0.hasItemConformingToTypeIdentifier(attachmentCardType.identifier) }),
+              providers.isEmpty || classify(providers[0]) == .files ||
+                  !nonFileTypes.contains(where: { providers[0].hasItemConformingToTypeIdentifier($0.identifier) }),
+              let marker = nativePasteboard.data(forType: NSPasteboard.PasteboardType(attachmentCardType.identifier)) else {
+            return providers
+        }
+        let recovered = NSItemProvider()
+        recovered.registerDataRepresentation(forTypeIdentifier: attachmentCardType.identifier, visibility: .ownProcess) {
+            completion in
+            completion(marker, nil)
+            return nil
+        }
+        return [recovered]
     }
 }
 
@@ -238,22 +266,36 @@ enum TaskProviderLoadLimit {
 /// reservation; an unowned, stale, or self-dropped tile never imports a file.
 @MainActor
 enum TaskDroppedAttachmentCards {
-    static func sources(from providers: [NSItemProvider], in store: TaskStore) async throws -> [TaskAttachmentSource] {
+    static func sources(from providers: [NSItemProvider], in store: TaskStore,
+                        nativePasteboard: NSPasteboard = NSPasteboard(name: .drag)) async throws -> [TaskAttachmentSource] {
         guard !providers.isEmpty, providers.count <= AttachmentLimits.maxAttachmentsPerNote else {
             throw TaskDropError.unsupported
         }
         var sources: [TaskAttachmentSource] = []
         for provider in providers {
-            guard provider.hasItemConformingToTypeIdentifier(TaskDropContent.attachmentCardType.identifier) else {
-                throw TaskDropError.unsupported
-            }
-            let data = try await TaskProviderLoad<Data>.run { load in
-                provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
-                    guard let data else {
-                        load.finish(.failure(error ?? TaskDropError.attachmentUnavailable))
-                        return
+            let data: Data
+            if provider.registeredTypeIdentifiers.isEmpty {
+                // The native drag bridge can produce an empty provider while
+                // keeping the private marker on its drag pasteboard. Read it
+                // before the drag ends; only a single unambiguous empty
+                // provider may recover this way.
+                guard providers.count == 1, let marker = nativePasteboard.data(forType:
+                    NSPasteboard.PasteboardType(TaskDropContent.attachmentCardType.identifier)) else {
+                    throw TaskDropError.attachmentUnavailable
+                }
+                data = marker
+            } else {
+                guard provider.hasItemConformingToTypeIdentifier(TaskDropContent.attachmentCardType.identifier) else {
+                    throw TaskDropError.unsupported
+                }
+                data = try await TaskProviderLoad<Data>.run { load in
+                    provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                        guard let data else {
+                            load.finish(.failure(error ?? TaskDropError.attachmentUnavailable))
+                            return
+                        }
+                        load.finish(.success(data))
                     }
-                    load.finish(.success(data))
                 }
             }
             guard let raw = String(data: data, encoding: .utf8), let id = UUID(uuidString: raw),
@@ -282,7 +324,25 @@ enum TaskDroppedFiles {
         do {
             for (index, provider) in providers.enumerated() {
                 if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    staging.urls.append(try await fileURL(from: provider))
+                    do {
+                        let url = try await fileURL(from: provider)
+                        guard FileManager.default.fileExists(atPath: url.path) else {
+                            throw TaskDropError.unsupported
+                        }
+                        staging.urls.append(url)
+                    } catch {
+                        // A cancelled or stalled load is terminal; only a
+                        // failed URL representation gets a second chance.
+                        if error is CancellationError { throw error }
+                        if let failure = error as? TaskDropError, case .stalled = failure { throw error }
+                        // Native file promises can advertise a file URL
+                        // without supplying a usable URL. Use the actual
+                        // file representation they also offer.
+                        guard let type = fileContentType(of: provider) else { throw error }
+                        let destination = try staging.makeOwnedDirectory()
+                            .appendingPathComponent("\(index)", isDirectory: true)
+                        staging.urls.append(try await copyFile(of: provider, type: type, into: destination))
+                    }
                 } else if let type = fileContentType(of: provider) {
                     let destination = try staging.makeOwnedDirectory()
                         .appendingPathComponent("\(index)", isDirectory: true)
