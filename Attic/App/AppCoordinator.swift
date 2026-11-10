@@ -741,6 +741,9 @@ final class AppCoordinator: ObservableObject {
                                style: DrawStyle(corners: .rounded), content: .shape(.rectangle)),
                     DrawObject(frame: DrawFrame(x: 255, y: 172, width: 80, height: 20), zIndex: 2,
                                content: .text("Launch day")),
+                    // Around it, so the page's fit leaves room below for the sketch.
+                    DrawObject(frame: DrawFrame(x: 120, y: 70, width: 70, height: 20), zIndex: 3, content: .text("Brief")),
+                    DrawObject(frame: DrawFrame(x: 330, y: 420, width: 60, height: 20), zIndex: 4, content: .text("Retro")),
                 ]), on: canvas.id)
             }
             if parts.contains("motion:reduced") { settings.animations = .reduced }

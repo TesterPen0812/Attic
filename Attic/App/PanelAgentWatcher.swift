@@ -167,16 +167,24 @@ final class PanelAgentWatcher {
             await pause(pace.hold)
             return
         }
-        // Once the board is laid out on the canvas.
-        await pause(pace.frame * 2)
-        guard watching, let board = draw.board as? NSView, board.window != nil else { return }
+        // Once the board is laid out on the canvas (a page just switched in,
+        // or a canvas just opened, takes a few frames).
+        var board: NSView?
+        for _ in 0..<30 {
+            await frameWait()
+            guard watching else { return }
+            if let view = draw.board as? NSView, view.window != nil, view.bounds.height > 0 { board = view; break }
+        }
+        guard let board else { return }
         let palette = DrawPalette(dark: board.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         let shown = objects.compactMap(draw.object).sorted(by: DrawPageModel.order)
         let replay = AgentSketchReplay()
         let viewport = draw.viewport
         var toWindow = CGAffineTransform(scaleX: viewport.zoom, y: viewport.zoom)
             .concatenating(CGAffineTransform(translationX: viewport.x, y: viewport.y))
-        // The board's own space to the window's (flipped or not).
+        // Board space runs down from the view's top (`DrawBoardView.boardPoint`);
+        // then the view's own space to the window's (flipped or not).
+        toWindow = toWindow.concatenating(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: board.bounds.height))
         let origin = board.convert(CGPoint.zero, to: nil)
         let down = board.convert(CGPoint(x: 0, y: 1), to: nil).y - origin.y
         toWindow = toWindow.concatenating(CGAffineTransform(a: 1, b: 0, c: 0, d: down, tx: origin.x, ty: origin.y))
