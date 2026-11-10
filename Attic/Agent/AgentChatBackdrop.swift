@@ -4,11 +4,40 @@ import SwiftUI
 
 /// The panel blurring under the chat (the design's `blur(10px) saturate(1.3)`
 /// over a faint surface tint), opening from the ✦ as a circle. Core Animation
-/// draws the blur and runs the wipe, so opening costs the main thread nothing
-/// per frame, and it exists only while the chat is on screen. It also catches
-/// Escape, wherever the keyboard is.
-struct AgentChatBackdrop: NSViewRepresentable {
+/// draws the blur; the wipe's progress is SwiftUI's, on the wipe's own curve,
+/// so the blur, the colour over it, the thread and the composer all move on
+/// one clock. (Run by Core Animation alone, the blur kept going through the
+/// main thread's first frames while everything else waited, and the colour
+/// arrived visibly later: screen 9, item 21.) It exists only while the chat
+/// is on screen. It also catches Escape, wherever the keyboard is.
+struct AgentChatBackdrop: View, Animatable {
     var shown: Bool
+    var reveal: CGFloat
+    var origin: CGPoint
+    var tint: NSColor
+    var fades: Bool
+    var solid: Bool
+    var onEscape: @MainActor () -> Void
+    var didMake: @MainActor (AgentChatBackdropView) -> Void = { _ in }
+
+    /// A representable is handed only an animation's end value; a view's body
+    /// gets every frame of it, and passes each one on.
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+
+    var body: some View {
+        AgentChatBackdropRepresentable(shown: shown, reveal: reveal, origin: origin, tint: tint, fades: fades, solid: solid,
+                                       onEscape: onEscape, didMake: didMake)
+    }
+}
+
+struct AgentChatBackdropRepresentable: NSViewRepresentable {
+    /// Where the wipe is going: open, or closing (Escape is then left alone).
+    var shown: Bool
+    /// 0: a point at the ✦ (or clear, when fading); 1: open.
+    var reveal: CGFloat
     /// Where the circle opens from, in this view's top-left coordinates.
     var origin: CGPoint
     var tint: NSColor
@@ -17,8 +46,6 @@ struct AgentChatBackdrop: NSViewRepresentable {
     /// Reduce Transparency, or no blur available: the tint alone, near solid.
     var solid: Bool
     var onEscape: @MainActor () -> Void
-    /// Told when a wipe starts, so the colour over the blur can follow it.
-    var onWipe: @MainActor (AgentChatWipe?) -> Void = { _ in }
     var didMake: @MainActor (AgentChatBackdropView) -> Void = { _ in }
 
     func makeNSView(context: Context) -> AgentChatBackdropView {
@@ -29,64 +56,61 @@ struct AgentChatBackdrop: NSViewRepresentable {
 
     func updateNSView(_ view: AgentChatBackdropView, context: Context) {
         view.onEscape = onEscape
-        view.onWipe = onWipe
+        view.isShown = shown
         view.configure(tint: tint, solid: solid)
-        view.setShown(shown, origin: origin, fades: fades)
+        view.apply(reveal: reveal, origin: origin, fades: fades)
     }
 
     static func dismantleNSView(_ view: AgentChatBackdropView, coordinator: ()) { view.stopWatchingKeys() }
 }
 
-/// One open or close of the blur, shared by what moves with it: the blur and
-/// tint here, and the colour the alive layer draws over them. The circle has a
+/// The wipe's circle, shared by what moves with it: the blur and tint, the
+/// colour the alive layer draws over them, and the thread. The circle has a
 /// soft rim (`feather` of its radius), which grows and shrinks with it.
 struct AgentChatWipe: Equatable {
     /// The part of the circle's radius that fades out to its edge.
     static let feather: CGFloat = 0.24
+    /// `cubic-bezier` values and lengths from the design's wipe.
+    static let opening = (x1: 0.3, y1: 0.7, x2: 0.2, y2: 1.0, duration: 0.62)
+    static let closing = (x1: 0.5, y1: 0.0, x2: 0.8, y2: 0.4, duration: 0.4)
 
-    var shown: Bool
-    var start: Date
     var origin: CGPoint
     /// The furthest corner from the origin: where the solid part must end up.
     var reach: CGFloat
-    /// From `from` to the end, as a fraction of the full radius.
-    var from: CGFloat
-    var duration: Double
-    var curve: (x1: Double, y1: Double, x2: Double, y2: Double)
+
+    init(origin: CGPoint, size: CGSize) {
+        self.origin = origin
+        reach = hypot(max(origin.x, size.width - origin.x), max(origin.y, size.height - origin.y)) + 2
+    }
 
     /// The circle's radius when fully open, rim included.
     var fullRadius: CGFloat { reach / (1 - Self.feather) }
-    static func smallest(reach: CGFloat) -> CGFloat { 0.5 / (reach / (1 - feather)) }
+    /// Closed: half a point across, so nothing shows.
+    var smallest: CGFloat { 0.5 / fullRadius }
 
-    /// The circle's scale at `date`: the wipe's curve, as Core Animation runs it.
-    func scale(at date: Date) -> CGFloat {
-        let t = duration > 0 ? date.timeIntervalSince(start) / duration : 1
-        let to: CGFloat = shown ? 1 : Self.smallest(reach: reach)
-        return from + (to - from) * CGFloat(AgentEase.curve(curve.x1, curve.y1, curve.x2, curve.y2, t))
-    }
+    /// The circle's scale at `reveal` (0 closed, 1 open).
+    func scale(reveal: CGFloat) -> CGFloat { smallest + (1 - smallest) * min(max(reveal, 0), 1) }
 
-    func isRunning(at date: Date) -> Bool { date.timeIntervalSince(start) < duration }
-
-    /// Equatable by the wipe's identity: the tuple holds only its curve.
-    static func == (a: AgentChatWipe, b: AgentChatWipe) -> Bool {
-        a.shown == b.shown && a.start == b.start && a.origin == b.origin && a.reach == b.reach && a.from == b.from
+    /// The motion that takes `reveal` to 1 (opening) or 0 (closing).
+    static func animation(opening: Bool) -> Animation {
+        let t = opening ? Self.opening : Self.closing
+        return .timingCurve(t.x1, t.y1, t.x2, t.y2, duration: t.duration)
     }
 }
 
 final class AgentChatBackdropView: NSView {
-    /// `cubic-bezier` values and lengths from the design's wipe.
-    static let opening = (x1: Float(0.3), y1: Float(0.7), x2: Float(0.2), y2: Float(1), duration: 0.62)
-    static let closing = (x1: Float(0.5), y1: Float(0), x2: Float(0.8), y2: Float(0.4), duration: 0.4)
     static let blurRadius: CGFloat = 5
     static let saturation: CGFloat = 1.3
 
     var onEscape: @MainActor () -> Void = {}
-    var onWipe: @MainActor (AgentChatWipe?) -> Void = { _ in }
     private let backdrop: CALayer?
     private let tintLayer = CALayer()
-    private var isShown: Bool?
-    private var pending: (shown: Bool, origin: CGPoint, fades: Bool)?
+    var isShown = false
     nonisolated(unsafe) private var keyMonitor: Any?
+    #if DEBUG
+    /// Test seam: the circle's scale last applied to the blur and tint.
+    private(set) var appliedScale: CGFloat?
+    #endif
 
     init() {
         backdrop = AtticVariableBlurView.backdropClass?.init()
@@ -138,11 +162,10 @@ final class AgentChatBackdropView: NSView {
         backdrop?.frame = bounds
         tintLayer.frame = bounds
         CATransaction.commit()
-        if let pending, !bounds.isEmpty {
-            self.pending = nil
-            setShown(pending.shown, origin: pending.origin, fades: pending.fades)
-        }
+        if let last { apply(reveal: last.reveal, origin: last.origin, fades: last.fades) }
     }
+
+    private var last: (reveal: CGFloat, origin: CGPoint, fades: Bool)?
 
     func configure(tint: NSColor, solid: Bool) {
         CATransaction.begin()
@@ -152,52 +175,33 @@ final class AgentChatBackdropView: NSView {
         CATransaction.commit()
     }
 
-    /// Runs the wipe or fade the first time and on every change of `shown`.
-    func setShown(_ shown: Bool, origin: CGPoint, fades: Bool) {
-        guard shown != isShown else { return }
-        guard !bounds.isEmpty else {
-            pending = (shown, origin, fades)
-            return
-        }
-        let first = isShown == nil
-        isShown = shown
-        let layers = [backdrop, tintLayer].compactMap { $0 }
-        if fades {
-            onWipe(nil)
-            for layer in layers {
+    /// Sets the blur and tint to `reveal`: a circle from `origin` with a soft
+    /// rim, or, when it `fades`, the whole of it at that opacity. Called on
+    /// every frame of the wipe, with no implicit motion of its own.
+    func apply(reveal: CGFloat, origin: CGPoint, fades: Bool) {
+        last = (reveal, origin, fades)
+        guard !bounds.isEmpty else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for layer in [backdrop, tintLayer].compactMap({ $0 }) {
+            if fades {
                 layer.mask = nil
-                let fade = CABasicAnimation(keyPath: "opacity")
-                fade.fromValue = shown ? 0 : 1
-                fade.toValue = shown ? 1 : 0
-                fade.duration = 0.2
-                layer.opacity = shown ? 1 : 0
-                layer.add(fade, forKey: "fade")
+                layer.opacity = Float(min(max(reveal, 0), 1))
+                continue
             }
-            return
-        }
-        let reach = hypot(max(origin.x, bounds.width - origin.x), max(origin.y, bounds.height - origin.y)) + 2
-        let timing = shown ? Self.opening : Self.closing
-        let small = AgentChatWipe.smallest(reach: reach)
-        let wipe = AgentChatWipe(shown: shown, start: Date(), origin: origin, reach: reach, from: shown || first ? small : 1,
-                                 duration: timing.duration,
-                                 curve: (Double(timing.x1), Double(timing.y1), Double(timing.x2), Double(timing.y2)))
-        onWipe(wipe)
-        let radius = wipe.fullRadius
-        for layer in layers {
+            layer.opacity = 1
+            let wipe = AgentChatWipe(origin: origin, size: bounds.size)
+            let radius = wipe.fullRadius
+            let scale = wipe.scale(reveal: reveal)
             let mask = (layer.mask as? CAGradientLayer) ?? Self.softMask()
-            let animation = CABasicAnimation(keyPath: "transform.scale")
-            animation.fromValue = wipe.from
-            animation.toValue = shown ? 1 : small
-            animation.duration = timing.duration
-            animation.timingFunction = CAMediaTimingFunction(controlPoints: timing.x1, timing.y1, timing.x2, timing.y2)
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
             mask.bounds = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2)
             mask.position = origin
-            mask.transform = CATransform3DMakeScale(shown ? 1 : small, shown ? 1 : small, 1)
-            CATransaction.commit()
+            mask.transform = CATransform3DMakeScale(scale, scale, 1)
             layer.mask = mask
-            mask.add(animation, forKey: "wipe")
+            #if DEBUG
+            appliedScale = scale
+            #endif
         }
     }
 
@@ -216,7 +220,7 @@ final class AgentChatBackdropView: NSView {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated {
-                guard let self, event.keyCode == 53, event.window === self.window, self.isShown == true else { return event }
+                guard let self, event.keyCode == 53, event.window === self.window, self.isShown else { return event }
                 self.onEscape()
                 return nil
             }

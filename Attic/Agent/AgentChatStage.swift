@@ -124,6 +124,9 @@ struct AgentChatStage: View {
 
     @Environment(\.atticDesign) private var design
     @State private var backdropView: AgentChatBackdropView?
+    /// The wipe's progress, 0 to 1: the one clock the blur, its colour and
+    /// the thread share. It starts at 0 and animates on the wipe's curve.
+    @State private var reveal: CGFloat = 0
 
     private var alive: Bool { !design.reduceMotion }
     private var dark: Bool { design.tokens.context.mode == .dark }
@@ -147,12 +150,15 @@ struct AgentChatStage: View {
         let _ = Self.bodyEvaluations += 1
         #endif
         ZStack(alignment: .topTrailing) {
-            AgentChatBackdrop(shown: shown, origin: star, tint: tint, fades: !alive, solid: solid,
-                              onEscape: { model.close() }, onWipe: { [fx] in fx.wipe = $0 },
+            AgentChatBackdrop(shown: shown, reveal: reveal, origin: star, tint: tint, fades: !alive, solid: solid,
+                              onEscape: { model.close() },
                               didMake: { view in DispatchQueue.main.async { backdropView = view } })
                 .overlay { Color.clear.contentShape(Rectangle()).onTapGesture { model.close() } }
                 .accessibilityHidden(true)
-            if alive { AgentChatAuraLayer(fx: fx).opacity(shown ? 1 : 0).animation(.easeOut(duration: 0.3), value: shown) }
+            if alive {
+                // Only the fade is eased here: the circle keeps the wipe's curve.
+                AgentChatAuraLayer(fx: fx, reveal: reveal).animation(.easeOut(duration: 0.3)) { $0.opacity(shown ? 1 : 0) }
+            }
             VStack(spacing: 0) {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) {
                     if model.entries.isEmpty {
@@ -163,6 +169,10 @@ struct AgentChatStage: View {
                         AgentChatThread(model: model, fx: fx, alive: alive, onAway: { model.close() })
                     }
                 }
+                // The thread arrives with the blur under it, never over the
+                // page's still readable rows (screen 9): the wipe's circle,
+                // or its fade.
+                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: AgentChatWipe(origin: star, size: layout.panelSize), fades: !alive))
                 AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, alive: alive, setTyping: setTyping, didClose: didClose)
             }
             if !model.entries.isEmpty {
@@ -184,7 +194,10 @@ struct AgentChatStage: View {
             fx.needsYou = phase == .needsYou
         }
         .onChange(of: model.entries.isEmpty, initial: true) { _, empty in fx.emptyThread = empty && shown }
-        .onChange(of: shown) { _, now in fx.emptyThread = now && model.entries.isEmpty }
+        .onChange(of: shown) { _, now in
+            fx.emptyThread = now && model.entries.isEmpty
+            wipe(to: now)
+        }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
         .onReceive(model.effects) { effect in if alive { play(effect) } else { settle(effect) } }
     }
@@ -202,8 +215,20 @@ struct AgentChatStage: View {
     }
 
     private func appeared() {
+        fx.wipeOrigin = star
         if alive { fx.open(at: star) } else { fx.clearLive() }
+        wipe(to: shown)
     }
+
+    /// Runs the wipe (or, with Reduce Motion, the fade) to `open`.
+    private func wipe(to open: Bool) {
+        let target: CGFloat = open ? 1 : 0
+        guard reveal != target else { return }
+        withAnimation(alive ? AgentChatWipe.animation(opening: open) : .linear(duration: AgentChatStage.fade)) { reveal = target }
+    }
+
+    /// Reduce Motion's fade, in and out.
+    static let fade = 0.2
 
     // MARK: The motion
 
@@ -311,6 +336,55 @@ struct AgentChatIconButton: View {
     }
 }
 
+/// What the chat draws over the page shows only where the blur already is:
+/// inside the wipe's circle, with the same soft rim, or at the fade's
+/// opacity. The circle is the blur's, in the stage's space.
+struct AgentChatWipeReveal: ViewModifier, Animatable {
+    var reveal: CGFloat
+    let wipe: AgentChatWipe
+    let fades: Bool
+
+    #if DEBUG
+    /// Test seam: the circle's scale (or the fade) the thread was last drawn at.
+    static var lastScale: CGFloat?
+    #endif
+
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        // One structure throughout, so the thread is never rebuilt as the
+        // wipe ends: only the mask's own content changes.
+        let open = min(max(reveal, 0), 1)
+        content
+            .opacity(fades ? Double(open) : 1)
+            .mask {
+                if fades || open >= 1 {
+                    #if DEBUG
+                    let _ = Self.lastScale = fades ? open : 1
+                    #endif
+                    Color.black
+                } else {
+                    GeometryReader { geometry in
+                        let frame = geometry.frame(in: .named(AgentChatStage.space))
+                        let scale = wipe.scale(reveal: open)
+                        #if DEBUG
+                        let _ = Self.lastScale = scale
+                        #endif
+                        RadialGradient(stops: [.init(color: .black, location: 0),
+                                               .init(color: .black, location: 1 - AgentChatWipe.feather),
+                                               .init(color: .clear, location: 1)],
+                                       center: UnitPoint(x: (wipe.origin.x - frame.minX) / max(1, frame.width),
+                                                         y: (wipe.origin.y - frame.minY) / max(1, frame.height)),
+                                       startRadius: 0, endRadius: max(0.5, wipe.fullRadius * scale))
+                    }
+                }
+            }
+    }
+}
+
 /// The composer growing out of the ✦ and folding back into it: size, corner
 /// and place from one progress, as the "+" card does from the "+".
 private struct AgentChatGrow: ViewModifier, Animatable {
@@ -406,7 +480,7 @@ struct AgentChatComposer: View {
             setTyping(false)
             withAnimation(animation) { grown = false }
             // The blur's wipe is the longest part of the close.
-            DispatchQueue.main.asyncAfter(deadline: .now() + AgentChatBackdropView.closing.duration + 0.02) { didClose() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + AgentChatWipe.closing.duration + 0.02) { didClose() }
         }
     }
 

@@ -90,8 +90,8 @@ final class AgentChatFX: ObservableObject {
     var askedFrame: CGRect?
     /// Where the current exchange starts, in the stage's space.
     var turnTop: CGFloat?
-    /// The blur's current wipe; the colour follows it.
-    var wipe: AgentChatWipe? { didSet { if wipe != oldValue { wake() } } }
+    /// Where the blur's wipe opens from; the colour opens from there too.
+    var wipeOrigin: CGPoint?
     var paragraphFrames: [Int: CGRect] = [:]
     let word = AgentWordProbe()
 
@@ -171,9 +171,9 @@ final class AgentChatFX: ObservableObject {
     func open(at star: CGPoint) {
         clearLive()
         addFlash(0.9)
-        // No ring: it crossed the composer as the composer grew. The stars end
-        // with the wipe, and the first ember waits until they have gone.
-        burst(star.x, star.y, count: 20, speed: 130, life: 0.3...0.58)
+        // No ring and no stars: a burst from the ✦ spreads as a dotted halo
+        // around it while the composer grows (screen 9, item 22). The colour
+        // and the blur are the opening; the first ember waits a moment.
         ember = Self.firstEmber
     }
 
@@ -183,6 +183,8 @@ final class AgentChatFX: ObservableObject {
     /// Test seam: how much is alive.
     var liveCount: Int { particles.count + rings.count + flights.count + scans.count }
     var ringCount: Int { rings.count }
+    /// The colour's circle, as a scale of its full radius, last drawn.
+    var lastAuraScale: CGFloat?
     #endif
 
     // MARK: Spawning (design px halved)
@@ -403,7 +405,6 @@ final class AgentChatFX: ObservableObject {
         }
         let busy = acting || needsYou || spark.on || landing || emptyThread || !particles.isEmpty || !rings.isEmpty
             || !flights.isEmpty || !scans.isEmpty || abs(energy - energyGoal) > 0.01 || flash > 0.01
-            || wipe?.isRunning(at: date) == true
         if !busy, !isIdle { DispatchQueue.main.async { [weak self] in self?.isIdle = true } }
     }
 
@@ -581,14 +582,17 @@ final class AgentChatFX: ObservableObject {
     }
 
     /// The soft glow that rises from the bottom while the agent works.
-    func drawAura(in context: inout GraphicsContext, size: CGSize, at date: Date) {
+    func drawAura(in context: inout GraphicsContext, size: CGSize, reveal: CGFloat) {
         let e = min(1.25, energy + flash)
         let blobs: [(Double, Double, Double, Double, Double)] = [
             (0.18, 0.9, 0.7, 0.5, 0), (0.52, 0.98, 0.5, 0.8, 2), (0.84, 0.9, 0.9, 0.4, 4), (0.4, 0.8, 0.6, 0.6, 5.2)
         ]
-        // Alive means a wipe is on its way: no colour before it starts.
-        guard let wipe else { return }
-        let clip: AgentChatWipe? = wipe.isRunning(at: date) || !wipe.shown ? wipe : nil
+        // No colour before the wipe starts, and none outside its circle.
+        guard let origin = wipeOrigin, reveal > 0 else { return }
+        let clip: AgentChatWipe? = reveal < 1 ? AgentChatWipe(origin: origin, size: size) : nil
+        #if DEBUG
+        lastAuraScale = clip?.scale(reveal: reveal) ?? 1
+        #endif
         context.drawLayer { layer in
             for (index, blob) in blobs.enumerated() {
                 let (bx, by, sx, sy, phase) = blob
@@ -602,7 +606,7 @@ final class AgentChatFX: ObservableObject {
             }
             // The colour opens with the blur: the same circle, the same rim.
             guard let clip else { return }
-            let radius = clip.fullRadius * clip.scale(at: date)
+            let radius = clip.fullRadius * clip.scale(reveal: reveal)
             layer.blendMode = .destinationIn
             layer.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
                 Gradient(stops: [.init(color: .black, location: 0),
@@ -629,14 +633,23 @@ struct AgentChatFXLayer: View {
     }
 }
 
-/// The aura, under the thread.
-struct AgentChatAuraLayer: View {
+/// The aura, under the thread. Its circle is the blur's: `reveal` is the
+/// same animated value, so on every frame of the wipe the colour is drawn
+/// where the blur is, whatever the timeline's own rate.
+struct AgentChatAuraLayer: View, Animatable {
     @ObservedObject var fx: AgentChatFX
+    var reveal: CGFloat
+
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fx.isIdle)) { timeline in
+        let reveal = reveal
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: fx.isIdle)) { _ in
             Canvas { context, size in
-                fx.drawAura(in: &context, size: size, at: timeline.date)
+                fx.drawAura(in: &context, size: size, reveal: reveal)
             }
         }
         .allowsHitTesting(false)

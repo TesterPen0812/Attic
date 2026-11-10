@@ -958,6 +958,45 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertFalse(topRow.isAway(.tasks))
     }
 
+    private func backdropView() -> AgentChatBackdropView? {
+        func find(_ view: NSView) -> AgentChatBackdropView? {
+            if let found = view as? AgentChatBackdropView { return found }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
+        }
+        return window.contentView.flatMap(find)
+    }
+
+    /// Mid-opening, the blur is part way and at the thread's circle: a
+    /// representable alone is handed only the wipe's end, and the preview
+    /// showed the whole panel blurred in its first frame.
+    func testMidOpeningTheBlurIsPartWayAndAtTheThreadsCircle() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.seedExchangeForUITesting(asked: "Tell me a short hello.", reply: "Hi there!")
+        model.open()
+        spin(0.12)
+        let blur = try XCTUnwrap(backdropView()?.appliedScale)
+        XCTAssertLessThan(blur, 0.97, "The blur wipes; it is not all there at once")
+        XCTAssertEqual(blur, try XCTUnwrap(AgentChatWipeReveal.lastScale), accuracy: 0.02, "One circle for the blur and the thread")
+        spin(0.8)
+        XCTAssertEqual(try XCTUnwrap(backdropView()?.appliedScale), 1, accuracy: 0.001)
+    }
+
+    /// Screen 9: the earlier reply was drawn over the page's still readable
+    /// rows before the blur had covered them. It arrives with the wipe.
+    func testTheThreadArrivesWithTheWipeNotBeforeIt() {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        model.seedExchangeForUITesting(asked: "Tell me a short hello.", reply: "Hi there!")
+        AgentChatWipeReveal.lastScale = nil
+        model.open()
+        spin(0.01)
+        XCTAssertLessThan(AgentChatWipeReveal.lastScale ?? 1, 0.2, "At the start of the wipe the thread is hidden with the blur")
+        spin(1)
+        XCTAssertEqual(AgentChatWipeReveal.lastScale ?? 0, 1, accuracy: 0.001, "Open, the whole thread shows")
+    }
+
     func testPanelHidingRemovesTheStageAtOnce() {
         model.open()
         spin(0.15)
@@ -1137,7 +1176,10 @@ final class AgentChatFXTests: XCTestCase {
         fx.emptyThread = true
         fx.open(at: CGPoint(x: 250, y: 520))
         XCTAssertEqual(fx.ringCount, 0, "No ring over the composer as it grows")
-        run(fx, seconds: AgentChatBackdropView.opening.duration + 0.05)
+        XCTAssertEqual(fx.liveCount, 0, "No stars burst from the ✦: they spread as a dotted halo round it")
+        run(fx, seconds: 0.12)
+        XCTAssertEqual(fx.liveCount, 0, "Nothing around the ✦ while the composer grows")
+        run(fx, seconds: AgentChatWipe.opening.duration + 0.05)
         XCTAssertEqual(fx.liveCount, 0, "The opening's stars end with the wipe")
         run(fx, seconds: 0.3)
         XCTAssertEqual(fx.liveCount, 0, "Nothing rises in the first second")
@@ -1167,31 +1209,76 @@ final class AgentChatFXTests: XCTestCase {
         let view = AgentChatBackdropView()
         view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
         view.layout()
-        view.setShown(true, origin: CGPoint(x: 280, y: 530), fades: false)
+        view.apply(reveal: 0.4, origin: CGPoint(x: 280, y: 530), fades: false)
         let layers = try XCTUnwrap(view.layer?.sublayers)
         XCTAssertFalse(layers.isEmpty)
         for layer in layers {
             let mask = try XCTUnwrap(layer.mask as? CAGradientLayer, "A hard path edge slices through text")
             XCTAssertEqual(mask.type, .radial)
-            let wipe = try XCTUnwrap(mask.animation(forKey: "wipe"))
-            XCTAssertEqual(wipe.duration, AgentChatBackdropView.opening.duration, accuracy: 0.001)
+            XCTAssertNil(mask.animation(forKey: "wipe"), "No clock of its own: it moves with the rest of the opening")
+            XCTAssertEqual(mask.locations?.dropFirst().first?.doubleValue ?? 0, Double(1 - AgentChatWipe.feather), accuracy: 0.001)
         }
     }
 
     func testTheWipeFollowsItsCurveFromTheStar() {
-        let start = Date(timeIntervalSinceReferenceDate: 1000)
-        let reach: CGFloat = 400
-        let timing = AgentChatBackdropView.opening
-        let small = AgentChatWipe.smallest(reach: reach)
-        let wipe = AgentChatWipe(shown: true, start: start, origin: CGPoint(x: 280, y: 530), reach: reach, from: small,
-                                 duration: timing.duration,
-                                 curve: (Double(timing.x1), Double(timing.y1), Double(timing.x2), Double(timing.y2)))
-        XCTAssertEqual(wipe.scale(at: start), small, accuracy: 0.001)
-        let half = wipe.scale(at: start.addingTimeInterval(timing.duration / 2))
-        XCTAssertEqual(half, small + (1 - small) * CGFloat(AgentEase.curve(0.3, 0.7, 0.2, 1, 0.5)), accuracy: 0.01)
-        XCTAssertEqual(wipe.scale(at: start.addingTimeInterval(timing.duration)), 1, accuracy: 0.001)
-        XCTAssertGreaterThanOrEqual(wipe.fullRadius * (1 - AgentChatWipe.feather), reach - 0.5,
+        let timing = AgentChatWipe.opening
+        XCTAssertEqual([timing.x1, timing.y1, timing.x2, timing.y2, timing.duration], [0.3, 0.7, 0.2, 1, 0.62])
+        XCTAssertEqual([AgentChatWipe.closing.x1, AgentChatWipe.closing.y1, AgentChatWipe.closing.x2, AgentChatWipe.closing.y2,
+                        AgentChatWipe.closing.duration], [0.5, 0, 0.8, 0.4, 0.4])
+        let wipe = AgentChatWipe(origin: CGPoint(x: 280, y: 530), size: CGSize(width: 340, height: 560))
+        XCTAssertEqual(wipe.scale(reveal: 0) * wipe.fullRadius, 0.5, accuracy: 0.001, "Closed: half a point at the ✦")
+        XCTAssertEqual(wipe.scale(reveal: 1), 1, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(wipe.fullRadius * (1 - AgentChatWipe.feather), hypot(280, 530) - 0.5,
                                     "Fully open, the solid part reaches every corner")
+    }
+
+    /// Screen 9, item 21, stepped and paused: at every point of the wipe the
+    /// blur, the colour over it and the thread are drawn at one circle.
+    func testBlurColourAndThreadShareOneCircleAtEveryStep() throws {
+        let size = CGSize(width: 340, height: 560)
+        let star = CGPoint(x: 280, y: 530)
+        let wipe = AgentChatWipe(origin: star, size: size)
+        let view = AgentChatBackdropView()
+        view.frame = CGRect(origin: .zero, size: size)
+        view.layout()
+        let fx = AgentChatFX()
+        fx.wipeOrigin = star
+        for step in 1...9 {
+            let reveal = CGFloat(step) / 10
+            view.apply(reveal: reveal, origin: star, fades: false)
+            let blur = try XCTUnwrap(view.appliedScale)
+            fx.lastAuraScale = nil
+            AgentChatWipeReveal.lastScale = nil
+            let aura = ImageRenderer(content: AgentChatAuraLayer(fx: fx, reveal: reveal).frame(width: size.width, height: size.height))
+            _ = aura.nsImage
+            let thread = ImageRenderer(content: Color.red
+                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: wipe, fades: false))
+                .frame(width: size.width, height: size.height)
+                .coordinateSpace(.named(AgentChatStage.space)))
+            _ = thread.nsImage
+            XCTAssertEqual(blur, wipe.scale(reveal: reveal), accuracy: 0.0001)
+            XCTAssertEqual(try XCTUnwrap(fx.lastAuraScale), blur, accuracy: 0.0001, "The colour is where the blur is")
+            XCTAssertEqual(try XCTUnwrap(AgentChatWipeReveal.lastScale), blur, accuracy: 0.0001,
+                           "The thread shows only where the blur is")
+        }
+    }
+
+    /// Reduce Motion: the blur and the thread fade in together.
+    func testReducedMotionFadesTheBlurAndTheThreadTogether() throws {
+        let view = AgentChatBackdropView()
+        view.frame = CGRect(x: 0, y: 0, width: 340, height: 560)
+        view.layout()
+        view.apply(reveal: 0.3, origin: CGPoint(x: 280, y: 530), fades: true)
+        for layer in try XCTUnwrap(view.layer?.sublayers) {
+            XCTAssertNil(layer.mask)
+            XCTAssertEqual(layer.opacity, 0.3, accuracy: 0.001)
+        }
+        AgentChatWipeReveal.lastScale = nil
+        _ = ImageRenderer(content: Color.red
+            .modifier(AgentChatWipeReveal(reveal: 0.3, wipe: AgentChatWipe(origin: .zero, size: CGSize(width: 10, height: 10)),
+                                          fades: true))
+            .frame(width: 10, height: 10)).nsImage
+        XCTAssertEqual(try XCTUnwrap(AgentChatWipeReveal.lastScale), 0.3, accuracy: 0.001)
     }
 
     func testClearLiveDropsLeftovers() {
@@ -1199,5 +1286,54 @@ final class AgentChatFXTests: XCTestCase {
         fx.dust(CGRect(x: 0, y: 0, width: 100, height: 20))
         fx.clearLive()
         XCTAssertEqual(fx.liveCount, 0)
+    }
+}
+
+/// Draw's floating controls fold under the chat as the top row does (screen 9,
+/// item 24): blurred, the title capsule stayed a bright patch and the tool bar
+/// glowed through the composer.
+@MainActor
+final class AgentChatDrawFoldTests: XCTestCase {
+    private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
+        guard depth < 50 else { return nil }
+        if (element.accessibilityIdentifier?() ?? nil) == id { return element }
+        for child in (element.accessibilityChildren?() ?? nil) ?? [] {
+            if let found = find(id, in: child as AnyObject, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    func testDrawsTitleAndToolsFoldWhileTheChatIsOver() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let topRow = PanelTopRowState()
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        let size = CGSize(width: 320, height: 460)
+        let host = NSHostingView(rootView: DrawPageHost(model: model, uiState: PanelUIState(),
+                                                        layout: PanelPageLayout(cornerSize: 52, panelSize: size))
+            .environment(\.panelTopRowState, topRow)
+            .atticDesign(AtticDesignContext(mode: .dark))
+            .frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        spin(0.3)
+        XCTAssertNotNil(find("draw-title", in: host), "Precondition: the title is there before the chat")
+        XCTAssertNotNil(find("draw-tool-bar", in: host), "Precondition: the tools are there before the chat")
+        topRow.chatOver = true
+        spin(0.5)
+        XCTAssertNil(find("draw-title", in: host), "The title capsule folds away under the chat")
+        XCTAssertNil(find("draw-tool-bar", in: host), "The tool bar folds away under the chat")
+        topRow.chatOver = false
+        spin(0.5)
+        XCTAssertNotNil(find("draw-title", in: host), "The title comes back when the chat closes")
+        XCTAssertNotNil(find("draw-tool-bar", in: host))
     }
 }

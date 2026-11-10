@@ -406,7 +406,7 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                     .environment(\.panelTopRowPage, page)
             }
         }
-        .modifier(PanelTopRowChatFold(state: state, page: page))
+        .modifier(PanelChatFold(state: state, page: page))
         .frame(height: control)
         .padding(.top, layout.chromeInsets.top)
         .padding(.leading, layout.chromeInsets.leading)
@@ -534,9 +534,12 @@ struct PanelTopRowMoreButton: View {
     }
 }
 
-/// A page's top row folds away while the chat floats over the panel. Only
-/// this observes the chat, so the row's own body gains no work.
-private struct PanelTopRowChatFold: ViewModifier {
+/// A page's top row folds away while the chat floats over the panel, and so
+/// does any other control a page floats over its content (Draw's title,
+/// tools and pills): under the chat's blur, a bright control would still
+/// show through as a patch. Only this observes the chat, so the control's
+/// own body gains no work.
+struct PanelChatFold: ViewModifier {
     let state: PanelTopRowState?
     let page: PanelPage
 

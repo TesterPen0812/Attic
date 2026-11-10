@@ -655,6 +655,9 @@ final class AppCoordinator: ObservableObject {
             }
         )
         agentChat.connect(agentRunner)
+        #if DEBUG
+        if isUITesting, let script = environment["ATTIC_UI_TEST_CHAT"] { agentChat.runUITestingScript(script) }
+        #endif
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
         // The combination Settings chose (round 10: the recorder).
