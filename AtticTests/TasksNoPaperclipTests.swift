@@ -101,8 +101,16 @@ final class TasksNoPaperclipTests: XCTestCase {
         let withFiles = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == row.id })
         XCTAssertEqual(withFiles.model.attachments, 3)
         XCTAssertEqual(withFiles.model.tileFiles.count, 3, "its files show as tiles")
-        XCTAssertEqual(try XCTUnwrap(hosted.session.controlFrames[key]).count, before,
-                       "the files add no control to the row: no paperclip count")
+        // Every tile is itself a draggable target, so it reports a control
+        // frame. A separate paperclip/count button would add one more.
+        let controls = try XCTUnwrap(hosted.session.controlFrames[key])
+        XCTAssertEqual(controls.count, before + withFiles.model.tileFiles.count,
+                       "each draggable file tile adds one target, with no paperclip count")
+        XCTAssertEqual(controls.filter {
+            abs($0.width - TasksDesignMetrics.fileTileWidth) <= 0.5 &&
+                abs($0.height - TasksDesignMetrics.tile) <= 0.5
+        }.count, withFiles.model.tileFiles.count,
+        "the added targets are file tiles, not a paperclip control")
 
         // A row whose only details were its files has no details line left.
         let plain = try XCTUnwrap(hosted.store.create(title: "Scan the receipts"))
