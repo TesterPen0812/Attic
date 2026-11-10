@@ -245,6 +245,12 @@ app.resources_build_phase.add_file_reference(assets)
 mobile_app.resources_build_phase.add_file_reference(assets)
 notice = app_group.new_file('Resources/ThirdPartyNotices.txt')
 [app, unit_host].each { |target| target.resources_build_phase.add_file_reference(notice) }
+# Interface sounds (Scripts/generate_sounds.py): one folder reference, so
+# they keep their `Sounds/` path in the bundle. The unit host carries them
+# too, for the tests that check every cue has its file.
+sounds = app_group.new_file('Resources/Sounds')
+sounds.last_known_file_type = 'folder'
+[app, unit_host].each { |target| target.resources_build_phase.add_file_reference(sounds) }
 privacy_manifest = app_group.new_file('Resources/PrivacyInfo.xcprivacy')
 app.resources_build_phase.add_file_reference(privacy_manifest)
 mobile_app.resources_build_phase.add_file_reference(privacy_manifest)

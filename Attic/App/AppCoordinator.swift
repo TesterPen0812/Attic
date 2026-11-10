@@ -453,6 +453,8 @@ final class AppCoordinator: ObservableObject {
         let inMemoryStore = runtime.usesInMemoryStore
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
+        // Sounds play in the real app only: never in tests or the gallery.
+        if !isUITesting, !isRunningTests, !runtime.isGalleryLaunch { AtticSounds.shared.connect(settings) }
         #if DEBUG && !ATTIC_LOCAL_ONLY
         if !inMemoryStore {
             do {
