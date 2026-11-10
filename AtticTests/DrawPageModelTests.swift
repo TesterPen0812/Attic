@@ -170,6 +170,25 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
+    func testEraserRespectsThinPressureNibAndCrossesStrokesUnderShapes() throws {
+        let light = DrawObject(frame: DrawFrame(x: 60, y: 100, width: 40, height: 0),
+                               style: DrawStyle(colour: .blue, size: .small, corners: .square),
+                               content: .stroke([DrawPoint(x: 60, y: 100, pressure: 0), DrawPoint(x: 100, y: 100, pressure: 0)]))
+        let covered = DrawObject(frame: DrawFrame(x: 60, y: 150, width: 40, height: 0),
+                                 style: DrawStyle(colour: .green, size: .large, corners: .square),
+                                 content: .stroke([DrawPoint(x: 60, y: 150, pressure: 1), DrawPoint(x: 100, y: 150, pressure: 1)]))
+        let shape = DrawObject(frame: DrawFrame(x: 50, y: 140, width: 70, height: 30),
+                               zIndex: 100, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([light, covered, shape])).isSaved)
+        model.setTool(.eraser)
+        // 5pt cursor reach + 0.375pt half-width of a 0-pressure thin pen.
+        drag([CGPoint(x: 65, y: 105.5), CGPoint(x: 105, y: 105.5)])
+        XCTAssertTrue(stored.contains(where: { $0.id == light.id }), "outside the visible thin nib must not erase")
+        drag([CGPoint(x: 80, y: 133), CGPoint(x: 80, y: 170)])
+        XCTAssertFalse(stored.contains(where: { $0.id == covered.id }), "fast crossing must erase under a shape")
+        XCTAssertTrue(stored.contains(where: { $0.id == shape.id }), "eraser never removes shapes")
+    }
+
     func testPenPressureSmoothsAndSurvivesMoveAndResize() throws {
         model.setTool(.pen)
         model.pointerDown(at: CGPoint(x: 60, y: 100), pressure: 0)
@@ -396,6 +415,41 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.count, 2)
         XCTAssertTrue(key("v", command: true))
         XCTAssertEqual(stored.count, 4)
+    }
+
+    func testInkEraseColourAndWidthUndoRedoThirtyStepsExactly() {
+        var history: [[DrawObject]] = [stored]
+        for index in 0..<25 {
+            model.setTool(.pen)
+            drag([CGPoint(x: 60, y: 100 + CGFloat(index) * 18),
+                  CGPoint(x: 90, y: 105 + CGFloat(index) * 18),
+                  CGPoint(x: 130, y: 100 + CGFloat(index) * 18)])
+            history.append(stored)
+        }
+        let target = stored[0].id
+        model.setTool(.select)
+        model.select([target])
+        model.styleSelection(colour: .red)
+        history.append(stored)
+        model.styleSelection(size: .large)
+        history.append(stored)
+        model.setTool(.eraser)
+        drag([CGPoint(x: 90, y: 90), CGPoint(x: 90, y: 108)])
+        XCTAssertLessThan(stored.count, 25, "eraser removes whole strokes")
+        history.append(stored)
+
+        for index in stride(from: history.count - 2, through: 0, by: -1) {
+            XCTAssertTrue(key("z", command: true))
+            XCTAssertEqual(stored, history[index], "undo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canUndo)
+        for index in 1..<history.count {
+            XCTAssertTrue(key("z", command: true, shift: true))
+            XCTAssertEqual(stored, history[index], "redo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canRedo)
+        model.undo() // The toolbar's action is the same undo path.
+        XCTAssertEqual(stored, history[history.count - 2])
     }
 
     func testDeleteReturnAndEscape() {

@@ -306,6 +306,43 @@ enum DrawGeometry {
         return hypot(p.x - a.x - t * dx, p.y - a.y - t * dy)
     }
 
+    /// Distance between the entire eraser drag and a stroke segment. Testing
+    /// the two continuous segments avoids skipping thin ink on fast drags.
+    static func segmentDistance(_ a: CGPoint, _ b: CGPoint, to c: CGPoint, _ d: CGPoint) -> CGFloat {
+        let rx = b.x - a.x, ry = b.y - a.y
+        let sx = d.x - c.x, sy = d.y - c.y
+        let cross = rx * sy - ry * sx
+        if abs(cross) > 1e-12 {
+            let qx = c.x - a.x, qy = c.y - a.y
+            let t = (qx * sy - qy * sx) / cross
+            let u = (qx * ry - qy * rx) / cross
+            if (0...1).contains(t), (0...1).contains(u) { return 0 }
+        }
+        return min(segmentDistance(a, c, d), segmentDistance(b, c, d),
+                   segmentDistance(c, a, b), segmentDistance(d, a, b))
+    }
+
+    /// Actual nib contact, including pressure. Other objects' z-order is
+    /// deliberately irrelevant: an eraser can reach an obscured stroke.
+    static func eraserTouches(_ samples: [DrawPoint], size: DrawSize,
+                              from start: CGPoint, to end: CGPoint, tolerance: CGFloat) -> Bool {
+        guard let first = samples.first else { return false }
+        let base = CGFloat(size.strokeWidth)
+        func position(_ point: DrawPoint) -> CGPoint { CGPoint(x: point.x, y: point.y) }
+        func radius(_ point: DrawPoint) -> CGFloat { DrawInk.pressureWidth(point.pressure, base: base) / 2 }
+        if samples.count == 1 {
+            return segmentDistance(position(first), start, end) <= tolerance + radius(first)
+        }
+        for index in 1..<samples.count {
+            let before = samples[index - 1], after = samples[index]
+            let nib = max(radius(before), radius(after))
+            if segmentDistance(start, end, to: position(before), position(after)) <= tolerance + nib {
+                return true
+            }
+        }
+        return false
+    }
+
     static func hits(_ object: DrawObject, _ point: CGPoint, tolerance: CGFloat) -> Bool {
         let half = strokeWidth(object) / 2
         switch object.content {
