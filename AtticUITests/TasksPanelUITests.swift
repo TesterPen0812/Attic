@@ -147,6 +147,12 @@ final class TasksPanelUITests: XCTestCase {
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
         // Accepted 3 Nov, P4: Return creates and keeps the card open.
         openCard()
+        // An earlier test leaves "Kept draft" in the real persisted composer.
+        // Clear it through the same field a person would edit, so this test
+        // checks the two new titles independently of test execution order.
+        cardTitle.typeKey("a", modifierFlags: .command)
+        cardTitle.typeKey(.delete, modifierFlags: [])
+        waitFor((cardTitle.value as? String) == "", "a previous kept draft can be cleared before adding")
         app.typeText("Short\r")
         waitFor(row("Short").exists, "the short task is listed")
         XCTAssertTrue(cardTitle.exists, "P4 keeps the card ready for the next task")
