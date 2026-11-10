@@ -341,6 +341,23 @@ final class CalendarPageHostedTests: XCTestCase {
 
     // MARK: The picked view decides the fold (Accepted 2026-11-10)
 
+    /// E-1: Month wins even while Week's animated scroll has started but
+    /// its delayed replacement of the month grid has not run yet.
+    func testE1MonthCancelsAnInFlightWeekFold() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPage(events: [], height: 460) { page in
+            page.model.pickWeek(true)
+            page.settle(0.12)
+            XCTAssertGreaterThan(page.offset, 2, "the Week scroll has begun")
+            page.model.pickWeek(false)
+            page.settle(0.8)
+            XCTAssertFalse(page.model.isWeekPicked)
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "Month must unfold despite Week's unfinished task")
+            XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"), "all weeks are back")
+        }
+    }
+
     private static let selectedWeek = ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29",
                                        "2026-10-30", "2026-10-31", "2026-11-01"]
 
