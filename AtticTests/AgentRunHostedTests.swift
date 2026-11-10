@@ -454,6 +454,16 @@ final class AgentRunHostedTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+    func testSystemPromptNamesTheLocalClockAndTimeZone() throws {
+        let london = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        let winter = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-10T18:15:00Z"))
+        let summer = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-10T18:15:00Z"))
+        XCTAssertTrue(AgentRunEngine.systemPrompt(date: winter, timeZone: london)
+            .contains("2026-11-10T18:15:00Z (Europe/London)"))
+        XCTAssertTrue(AgentRunEngine.systemPrompt(date: summer, timeZone: london)
+            .contains("2026-08-10T19:15:00+01:00 (Europe/London)"))
+    }
+
     func testSendImmediatelyAfterNewChatWaitsForOldReceiptAndKeepsTheNewMessage() async {
         let tools = FakeRunTools()
         tools.holdDrain = true
