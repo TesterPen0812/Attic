@@ -6,12 +6,13 @@ enum AtticPanelChromeMetrics {
     static let headerGap: CGFloat = 5
     static let footerGap: CGFloat = 5
 
+    /// The chrome fold's named curve (`AtticMotionScale.chromeFoldCurve`).
     static func curve(_ duration: Double) -> Animation {
-        .timingCurve(0.3, 0.7, 0.2, 1, duration: duration)
+        AtticMotionScale.chromeFoldCurve(duration)
     }
 
     static func fold(reduceMotion: Bool) -> Animation {
-        reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
+        reduceMotion ? .easeOut(duration: 0.15) : curve(AtticMotionScale.chromeFold)
     }
 }
 
