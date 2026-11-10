@@ -39,6 +39,28 @@ final class DrawPersistenceTests: XCTestCase {
         try DrawStoreContractTests().typingContract(DrawPersistentStore(container: container()))
     }
 
+    func testTextSavedDuringEditingSurvivesAnUncleanRelaunch() throws {
+        let root = try temporaryDirectory()
+        var canvasID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root))
+            let model = DrawPageModel(store: store)
+            model.start()
+            canvasID = try XCTUnwrap(model.canvasID)
+            model.setTool(.text)
+            model.pointerDown(at: CGPoint(x: 80, y: 120))
+            model.typed("Draft")
+            model.typed("Draft 👩🏽‍🚀")
+            XCTAssertNotNil(model.editing, "No blur or graceful shutdown should be needed to save text")
+            XCTAssertFalse(store.hasUnsettledEdits)
+            XCTAssertEqual(try store.open(canvasID).objects.map(\.text), ["Draft 👩🏽‍🚀"])
+        }
+
+        let reopened = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try reopened.open(canvasID).objects.map(\.text), ["Draft 👩🏽‍🚀"])
+        XCTAssertFalse(reopened.canUndo(on: canvasID), "Undo history is session-scoped")
+    }
+
     func testFinishedInkSurvivesUncleanRelaunchWhileUnfinishedInkWasNeverCommitted() throws {
         let root = try temporaryDirectory()
         var canvasID = UUID()

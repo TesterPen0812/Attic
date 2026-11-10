@@ -247,12 +247,17 @@ final class DrawPageModelTests: XCTestCase {
     }
 
     func testVeryNarrowWrappingKeepsEmojiAndRTLTextIntact() {
-        let text = "Start 👩🏽‍🚀 אבג 🧑‍💻 End"
-        for width in [CGFloat(0.5), 2, 8, 15, 55] {
-            let lines = DrawText.lines(text, size: 14, width: width)
-            XCTAssertEqual(lines.joined(), text, "Wrap at \(width)pt must never lose or corrupt composed characters")
-            let original = Array(text)
-            XCTAssertEqual(lines.flatMap { Array($0) }, original, "A wrapped line must not split an emoji grapheme")
+        let samples = [
+            "Start 👩🏽‍🚀 אבג 🧑‍💻 End",
+            "Start\r👩🏽‍🚀\rאבג End",
+            String(repeating: "á👩‍👩‍👧‍👧אבג", count: 48)
+        ]
+        for text in samples {
+            for width in [CGFloat(0.01), 0.5, 2, 8, 15, 55] {
+                let lines = DrawText.lines(text, size: 14, width: width)
+                XCTAssertEqual(lines.joined(), text, "Wrap at \(width)pt must not lose source characters")
+                XCTAssertEqual(lines.flatMap { Array($0) }, Array(text), "A wrapped line must not split a grapheme")
+            }
         }
     }
 
@@ -591,6 +596,38 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.map(\.text), ["x"])
         model.redo()
         XCTAssertEqual(stored.map(\.text), ["x"], "Typing after Undo starts a new branch")
+    }
+
+    func testUndoRedoRestoresTextMoveAndStyleInOrder() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Draft")
+        let typed = stored
+        let box = try XCTUnwrap(typed.first)
+        model.endEditing()
+
+        var moved = box
+        moved.frame.x += 40
+        XCTAssertTrue(model.perform(.put([moved])).isSaved)
+        XCTAssertEqual(stored, [moved])
+        model.select([moved.id])
+        model.styleSelection(colour: .red)
+        let styled = stored
+        XCTAssertEqual(styled.first?.style.colour, .red)
+
+        model.undo()
+        XCTAssertEqual(stored, [moved], "First Undo restores the previous colour")
+        model.undo()
+        XCTAssertEqual(stored, typed, "Second Undo restores the original position")
+        model.undo()
+        XCTAssertTrue(stored.isEmpty, "Third Undo removes the first typed content")
+
+        model.redo()
+        XCTAssertEqual(stored, typed)
+        model.redo()
+        XCTAssertEqual(stored, [moved])
+        model.redo()
+        XCTAssertEqual(stored, styled, "Redo restores text, position and style exactly")
     }
 
     func testSwatchStylesTheOpenTextBox() {
