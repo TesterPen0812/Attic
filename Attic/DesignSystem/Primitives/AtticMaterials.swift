@@ -240,6 +240,20 @@ struct AtticRaisedMaterialModifier: ViewModifier {
         }
     }
 
+    /// Draft B (`AtticSurfaceModel.LiftControlsTrial`): a stronger hairline
+    /// on lifted surfaces. Release builds draw the Edge light as it is.
+    static func liftTrialEdge(_ light: AtticEdgeLight, lifted: Bool) -> AtticEdgeLight {
+        #if DEBUG
+        guard AtticSurfaceModel.LiftControlsTrial.current == .b, lifted else { return light }
+        return AtticEdgeLight(lineWidth: light.lineWidth, topLeading: light.topLeading,
+                              bottomTrailing: light.bottomTrailing, fade: light.fade,
+                              hairlineWidth: AtticSurfaceModel.LiftControlsTrial.edgeWidth,
+                              hairline: .black(AtticSurfaceModel.LiftControlsTrial.edgeAlpha))
+        #else
+        return light
+        #endif
+    }
+
     private func glass<Content: View, S: InsettableShape>(_ content: Content, in shape: S) -> some View {
         let tokens = design.tokens
         let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
@@ -255,7 +269,8 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             .glassEffect(glass, in: shape)
             .overlay {
                 if edgeLight, !design.increaseContrast,
-                   let light = AtticGlassModel.edgeLight(dark: design.mode == .dark, surface: design.effectiveSurface) {
+                   let light = AtticGlassModel.edgeLight(dark: design.mode == .dark, surface: design.effectiveSurface)
+                    .map({ Self.liftTrialEdge($0, lifted: design.glassLift > 0) }) {
                     ZStack {
                         shape.strokeBorder(LinearGradient(stops: light.stops.map { .init(color: .white.opacity($0.opacity), location: $0.location) },
                                                           startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -786,6 +801,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// A small satellite crops the panel-sized material. Native regular glass
     /// switches to a dark control treatment at narrow dimensions.
     var nativeGlassSize: CGSize?
+    /// Draft C (`AtticSurfaceModel.LiftControlsTrial`): the panel's lift
+    /// leaves its top and bottom control bands.
+    var liftLeavesControlBands = false
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -797,7 +815,8 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
                 // Light Glass and Frosted only; never Settings' chrome.
                 if !isChrome {
-                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass))
+                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
+                                   leavesControlBands: liftLeavesControlBands)
                 }
                 // The foundation, with Dark's dark tint over it (A37).
                 shape.fill(model.backing.color)
@@ -885,15 +904,48 @@ struct AtticSurfaceBackground<S: Shape>: View {
 struct AtticGlassLift<S: Shape>: View {
     let shape: S
     let strength: Double
+    var leavesControlBands = false
 
     var body: some View {
         if strength > 0 {
-            shape.fill(Color.white.opacity(strength))
-                .blendMode(.plusLighter)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            #if DEBUG
+            if leavesControlBands, AtticSurfaceModel.LiftControlsTrial.current == .c {
+                // The mask goes inside the blend, so the masked white still
+                // adds to the glass rather than lying over it.
+                shape.fill(Color.white.opacity(strength))
+                    .mask { Self.bandMask }
+                    .blendMode(.plusLighter)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            } else {
+                lift
+            }
+            #else
+            lift
+            #endif
         }
     }
+
+    private var lift: some View {
+        shape.fill(Color.white.opacity(strength))
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    #if DEBUG
+    private static var bandMask: some View {
+        let clear = AtticSurfaceModel.LiftControlsTrial.bandClear
+        let fade = AtticSurfaceModel.LiftControlsTrial.bandFade
+        return VStack(spacing: 0) {
+            Color.clear.frame(height: clear)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: fade)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: fade)
+            Color.clear.frame(height: clear)
+        }
+    }
+    #endif
 }
 
 /// A stand-in desktop for gallery stages and contact sheets: the soft
@@ -977,7 +1029,8 @@ struct AtticPanelStageSurface: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
+                               liftLeavesControlBands: true)
     }
 }
 

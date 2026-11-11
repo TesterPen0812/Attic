@@ -84,6 +84,25 @@ struct AtticSurfaceModel: Equatable, Sendable {
         return copy
     }
 
+    #if DEBUG
+    /// Drafts for the owner (11 Nov, "controls look barely glass at all"
+    /// with the lift on): how the raised controls keep their glass when the
+    /// lift is on. `-glassLiftControls A|B|C|D`; A (or unset) is as shipped.
+    /// B: a stronger Edge light hairline on lifted surfaces
+    /// (`-glassLiftEdgeAlpha`, `-glassLiftEdgeWidth`). C: the lift fades out
+    /// over the panel's top and bottom control bands. D: a weaker lift.
+    enum LiftControlsTrial: String {
+        case a = "A", b = "B", c = "C", d = "D"
+        static let current = LiftControlsTrial(rawValue: UserDefaults.standard.string(forKey: "glassLiftControls") ?? "") ?? .a
+        static var edgeAlpha: Double { (UserDefaults.standard.object(forKey: "glassLiftEdgeAlpha") as? NSString)?.doubleValue ?? 0.30 }
+        static var edgeWidth: CGFloat { CGFloat((UserDefaults.standard.object(forKey: "glassLiftEdgeWidth") as? NSString)?.doubleValue ?? 0.5) }
+        /// C: the top and bottom bands left unlifted, and the fade into the lift.
+        static let bandClear: CGFloat = 46
+        static let bandFade: CGFloat = 24
+        static let weakStrength = 0.08
+    }
+    #endif
+
     /// "Brighten glass over dark backgrounds" (owner, 2026-11-11, option C;
     /// Bright Test's lift, 2 Nov): the strength of the additive white
     /// (`.plusLighter`) laid over the native material. Additive white raises
@@ -98,6 +117,9 @@ struct AtticSurfaceModel: Equatable, Sendable {
     static func glassLift(enabled: Bool, appearance: AtticPanelThemeAppearance,
                           kind: AtticPanelSurfaceTreatment.Kind, increaseContrast: Bool) -> Double {
         guard enabled, appearance == .light, kind != .solid, !increaseContrast else { return 0 }
+        #if DEBUG
+        if LiftControlsTrial.current == .d { return LiftControlsTrial.weakStrength }
+        #endif
         return glassLiftStrength
     }
 
