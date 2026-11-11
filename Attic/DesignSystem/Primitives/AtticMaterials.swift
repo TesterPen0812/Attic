@@ -731,7 +731,7 @@ struct AtticRowHighlight: View {
             AtticHighlight(fill: fill, cornerRadius: cornerRadius, run: run, joinOverlap: joinOverlap)
         case .raisedChip:
             Color.clear
-                .atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false)
+                .atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false, edgeLight: true)
                 .environment(\.atticControlCornerExponent, cornerExponent == nil ? nil : AtticShape.surfaceExponent)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

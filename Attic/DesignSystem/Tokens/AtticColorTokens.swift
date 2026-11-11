@@ -412,13 +412,11 @@ struct AtticColorTokens: Equatable, Sendable {
 
     /// What a Task or Note row draws for its state, nil for none. A selected
     /// row on Glass is a raised glass chip (Accepted 2026-11-09,
-    /// `hover-drafts.html` B). Rows selected together are one joined shape,
-    /// which separate glass pieces cannot make, so a run is a flat fill at
-    /// the same sheet's A (14 % / 16 %), still about twice the hover.
+    /// `hover-drafts.html` B). Touching selected rows share one joined
+    /// raised backing, drawn from their combined row bounds.
     func rowHighlight(selected: Bool, hovered: Bool, run: AtticSelectionRun = .single) -> AtticRowHighlightStyle? {
         if selected {
             guard context.surface == .glass else { return .fill(self.selected) }
-            guard run == .single else { return .fill(context.mode == .dark ? .white(0.16) : .black(0.14)) }
             return .raisedChip
         }
         return hovered ? .fill(rowHover) : nil

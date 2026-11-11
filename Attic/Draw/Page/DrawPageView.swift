@@ -144,7 +144,7 @@ struct DrawTitleCapsule: View {
                                    onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename)
                         .frame(height: m.capsule)
                         .padding(.horizontal, m.titlePadding.leading)
-                        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false, edgeLight: true))
                         .accessibilityIdentifier("draw-title-rename")
                     if library.renameFailed {
                         AtticErrorLine(message: String(localized: "Not saved"), onRetry: library.commitRename)
@@ -173,7 +173,7 @@ struct DrawTitleCapsule: View {
                     .frame(height: m.capsule)
                     .padding(.leading, m.titlePadding.leading)
                     .padding(.trailing, 4)
-                    .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                    .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false, edgeLight: true))
                     .frame(width: model.isFiltering ? nil : 0)
                     .opacity(model.isFiltering ? 1 : 0)
                     .allowsHitTesting(model.isFiltering)

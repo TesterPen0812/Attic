@@ -239,10 +239,10 @@ final class TasksPanelDesignTests: XCTestCase {
             XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: true), .raisedChip, "selection wins over hover")
             XCTAssertNil(tokens.rowHighlight(selected: false, hovered: false))
         }
-        // Rows selected together stay one joined flat shape, about twice the hover.
+        // One or more touching rows share a single raised glass backing.
         for run in [AtticSelectionRun.first, .middle, .last] {
-            XCTAssertEqual(light.rowHighlight(selected: true, hovered: false, run: run), .fill(.black(0.14)))
-            XCTAssertEqual(dark.rowHighlight(selected: true, hovered: false, run: run), .fill(.white(0.16)))
+            XCTAssertEqual(light.rowHighlight(selected: true, hovered: false, run: run), .raisedChip)
+            XCTAssertEqual(dark.rowHighlight(selected: true, hovered: false, run: run), .raisedChip)
         }
         // The shared tokens that menus, Settings and tags use do not move.
         XCTAssertEqual(light.hover, .black(0.035))
@@ -251,15 +251,41 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(dark.selected, .white(0.09))
     }
 
+    /// Joined glass spans the entire contiguous run, even with tall rows.
+    @MainActor
+    func testJoinedSelectedRowsAreOneChipEvenWithMixedHeightsAndSeparatedGroups() {
+        let ids = (0..<5).map { _ in UUID() }
+        let pieces: [AtticJoinedSelectedRuns.Piece] = [
+            .init(id: ids[0], frame: CGRect(x: 8, y: 0, width: 220, height: 32), run: .first),
+            .init(id: ids[1], frame: CGRect(x: 8, y: 32, width: 220, height: 48), run: .middle),
+            .init(id: ids[2], frame: CGRect(x: 8, y: 80, width: 220, height: 32), run: .last),
+            .init(id: ids[3], frame: CGRect(x: 8, y: 144, width: 220, height: 32), run: .first),
+            .init(id: ids[4], frame: CGRect(x: 8, y: 176, width: 220, height: 32), run: .last)
+        ]
+        let joined = AtticJoinedSelectedRuns.joined(Array(pieces.reversed()))
+        XCTAssertEqual(joined.count, 2)
+        XCTAssertEqual(joined.map(\.frame), [CGRect(x: 8, y: 0, width: 220, height: 112),
+                                              CGRect(x: 8, y: 144, width: 220, height: 64)])
+        // A date header, hidden row or expanded detail separates the glass.
+        let broken = AtticJoinedSelectedRuns.joined([
+            .init(id: ids[0], frame: CGRect(x: 8, y: 0, width: 220, height: 32), run: .first),
+            .init(id: ids[1], frame: CGRect(x: 8, y: 48, width: 220, height: 32), run: .last)
+        ])
+        XCTAssertEqual(broken.count, 2)
+    }
+
     /// The other surfaces keep the shared fills.
     @MainActor
     func testRowHighlightOffGlassKeepsSharedFills() {
         for mode in [AtticDesignContext.Mode.light, .dark] {
-            for surface in [PanelSurfaceStyle.solid, .frosted] {
-                let tokens = AtticDesignContext(mode: mode, surface: surface).tokens
-                XCTAssertEqual(tokens.rowHighlight(selected: false, hovered: true), .fill(tokens.hover), "\(mode) \(surface)")
-                XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false), .fill(tokens.selected), "\(mode) \(surface)")
-                XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false, run: .middle), .fill(tokens.selected), "\(mode) \(surface)")
+            for increaseContrast in [false, true] {
+                for surface in [PanelSurfaceStyle.solid, .frosted, .glass] {
+                    let tokens = AtticDesignContext(mode: mode, surface: surface, increaseContrast: increaseContrast).tokens
+                    XCTAssertEqual(tokens.rowHighlight(selected: false, hovered: true), .fill(tokens.rowHover), "\(mode) \(surface) IC=\(increaseContrast)")
+                    let selected = surface == .glass ? AtticRowHighlightStyle.raisedChip : .fill(tokens.selected)
+                    XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false), selected, "\(mode) \(surface) IC=\(increaseContrast)")
+                    XCTAssertEqual(tokens.rowHighlight(selected: true, hovered: false, run: .middle), selected, "\(mode) \(surface) IC=\(increaseContrast)")
+                }
             }
         }
     }

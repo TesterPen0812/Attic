@@ -888,7 +888,7 @@ struct AtticAddBar: View {
             }
         }
         .frame(height: height + grown)
-        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
+        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false, edgeLight: true)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
@@ -1628,7 +1628,7 @@ struct AtticSelectionBar: View {
         .environment(\.atticSmallControlBarSize, inBar ? m.barControl : nil)
         .padding(inset)
         .frame(height: height)
-        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .atticRaisedMaterial(cornerRadius: radius, interactive: false, edgeLight: true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "\(count) selected"))
         .accessibilityValue(summary ?? "")

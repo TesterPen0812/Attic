@@ -11,6 +11,17 @@ import XCTest
 /// replaced.
 @MainActor
 final class AtticDropdownTests: XCTestCase {
+    func testTagSuggestionCountKeepsNormalInkAndPassesIncreaseContrastOnDarkDesktop() {
+        for mode in AtticDesignContext.Mode.allCases {
+            let normal = AtticDesignContext(mode: mode, surface: .glass, increaseContrast: false)
+            XCTAssertNil(AtticTagSuggestionList.countColour(in: normal), "normal helper must stay as drawn")
+            let increased = AtticDesignContext(mode: mode, surface: .glass, increaseContrast: true)
+            let ink = AtticTagSuggestionList.countColour(in: increased)
+            XCTAssertNotNil(ink)
+            XCTAssertGreaterThanOrEqual(ink!.contrast(on: mode == .light ? AtticRGBA(0x787878) : AtticRGBA(0x444444)), 4.5)
+        }
+    }
+
     // MARK: The width rule
 
     /// Tab's policy in a card with a field and a list (the race itself is

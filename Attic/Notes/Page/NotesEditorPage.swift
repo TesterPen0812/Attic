@@ -1430,13 +1430,14 @@ struct NoteProposalComparison: View {
                 AtticText(verbatim: "\(review.agent) · \(review.createdAt.formatted(date: .omitted, time: .shortened)) · \(review.summary)",
                           style: .helper, ink: .helper)
                 if controller.reviewProposals.count > 1 {
-                    Menu("\(controller.reviewProposals.count) proposals") {
-                        ForEach(controller.reviewProposals, id: \.id) { edit in
-                            Button("\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")") {
-                                Task { _ = await controller.beginProposalReview(id: edit.id) }
-                            }
+                    AtticCommandMenu(commands: controller.reviewProposals.map { edit in
+                        AtticMenuCommand(verbatim: "\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")") {
+                            Task { _ = await controller.beginProposalReview(id: edit.id) }
                         }
-                    }.accessibilityIdentifier("notes-proposal-picker")
+                    }, accessibilityLabel: String(localized: "Proposals")) {
+                        Text("\(controller.reviewProposals.count) proposals")
+                    }
+                    .accessibilityIdentifier("notes-proposal-picker")
                 }
             }.padding(.horizontal, columnInset)
             NoteComparisonPreview(document: document, noteID: review.noteID, design: design,
@@ -1459,18 +1460,24 @@ struct NoteProposalComparison: View {
                     Button("Back") { controller.endProposalReview() }
                         .accessibilityIdentifier("notes-proposal-back")
                     Spacer(minLength: 4)
-                    Menu {
-                        Button(review.isDeletion ? "Save as New Note" : "Save Proposal as New Note") {
+                    AtticCommandMenu(commands: {
+                        var save = AtticMenuCommand(verbatim: review.isDeletion ? String(localized: "Save as New Note") : String(localized: "Save Proposal as New Note"),
+                                                    isDisabled: review.workspaceIntent != nil) {
                             run { await controller.saveReviewedProposalAsNew() }
-                        }.accessibilityIdentifier("notes-proposal-save-new").disabled(review.workspaceIntent != nil)
-                        Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
-                            .accessibilityIdentifier("notes-proposal-discard")
-                        if review.isDeletion {
-                            Button("Delete Note", role: .destructive) { run { await controller.acceptProposal() } }
-                                .accessibilityIdentifier("notes-proposal-delete")
                         }
-                    } label: { Image(systemName: "ellipsis") }
-                    .accessibilityLabel("Proposal actions")
+                        save.identifier = "notes-proposal-save-new"
+                        var discard = AtticMenuCommand("Discard Proposal") { _ = controller.discardReviewedProposal() }
+                        discard.identifier = "notes-proposal-discard"
+                        var items = [save, discard]
+                        if review.isDeletion {
+                            items.append(AtticMenuCommand("Delete Note", isDestructive: true, identifier: "notes-proposal-delete") {
+                                run { await controller.acceptProposal() }
+                            })
+                        }
+                        return items
+                    }(), accessibilityLabel: String(localized: "Proposal actions")) {
+                        Image(systemName: "ellipsis")
+                    }
                     .accessibilityIdentifier("notes-proposal-menu")
                 }
             }.padding(.horizontal, columnInset).disabled(busy)
@@ -1638,31 +1645,30 @@ struct NoteProposalReviewActions: View {
     }
 
     private var actionsMenu: some View {
-        Menu {
-            Button("Save as New Note") {
+        AtticCommandMenu(commands: {
+            let save = AtticMenuCommand("Save as New Note", identifier: "notes-proposal-save-new") {
                 controller.performProposalReviewAction { await controller.saveReviewedProposalAsNew() }
             }
-            .accessibilityIdentifier("notes-proposal-save-new")
-            Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
-                .accessibilityIdentifier("notes-proposal-discard")
+            let discard = AtticMenuCommand("Discard Proposal", identifier: "notes-proposal-discard") {
+                _ = controller.discardReviewedProposal()
+            }
+            // A change in another proposal is a new menu section, as in the native menu.
+            var items = [save, discard]
             if controller.reviewProposals.count > 1 {
-                Divider()
-                ForEach(controller.reviewProposals, id: \.id) { edit in
-                    Button("\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")") {
+                items.append(contentsOf: controller.reviewProposals.enumerated().map { index, edit in
+                    AtticMenuCommand(verbatim: "\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")",
+                                     startsSection: index == 0) {
                         Task { _ = await controller.beginProposalReview(id: edit.id) }
                     }
-                }
+                })
             }
-        } label: {
+            return items
+        }(), accessibilityLabel: String(localized: "Proposal actions")) {
             Image(systemName: "ellipsis")
                 .font(.system(size: NoteProposalReviewMetrics.menuGlyph, weight: .medium))
                 .frame(width: NoteProposalReviewMetrics.menuSize, height: NoteProposalReviewMetrics.menuSize)
                 .contentShape(Circle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .help("Proposal actions")
         .accessibilityLabel("Proposal actions")
         .accessibilityIdentifier("notes-proposal-menu")

@@ -539,6 +539,9 @@ struct AtticDropdownRow: View {
     /// A priority's mark column (`.none` keeps the column empty).
     var mark: AtticPriority?
     var detail: String?
+    /// A narrow exception for helper text drawn over a high-contrast menu
+    /// highlight; the normal dropdown helper ink is unchanged.
+    var detailColour: AtticRGBA?
     /// Only a shortcut menu's shared scope supplies this value.
     var shortcutHintsShown: Bool?
     /// Typed text to embolden in the name (the `/` list's filter).
@@ -558,7 +561,7 @@ struct AtticDropdownRow: View {
 
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
-         detail: String? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
+         detail: String? = nil, detailColour: AtticRGBA? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
          titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
         self.position = position
@@ -570,6 +573,7 @@ struct AtticDropdownRow: View {
         self.checkGlyph = checkGlyph
         self.mark = mark
         self.detail = detail
+        self.detailColour = detailColour
         self.shortcutHintsShown = shortcutHintsShown
         self.match = match
         self.isHighlighted = isHighlighted
@@ -630,6 +634,7 @@ struct AtticDropdownRow: View {
                     }
                 } else {
                     AtticText(verbatim: detail, style: .shortcut, ink: .helper)
+                        .colour(detailColour)
                         .fixedSize()
                 }
             }

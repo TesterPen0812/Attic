@@ -1603,6 +1603,9 @@ struct TasksPage: View {
                         }
                     }
                 }
+                .backgroundPreferenceValue(AtticSelectedRunBounds.self) { anchors in
+                    AtticJoinedSelectedRuns(anchors: anchors)
+                }
                 .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
@@ -3325,7 +3328,7 @@ struct TasksPage: View {
         }
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
-        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
+        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false, edgeLight: true)
     }
 
     /// The selection bar's turn in the tag bar's place (T2): two or more
