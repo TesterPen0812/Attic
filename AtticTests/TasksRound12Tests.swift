@@ -113,28 +113,50 @@ final class TasksRound12Tests: XCTestCase {
     }
 
     func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() async throws {
+        try await assertG08FindRetriesPreserveSelectionAndMidQueryCaret(reduceMotion: false)
+    }
+
+    func testG08FindRetriesPreserveSelectionAndMidQueryCaretWithReduceMotion() async throws {
+        try await assertG08FindRetriesPreserveSelectionAndMidQueryCaret(reduceMotion: true)
+    }
+
+    private func assertG08FindRetriesPreserveSelectionAndMidQueryCaret(reduceMotion: Bool) async throws {
         try requireKeyWindowTests()
         for tab in [TasksTab.now, .backlog] {
             for selection in [NSRange(location: 1, length: 3), NSRange(location: 2, length: 0)] {
-                let hosted = try Hosted(height: 520)
+                let hosted = try Hosted(height: 520,
+                    design: AtticDesignContext(mode: .light, reduceMotion: reduceMotion))
                 defer { hosted.window.contentView = nil; hosted.close() }
                 if tab != .now { hosted.go(to: tab) }
                 let turn = QueueTurn()
                 DispatchQueue.main.async { turn.ran = true }
                 sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
                 try await Task.sleep(for: .milliseconds(60))
-                XCTAssertTrue(turn.ran, "the native focus callbacks received their turn before acquisition is checked")
-                let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: hosted.window.contentView!,
-                    placeholder: hosted.model.searchPlaceholder(for: tab)))
-                let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView,
-                    "Find tab=\(tab) selection=\(selection) first=\(String(describing: hosted.window.firstResponder)) key=\(hosted.window.isKeyWindow) fieldEnabled=\(field.isEnabled) fieldHidden=\(field.isHiddenOrHasHiddenAncestor) currentEditor=\(String(describing: field.currentEditor()))")
-                XCTAssertTrue(editor.delegate as? NSTextField === field, "Find acquired its own field before the retry")
-                editor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
-                editor.setSelectedRange(selection)
+                // SwiftUI can mount the new tab's field after the first main
+                // queue turn. The field explicitly retries at 150/400 ms;
+                // wait for that same request to acquire its own native editor.
+                let deadline = Date().addingTimeInterval(2)
+                var field: NSTextField?
+                var editor: NSTextView?
+                repeat {
+                    hosted.window.contentView?.layoutSubtreeIfNeeded()
+                    field = AtticTabsSearchField.searchField(in: hosted.window.contentView!,
+                        placeholder: hosted.model.searchPlaceholder(for: tab))
+                    editor = hosted.window.firstResponder as? NSTextView
+                    if let field, let editor, editor.delegate as? NSTextField === field { break }
+                    try await Task.sleep(for: .milliseconds(20))
+                } while Date() < deadline
+                XCTAssertTrue(turn.ran, "native focus callbacks received their main-queue turn before acquisition")
+                let acquiredField = try XCTUnwrap(field, "Find field mounted on \(tab)")
+                let acquiredEditor = try XCTUnwrap(editor,
+                    "Find tab=\(tab) selection=\(selection) first=\(String(describing: hosted.window.firstResponder)) key=\(hosted.window.isKeyWindow) fieldEnabled=\(acquiredField.isEnabled) fieldHidden=\(acquiredField.isHiddenOrHasHiddenAncestor) currentEditor=\(String(describing: acquiredField.currentEditor()))")
+                XCTAssertTrue(acquiredEditor.delegate as? NSTextField === acquiredField, "Find acquired its own field before the retry")
+                acquiredEditor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
+                acquiredEditor.setSelectedRange(selection)
                 try await Task.sleep(for: .milliseconds(500))
-                XCTAssertTrue(hosted.window.firstResponder === editor)
-                XCTAssertEqual(editor.selectedRange(), selection, "later retries must not move the caret: \(tab)")
-                editor.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertTrue(hosted.window.firstResponder === acquiredEditor)
+                XCTAssertEqual(acquiredEditor.selectedRange(), selection, "later retries must not move the caret: \(tab)")
+                acquiredEditor.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
                 XCTAssertEqual(hosted.model.searchQuery(for: tab), ("invoice" as NSString).replacingCharacters(in: selection, with: "X"))
             }
         }

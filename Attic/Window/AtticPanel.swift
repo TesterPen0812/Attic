@@ -1184,6 +1184,29 @@ final class AtticPanelContentContainer: NSView {
     let hostingView: AtticPanelHostingView
     private let motionView = NSView()
     private static let collapseAnimationKey = "attic.panel.collapse"
+    #if DEBUG
+    /// A CI turn may be stalled for longer than a release spring. Arm the
+    /// pause before the gesture so it happens while the animation is added.
+    private var nextSpringFreezeFractionForTesting: Double?
+
+    func freezeNextSpringForTesting(atFraction fraction: Double) {
+        precondition((0..<1).contains(fraction))
+        nextSpringFreezeFractionForTesting = fraction
+    }
+
+    var hasFrozenSpringForTesting: Bool {
+        guard let layer = motionView.layer, layer.speed == 0 else { return false }
+        return layer.animation(forKey: Self.collapseAnimationKey) != nil
+            || layer.animation(forKey: Self.swoopAnimationKey) != nil
+    }
+
+    func thawSpringForTesting() {
+        nextSpringFreezeFractionForTesting = nil
+        swoopClockFrozenAt = nil
+        motionView.layer?.speed = 1
+        motionView.layer?.timeOffset = 0
+    }
+    #endif
     var allowsContentInteraction = true
     /// While a swipe's close or spring-back runs, the panel's whole area
     /// takes the first event of a new swipe (a takeover), also where the
@@ -1447,6 +1470,13 @@ final class AtticPanelContentContainer: NSView {
             animation.toValue = NSValue(caTransform3D: target)
             CATransaction.setCompletionBlock(completion)
             layer.add(animation, forKey: Self.collapseAnimationKey)
+            #if DEBUG
+            if spring != nil, let fraction = nextSpringFreezeFractionForTesting {
+                nextSpringFreezeFractionForTesting = nil
+                layer.speed = 0
+                layer.timeOffset = animation.beginTime + animation.duration * fraction
+            }
+            #endif
             if hides {
                 // The last part fades out, so the hide ends cleanly. It holds
                 // at 0 until the next motion takes the panel back.
@@ -1883,6 +1913,14 @@ final class AtticPanelContentContainer: NSView {
             }
         }
         layer.add(group, forKey: Self.swoopAnimationKey)
+        #if DEBUG
+        if case .spring = curve, let fraction = nextSpringFreezeFractionForTesting {
+            nextSpringFreezeFractionForTesting = nil
+            swoopClockFrozenAt = run.start + run.duration * fraction
+            layer.speed = 0
+            layer.timeOffset = group.beginTime + group.duration * fraction
+        }
+        #endif
         CATransaction.commit()
         return run.duration
     }

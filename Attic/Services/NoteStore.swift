@@ -124,6 +124,11 @@ private enum NotePersistenceRefreshOutcome {
 /// `LSUIElement` Mac app does not nap while Core Data is mirroring.
 @MainActor
 final class NoteStore: ObservableObject {
+    #if DEBUG
+    /// Counts real stored-document decodes by UUID. Warm session reuse must
+    /// not decode the same document again just to reopen its page.
+    var documentDecodeCountByIDForTesting: [UUID: Int] = [:]
+    #endif
     /// S10 chooses the same oldest physical creation date as the registry.
     /// Keep this with the published snapshot, rather than fetching per row.
     private(set) var itemWritingIDs: [UUID: UUID] = [:]
