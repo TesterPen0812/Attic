@@ -810,4 +810,198 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(result.canvas.id, model.canvasID)
         XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
+
+    // Red-first Draw integration audit, 11 Nov. These intentionally assert the intended safety contract.
+    func testDA1SecondaryPanDuringInkMustKeepTheUnfinishedStroke() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120))
+        // The middle button can be pressed before the pen's mouse-up.
+        model.pointerDown(at: CGPoint(x: 90, y: 120), panButton: true)
+        model.pointerDragged(to: CGPoint(x: 110, y: 130))
+        model.pointerUp()
+        XCTAssertEqual(try store.open(id).objects.filter { if case .stroke = $0.content { true } else { false } }.count,
+                       1, "The secondary pan must not discard ink that was already drawn")
+    }
+
+    func testDA1SecondaryPanSettlesShapeAndEraseAndWaitsForItsOwnButtonUp() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.shape)
+        model.pointerDown(at: CGPoint(x: 70, y: 170))
+        model.pointerDragged(to: CGPoint(x: 125, y: 215))
+        model.pointerDown(at: CGPoint(x: 140, y: 230), panButton: true)
+        XCTAssertEqual(try store.open(id).objects.filter { if case .shape = $0.content { true } else { false } }.count, 1)
+        guard case .pan = model.live else { return XCTFail("Secondary pan must own the pointer") }
+        model.pointerUp(panButton: false)
+        XCTAssertNotNil(model.live, "The first button release must not end the second button's pan")
+        let startViewport = model.viewport
+        model.pointerDragged(to: CGPoint(x: 160, y: 250), panButton: false)
+        XCTAssertEqual(model.viewport, startViewport, "Primary drag must not move a middle-button pan")
+        model.pointerDragged(to: CGPoint(x: 160, y: 250), panButton: true)
+        XCTAssertNotEqual(model.viewport, startViewport)
+        model.pointerUp(panButton: true)
+        XCTAssertNil(model.live)
+
+        model.setViewport(DrawViewport(), byUser: true)
+        let samples = [DrawPoint(x: 80, y: 320), DrawPoint(x: 140, y: 320)]
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(samples), content: .stroke(samples))
+        XCTAssertTrue(model.perform(.put([stroke])).isSaved)
+        model.setTool(.eraser)
+        model.pointerDown(at: CGPoint(x: 95, y: 320))
+        model.pointerDragged(to: CGPoint(x: 120, y: 320))
+        model.pointerDown(at: CGPoint(x: 150, y: 330), panButton: true)
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == stroke.id }),
+                       "The interrupted eraser must save the removal")
+        model.pointerUp(panButton: false)
+        XCTAssertNotNil(model.live)
+        model.pointerUp(panButton: true)
+        XCTAssertNil(model.live)
+    }
+
+    func testDA2ExternalAgentDeleteDuringInkMustNotLeaveAResurrectableStaleObject() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let target = DrawObject(frame: DrawFrame(x: 40, y: 60, width: 60, height: 20),
+                                content: .text("Agent deletes me"))
+        XCTAssertTrue(model.perform(.put([target])).isSaved)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 180, y: 150))
+        model.pointerDragged(to: CGPoint(x: 210, y: 170))
+        // Store writes are immediate; the page's observation callback is queued asynchronously.
+        XCTAssertTrue(store.perform(.remove([target.id]), on: id).isSaved)
+        model.pointerUp(at: CGPoint(x: 230, y: 180))
+        XCTAssertFalse(model.objects.contains(where: { $0.id == target.id }),
+                       "The model must incorporate an external delete before the owner uses stale content")
+        // Follow-up owner action must not silently revive the deleted text box.
+        model.setTool(.select)
+        model.select([target.id])
+        let stale = model.selectedObjects.map { $0.translated(by: DrawPoint(x: 10, y: 10), id: $0.id) }
+        if !stale.isEmpty { XCTAssertTrue(model.perform(.put(stale)).isSaved) }
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == target.id }),
+                       "An agent-deleted box must remain deleted after the owner moves a selection")
+    }
+
+    func testDA2ExternalRestyleAndMoveDuringOwnerMovePreservesBothChanges() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let box = DrawObject(frame: DrawFrame(x: 70, y: 150, width: 80, height: 30), content: .text("Shared"))
+        XCTAssertTrue(model.perform(.put([box])).isSaved)
+        model.setTool(.select)
+        model.select([box.id])
+        model.pointerDown(at: CGPoint(x: 90, y: 165))
+        model.pointerDragged(to: CGPoint(x: 105, y: 175))
+        var agent = box
+        agent.frame.x += 80
+        agent.style.colour = .red
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.pointerUp()
+        let saved = try XCTUnwrap(store.open(id).objects.first { $0.id == box.id })
+        XCTAssertEqual(saved.frame.x, agent.frame.x + 15, accuracy: 0.01)
+        XCTAssertEqual(saved.frame.y, agent.frame.y + 10, accuracy: 0.01)
+        XCTAssertEqual(saved.style.colour, .red, "The gesture must keep the agent's restyle")
+    }
+
+    func testDA2ExternalRestyleDuringSelectionResizeSurvivesCommit() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let shape = DrawObject(frame: DrawFrame(x: 70, y: 150, width: 60, height: 45), content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([shape])).isSaved)
+        model.setTool(.select)
+        model.select([shape.id])
+        let corner = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        model.pointerDown(at: corner.point)
+        model.pointerDragged(to: CGPoint(x: corner.point.x + 20, y: corner.point.y + 15))
+        var agent = shape
+        agent.style.colour = .red
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.pointerUp()
+        let saved = try XCTUnwrap(store.open(id).objects.first { $0.id == shape.id })
+        XCTAssertEqual(saved.style.colour, .red)
+        XCTAssertEqual(saved.frame.width, shape.frame.width + 20, accuracy: 0.01)
+        XCTAssertEqual(saved.frame.height, shape.frame.height + 15, accuracy: 0.01)
+    }
+
+    func testDA3AgentMoveOfLiveTextBoxMustSurviveTheOwnersNextKeystroke() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.text)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Before")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var moved = original
+        moved.frame.x += 90
+        moved.frame.y += 40
+        XCTAssertTrue(store.perform(.put([moved]), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.object(original.id)?.frame.x, moved.frame.x, "The external move reaches the board")
+        model.typed("Before!")
+        let after = try XCTUnwrap(store.open(id).objects.first)
+        XCTAssertEqual(after.frame.x, moved.frame.x, "Typing must retain the agent's new text position")
+        XCTAssertEqual(after.frame.y, moved.frame.y, "Typing must retain the agent's new text position")
+    }
+
+    func testDA3TypingBeforeStoreObservationRebasesWidthScaleAndRestyle() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Before")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var changed = original
+        changed.frame.x += 40
+        changed.frame.y += 30
+        changed.textWidth = 115
+        changed.textScale = 1.4
+        changed.style.colour = .red
+        DrawPageModel.measure(&changed, text: changed.text)
+        XCTAssertTrue(store.perform(.put([changed]), on: id).isSaved)
+        // Deliberately do not call syncExternalChanges: typing is faster than the observer.
+        model.typed("Before!")
+        let edit = try XCTUnwrap(model.editing)
+        XCTAssertEqual(edit.origin.x, changed.frame.x)
+        XCTAssertEqual(edit.origin.y, changed.frame.y)
+        XCTAssertEqual(edit.width, 115)
+        XCTAssertEqual(edit.scale, 1.4, accuracy: 0.0001)
+        let stored = try XCTUnwrap(store.open(id).objects.first)
+        XCTAssertEqual(stored.frame.x, changed.frame.x)
+        XCTAssertEqual(stored.frame.y, changed.frame.y)
+        XCTAssertEqual(stored.textWidth, 115)
+        XCTAssertEqual(stored.textScale ?? 1, 1.4, accuracy: 0.0001)
+        XCTAssertEqual(stored.style.colour, .red)
+        XCTAssertEqual(stored.text, "Before!")
+    }
+
+    func testDA3ExternalTextConflictEndsEditAndKeepsOwnerTextInUndoHistory() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Owner typed text")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var agent = original
+        agent.content = .text("Agent's different text")
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertNil(model.editing, "A conflicting live edit must close")
+        model.typed("Stale editor write")
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Agent's different text")
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Owner typed text",
+                       "Previously committed owner typing remains recoverable")
+    }
+
+    func testDA3ExternalDeleteOfEditedBoxCannotBeUndoneByTyping() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Owner's saved sentence")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        XCTAssertTrue(store.perform(.remove([original.id]), on: id).isSaved)
+        model.typed("Owner's saved sentence!")
+        XCTAssertNil(model.editing)
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == original.id }))
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Owner's saved sentence")
+    }
+
 }

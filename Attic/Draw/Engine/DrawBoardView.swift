@@ -538,11 +538,11 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
+        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event), panButton: false)
     }
 
     override func mouseUp(with event: NSEvent) {
-        model.pointerUp(at: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
+        model.pointerUp(at: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event), panButton: false)
     }
 
     /// Tablet-point samples may arrive separately from mouse drags; include
@@ -561,8 +561,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func otherMouseDown(with event: NSEvent) { model.pointerDown(at: boardPoint(event), panButton: true) }
-    override func otherMouseDragged(with event: NSEvent) { model.pointerDragged(to: boardPoint(event)) }
-    override func otherMouseUp(with event: NSEvent) { model.pointerUp(at: boardPoint(event)) }
+    override func otherMouseDragged(with event: NSEvent) { model.pointerDragged(to: boardPoint(event), panButton: true) }
+    override func otherMouseUp(with event: NSEvent) { model.pointerUp(at: boardPoint(event), panButton: true) }
 
     /// A scroll gesture is the board's when it begins over the clear area
     /// (a gesture belongs to what is under the pointer when it begins). Over
