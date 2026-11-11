@@ -3,9 +3,10 @@ import Combine
 import QuartzCore
 
 /// The Draw board (restart plan §2): live ink draws incrementally on its own
-/// layers; committed content is one raster from the background renderer,
-/// latest request winning; live ink stays until a raster that includes it
-/// is installed. Input handlers only move layers and queue rasters.
+/// layers; committed content is a world-space raster from the background
+/// renderer. Its pixels cover the drawing, independent of pan and zoom, so
+/// input can transform it without waiting for another raster. Live ink stays
+/// until a raster that includes it is installed.
 ///
 /// The view is unflipped; the page model's screen points are y down, so
 /// every conversion flips once here.
@@ -15,6 +16,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     private let dotsLayer = CALayer()
     private let committedLayer = CALayer()
+    /// A screen-resolution raster replaces the world backing while the
+    /// viewport is resting. Pan/zoom restores the complete world backing.
+    private let detailLayer = CALayer()
     /// Live overlays in world points: ink, the shape being dragged out.
     private let worldLayer = CALayer()
     private let selectionLayer = CAShapeLayer()
@@ -27,6 +31,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private(set) var pendingOverlays: [(revision: Int, layer: CALayer)] = []
     private var requestedKey: DrawRasterKey?
     private(set) var installedKey: DrawRasterKey?
+    private var detailRequestedKey: DrawRasterKey?
+    private var detailInstalledKey: DrawRasterKey?
+    private var detailSettle: DispatchWorkItem?
     private var needsRaster = true
     private var dots = DrawDots()
     private(set) var editor: DrawTextEditorView?
@@ -65,6 +72,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     /// Test seam: rasters requested and installed by this board.
     private(set) var rasterRequests = 0
     private(set) var rasterInstalls = 0
+    private(set) var detailInstalls = 0
     #endif
 
     private lazy var renderer = DrawLatestRenderer<DrawRasterRequest, DrawRasterImage>(
@@ -72,12 +80,17 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         install: { [weak self] request, image in self?.install(request, image) }
     )
 
+    private lazy var detailRenderer = DrawLatestRenderer<DrawRasterRequest, DrawRasterImage>(
+        work: { request, stale in DrawRaster.render(request, cancelled: stale) },
+        install: { [weak self] request, image in self?.installDetail(request, image) }
+    )
+
     init(model: DrawPageModel) {
         self.model = model
         super.init(frame: CGRect(origin: .zero, size: model.boardSize))
         wantsLayer = true
         layerContentsRedrawPolicy = .never
-        for sublayer in [dotsLayer, committedLayer, worldLayer] {
+        for sublayer in [dotsLayer, committedLayer, detailLayer, worldLayer] {
             sublayer.anchorPoint = .zero
             sublayer.position = .zero
             sublayer.actions = Self.noActions
@@ -138,8 +151,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         model.setBoard(size: newSize, clearInsets: model.clearInsets)
+        invalidateDetail()
         layoutLayers()
         requestRaster()
+        scheduleDetail()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -164,12 +179,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         if let installed = installedKey {
             // The installed raster, carried to the current viewport until the
             // next one arrives (a pan or zoom never waits for it).
-            let s = viewport.zoom / installed.viewport.zoom
-            committedLayer.bounds = CGRect(origin: .zero, size: installed.size)
-            committedLayer.setAffineTransform(CGAffineTransform(
-                a: s, b: 0, c: 0, d: s,
-                tx: viewport.x - s * installed.viewport.x,
-                ty: height - s * installed.size.height + s * installed.viewport.y - viewport.y))
+            placeRaster(committedLayer, key: installed, viewport: viewport, height: height)
+        }
+        if let installed = detailInstalledKey {
+            placeRaster(detailLayer, key: installed, viewport: viewport, height: height)
         }
         dots.place(in: dotsLayer, viewport: viewport, size: bounds.size, dark: isDark)
         updateSelection()
@@ -177,11 +190,49 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         CATransaction.commit()
     }
 
+    private func placeRaster(_ layer: CALayer, key: DrawRasterKey, viewport: DrawViewport, height: CGFloat) {
+        let s = viewport.zoom / key.viewport.zoom
+        layer.bounds = CGRect(origin: .zero, size: key.size)
+        layer.setAffineTransform(CGAffineTransform(
+            a: s, b: 0, c: 0, d: s,
+            tx: viewport.x - s * key.viewport.x,
+            ty: height - s * key.size.height + s * key.viewport.y - viewport.y))
+    }
+
     // MARK: Rasters
+
+    /// The backing image covers every committed object, including geometry
+    /// being moved or replaced. A raster clipped to the current viewport
+    /// cannot reveal pixels that scroll into view during a continuous pinch.
+    private func rasterCoverage() -> CGRect {
+        var coverage = DrawGeometry.union(model.objects) ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        if let move = model.rasterMove {
+            for object in model.objects where move.ids.contains(object.id) {
+                coverage = coverage.union(DrawGeometry.bounds(object.translated(
+                    by: DrawPoint(x: move.offset.x, y: move.offset.y), id: object.id)))
+            }
+        }
+        for object in model.rasterReplacements.values {
+            coverage = coverage.union(DrawGeometry.bounds(object))
+        }
+        // Includes stroke caps, image rounded corners and antialiasing.
+        coverage = coverage.insetBy(dx: -12, dy: -12)
+        return CGRect(x: floor(coverage.minX), y: floor(coverage.minY),
+                      width: ceil(coverage.maxX) - floor(coverage.minX),
+                      height: ceil(coverage.maxY) - floor(coverage.minY))
+    }
 
     private func currentKey() -> DrawRasterKey {
         let move = model.rasterMove
-        return DrawRasterKey(revision: model.contentRevision, viewport: model.viewport, size: bounds.size, scale: scale,
+        let coverage = rasterCoverage()
+        // A large or sparse canvas must never allocate an unbounded bitmap.
+        // Keep its complete extent, reducing the backing density if needed.
+        let maxPixels: CGFloat = 12_000_000
+        let density = min(scale, 8192 / max(coverage.width, coverage.height),
+                          sqrt(maxPixels / (coverage.width * coverage.height)))
+        let rasterViewport = DrawViewport(x: -coverage.minX, y: -coverage.minY)
+        return DrawRasterKey(revision: model.contentRevision, viewport: rasterViewport,
+                             size: coverage.size, scale: density,
                              dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero,
                              replaced: model.rasterReplacements.mapValues(\.frame))
     }
@@ -194,10 +245,68 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         guard key != requestedKey || needsRaster else { return }
         needsRaster = false
         requestedKey = key
+        invalidateDetail()
+        scheduleDetail()
         #if DEBUG
         rasterRequests += 1
         #endif
         renderer.request(DrawRasterRequest(key: key, objects: model.objects, replacements: model.rasterReplacements))
+    }
+
+    private func detailKey() -> DrawRasterKey {
+        let move = model.rasterMove
+        return DrawRasterKey(revision: model.contentRevision, viewport: model.viewport, size: bounds.size, scale: scale,
+                             dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero,
+                             replaced: model.rasterReplacements.mapValues(\.frame))
+    }
+
+    /// Stop displaying a viewport-clipped image as soon as any movement
+    /// begins. The world raster underneath has all pixels to move into view.
+    private func invalidateDetail() {
+        detailSettle?.cancel()
+        detailSettle = nil
+        detailRenderer.cancel()
+        detailRequestedKey = nil
+        detailInstalledKey = nil
+        detailLayer.isHidden = true
+        committedLayer.isHidden = false
+    }
+
+    private func scheduleDetail() {
+        guard model.isShown else { return }
+        // At normal size the world bitmap already supplies one device pixel
+        // per pixel. Detail is only useful when it would be visibly sharper.
+        let worldDensity = requestedKey?.scale ?? installedKey?.scale ?? 0
+        guard worldDensity < scale * model.viewport.zoom * 0.99 else { return }
+        detailSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.requestDetail() }
+        detailSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.035, execute: work)
+    }
+
+    private func requestDetail() {
+        guard model.isShown, bounds.width > 0, bounds.height > 0 else { return }
+        let key = detailKey()
+        detailRequestedKey = key
+        detailRenderer.request(DrawRasterRequest(key: key, objects: model.objects,
+                                                replacements: model.rasterReplacements))
+    }
+
+    private func installDetail(_ request: DrawRasterRequest, _ result: DrawRasterImage) {
+        guard model.isShown, request.key == detailRequestedKey, request.key == detailKey() else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        detailLayer.contents = result.image
+        detailLayer.contentsScale = request.key.scale
+        detailInstalledKey = request.key
+        layoutLayers()
+        detailLayer.isHidden = false
+        committedLayer.isHidden = true
+        CATransaction.commit()
+        #if DEBUG
+        rasterInstalls += 1
+        detailInstalls += 1
+        #endif
     }
 
     private func install(_ request: DrawRasterRequest, _ result: DrawRasterImage) {
@@ -229,15 +338,17 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     func drawViewportChanged() {
+        invalidateDetail()
         layoutLayers()
-        requestRaster()
+        scheduleDetail()
         queueCursorRefresh()
     }
 
     func drawSelectionChanged() { updateSelection(); queueObjectAccessibilityUpdate() }
 
     func drawVisibilityChanged() {
-        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
+        if model.isShown { needsRaster = true; requestRaster() }
+        else { renderer.cancel(); requestedKey = nil; invalidateDetail(); releaseCursor() }
         if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
     }
