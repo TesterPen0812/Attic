@@ -107,7 +107,7 @@ struct CalendarPage: View {
         .onAppear {
             model.setVisible(isReallyVisible)
             // A retained, prewarmed Calendar is mounted but not the shown page.
-            if isReallyVisible { model.pageAppeared() }
+            if isReallyVisible { model.pageAppeared(); applyWatchedDayRequest() }
             #if DEBUG
             if isReallyVisible, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
                 model.setDayView(true)
@@ -120,7 +120,7 @@ struct CalendarPage: View {
         }
         .onChange(of: isReallyVisible) { _, current in
             model.setVisible(current)
-            if current { model.pageAppeared() }
+            if current { model.pageAppeared(); applyWatchedDayRequest() }
             #if DEBUG
             if current, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
                 model.setDayView(true)
@@ -132,8 +132,9 @@ struct CalendarPage: View {
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         // The agent picks a day while you watch (the spark taps its key).
         .onReceive(AgentWatchBoard.shared.$dayRequest.compactMap { $0 }) { request in
-            AgentWatchBoard.shared.consumeDay(request.id)
-            model.select(request.day)
+            // @Published sends before updating its stored value; check the
+            // latest request once the publication has finished.
+            Task { @MainActor in applyWatchedDayRequest(request) }
         }
         .onChange(of: snapshot.weeks.count) { _, count in
             // The week view stays the week view when the month changes
@@ -359,6 +360,18 @@ struct CalendarPage: View {
 
     private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {
         model.navigateAfterClosingEvent(action)
+    }
+
+    private func applyWatchedDayRequest() {
+        if let request = AgentWatchBoard.shared.dayRequest { applyWatchedDayRequest(request) }
+    }
+
+    private func applyWatchedDayRequest(_ request: (day: DueDay, id: UUID, generation: UInt64)) {
+        let board = AgentWatchBoard.shared
+        guard board.acceptsDayRequest(id: request.id, generation: request.generation,
+                                      pageIsVisible: isReallyVisible) else { return }
+        board.consumeDay(request.id)
+        model.select(request.day)
     }
 
     private func beginSearch() {

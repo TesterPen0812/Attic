@@ -1931,6 +1931,30 @@ final class AgentChatWatchingTests: XCTestCase {
     private var presented: [AgentWatchedAction] = []
     private var pagesOpened: [AgentPage] = []
 
+    func testBA4ClosingWatchingClearsDeferredCalendarDayAndOldSessionCannotReuseIt() async throws {
+        let chat = AgentChatModel()
+        let board = AgentWatchBoard()
+        let watcher = PanelAgentWatcher(chat: chat,
+            noteWriter: AgentNoteWriter(open: { _, _, _ in nil }, base: { _ in nil }), board: board)
+        watcher.pace = .instant
+        watcher.reducesMotion = { true }
+        watcher.currentPage = { .calendar }
+        chat.open()
+        let occurrence = "held@\(Date().timeIntervalSinceReferenceDate)"
+        await watcher.presentation(for: .calendarEvent(AgentTarget(page: .calendar, externalID: occurrence)))?()
+        XCTAssertNotNil(board.dayRequest, "a watched event requests its day")
+        let request = try XCTUnwrap(board.dayRequest)
+        XCTAssertFalse(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: false),
+                       "a retained, hidden Calendar must ignore the day")
+        XCTAssertTrue(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: true))
+        chat.close()
+        XCTAssertNil(board.dayRequest, "a closed chat must retire its unpublished day request")
+        XCTAssertFalse(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: true),
+                       "a retired generation cannot override a manual day selection")
+        chat.open()
+        XCTAssertNil(board.dayRequest, "a new watch session must not reuse the old day")
+    }
+
     override func setUp() async throws {
         tasks = try makeTestStore()
         let library = AtticLibrary(tasks: tasks)

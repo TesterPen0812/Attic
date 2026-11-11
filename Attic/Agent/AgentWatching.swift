@@ -157,7 +157,10 @@ final class AgentWatchBoard: ObservableObject {
     /// Events growing in now.
     @Published private(set) var growingEvents: Set<String> = []
     /// Calendar's selected day, as the agent picks it.
-    @Published private(set) var dayRequest: (day: DueDay, id: UUID)?
+    @Published private(set) var dayRequest: (day: DueDay, id: UUID, generation: UInt64)?
+    private weak var watchingChat: AgentChatModel?
+
+    func bindWatching(to chat: AgentChatModel) { watchingChat = chat }
 
     func report(_ key: String, frame: CGRect) { frames[key] = frame }
     func forget(_ key: String) { frames[key] = nil }
@@ -174,7 +177,18 @@ final class AgentWatchBoard: ObservableObject {
         if growingEvents.contains(id) { growingEvents.remove(id) }
     }
 
-    func pick(_ day: DueDay) { dayRequest = (day, UUID()) }
+    func pick(_ day: DueDay, generation: UInt64) {
+        guard watchingChat?.isWatching(generation) == true else { return }
+        dayRequest = (day, UUID(), generation)
+    }
+
+    func retireDayRequest() { dayRequest = nil }
+
+    /// A retained or prewarmed Calendar page must never consume a request.
+    func acceptsDayRequest(id: UUID, generation: UInt64, pageIsVisible: Bool) -> Bool {
+        pageIsVisible && dayRequest?.id == id && dayRequest?.generation == generation
+            && watchingChat?.isWatching(generation) == true
+    }
     /// A page that took the day: a page drawn later never picks it again.
     func consumeDay(_ id: UUID) {
         guard dayRequest?.id == id else { return }
