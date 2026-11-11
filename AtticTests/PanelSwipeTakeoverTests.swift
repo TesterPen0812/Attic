@@ -352,6 +352,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
             // its actual presentation layer partway through the release so
             // the next swipe must take over a known in-flight frame.
             var pausedLayer: CALayer?
+            var swoopContent: AtticPanelContentContainer?
             if mode == .slide {
                 let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
                 let layer = try XCTUnwrap(content.subviews.compactMap(\.layer)
@@ -362,11 +363,16 @@ final class PanelSwipeTakeoverTests: XCTestCase {
                 CATransaction.flush()
                 pausedLayer = layer
             } else {
-                spin(0.04)
+                // Swoop's spring reads the clock, which a stalled CI turn
+                // also runs on: stop it a fifth of the way through.
+                let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
+                XCTAssertTrue(content.freezeSwoopForTesting(atFraction: 0.2), "\(mode): the release runs a spring")
+                swoopContent = content
             }
             defer {
                 pausedLayer?.speed = 1
                 pausedLayer?.timeOffset = 0
+                swoopContent?.thawSwoopForTesting()
             }
             let springing = rig.controller.displayedProgressForProbe
             XCTAssertTrue(rig.panel.isVisible, "\(mode)")
@@ -378,6 +384,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
             XCTAssertEqual(caught, springing, accuracy: 0.03, "\(mode): picked up where the spring had it")
             pausedLayer?.speed = 1
             pausedLayer?.timeOffset = 0
+            swoopContent?.thawSwoopForTesting()
             for _ in 0..<20 { spin(1.0 / 120); try send(-6, phase: 2, to: rig.panel) }
             let followed = rig.controller.displayedProgressForProbe
             XCTAssertGreaterThan(followed, springing + 0.1, "\(mode): the new swipe drives the panel")
