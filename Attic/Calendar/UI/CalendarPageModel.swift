@@ -69,7 +69,8 @@ final class CalendarPageModel: ObservableObject {
     private var cachedTasks: (revision: UInt64, today: DueDay, environment: DatePresentationEnvironment,
                               entries: [CalendarTaskEntry])?
     private var isVisible = false
-    /// Calendar navigation waits behind one owned-event save.
+    /// Calendar navigation waits behind one owned-event save. A hidden page
+    /// retires its pending actions without cancelling that save.
     private var pendingNavigation: [@MainActor () -> Void] = []
     private var navigationClosing = false
     private var navigationGeneration: UInt64 = 0
@@ -153,6 +154,8 @@ final class CalendarPageModel: ObservableObject {
             }
             startNowPositionTimer()
         } else {
+            navigationGeneration &+= 1
+            pendingNavigation.removeAll()
             nowPositionTimer?.invalidate()
             nowPositionTimer = nil
         }

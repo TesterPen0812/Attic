@@ -90,6 +90,18 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertNotNil(model.eventRows.failure)
     }
 
+    func testBA3LeavingCalendarRetiresNavigationButCompletesTheSave() async throws {
+        let (model, writer) = try await heldNavigation()
+        model.navigateAfterClosingEvent { model.goToToday(); model.shift(by: 1, weekView: false) }
+        let gate = try await waitForHeldSave(writer)
+        model.setVisible(false) // Tasks selected or panel hidden while the edit is saving.
+        gate.resume()
+        for _ in 0..<200 where writer.commits == 0 { await Task.yield() }
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(writer.saved.draft.title, "Lunch changed", "the save is still durable")
+        XCTAssertEqual(model.snapshot.selected, day(2026, 10, 29), "only the deferred page action is retired")
+    }
+
     private func day(_ y: Int, _ m: Int, _ d: Int) -> DueDay { DueDay(year: y, month: m, day: d)! }
 
     private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 0, _ min: Int = 0) -> Date {
