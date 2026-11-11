@@ -358,7 +358,7 @@ struct CalendarPage: View {
     }
 
     private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {
-        Task { if await model.eventRows.close() { action() } }
+        model.navigateAfterClosingEvent(action)
     }
 
     private func beginSearch() {

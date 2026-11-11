@@ -12,6 +12,84 @@ import XCTest
 final class CalendarPageTests: XCTestCase {
     private let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: "Europe/London")!)
 
+    /// The actual owned-event close is held while the Calendar navigation buttons are pressed.
+    private final class HeldNavigationWriter: CalendarEventWriter {
+        var saved: CalendarOwnedEvent
+        var gate: CheckedContinuation<Void, Never>?
+        var fail = false
+        var commits = 0
+        var lastError: CalendarEventWriteError? { nil }
+
+        init(_ start: Date) {
+            saved = CalendarOwnedEvent(id: UUID(), occurrenceID: "held-event",
+                draft: CalendarEventDraft(title: "Lunch", start: start, length: 3600,
+                                          calendarID: "home", timeZoneID: "Europe/London"))
+        }
+        func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
+        func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? {
+            id == saved.occurrenceID ? saved : nil
+        }
+        func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
+        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+            await withCheckedContinuation { gate = $0 }
+            if fail { throw CalendarEventWriteError.saveFailed("Fake failure") }
+            saved.draft = draft
+            commits += 1
+            return saved
+        }
+        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func openInCalendar(_ id: String) async throws { throw CalendarEventWriteError.openFailed }
+    }
+
+    private func heldNavigation() async throws -> (CalendarPageModel, HeldNavigationWriter) {
+        let start = date(2026, 10, 29, 11)
+        let writer = HeldNavigationWriter(start)
+        let store = try makeTestStore()
+        let event = event(writer.saved.occurrenceID, "Lunch", start: start, end: start.addingTimeInterval(3600))
+        let model = CalendarPageModel(store: store, source: CalendarEventSourceStub(events: [event]),
+                                      calendar: calendar, now: { self.date(2026, 10, 29, 12) },
+                                      makeWriter: { writer })
+        model.setVisible(true)
+        await model.eventRows.toggle(event)
+        XCTAssertEqual(model.eventRows.rowID, event.id)
+        model.eventRows.title = "Lunch changed"
+        return (model, writer)
+    }
+
+    private func waitForHeldSave(_ writer: HeldNavigationWriter) async throws -> CheckedContinuation<Void, Never> {
+        for _ in 0..<200 where writer.gate == nil { await Task.yield() }
+        return try XCTUnwrap(writer.gate, "owned edit reached the delayed fake writer")
+    }
+
+    func testBA2TwoNextPressesDuringOneSaveBothNavigateInOrder() async throws {
+        let (model, writer) = try await heldNavigation()
+        defer { model.setVisible(false) }
+        model.navigateAfterClosingEvent { model.shift(by: 1, weekView: false) }
+        let gate = try await waitForHeldSave(writer)
+        model.navigateAfterClosingEvent { model.shift(by: 1, weekView: false) }
+        for _ in 0..<20 { await Task.yield() }
+        gate.resume()
+        for _ in 0..<200 where writer.commits == 0 { await Task.yield() }
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(writer.commits, 1, "one editor save for both navigation requests")
+        XCTAssertEqual(model.snapshot.selected, day(2026, 12, 1), "both Next requests must count")
+    }
+
+    func testBA2FailedCloseRetainsDraftAndDropsBothQueuedSteps() async throws {
+        let (model, writer) = try await heldNavigation()
+        defer { model.setVisible(false) }
+        writer.fail = true
+        model.navigateAfterClosingEvent { model.shift(by: 1, weekView: false) }
+        let gate = try await waitForHeldSave(writer)
+        model.navigateAfterClosingEvent { model.shift(by: 1, weekView: false) }
+        gate.resume()
+        for _ in 0..<150 { await Task.yield() }
+        XCTAssertEqual(model.snapshot.selected, day(2026, 10, 29))
+        XCTAssertEqual(model.eventRows.title, "Lunch changed")
+        XCTAssertNotNil(model.eventRows.rowID)
+        XCTAssertNotNil(model.eventRows.failure)
+    }
+
     private func day(_ y: Int, _ m: Int, _ d: Int) -> DueDay { DueDay(year: y, month: m, day: d)! }
 
     private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 0, _ min: Int = 0) -> Date {
