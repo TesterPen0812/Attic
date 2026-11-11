@@ -250,6 +250,10 @@ private struct PanelPageTransitKey: EnvironmentKey {
     static let defaultValue: PanelPageTransit? = nil
 }
 
+private struct PanelNativePageSlideKey: EnvironmentKey {
+    static let defaultValue: PanelNativePageSlide? = nil
+}
+
 /// Whether a page switch's slide is running (`PanelUIState.switchPage`).
 @MainActor
 final class PanelPageTransit: ObservableObject {
@@ -261,6 +265,10 @@ final class PanelPageTransit: ObservableObject {
 }
 
 extension EnvironmentValues {
+    var panelNativePageSlide: PanelNativePageSlide? {
+        get { self[PanelNativePageSlideKey.self] }
+        set { self[PanelNativePageSlideKey.self] = newValue }
+    }
     /// How far the shell has moved this page sideways for a page switch
     /// (0 at rest). The top row moves back by as much, in the same
     /// transaction, so it changes in place while the page travels.
@@ -383,11 +391,32 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
     @Environment(\.panelTopRowState) private var state
     @Environment(\.panelSharedChrome) private var chrome
     @Environment(\.panelPageTravel) private var travel
+    @Environment(\.panelNativePageSlide) private var nativeSlide
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        Group {
+            if let nativeSlide {
+                // The page travels in its own native layer; this independent
+                // header layer receives the inverse travel in the handler.
+                PanelNativeChromeHost(page: page, selected: page, kind: .topRow,
+                                      driver: nativeSlide, content: AnyView(row))
+                    .frame(height: PanelTopRowLayout.control + layout.chromeInsets.top)
+            } else {
+                row.offset(x: -travel).modifier(PanelInPlaceFade(away: travel != 0))
+            }
+        }
+        .onChange(of: searchOpen, initial: true) { _, open in state?.setSearching(open, on: page) }
+        .onAppear { chrome?.setTopRowShown(true, for: page) }
+        .onDisappear {
+            state?.setSearching(false, on: page)
+            chrome?.removeTopRow(for: page)
+        }
+    }
+
+    private var row: some View {
         let control = PanelTopRowLayout.control
         let gap = PanelTopRowLayout.gap
-        ZStack(alignment: .trailing) {
+        return ZStack(alignment: .trailing) {
             // Folded away (not just faded) while searching, so VoiceOver
             // and the keyboard only reach the field.
             if !searchOpen {
@@ -424,14 +453,6 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
         // Owner, 2026-10-31: the row stays in place through a page switch;
         // only what differs (the page's switch and leading text) changes:
         // the old fades out, then the new fades in (Accepted 2026-11-04).
-        .offset(x: -travel)
-        .modifier(PanelInPlaceFade(away: travel != 0))
-        .onChange(of: searchOpen, initial: true) { _, open in state?.setSearching(open, on: page) }
-        .onAppear { chrome?.setTopRowShown(true, for: page) }
-        .onDisappear {
-            state?.setSearching(false, on: page)
-            chrome?.removeTopRow(for: page)
-        }
     }
 
     private func report(leading maxX: CGFloat) {

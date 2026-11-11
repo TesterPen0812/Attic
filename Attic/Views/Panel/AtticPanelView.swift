@@ -191,27 +191,11 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
-                        pageHost(page)
-                            .onAppear {
-                                PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
-                            }
-                            .onChange(of: page == currentPage) { _, shown in
-                                if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)") }
-                            }
-                            .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
-                            .modifier(PanelPageVisibility(
-                                isCurrent: page == currentPage,
-                                // A page kept built rests on its side of the
-                                // current one, so it moves in from there.
-                                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage),
-                                                                        width: panelSize.width),
-                                motion: pageMotion,
-                                // Canvas and Notes have page-local shortcuts;
-                                // hidden, they must not fire. Tasks has none
-                                // outside its menus, and disabling it would
-                                // redraw the whole list on every switch.
-                                disablesWhenHidden: page == .canvas || page == .notes
-                            ))
+                        PanelNativePageHost(page: page, selected: currentPage,
+                                            width: panelSize.width, driver: uiState.nativePageSlide,
+                                            content: AnyView(nativePageContent(page)))
+                            .frame(width: panelSize.width, height: panelSize.height)
+                            .zIndex(page == currentPage ? 1 : 0)
                     }
                 }
             }
@@ -227,7 +211,17 @@ struct AtticPanelView: View {
             // The bottom bar every page shares (owner, 2026-10-31): drawn
             // once, so a page switch never moves, fades or rebuilds it.
             if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
-                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout, agentChat: uiState.agentChat)
+                ZStack(alignment: .bottom) {
+                    ForEach(PanelPage.allCases) { page in
+                        PanelNativeChromeHost(page: page, selected: currentPage, kind: .bottomBar,
+                                              driver: uiState.nativePageSlide,
+                                              content: AnyView(PanelSharedBottomBar(
+                                                chrome: sharedChrome, page: page, layout: pageLayout,
+                                                agentChat: uiState.agentChat)))
+                            .frame(height: AtticControlSize.headerControl + PanelSharedBottomBar.plusInsets(layout: pageLayout).bottom)
+                            .zIndex(page == currentPage ? 1 : 0)
+                    }
+                }
             }
         }
         .overlay {
@@ -271,6 +265,68 @@ struct AtticPanelView: View {
                 noticeClearance = clearance
             }
         }
+    }
+
+    /// Each page has its own native layer; the header, shared bar, composer
+    /// and notices are still composed once by the outer panel. Carry the
+    /// panel's design environment into each hosted page.
+    private func nativePageContent(_ page: PanelPage) -> some View {
+        pageHost(page)
+            .onAppear {
+                PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
+                #if DEBUG
+                PanelColdFirstFrameProbe.pageReady(page)
+                #endif
+                uiState.nativePageSlide.pageDidAppear(page)
+            }
+            .onChange(of: page == currentPage) { _, shown in
+                if shown {
+                    PerformanceSignposts.noteInput("page-current \(page.rawValue)")
+                    #if DEBUG
+                    PanelColdFirstFrameProbe.pageReady(page)
+                    #endif
+                    uiState.nativePageSlide.pageDidBecomeCurrent(page)
+                }
+            }
+            .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
+            .modifier(PanelPageVisibility(
+                isCurrent: page == currentPage,
+                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage), width: panelSize.width),
+                motion: pageMotion,
+                disablesWhenHidden: page == .canvas || page == .notes,
+                nativeMotion: true
+            ))
+            .environment(\.panelPageTransit, uiState.pageTransit)
+            .coordinateSpace(PanelPageLayout.coordinateSpace)
+            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+                guard page == currentPage, noticeClearance != clearance else { return }
+                noticeClearance = clearance
+            }
+            .environment(\.colorScheme, systemColorScheme)
+            .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
+            .environment(\.controlActiveState, .key)
+            .atticDesignCorners()
+            .environment(\.atticPanelThemePalette, panelThemePalette)
+            .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
+            .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
+            .environment(\.atticPanelToasts, toasts)
+            .environment(\.panelResumeDefaults, uiState.resumeDefaults)
+            .environment(\.panelTopRowState, topRowState)
+            .environment(\.panelNativePageSlide, uiState.nativePageSlide)
+            .environment(\.panelSharedChrome, sharedChrome)
+            .environment(\.panelComposer, composerRoute)
+            .environment(\.panelComposerRoom, composerState.room)
+            .atticTagColours(store.commandLibrary)
+            .tint(panelAccentColor)
+            .accentColor(panelAccentColor)
+            .atticDesignFromSystem(
+                palette: settings.panelTheme, surface: settings.panelSurfaceStyle,
+                tint: settings.panelTint, tintLength: settings.panelTintLength,
+                hapticsEnabled: settings.panelHapticsEnabled, animations: settings.animations,
+                controls: PanelKeyTreatment.controls(isPanelKey: false, surface: settings.panelSurfaceStyle),
+                motion: settings.motionTuning
+            )
+            .frame(width: panelSize.width, height: panelSize.height)
     }
 
     private var header: some View {
@@ -922,16 +978,17 @@ struct PanelPageVisibility: ViewModifier {
     /// in-place fade read it.
     var motion: PanelPageMotion = .instant
     let disablesWhenHidden: Bool
+    var nativeMotion = false
 
     func body(content: Content) -> some View {
         content
             .environment(\.atticPanelPageIsCurrent, isCurrent)
             .environment(\.panelPageMotion, motion)
             .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
-            .offset(x: isCurrent ? 0 : restingOffset)
+            .offset(x: nativeMotion ? 0 : (isCurrent ? 0 : restingOffset))
             // Both pages fully drawn, edge to edge: the new one at once (it
             // starts outside the glass), the old one until it is out.
-            .animation(motion.pageOpacityAnimation(incoming: isCurrent)) { $0.opacity(isCurrent ? 1 : 0) }
+            .animation(motion.pageOpacityAnimation(incoming: isCurrent)) { $0.opacity(nativeMotion || isCurrent ? 1 : 0) }
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
             .accessibilityHidden(!isCurrent)

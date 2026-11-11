@@ -14,6 +14,319 @@ import XCTest
 final class PanelIntegrationTests: XCTestCase {
 
     #if !ATTIC_GENERATED_TESTS
+    func testNativeChromeStartsWithBodyAndKeepsTopRowFixed() throws {
+        let state = PanelUIState()
+        state.loadPageContent()
+        let width = state.panelSize.width
+        let outgoing = PanelNativePageHostingView(rootView: AnyView(Text("Tasks page")))
+        let incoming = PanelNativePageHostingView(rootView: AnyView(Text("Notes page")))
+        outgoing.wantsLayer = true
+        incoming.wantsLayer = true
+        let window = slideTestWindow(outgoing, incoming, width: width)
+        defer { window.contentView = nil; window.close() }
+        let driver = state.nativePageSlide
+        driver.register(outgoing, page: .tasks, selected: .tasks, width: width)
+        driver.register(incoming, page: .notes, selected: .tasks, width: width)
+
+        let outgoingTop = PanelNativeChromeHostingView(rootView: AnyView(Text("Tasks header")))
+        let incomingTop = PanelNativeChromeHostingView(rootView: AnyView(Text("Notes header")))
+        let outgoingBar = PanelNativeChromeHostingView(rootView: AnyView(Text("Tasks bar")))
+        let incomingBar = PanelNativeChromeHostingView(rootView: AnyView(Text("Notes bar")))
+        let chromeContainer = try XCTUnwrap(window.contentView)
+        // A test must not add NSHostingView children directly to an
+        // NSHostingView; production installs them with NSViewRepresentable.
+        for (page, kind, host) in [
+            (PanelPage.tasks, PanelNativePageSlide.ChromeKind.topRow, outgoingTop),
+            (.notes, .topRow, incomingTop),
+            (.tasks, .bottomBar, outgoingBar),
+            (.notes, .bottomBar, incomingBar)
+        ] {
+            host.wantsLayer = true
+            host.frame = CGRect(x: 0, y: 0, width: width, height: 42)
+            chromeContainer.addSubview(host)
+            driver.registerChrome(host, page: page, kind: kind, selected: .tasks)
+        }
+
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        state.switchPage(to: .notes, motion: motion)
+        let body = try XCTUnwrap(outgoing.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        let incomingBody = try XCTUnwrap(incoming.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        let counter = try XCTUnwrap(outgoingTop.layer?.animation(forKey: "AtticNativeChromeCounterTravel") as? CAKeyframeAnimation)
+        let arrives = try XCTUnwrap(incomingTop.layer?.animation(forKey: "AtticNativeChromeCounterTravel") as? CAKeyframeAnimation)
+        let headerFade = try XCTUnwrap(incomingTop.layer?.animation(forKey: "AtticNativeChromeOpacity") as? CABasicAnimation)
+        let oldBarFade = try XCTUnwrap(outgoingBar.layer?.animation(forKey: "AtticNativeChromeOpacity") as? CABasicAnimation)
+        let newBarFade = try XCTUnwrap(incomingBar.layer?.animation(forKey: "AtticNativeChromeOpacity") as? CABasicAnimation)
+        let travel = try XCTUnwrap(body.values as? [NSNumber]).map(\.doubleValue)
+        let inverse = try XCTUnwrap(counter.values as? [NSNumber]).map(\.doubleValue)
+        XCTAssertEqual(travel.count, inverse.count)
+        for (pageX, headerX) in zip(travel, inverse) {
+            // The sampled SwiftUI spring can accumulate <0.01 pt floating
+            // point error when its endpoints are inverted independently.
+            // Even the allowed 0.02 pt is under one twentieth of a pixel.
+            XCTAssertEqual(pageX + headerX, 0, accuracy: 0.02,
+                           "The Tasks header must never travel under the pin")
+        }
+        let incomingTravel = try XCTUnwrap(incomingBody.values as? [NSNumber]).map(\.doubleValue)
+        let incomingInverse = try XCTUnwrap(arrives.values as? [NSNumber]).map(\.doubleValue)
+        XCTAssertEqual(incomingTravel.count, incomingInverse.count)
+        for (pageX, headerX) in zip(incomingTravel, incomingInverse) {
+            XCTAssertEqual(pageX + headerX, 0, accuracy: 0.02,
+                           "The arriving header must remain fixed through the native spring")
+        }
+        XCTAssertEqual(body.duration, counter.duration, accuracy: 0.000_001)
+        XCTAssertEqual(headerFade.duration, PanelPageMotion.fadeIn, accuracy: 0.000_001)
+        XCTAssertEqual(oldBarFade.duration, PanelPageMotion.fadeOut, accuracy: 0.000_001)
+        XCTAssertEqual(newBarFade.duration, PanelPageMotion.fadeIn, accuracy: 0.000_001)
+        XCTAssertEqual(outgoingTop.layer?.opacity, 0,
+                       "The old header must be gone before body motion begins")
+        XCTAssertEqual(incomingTop.layer?.opacity, 1,
+                       "The new header must already be in place when motion begins")
+        XCTAssertEqual(headerFade.beginTime + headerFade.duration,
+                       arrives.beginTime, accuracy: 0.001,
+                       "The header must complete its original fade before native motion")
+        XCTAssertFalse(outgoingTop.acceptsPageInput)
+        XCTAssertFalse(outgoingBar.acceptsPageInput)
+        XCTAssertTrue(incomingTop.acceptsPageInput)
+        XCTAssertTrue(incomingBar.acceptsPageInput)
+        state.panelDidHide()
+        XCTAssertNil(outgoingTop.layer?.animation(forKey: "AtticNativeChromeCounterTravel"))
+        XCTAssertNil(incomingBar.layer?.animation(forKey: "AtticNativeChromeOpacity"))
+    }
+
+    func testNativeSlideStartsWithLayerAndTransfersInputBeforeViewUpdate() throws {
+        let state = PanelUIState()
+        state.loadPageContent()
+        let outgoing = PanelNativePageHostingView(rootView: AnyView(Text("Tasks")))
+        let incoming = PanelNativePageHostingView(rootView: AnyView(Text("Notes")))
+        outgoing.wantsLayer = true
+        incoming.wantsLayer = true
+        let width = state.panelSize.width
+        let window = slideTestWindow(outgoing, incoming, width: width)
+        defer { window.contentView = nil; window.close() }
+        state.nativePageSlide.register(outgoing, page: .tasks, selected: .tasks, width: width)
+        state.nativePageSlide.register(incoming, page: .notes, selected: .tasks, width: width)
+
+        state.switchPage(to: .notes, motion: PanelPageMotion.current(reduceMotion: false))
+        // The model changes synchronously. The native layers must already
+        // have their spring, before SwiftUI gets another render pass.
+        XCTAssertEqual(state.selectedSection, .notes)
+        let departing = try XCTUnwrap(outgoing.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        XCTAssertNotNil(incoming.layer?.animation(forKey: "AtticNativePageSlide"))
+        // The native NSHostingView may re-layout its model layer while the
+        // presentation animation is in flight. Assert its actual keyframes.
+        XCTAssertEqual((departing.values?.first as? NSNumber)?.doubleValue ?? -1, 0, accuracy: 0.5)
+        XCTAssertEqual((departing.values?.last as? NSNumber)?.doubleValue ?? 0,
+                       Double(-width), accuracy: 0.5)
+        XCTAssertEqual(incoming.layer?.transform.m41 ?? -1, 0, accuracy: 0.5)
+        XCTAssertFalse(outgoing.acceptsPageInput)
+        XCTAssertTrue(incoming.acceptsPageInput)
+        state.panelDidHide()
+        XCTAssertNil(outgoing.layer?.animation(forKey: "AtticNativePageSlide"))
+    }
+
+    func testColdNativeSlideKeepsDepartingPageVisibleUntilDestinationIsHosted() throws {
+        let state = PanelUIState()
+        state.loadPageContent()
+        let outgoing = PanelNativePageHostingView(rootView: AnyView(Text("Tasks")))
+        outgoing.wantsLayer = true
+        let width = state.panelSize.width
+        let window = slideTestWindow(outgoing, width: width)
+        defer { window.contentView = nil; window.close() }
+        state.nativePageSlide.register(outgoing, page: .tasks, selected: .tasks, width: width)
+        state.switchPage(to: .notes, motion: .current(reduceMotion: false))
+
+        XCTAssertNil(outgoing.layer?.animation(forKey: "AtticNativePageSlide"),
+                     "Without a drawn Notes host, moving Tasks would expose a blank panel")
+        XCTAssertEqual(outgoing.layer?.transform.m41 ?? -1, 0, accuracy: 0.5)
+        XCTAssertEqual(outgoing.layer?.opacity ?? 0, 1)
+        XCTAssertFalse(outgoing.acceptsPageInput, "departing content immediately stops taking input")
+
+        let incoming = PanelNativePageHostingView(rootView: AnyView(Text("Notes")))
+        incoming.wantsLayer = true
+        window.contentView?.addSubview(incoming)
+        incoming.frame = CGRect(x: 0, y: 0, width: width, height: 400)
+        state.nativePageSlide.register(incoming, page: .notes, selected: .notes, width: width)
+        XCTAssertNil(outgoing.layer?.animation(forKey: "AtticNativePageSlide"),
+                     "Mounting the native host is earlier than the first hosted render pass")
+        state.nativePageSlide.pageDidAppear(.notes)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.07))
+        XCTAssertTrue(state.pageTransit.sliding,
+                      "The outgoing Tasks page must keep drawing until the native flight settles")
+        let departing = try XCTUnwrap(outgoing.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        let arriving = try XCTUnwrap(incoming.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        XCTAssertEqual((departing.values?.last as? NSNumber)?.doubleValue ?? .nan,
+                       Double(-width), accuracy: 0.01)
+        XCTAssertEqual((arriving.values?.first as? NSNumber)?.doubleValue ?? .nan,
+                       Double(width), accuracy: 0.01)
+        XCTAssertEqual((arriving.values?.last as? NSNumber)?.doubleValue ?? .nan,
+                       0, accuracy: 0.01)
+        XCTAssertTrue(incoming.acceptsPageInput)
+        state.panelDidHide()
+        XCTAssertNil(outgoing.layer?.animation(forKey: "AtticNativePageSlide"))
+        XCTAssertNil(incoming.layer?.animation(forKey: "AtticNativePageSlide"))
+    }
+
+    func testNativeLayerPositionsMatchTheExistingSwiftUISpringWithinTwoPoints() throws {
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        let spring = try XCTUnwrap(motion.spring)
+        let swiftUI = Spring(duration: spring.response, bounce: spring.bounce)
+        // Test both page directions: the native animation must follow the
+        // same numeric oscillator as Animation.spring(duration:bounce:).
+        for (from, to) in [(352.0, 0.0), (0.0, -352.0)] {
+            let native = PanelNativePageSlide.swiftUISpringAnimation(spring: spring, from: from, to: to)
+            let positions = try XCTUnwrap(native.values as? [NSNumber]).map(\.doubleValue)
+            XCTAssertEqual(native.duration, swiftUI.settlingDuration, accuracy: 0.0001)
+            for ms in [0.0, 16, 33, 50, 83, 120, 160, 250, 400] {
+                let elapsed = min(ms / 1_000, native.duration)
+                let i = elapsed / native.duration * Double(positions.count - 1)
+                let lower = min(Int(i), positions.count - 1)
+                let upper = min(lower + 1, positions.count - 1)
+                let interpolation = i - Double(lower)
+                let nativeX = positions[lower] + (positions[upper] - positions[lower]) * interpolation
+                let swiftUIX = swiftUI.value(fromValue: from, toValue: to,
+                                             initialVelocity: 0.0, time: elapsed)
+                XCTAssertEqual(nativeX, swiftUIX, accuracy: 2.0, "\(ms) ms, \(from) → \(to)")
+            }
+        }
+    }
+
+    func testNativePageSwitchKeyframesMatchSwiftUIForThreeRoutesAndBothFeels() throws {
+        let width = PanelUIState().panelSize.width
+        var greatestKeyframeError: Double = 0
+        var greatestCheckpointError: Double = 0
+        let routes: [(from: PanelPage, to: PanelPage, direction: CGFloat)] = [
+            (.tasks, .notes, 1), (.notes, .calendar, 1), (.calendar, .tasks, -1)
+        ]
+        for tuning in [AtticMotionTuning.lively, .subtle] {
+            let motion = PanelPageMotion.current(reduceMotion: false, tuning: tuning)
+            let source = AtticMotionPreset.pageSwitch.spring(in: tuning)
+            let spring = try XCTUnwrap(motion.spring)
+            XCTAssertEqual(spring.response, source.response * PanelPageMotion.speed, accuracy: 0.000_001)
+            XCTAssertEqual(spring.bounce, source.bounce, accuracy: 0.000_001)
+            let reference = Spring(duration: spring.response, bounce: spring.bounce)
+
+            for (fromPage, toPage, direction) in routes {
+                let switchModel = PanelPageSwitch(from: fromPage, to: toPage, motion: motion)
+                XCTAssertEqual(toPage.side(from: fromPage), direction)
+                XCTAssertEqual(switchModel.restingSide(of: toPage), direction)
+                XCTAssertEqual(switchModel.restingSide(of: fromPage), -direction)
+
+                for page in [fromPage, toPage] {
+                    let oldOffset = page == fromPage
+                        ? CGFloat.zero
+                        : motion.restingOffset(side: switchModel.restingSide(of: page), width: width)
+                    let newOffset = page == toPage
+                        ? CGFloat.zero
+                        : motion.restingOffset(side: switchModel.restingSide(of: page), width: width)
+                    XCTAssertEqual(oldOffset, (page == fromPage ? 0 : direction * width))
+                    XCTAssertEqual(newOffset, (page == toPage ? 0 : -direction * width))
+                    let flight = PanelNativePageSlide.swiftUISpringAnimation(
+                        spring: spring, from: Double(oldOffset), to: Double(newOffset))
+                    let values = try XCTUnwrap(flight.values as? [NSNumber]).map(\.doubleValue)
+                    let keyTimes = try XCTUnwrap(flight.keyTimes).map(\.doubleValue)
+                    XCTAssertEqual(values.count, keyTimes.count)
+                    XCTAssertGreaterThanOrEqual(values.count, Int(ceil(reference.settlingDuration * 240)) + 1)
+                    XCTAssertEqual(flight.duration, motion.settleDuration, accuracy: 0.000_001)
+                    XCTAssertEqual(values.first ?? .nan, Double(oldOffset), accuracy: 0.01)
+                    XCTAssertEqual(values.last ?? .nan, Double(newOffset), accuracy: 0.01)
+
+                    var worstError: Double = 0
+                    for i in values.indices {
+                        let t = flight.duration * keyTimes[i]
+                        let expected = reference.value(fromValue: Double(oldOffset), toValue: Double(newOffset),
+                                                       initialVelocity: 0, time: t)
+                        worstError = max(worstError, abs(values[i] - expected))
+                    }
+                    greatestKeyframeError = max(greatestKeyframeError, worstError)
+                    XCTAssertLessThan(worstError, 0.01,
+                                      "\(fromPage)→\(toPage) \(page) max keyframe deviation \(worstError) pt")
+                    for ms in [0.0, 16, 33, 50, 100, 160, 250] {
+                        let elapsed = min(ms / 1_000, flight.duration)
+                        let index = elapsed / flight.duration * Double(values.count - 1)
+                        let lower = min(Int(index), values.count - 1)
+                        let upper = min(lower + 1, values.count - 1)
+                        let interpolated = values[lower] + (values[upper] - values[lower]) * (index - Double(lower))
+                        let expected = reference.value(fromValue: Double(oldOffset), toValue: Double(newOffset),
+                                                       initialVelocity: 0, time: elapsed)
+                        greatestCheckpointError = max(greatestCheckpointError, abs(interpolated - expected))
+                        XCTAssertEqual(interpolated, expected, accuracy: 0.1,
+                                       "\(fromPage)→\(toPage) \(page) at \(ms) ms")
+                    }
+                }
+            }
+        }
+
+        let reduced = PanelPageMotion.current(reduceMotion: true)
+        XCTAssertFalse(reduced.travels)
+        XCTAssertNil(reduced.spring)
+        XCTAssertNil(reduced.animation)
+        XCTAssertEqual(reduced.settleDuration, 0)
+        XCTAssertEqual(reduced.restingOffset(side: 1, width: width), 0)
+        let reducedDriver = PanelNativePageSlide()
+        let fromHost = PanelNativePageHostingView(rootView: AnyView(Text("Tasks")))
+        let toHost = PanelNativePageHostingView(rootView: AnyView(Text("Notes")))
+        fromHost.wantsLayer = true
+        toHost.wantsLayer = true
+        let window = slideTestWindow(fromHost, toHost, width: width)
+        defer { reducedDriver.cancel(); window.contentView = nil; window.close() }
+        reducedDriver.register(fromHost, page: .tasks, selected: .tasks, width: width)
+        reducedDriver.register(toHost, page: .notes, selected: .tasks, width: width)
+        reducedDriver.begin(.init(from: .tasks, to: .notes, motion: reduced), width: width, onSettled: {})
+        XCTAssertNil(fromHost.layer?.animation(forKey: "AtticNativePageSlide"))
+        XCTAssertNil(toHost.layer?.animation(forKey: "AtticNativePageSlide"))
+        XCTAssertFalse(fromHost.acceptsPageInput)
+        XCTAssertTrue(toHost.acceptsPageInput)
+        print("ATTIC_NATIVE_SLIDE_MAX_KEYFRAME_ERROR_PT \(greatestKeyframeError)")
+        print("ATTIC_NATIVE_SLIDE_MAX_CHECKPOINT_ERROR_PT \(greatestCheckpointError)")
+    }
+
+    func testReturningToRetainedTasksWaitsForPagerPaintBeforeNativeSlide() throws {
+        let state = PanelUIState()
+        state.loadPageContent()
+        state.switchPage(to: .calendar, motion: .instant)
+        let outgoing = PanelNativePageHostingView(rootView: AnyView(Text("Calendar")))
+        let incoming = PanelNativePageHostingView(rootView: AnyView(Text("Tasks")))
+        outgoing.wantsLayer = true
+        incoming.wantsLayer = true
+        let width = state.panelSize.width
+        let window = slideTestWindow(outgoing, incoming, width: width)
+        defer { window.contentView = nil; window.close() }
+        state.nativePageSlide.register(outgoing, page: .calendar, selected: .calendar, width: width)
+        state.nativePageSlide.register(incoming, page: .tasks, selected: .calendar, width: width)
+
+        state.switchPage(to: .tasks, motion: .current(reduceMotion: false))
+        XCTAssertNil(outgoing.layer?.animation(forKey: "AtticNativePageSlide"))
+        XCTAssertEqual(outgoing.layer?.transform.m41 ?? -1, 0, accuracy: 0.5)
+        XCTAssertEqual(outgoing.layer?.opacity ?? 0, 1)
+        XCTAssertTrue(state.pageTransit.sliding)
+        state.nativePageSlide.pageDidBecomeCurrent(.tasks)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        let departing = try XCTUnwrap(outgoing.layer?.animation(forKey: "AtticNativePageSlide") as? CAKeyframeAnimation)
+        XCTAssertEqual((departing.values?.last as? NSNumber)?.doubleValue ?? .nan,
+                       Double(width), accuracy: 0.01)
+        XCTAssertNotNil(incoming.layer?.animation(forKey: "AtticNativePageSlide"))
+        XCTAssertTrue(incoming.acceptsPageInput)
+        state.panelDidHide()
+    }
+
+    private func slideTestWindow(_ hosts: PanelNativePageHostingView..., width: CGFloat) -> NSWindow {
+        let offscreen = TestPresentationPolicy.offscreenFrame(
+            CGRect(x: -6_000, y: -6_000, width: width, height: 400))
+        let window = NSWindow(contentRect: offscreen, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let parent = NSView(frame: CGRect(x: 0, y: 0, width: width, height: 400))
+        parent.wantsLayer = true
+        window.contentView = parent
+        for host in hosts {
+            host.frame = parent.bounds
+            parent.addSubview(host)
+        }
+        window.orderFront(nil)
+        parent.layoutSubtreeIfNeeded()
+        return window
+    }
+
     func testScreen9NotesLibraryEscapeLeavesTheOpenComposerInCharge() async throws {
         var keys: NotesLibraryKeys?
         NotesLibraryView.lifetimeProbe = { keys = $0 }

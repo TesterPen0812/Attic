@@ -316,6 +316,7 @@ final class PanelUIState: ObservableObject {
     func panelDidHide() {
         hideCount &+= 1
         agentChat.panelDidHide()
+        nativePageSlide.cancel()
         // SwiftUI may stop completing animations after the window orders out.
         // No page is visibly travelling now; discard the old completion so
         // it cannot end a new slide if the panel reopens immediately.
@@ -350,6 +351,10 @@ final class PanelUIState: ObservableObject {
     /// own copy of where to go would be stale).
     private(set) var lastPageSwitch: PanelPageSwitch?
 
+    /// The page layers start moving in the handler, before SwiftUI publishes
+    /// the selected section to the retained page hosts.
+    let nativePageSlide = PanelNativePageSlide()
+
     /// The one way the shell switches page (A20): every route makes the
     /// switch with `motion` (and `alongside` in the same transaction), and
     /// records it for the pages' transitions.
@@ -357,21 +362,40 @@ final class PanelUIState: ObservableObject {
         IdleLatencyTrace.point("page_change_decision")
         guard selectedSection != section, !routeElsewhere(section) else { return }
         PerformanceSignposts.noteInput("page-handler-begin from=\(PanelPage(selectedSection).rawValue) to=\(PanelPage(section).rawValue) built=\(builtPages.map(\.rawValue).sorted().joined(separator: ","))")
+        #if DEBUG
+        PanelColdFirstFrameProbe.switchTriggered(to: PanelPage(section))
+        #endif
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1
         let generation = pageSlideGeneration
+        let nativeSlide = motion.travels && nativePageSlide.hasDepartingHost(PanelPage(selectedSection))
+        if let lastPageSwitch, nativeSlide || !motion.travels {
+            nativePageSlide.begin(lastPageSwitch, width: panelSize.width) { [weak self] in
+                guard let self, self.pageSlideGeneration == generation else { return }
+                self.pageTransit.sliding = false
+                self.pageTransit.departingPage = nil
+            }
+        }
+        // selectSection publishes the cold destination once, in the same
+        // transaction as the selected page. A separate early publication
+        // causes an extra synchronous view-graph update before it can mount.
         let sliding = motion.travels
         pageTransit.departingPage = sliding ? PanelPage(selectedSection) : nil
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
-        withAnimation(motion.animation, completionCriteria: .removed) {
-            selectSection(section)
-            alongside()
-        } completion: { [weak self] in
-            // The page's actual animation has finished. An interrupted
-            // switch owns a newer generation and must keep its transit state.
-            guard sliding, let self, self.pageSlideGeneration == generation else { return }
-            self.pageTransit.sliding = false
-            self.pageTransit.departingPage = nil
+        if nativeSlide {
+            withAnimation(motion.animation) {
+                selectSection(section)
+                alongside()
+            }
+        } else {
+            withAnimation(motion.animation, completionCriteria: .removed) {
+                selectSection(section)
+                alongside()
+            } completion: { [weak self] in
+                guard sliding, let self, self.pageSlideGeneration == generation else { return }
+                self.pageTransit.sliding = false
+                self.pageTransit.departingPage = nil
+            }
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }
