@@ -24,6 +24,8 @@ struct DrawResize: Equatable {
     var from: CGPoint
     var originals: [DrawObject]
     var current: [DrawObject]
+    var delta: CGPoint = .zero
+    var constrained = false
 }
 
 extension DrawPageModel {
@@ -169,8 +171,9 @@ extension DrawPageModel {
 
     func dragResize(_ resize: DrawResize, to world: CGPoint, shift: Bool) {
         var next = resize
-        next.current = Self.resized(resize.originals, handle: resize.handle,
-                                    delta: CGPoint(x: world.x - resize.from.x, y: world.y - resize.from.y), shift: shift)
+        next.delta = CGPoint(x: world.x - resize.from.x, y: world.y - resize.from.y)
+        next.constrained = shift
+        next.current = Self.resized(resize.originals, handle: resize.handle, delta: next.delta, shift: shift)
         guard next != resize else { return }
         live = .resize(next)
         board?.drawLiveChanged()
@@ -180,12 +183,17 @@ extension DrawPageModel {
     /// The drag's end: one store command, one Undo step, one save.
     func finishResize(_ resize: DrawResize) {
         isMovingSelection = false
-        if resize.current != resize.originals { perform(.put(resize.current)) } else { board?.drawContentChanged() }
+        let fresh = resize.originals.compactMap { original in object(original.id) }
+        guard fresh.count == resize.originals.count else { board?.drawContentChanged(); return }
+        let current = fresh == resize.originals ? resize.current
+            : Self.resized(fresh, handle: resize.handle, delta: resize.delta, shift: resize.constrained)
+        if current != fresh { perform(.put(current)) } else { board?.drawContentChanged() }
     }
 
     /// VoiceOver's and the keyboard's way to resize the selection: a tenth
     /// larger or smaller from its top-left corner, one Undo step.
     func scaleSelection(by factor: CGFloat) {
+        syncExternalChanges()
         let chosen = selectedObjects
         guard let union = DrawGeometry.union(chosen), live == nil else { return }
         let delta = CGPoint(x: union.width * (factor - 1), y: union.height * (factor - 1))

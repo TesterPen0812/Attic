@@ -858,4 +858,64 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertNil(model.live)
     }
 
+    func testDA2ExternalAgentDeleteDuringInkMustNotLeaveAResurrectableStaleObject() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let target = DrawObject(frame: DrawFrame(x: 40, y: 60, width: 60, height: 20),
+                                content: .text("Agent deletes me"))
+        XCTAssertTrue(model.perform(.put([target])).isSaved)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 180, y: 150))
+        model.pointerDragged(to: CGPoint(x: 210, y: 170))
+        // Store writes are immediate; the page's observation callback is queued asynchronously.
+        XCTAssertTrue(store.perform(.remove([target.id]), on: id).isSaved)
+        model.pointerUp(at: CGPoint(x: 230, y: 180))
+        XCTAssertFalse(model.objects.contains(where: { $0.id == target.id }),
+                       "The model must incorporate an external delete before the owner uses stale content")
+        // Follow-up owner action must not silently revive the deleted text box.
+        model.setTool(.select)
+        model.select([target.id])
+        let stale = model.selectedObjects.map { $0.translated(by: DrawPoint(x: 10, y: 10), id: $0.id) }
+        if !stale.isEmpty { XCTAssertTrue(model.perform(.put(stale)).isSaved) }
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == target.id }),
+                       "An agent-deleted box must remain deleted after the owner moves a selection")
+    }
+
+    func testDA2ExternalRestyleAndMoveDuringOwnerMovePreservesBothChanges() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let box = DrawObject(frame: DrawFrame(x: 70, y: 150, width: 80, height: 30), content: .text("Shared"))
+        XCTAssertTrue(model.perform(.put([box])).isSaved)
+        model.setTool(.select)
+        model.select([box.id])
+        model.pointerDown(at: CGPoint(x: 90, y: 165))
+        model.pointerDragged(to: CGPoint(x: 105, y: 175))
+        var agent = box
+        agent.frame.x += 80
+        agent.style.colour = .red
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.pointerUp()
+        let saved = try XCTUnwrap(store.open(id).objects.first { $0.id == box.id })
+        XCTAssertEqual(saved.frame.x, agent.frame.x + 15, accuracy: 0.01)
+        XCTAssertEqual(saved.frame.y, agent.frame.y + 10, accuracy: 0.01)
+        XCTAssertEqual(saved.style.colour, .red, "The gesture must keep the agent's restyle")
+    }
+
+    func testDA2ExternalRestyleDuringSelectionResizeSurvivesCommit() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let shape = DrawObject(frame: DrawFrame(x: 70, y: 150, width: 60, height: 45), content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([shape])).isSaved)
+        model.setTool(.select)
+        model.select([shape.id])
+        let corner = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        model.pointerDown(at: corner.point)
+        model.pointerDragged(to: CGPoint(x: corner.point.x + 20, y: corner.point.y + 15))
+        var agent = shape
+        agent.style.colour = .red
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.pointerUp()
+        let saved = try XCTUnwrap(store.open(id).objects.first { $0.id == shape.id })
+        XCTAssertEqual(saved.style.colour, .red)
+        XCTAssertEqual(saved.frame.width, shape.frame.width + 20, accuracy: 0.01)
+        XCTAssertEqual(saved.frame.height, shape.frame.height + 15, accuracy: 0.01)
+    }
+
 }

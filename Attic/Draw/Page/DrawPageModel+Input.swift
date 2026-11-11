@@ -74,6 +74,7 @@ extension DrawPageModel {
             guard panButton else { return }
             finishLiveInput()
         }
+        syncExternalChanges()
         lastPointerShift = shift
         if isFiltering { closeFilter(); return }
         if editing != nil { endEditing(); return }
@@ -188,6 +189,9 @@ extension DrawPageModel {
         guard let finished = live else { return }
         live = nil
         liveStartedWithMiddleButton = false
+        // A gesture must finish against current objects. Otherwise a move
+        // can put back a remotely deleted box or undo an agent restyle.
+        syncExternalChanges()
         switch finished {
         case .pan:
             break

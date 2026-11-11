@@ -714,6 +714,7 @@ final class DrawPageModel: ObservableObject {
     // MARK: Selection
 
     func select(_ ids: [UUID]) {
+        syncExternalChanges()
         let next = ids.filter { id in objects.contains { $0.id == id } }
         guard next != selection else { return }
         selection = next
@@ -779,6 +780,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func restyleSelection(_ change: (inout DrawObject) -> Void) {
+        syncExternalChanges()
         let changed = selectedObjects.filter { !$0.isImage }.map { object -> DrawObject in
             var copy = object
             change(&copy)
@@ -791,6 +793,7 @@ final class DrawPageModel: ObservableObject {
     // MARK: Commands
 
     func deleteSelection() {
+        syncExternalChanges()
         guard !selection.isEmpty else { return }
         let ids = selection
         select([])
@@ -798,6 +801,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     func duplicateSelection() {
+        syncExternalChanges()
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
         var z = topZ
@@ -813,6 +817,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     func arrange(toFront: Bool) {
+        syncExternalChanges()
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
         // Pre-increment below: leave every chosen object's z below the
@@ -834,6 +839,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     func cutSelection() {
+        syncExternalChanges()
         guard let canvasID, !selection.isEmpty, let data = try? store.copy(selection, from: canvasID) else { return }
         pasteboard.clearContents()
         guard pasteboard.setData(data, forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else { return }
@@ -889,12 +895,16 @@ final class DrawPageModel: ObservableObject {
 
     func undo() {
         guard let canvasID, live == nil else { return }
+        syncExternalChanges()
+        guard self.canvasID == canvasID else { return }
         if editing == nil { select([]) }
         apply(store.undo(on: canvasID), replacingEditorText: true)
     }
 
     func redo() {
         guard let canvasID, live == nil else { return }
+        syncExternalChanges()
+        guard self.canvasID == canvasID else { return }
         if editing == nil { select([]) }
         apply(store.redo(on: canvasID), replacingEditorText: true)
     }
@@ -1102,6 +1112,8 @@ final class DrawPageModel: ObservableObject {
     @discardableResult
     func perform(_ command: DrawCommand) -> DrawSaveResult {
         guard let canvasID else { return .unchanged }
+        syncExternalChanges()
+        guard self.canvasID == canvasID else { return .unchanged }
         let result = store.perform(command, on: canvasID)
         apply(result)
         return result
@@ -1149,6 +1161,14 @@ final class DrawPageModel: ObservableObject {
             return
         case .saved(let delta):
             guard delta.canvas.id == canvasID else { return }
+            // A delta includes only this command. If some earlier external
+            // revision was missed, read the complete snapshot before claiming
+            // the store revision has been incorporated.
+            if delta.revision != appliedRevision &+ 1 {
+                externalSyncDeferred = true
+                syncExternalChanges()
+                return
+            }
             canvasName = delta.canvas.name
             if delta.removedIDs.isEmpty, delta.upserted.count == 1,
                let changed = delta.upserted.first,
@@ -1234,9 +1254,9 @@ final class DrawPageModel: ObservableObject {
             return
         }
         guard externalSyncDeferred || store.revision != appliedRevision else { return }
+        guard let snapshot = try? store.open(canvasID) else { return }
         externalSyncDeferred = false
         appliedRevision = store.revision
-        guard let snapshot = try? store.open(canvasID) else { return }
         if snapshot.canvas.deletedAt != nil {
             if let next = try? store.library().first { open(next.id) } else { newCanvas() }
             return
