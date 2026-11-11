@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -28,6 +29,7 @@ struct CalendarPage: View {
     @Environment(\.panelComposer) private var composer
     @Environment(\.panelResumeDefaults) private var resumeDefaults
     @State private var scrollPosition = ScrollPosition(y: 0)
+    @State private var nativeScroll = CalendarNativeScrollHandle()
     @State private var flags: ScrollFlags
     /// The grid is only the selected week: Week is picked and the fold to
     /// it has finished. It trails `model.isWeekPicked` while the fold runs.
@@ -169,6 +171,7 @@ struct CalendarPage: View {
                 }
                 .padding(.bottom, CalendarDesign.agendaBottom)
                 .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
+                .background(CalendarNativeScrollReader(handle: nativeScroll).frame(width: 0, height: 0))
                 .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
                 // What scrolls under the selected week is hidden behind it and
                 // fades in below it once it is held (item 14, owner 2026-10-31).
@@ -405,6 +408,14 @@ struct CalendarPage: View {
             // Week was still animating when Month was picked. The grid is
             // already a month, but the old scroll target must be reversed.
             if !week && interruptedWeekFold {
+                // A SwiftUI scrollTo can lose this reversal to the original
+                // animated scroll. Stop its native clip at the *current*
+                // visible frame, then reverse with the same spring.
+                if let scroller = nativeScroll.scrollView {
+                    let clip = scroller.contentView
+                    clip.scroll(to: clip.bounds.origin)
+                    scroller.reflectScrolledClipView(clip)
+                }
                 withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
                     scrollPosition.scrollTo(y: 0)
                 }
@@ -613,5 +624,41 @@ struct CalendarTodayButton: View {
                 withAnimation(animation) { away = true } completion: { if away { gone = true } }
             }
         }
+    }
+}
+
+/// Access to this page's mounted native scroller without publishing any
+/// additional view state or changing the scroll view's layout.
+private final class CalendarNativeScrollHandle {
+    weak var scrollView: NSScrollView?
+}
+
+private struct CalendarNativeScrollReader: NSViewRepresentable {
+    let handle: CalendarNativeScrollHandle
+
+    func makeNSView(context: Context) -> Reader {
+        let reader = Reader()
+        reader.handle = handle
+        return reader
+    }
+
+    func updateNSView(_ reader: Reader, context: Context) {
+        reader.handle = handle
+        reader.connect()
+    }
+
+    final class Reader: NSView {
+        weak var handle: CalendarNativeScrollHandle?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            connect()
+        }
+
+        func connect() {
+            handle?.scrollView = window == nil ? nil : enclosingScrollView
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
