@@ -1,3 +1,10 @@
+## 2026-11-11 · Joined task selection glass
+
+Touching selected Tasks rows share one raised glass backing across the full
+run, with rounded outer corners and no internal seams, including mixed-height
+rows. Selection still uses the original shared fills on Frosted and Solid;
+Glass hover stays black 7 % / white 8 %, and keyboard focus keeps its line.
+
 ## 2026-11-10 · Task date and composer accessibility
 
 Dated task rows keep their visible due-date button individually accessible,

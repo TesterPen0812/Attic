@@ -1320,6 +1320,78 @@ struct AtticPriorityMark: View {
 /// on the details line (quick look), and the rest (select). Keyboard
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
+/// Bounds are taken from the row highlight itself, not its drag cell (which
+/// may contain expanded subtasks). Only the selected members of a run report
+/// an anchor; ordinary rows and individual selected chips need no layout pass.
+struct AtticSelectedRunAnchor {
+    let bounds: Anchor<CGRect>
+    let run: AtticSelectionRun
+}
+
+struct AtticSelectedRunBounds: PreferenceKey {
+    static var defaultValue: [UUID: AtticSelectedRunAnchor] { [:] }
+
+    static func reduce(value: inout [UUID: AtticSelectedRunAnchor], nextValue: () -> [UUID: AtticSelectedRunAnchor]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newer in newer })
+    }
+}
+
+/// One raised backing per uninterrupted run, including rows of different
+/// heights. A single glass effect has no joins or squared internal corners.
+struct AtticJoinedSelectedRuns: View {
+    struct Piece {
+        let id: UUID
+        let frame: CGRect
+        let run: AtticSelectionRun
+    }
+
+    struct Joined: Identifiable {
+        let id: UUID
+        var frame: CGRect
+    }
+
+    let anchors: [UUID: AtticSelectedRunAnchor]
+    @Environment(\.atticDesign) private var design
+
+    static func joined(_ pieces: [Piece]) -> [Joined] {
+        let sorted = pieces.filter { !$0.frame.isEmpty }.sorted { $0.frame.minY < $1.frame.minY }
+        var joined: [Joined] = []
+        var current: Joined?
+        for piece in sorted {
+            if let previous = current, !piece.run.roundsTop,
+               piece.frame.minY <= previous.frame.maxY + 0.5,
+               piece.frame.maxY > previous.frame.maxY {
+                current?.frame = previous.frame.union(piece.frame)
+            } else {
+                if let current { joined.append(current) }
+                current = Joined(id: piece.id, frame: piece.frame)
+            }
+            if piece.run.roundsBottom {
+                if let finished = current { joined.append(finished) }
+                current = nil
+            }
+        }
+        if let current { joined.append(current) }
+        return joined
+    }
+
+    var body: some View {
+        if design.surface == .glass {
+            GeometryReader { geometry in
+                let pieces = anchors.map { Piece(id: $0.key, frame: geometry[$0.value.bounds], run: $0.value.run) }
+                ForEach(Self.joined(pieces)) { group in
+                    Color.clear
+                        .frame(width: group.frame.width, height: group.frame.height)
+                        .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius, interactive: false)
+                        .position(x: group.frame.midX, y: group.frame.midY)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 struct AtticTaskRow: View {
     /// The title's ink: the secondary grey once done (T-06 B, owner
     /// 2026-10-15; the filled mark stays), the disabled ink when disabled.
@@ -1457,13 +1529,24 @@ struct AtticTaskRow: View {
         ZStack(alignment: .topLeading) {
             Group {
                 if let highlight {
-                    AtticRowHighlight(style: highlight, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
+                    if highlight == .raisedChip && selectionRun != .single {
+                        // Adjacent selections share one glass layer behind
+                        // the list. Drawing a glass effect per row leaves
+                        // horizontal seams and rounds their inner corners.
+                        Color.clear.allowsHitTesting(false).accessibilityHidden(true)
+                    } else {
+                        AtticRowHighlight(style: highlight, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
+                    }
                 }
                 if dropLabel != nil {
                     AtticDropOutline()
                 }
             }
             .frame(height: highlightHeight)
+            .anchorPreference(key: AtticSelectedRunBounds.self, value: .bounds) { anchor in
+                highlight == .raisedChip && selectionRun != .single
+                    ? [model.id: AtticSelectedRunAnchor(bounds: anchor, run: selectionRun)] : [:]
+            }
             .padding(.horizontal, AtticLayout.rowHighlightInset)
             .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 

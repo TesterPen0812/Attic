@@ -755,6 +755,7 @@ private struct TaskRowsBoard: View {
                 GalleryTaskRow(model: rows[2], isSelected: true, selectionRun: .middle)
                 GalleryTaskRow(model: rows[3], isSelected: true, selectionRun: .last)
             }
+            .backgroundPreferenceValue(AtticSelectedRunBounds.self) { AtticJoinedSelectedRuns(anchors: $0) }
         }
         AtticSpecimen("In a window; date, files and links", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Draft the pricing page", priority: .medium, due: .init(text: "Thu"), attachments: 2, links: 2, inWindow: true))
@@ -1012,6 +1013,7 @@ private struct FocusBoard: View {
                 GalleryTaskRow(model: AtticGallerySamples.rows[2], isSelected: true, selectionRun: .middle)
                 GalleryTaskRow(model: AtticGallerySamples.rows[3], isSelected: true, selectionRun: .last)
             }
+            .backgroundPreferenceValue(AtticSelectedRunBounds.self) { AtticJoinedSelectedRuns(anchors: $0) }
         }
     }
 }
