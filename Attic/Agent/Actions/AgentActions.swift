@@ -678,16 +678,9 @@ final class AgentActions {
                     success = draw.undo(on: canvasID).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
-            case let .durableDraw(canvasID, snapshot, expectedStepID, proof, _):
+            case let .durableDraw(canvasID, snapshot, _, proof, _):
                 if let draw, let current = try? draw.open(canvasID), current == snapshot {
-                    if draw.undoStepID(on: canvasID) == expectedStepID {
-                        success = draw.undo(on: canvasID).isSaved
-                    } else {
-                        // A previous durable reversal may have left a new
-                        // in-memory Draw head. The store validates that head
-                        // and the exact physical snapshot before replaying.
-                        success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved
-                    }
+                    success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
             case let .createdNote(noteID, revision, metadata, _):

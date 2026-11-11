@@ -69,19 +69,25 @@ final class Draw3StoreTests: XCTestCase {
         seeded.insert(otherObject)
         try seeded.save()
 
-        XCTAssertFalse(draw.perform(.rename("Agent rename"), on: canvas.id).isSaved)
+        XCTAssertFalse(draw.performAgent(.rename("Agent rename"), on: canvas.id).isSaved)
         let fresh = ModelContext(container)
         XCTAssertEqual(Set(try fresh.fetch(FetchDescriptor<DrawCanvasRecord>())
             .filter { $0.id == canvas.id }.map(\.name)), ["Original", "Owner's other canvas"])
 
-        let before = try draw.open(canvas.id)
+        // Once the canvas family agrees, the independently divergent object
+        // family still must stop the next agent write.
+        let repair = ModelContext(container)
+        let canvases = try repair.fetch(FetchDescriptor<DrawCanvasRecord>())
+        let canonical = try XCTUnwrap(canvases.first { $0.id == canvas.id && $0.name == "Original" })
+        for row in canvases where row.id == canvas.id {
+            row.name = canonical.name
+            row.updatedAt = canonical.updatedAt
+        }
+        try repair.save()
         let moved = DrawObject(id: object.id, frame: DrawFrame(x: 4, y: 5, width: 100, height: 50),
                                content: .text("Original"))
-        let repository = DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(),
-                                                  save: { try $0.save() })
-        let outcome = repository.write(DrawChange(canvasID: canvas.id, before: before.canvas, after: before.canvas,
-            objectsBefore: [object.id: object], objectsAfter: [object.id: moved]))
-        guard case .held = outcome else { return XCTFail("Divergent object replicas must refuse the whole write") }
+        XCTAssertFalse(draw.performAgent(.put([moved]), on: canvas.id).isSaved,
+                       "Divergent object replicas must refuse the whole agent write")
         XCTAssertEqual(Set(try ModelContext(container).fetch(FetchDescriptor<DrawObjectRecord>())
             .filter { $0.id == object.id }.map(\.textIndex)), ["Original", "AAAA"])
     }

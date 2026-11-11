@@ -223,6 +223,9 @@ protocol DrawStoreProtocol: AnyObject {
     /// The 30-day removal: everything deleted strictly before `cutoff`.
     func purge(deletedBefore cutoff: Date) -> DrawPurgeReport
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
+    /// Agent-only write with physical replica preflight, without altering
+    /// the owner's regular Draw command and Undo behavior.
+    func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
     func retry(on id: UUID) -> DrawSaveResult
     func reconcile(on id: UUID) -> DrawSaveResult
     /// Abandon the last failed rename only if its physical write did not commit.
@@ -249,6 +252,7 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult { perform(command, on: id) }
     func library() throws -> [DrawCanvas] { try library(deleted: false) }
     func create() -> DrawCanvas { create(name: nil) }
     func duplicate(_ id: UUID) throws -> DrawCanvas? { try duplicate(id, name: nil) }

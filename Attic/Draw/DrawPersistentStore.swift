@@ -383,19 +383,33 @@ final class DrawSwiftDataRepository: DrawRepository {
 
     private func matchesBefore(_ change: DrawChange, scope: Scope) throws -> Bool {
         if let expected = change.before {
-            guard !scope.canvases.isEmpty, try Self.agree(scope.canvases) else { return false }
+            guard !scope.canvases.isEmpty else { return false }
             var metadata = expected; metadata.thumbnail = nil
             guard try DrawCodec.encode(canvasWinner(scope.canvases).value()) == DrawCodec.encode(metadata) else { return false }
         } else if !scope.canvases.isEmpty { return false }
         for id in change.objectIDs {
             let rows = scope.objects.filter { $0.id == id }
             if let expected = change.objectsBefore[id] {
-                guard Self.agree(rows, parent: change.canvasID), let row = objectWinner(rows), row.formatVersion == 1,
+                guard let row = objectWinner(rows), row.formatVersion == 1,
                       row.zIndex == expected.zIndex, row.deletedAt == expected.deletedAt,
                       row.textIndex.utf8.elementsEqual(expected.text.utf8),
                       row.header.utf8.elementsEqual(try DrawCodec.header(expected).utf8),
                       row.payloadDigest == DrawCodec.payload(expected).map(DrawCodec.digest) ?? "" else { return false }
             } else if !rows.isEmpty { return false }
+        }
+        return true
+    }
+
+    /// Agent writes must prove every physical replica before any row is
+    /// replaced. The ordinary Draw command path retains its existing
+    /// winner-based handling for the owner's own edits.
+    private func matchesAgentBefore(_ change: DrawChange, scope: Scope) throws -> Bool {
+        guard try matchesBefore(change, scope: scope) else { return false }
+        if change.before != nil {
+            guard try Self.agree(scope.canvases) else { return false }
+        }
+        for id in change.objectsBefore.keys {
+            guard Self.agree(scope.objects.filter { $0.id == id }, parent: change.canvasID) else { return false }
         }
         for id in binaryIDs(change) {
             let rows = scope.payloads.filter { $0.id == id }
@@ -417,7 +431,7 @@ final class DrawSwiftDataRepository: DrawRepository {
     }
 
     func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool {
-        do { return try matchesBefore(change, scope: scope(change, in: context(), countRows: false)) }
+        do { return try matchesAgentBefore(change, scope: scope(change, in: context(), countRows: false)) }
         catch { return false }
     }
 
