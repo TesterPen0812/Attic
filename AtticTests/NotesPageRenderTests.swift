@@ -341,6 +341,59 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertEqual(NoteTitleAccessories.headerProgress(titleBottom: 0, visibleTop: 40), 1)
     }
 
+    func testHeaderTitleClearsAfterScrollingARealLongNoteBackToTop() throws {
+        let id = UUID()
+        let lines: [NoteBlock] = [.text("Scrolling note")] + (1...60).map { .text(String($0)) }
+        var chrome: NotesPageChrome?
+        NotesEditorPage.lifetimeProbe = { value, _ in chrome = value }
+        defer { NotesEditorPage.lifetimeProbe = nil }
+        let harness = try makeHarness(context: AtticDesignContext(mode: .dark, controls: .craft),
+                                      size: CGSize(width: 320, height: 420)) { store in
+            _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: lines)).get()
+        }
+        XCTAssertTrue(harness.controller.open(noteID: id))
+        harness.window.setFrameOrigin(NSPoint(x: -4_000, y: -4_000))
+        harness.window.orderFront(nil)
+        defer { harness.window.orderOut(nil) }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        spin(0.5)
+
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let scroll = try XCTUnwrap(engine.scrollView)
+        let text = try XCTUnwrap(engine.textView)
+        func hasHeader(_ root: AnyObject) -> Bool {
+            if root.accessibilityIdentifier?() == "notes-header-title" { return true }
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return children.contains { hasHeader($0 as AnyObject) }
+        }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 450))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin(0.5)
+        harness.host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(try XCTUnwrap(chrome).headerTitleProgress, 0.5)
+        XCTAssertTrue(hasHeader(harness.host), "the scrolled-away title must be accessible in the header")
+
+        // Deliver the same Home key as the UI test, then inspect the real
+        // header's AX subtree. The editor alone cannot expose this bug.
+        let home = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: harness.window.windowNumber, context: nil,
+            characters: "\u{F729}", charactersIgnoringModifiers: "\u{F729}",
+            isARepeat: false, keyCode: 115
+        ))
+        text.keyDown(with: home)
+        spin(0.5)
+        harness.host.layoutSubtreeIfNeeded()
+        XCTAssertLessThan(try XCTUnwrap(chrome).headerTitleProgress, 0.5,
+                          "the header state must follow the restored title")
+        XCTAssertEqual(scroll.contentView.bounds.minY, -scroll.contentInsets.top, accuracy: 0.5,
+                       "Home must restore the top inset above the title")
+        XCTAssertFalse(hasHeader(harness.host), "Home must remove the now-invisible header title from accessibility")
+    }
+
     /// Floating controls (owner, 2026-10-14; was F-13's reserved footer):
     /// the note runs on to the panel's bottom edge, under the bottom row,
     /// and its scroll inset keeps the last line's resting place clear of it.

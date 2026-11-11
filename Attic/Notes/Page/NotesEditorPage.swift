@@ -408,8 +408,16 @@ struct NotesEditorPage: View {
                 .offset(y: design.reduceMotion ? 0 : (1 - progress) * -6)
                 .scaleEffect(design.reduceMotion ? 1 : 0.94 + 0.06 * progress, anchor: .top)
                 .allowsHitTesting(progress > 0.5)
-                .accessibilityHidden(progress < 0.5)
-                .accessibilityIdentifier("notes-header-title")
+                // The faded-out native button can linger in the AppKit AX
+                // tree after Home. Give accessibility a conditional button
+                // whose lifetime follows the same visibility threshold.
+                .accessibilityRepresentation {
+                    if progress >= 0.5 {
+                        Button(chrome.headerTitle) { chrome.presentMenu() }
+                            .accessibilityHint(String(localized: "Opens the note’s menu"))
+                            .accessibilityIdentifier("notes-header-title")
+                    }
+                }
         }
         // The search button stands between the title and the page switch:
         // the title's room ends a gap before it.
