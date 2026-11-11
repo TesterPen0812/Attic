@@ -1742,4 +1742,48 @@ final class AgentActionsTests: XCTestCase {
         print("AGENT_REALISTIC_REQUEST_MCP_TOOL_CALLS=\(callCount)")
         XCTAssertEqual(callCount, 5)
     }
+    func testMalformedUndoJournalRefusesMutationsWithoutReplacingBadFile() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentBrokenUndo").appendingPathComponent("undo.json")
+        let original = Data("{wrong-format-keep-me}".utf8)
+        try FileManager.default.createDirectory(at: journal.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try original.write(to: journal)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Must refuse")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "Untracked"],
+                                       watching: false, requestID: request)
+            XCTFail("A corrupted journal must refuse the store mutation")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("can't save Undo"), "\(error)")
+        }
+        XCTAssertEqual(try Data(contentsOf: journal), original)
+        XCTAssertFalse(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .contains(where: { $0.title == "Untracked" }))
+    }
+
+    func testUnwritableUndoJournalRefusesMutationBeforeStoreCommit() async throws {
+        let tasks = try makeTestStore()
+        let root = ownedTemporaryDirectory(prefix: "AgentUnwritableUndo")
+        let blockingFile = root.appendingPathComponent("file-instead-of-directory")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("block".utf8).write(to: blockingFile)
+        let journal = blockingFile.appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Must refuse")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "No receipt"],
+                                       watching: false, requestID: request)
+            XCTFail("An unwritable journal must refuse before touching the store")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("can't save Undo"), "\(error)")
+        }
+        XCTAssertFalse(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .contains(where: { $0.title == "No receipt" }))
+    }
+
+
 }

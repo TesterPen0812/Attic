@@ -162,6 +162,7 @@ final class AgentActions {
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private let journalURL: URL?
     private var journalWritable = true
+    private var journalIssue: String?
 
     init(tasks: AgentTaskTools, calendarSource: (any CalendarEventSource)? = nil,
          calendarWriter: (any CalendarEventWriter)? = nil,
@@ -178,6 +179,7 @@ final class AgentActions {
             guard let data = try? Data(contentsOf: journalURL),
                   let saved = try? JSONDecoder().decode(StoredUndo.self, from: data), saved.version == 1 else {
                 journalWritable = false
+                journalIssue = "the saved Undo journal is damaged or incompatible; it has been kept for diagnosis"
                 return
             }
             for request in saved.requests {
@@ -249,8 +251,9 @@ final class AgentActions {
         }
     }
 
-    private func saveJournal() {
-        guard journalWritable, let journalURL else { return }
+    private func saveJournal() throws {
+        guard let journalURL else { return }
+        guard journalWritable else { throw AgentActionsError.refused(journalIssue ?? "the Undo journal is unavailable") }
         let requests = order.compactMap { id -> StoredRequest? in
             guard let journal = journals[id], !journal.entries.isEmpty else { return nil }
             return StoredRequest(changeSet: journal.changeSet,
@@ -260,7 +263,21 @@ final class AgentActions {
             try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(StoredUndo(version: 1, requests: Array(requests.suffix(100))))
                 .write(to: journalURL, options: .atomic)
-        } catch { journalWritable = false }
+        } catch {
+            journalWritable = false
+            journalIssue = error.localizedDescription
+            throw AgentActionsError.refused("Attic couldn't finish saving Undo: \(error.localizedDescription)")
+        }
+    }
+
+    private func requireDurableUndoBeforeMutation() throws {
+        guard journalURL != nil else { return }
+        guard journalWritable else {
+            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? "journal unavailable")")
+        }
+        do { try saveJournal() } catch {
+            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
+        }
     }
 
     func canRecoverUndo(_ id: UUID) -> Bool {
@@ -401,6 +418,7 @@ final class AgentActions {
                          requestID: UUID) async throws -> AgentActionResult {
         try checkOpen(requestID)
         try guardMode(name, requestID: requestID)
+        if Self.isMutation(name) { try requireDurableUndoBeforeMutation() }
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
@@ -581,7 +599,7 @@ final class AgentActions {
             journal.changeSet.count += entries.count
             journal.changeSet.pages.formUnion(step.targets.map(\.page))
             journals[requestID] = journal
-            saveJournal()
+            try saveJournal()
         }
         return AgentActionResult(text: text, step: step, changeSet: changeSet(for: requestID))
     }
@@ -721,7 +739,8 @@ final class AgentActions {
             journals[id] = nil
             order.removeAll { $0 == id }
         } else { journals[id] = journal }
-        saveJournal()
+        do { try saveJournal() }
+        catch { failures.append("Undo was applied, but its journal checkpoint failed: \(error.localizedDescription)") }
         return AgentUndoReport(undone: undone, failures: failures, remaining: changeSet(for: id))
     }
 
