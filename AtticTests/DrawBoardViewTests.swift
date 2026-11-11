@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import XCTest
 @testable import Attic
 
@@ -165,6 +166,239 @@ final class DrawBoardViewTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Regression for the owner's 10 Nov recording: a large selected image
+    /// and ink must keep receiving committed pixels during a moving pinch.
+    /// A worker cannot finish in between consecutive viewport samples.
+    func testCommittedBoardKeepsRenderingDuringContinuousViewportChanges() throws {
+        XCTAssertTrue(waitForInstall(after: 0))
+        DrawRasterProbe.setTestDelay(0.15)
+        defer { DrawRasterProbe.setTestDelay(0) }
+        let id = try XCTUnwrap(model.canvasID)
+        let image = Draw3Images.encoded(width: 1170, height: 1428, red: 0.55, green: 0.57, blue: 0.57)
+        var objects: [DrawObject] = [
+            DrawObject(frame: DrawFrame(x: 0, y: 0, width: 585, height: 714),
+                       content: .image(DrawImage(original: image, pixelWidth: 1170, pixelHeight: 1428)))
+        ]
+        objects += (0..<320).map { index in
+            let x = Double(index % 20) * 29, y = Double(index / 20) * 42
+            let points = (0..<28).map { n in DrawPoint(x: x + Double(n), y: y + sin(Double(n) / 5) * 6) }
+            return DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: Int64(index + 1), content: .stroke(points))
+        }
+        XCTAssertTrue(store.perform(.put(objects), on: id).isSaved)
+        model.open(id)
+        let before = board.rasterInstalls
+        DrawRasterProbe.reset()
+        for sample in 0..<110 {
+            let zoom = CGFloat(0.5 + Double(sample % 32) / 32 * 2.5)
+            model.setViewport(DrawViewport(x: CGFloat(-sample * 3), y: CGFloat(sample), zoom: zoom), byUser: true)
+            spin(0.008)
+        }
+        XCTAssertGreaterThan(board.rasterInstalls, before,
+                             "At least one complete raster must land before a continuous pinch/pan ends")
+        XCTAssertEqual(DrawRasterProbe.mainThreadRasters, 0)
+    }
+
+    /// Air-only diagnostic, measuring the exact raster input size seen in the
+    /// recording at 2x plus a few hundred representative ink objects.
+    func testLargeImageRasterTimingAtTwoTimes() async {
+        let image = Draw3Images.encoded(width: 1170, height: 1428, red: 0.55, green: 0.57, blue: 0.57)
+        var objects: [DrawObject] = [
+            DrawObject(frame: DrawFrame(x: 0, y: 0, width: 585, height: 714),
+                       content: .image(DrawImage(original: image, pixelWidth: 1170, pixelHeight: 1428)))
+        ]
+        objects += (0..<320).map { index in
+            let x = Double(index % 20) * 29, y = Double(index / 20) * 42
+            let points = (0..<28).map { n in DrawPoint(x: x + Double(n), y: y + sin(Double(n) / 5) * 6) }
+            return DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: Int64(index + 1), content: .stroke(points))
+        }
+        let request = DrawRasterRequest(key: DrawRasterKey(viewport: DrawViewport(),
+                                     size: CGSize(width: 600, height: 740), scale: 2), objects: objects)
+        let readings = await Task.detached(priority: .userInitiated) {
+            (0..<4).map { _ -> Double in
+                let start = DispatchTime.now().uptimeNanoseconds
+                _ = DrawRaster.render(request)
+                return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            }
+        }.value
+        print("CANVAS_BOARD_RASTER_2X image=1170x1428 strokes=320 samples_ms=\(readings)")
+    }
+
+    func testWorldRasterAlwaysCoversObjectsAndTracksSelectionAtEveryViewport() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let image = DrawObject(frame: DrawFrame(x: 80, y: 30, width: 585, height: 714),
+                               content: .image(DrawImage(original: Draw3Images.encoded(width: 1170, height: 1428),
+                                                         pixelWidth: 1170, pixelHeight: 1428)))
+        XCTAssertTrue(store.perform(.put([image]), on: id).isSaved)
+        model.open(id)
+        let deadline = Date().addingTimeInterval(5)
+        while board.installedKey?.revision != model.contentRevision, Date() < deadline { spin(0.01) }
+        let backing = try XCTUnwrap(board.installedKey)
+        let worldRect = CGRect(x: -backing.viewport.x / backing.viewport.zoom,
+                               y: -backing.viewport.y / backing.viewport.zoom,
+                               width: backing.size.width / backing.viewport.zoom,
+                               height: backing.size.height / backing.viewport.zoom)
+        XCTAssertTrue(worldRect.contains(DrawGeometry.bounds(image)), "The complete selected image stays in the backing")
+
+        let rasterLayer = try XCTUnwrap(board.layer?.sublayers?[1])
+        let requests = board.rasterRequests
+        for viewport in [DrawViewport(x: -600, y: 45, zoom: 0.1),
+                         DrawViewport(x: 15, y: -400, zoom: 4),
+                         DrawViewport(x: -150, y: -100, zoom: 0.5)] {
+            model.setViewport(viewport, byUser: true)
+            let expected = viewport.screen(worldRect)
+            let actual = rasterLayer.convert(rasterLayer.bounds, to: board.layer)
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.1)
+            XCTAssertEqual(actual.minY, board.bounds.height - expected.maxY, accuracy: 0.1)
+            XCTAssertEqual(actual.width, expected.width, accuracy: 0.1)
+            XCTAssertEqual(actual.height, expected.height, accuracy: 0.1)
+        }
+        XCTAssertEqual(board.rasterRequests, requests, "Pan and zoom only transform the complete backing")
+        XCTAssertEqual(DrawRasterProbe.mainThreadRasters, 0)
+    }
+
+    func testZoomRefinesTheWorldImageAtScreenResolutionAfterGesturesSettle() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let image = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 585, height: 714),
+                               content: .image(DrawImage(original: Draw3Images.encoded(width: 1170, height: 1428),
+                                                         pixelWidth: 1170, pixelHeight: 1428)))
+        XCTAssertTrue(store.perform(.put([image]), on: id).isSaved)
+        let baseline = board.rasterInstalls
+        model.open(id)
+        XCTAssertTrue(waitForInstall(after: baseline), "Complete world raster lands before zooming")
+        let previous = board.detailInstalls
+        DrawRasterProbe.reset()
+        let started = DispatchTime.now().uptimeNanoseconds
+        model.setViewport(DrawViewport(x: 0, y: 0, zoom: 3.5), byUser: true)
+        let deadline = Date().addingTimeInterval(2)
+        while board.detailInstalls == previous && Date() < deadline { spin(0.005) }
+        XCTAssertGreaterThan(board.detailInstalls, previous, "The stopped zoom gets its sharp viewport raster")
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        print("CANVAS_BOARD_DETAIL latency_ms=\(ms)")
+        XCTAssertFalse(try XCTUnwrap(board.layer?.sublayers?[2]).isHidden)
+        XCTAssertEqual(DrawRasterProbe.mainThreadRasters, 0)
+    }
+
+    /// Diagnostic opt-in on the Air: capture only this offscreen NSWindow's
+    /// board layer. Each contact sheet places the old viewport-clipped
+    /// transport above the actual board's world-raster transport.
+    func testWindowOnlyFrameSheetsForScriptedPinchAndPan() async throws {
+        guard ProcessInfo.processInfo.environment["CANVAS_BOARD_FRAME_DIR"]?.isEmpty == false else {
+            throw XCTSkip("Air capture requires CANVAS_BOARD_FRAME_DIR")
+        }
+        let canvas = try XCTUnwrap(model.canvasID)
+        let image = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 585, height: 714),
+                               content: .image(DrawImage(original: Draw3Images.encoded(width: 1170, height: 1428),
+                                                         pixelWidth: 1170, pixelHeight: 1428)))
+        var objects = [image]
+        objects += (0..<320).map { index in
+            let x = Double(index % 20) * 29, y = Double(index / 20) * 42
+            let points = (0..<28).map { n in DrawPoint(x: x + Double(n), y: y + sin(Double(n) / 5) * 6) }
+            return DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: Int64(index + 1), content: .stroke(points))
+        }
+        XCTAssertTrue(store.perform(.put(objects), on: canvas).isSaved)
+        model.open(canvas)
+        model.setTool(.select)
+        model.select([image.id])
+        // This is an async @MainActor test. A synchronous RunLoop spin can
+        // starve the dispatch-to-main raster installation until the next await.
+        let deadline = Date().addingTimeInterval(5)
+        while board.installedKey?.revision != model.contentRevision, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard board.installedKey?.revision == model.contentRevision else {
+            XCTFail("Capture requires a complete backing at the current content revision")
+            return
+        }
+        XCTAssertNotNil(board.layer?.sublayers?[1].contents, "Capture requires the installed world raster")
+
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        defer { window.close() }
+        let layers = try XCTUnwrap(board.layer?.sublayers)
+        let base = layers[1]
+        let detail = layers[2]
+
+        // Capture exactly the old viewport-clipped raster once, then carry
+        // it across the same transform as the committed layer did before.
+        let oldKey = DrawRasterKey(revision: model.contentRevision, viewport: model.viewport,
+                                   size: board.bounds.size, scale: 2)
+        let oldRequest = DrawRasterRequest(key: oldKey, objects: model.objects)
+        let oldRendered = await Task.detached(priority: .userInitiated) {
+            DrawRaster.render(oldRequest)
+        }.value
+        let oldImage = try XCTUnwrap(oldRendered).image
+        let old = CALayer()
+        old.actions = DrawBoardView.noActions
+        old.anchorPoint = .zero
+        old.position = .zero
+        old.bounds = CGRect(origin: .zero, size: oldKey.size)
+        old.contents = oldImage
+        old.contentsScale = oldKey.scale
+        board.layer?.insertSublayer(old, above: base)
+        defer { old.removeFromSuperlayer() }
+
+        func snapshot() -> CGImage? {
+            let width = Int(board.bounds.width), height = Int(board.bounds.height)
+            guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            board.layer?.render(in: context)
+            return context.makeImage()
+        }
+
+        func sheet(_ name: String, _ viewports: [DrawViewport]) throws {
+            let width = Int(board.bounds.width), height = Int(board.bounds.height)
+            guard let sheet = CGContext(data: nil, width: width * viewports.count, height: height * 2,
+                                        bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                return XCTFail("Could not make window-only frame sheet")
+            }
+            for (index, viewport) in viewports.enumerated() {
+                model.setViewport(viewport, byUser: true)
+                CATransaction.flush()
+                let s = viewport.zoom / oldKey.viewport.zoom
+                old.setAffineTransform(CGAffineTransform(a: s, b: 0, c: 0, d: s,
+                    tx: viewport.x - s * oldKey.viewport.x,
+                    ty: board.bounds.height - s * oldKey.size.height + s * oldKey.viewport.y - viewport.y))
+                let inset = CGRect(x: CGFloat(index * width), y: CGFloat(height),
+                                   width: CGFloat(width), height: CGFloat(height))
+                base.isHidden = true
+                detail.isHidden = true
+                old.isHidden = false
+                if let frame = snapshot() { sheet.draw(frame, in: inset) }
+                base.isHidden = false
+                old.isHidden = true
+                if let frame = snapshot() { sheet.draw(frame, in: inset.offsetBy(dx: 0, dy: -CGFloat(height))) }
+            }
+            let data = NSMutableData()
+            guard let sheetImage = sheet.makeImage(),
+                  let output = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else {
+                return XCTFail("Could not create \(name) PNG")
+            }
+            CGImageDestinationAddImage(output, sheetImage, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(output))
+            let attachment = XCTAttachment(data: data as Data, uniformTypeIdentifier: "public.png")
+            attachment.name = "\(name)-old-above-new.png"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        try sheet("pinch-in", [DrawViewport(x: 10, y: 15, zoom: 0.65),
+                                DrawViewport(x: -90, y: -200, zoom: 1.3),
+                                DrawViewport(x: -210, y: -410, zoom: 2.1),
+                                DrawViewport(x: -350, y: -700, zoom: 3.5)])
+        try sheet("pinch-out", [DrawViewport(x: -350, y: -700, zoom: 3.5),
+                                 DrawViewport(x: -210, y: -410, zoom: 2.1),
+                                 DrawViewport(x: -70, y: -145, zoom: 0.85),
+                                 DrawViewport(x: 90, y: 130, zoom: 0.2)])
+        try sheet("two-finger-pan", [DrawViewport(x: 0, y: 0, zoom: 0.6),
+                                     DrawViewport(x: -120, y: -60, zoom: 0.6),
+                                     DrawViewport(x: -240, y: -120, zoom: 0.6),
+                                     DrawViewport(x: -360, y: -180, zoom: 0.6)])
+        print("CANVAS_BOARD_FRAME_SHEETS attachments=3 old_above_new=3")
     }
 
     func testAccessibilityKeepsTheZoomReadableWhenThePillSaysFit() {

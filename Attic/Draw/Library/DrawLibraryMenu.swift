@@ -176,7 +176,7 @@ struct DrawLibraryRows: View {
         let height = DrawLibraryMetrics.listHeight(rows)
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(rows) { row in
                         if row.startsSection { AtticDropdownRule() }
                         DrawLibraryRowView(row: row, isLit: row.id == litID,
