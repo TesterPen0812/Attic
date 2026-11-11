@@ -124,7 +124,7 @@ struct DrawLibraryCard<Content: View>: View {
             .frame(width: width)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .background(AtticGlassMenuSurface(style: style))
-            .clipShape(Squircle(cornerRadius: AtticGlassMenuShape.radius))
+            .clipShape(AtticGlassMenuShape.card)
             .accessibilityElement(children: .contain)
     }
 }
