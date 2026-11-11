@@ -26,6 +26,13 @@ final class PanelIntegrationTests: XCTestCase {
         await panel.noteDraft.pages.startAndWait()
         XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented)
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: true), .shown)
+        // SwiftUI only exposes the full nested control tree to hosted AX
+        // queries after AppKit's enhanced-user-interface request. Other
+        // panel AX tests use the same setting; restore it for sibling tests.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
         let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
         func descendants(_ view: AnyObject) -> [AnyObject] {
             [view] + ((view.accessibilityChildren?() ?? nil) ?? []).flatMap { descendants($0 as AnyObject) }
