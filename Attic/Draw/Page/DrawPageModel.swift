@@ -924,6 +924,7 @@ final class DrawPageModel: ObservableObject {
 
     /// Return on a selected text box, a double click, or Text on a box.
     func edit(_ id: UUID) {
+        syncExternalChanges()
         guard let object = object(id), case .text(let text) = object.content else { return }
         endEditing()
         editing = DrawTextEdit(id: id, origin: CGPoint(x: object.frame.x, y: object.frame.y), text: text,
@@ -939,6 +940,9 @@ final class DrawPageModel: ObservableObject {
     /// Each edit is one store command (Undo works while typing). IME's
     /// marked text is never sent; the editor calls this once it's committed.
     func typed(_ text: String) {
+        // The observer callback is asynchronous. A keystroke arriving first
+        // must still use the agent's current position and text geometry.
+        syncExternalChanges()
         guard var edit = editing, text != edit.text else { return }
         edit.text = text
         if text.isEmpty {
@@ -969,6 +973,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
+        syncExternalChanges()
         guard var edit = editing else { return }
         change(&edit.style)
         editing = edit
@@ -1205,6 +1210,9 @@ final class DrawPageModel: ObservableObject {
             if let object = object(edit.id), case .text(let text) = object.content {
                 edit.text = text
                 edit.style = object.style
+                edit.origin = CGPoint(x: object.frame.x, y: object.frame.y)
+                edit.width = object.textWidth.map { CGFloat($0) }
+                edit.scale = CGFloat(object.textScale ?? 1)
                 edit.stored = true
             } else {
                 edit.text = ""
@@ -1263,8 +1271,18 @@ final class DrawPageModel: ObservableObject {
         }
         canvasName = confirmedName(in: snapshot)
         let fresh = snapshot.objects.filter { $0.deletedAt == nil }
+        // Editing text is saved on every committed keystroke. If an agent
+        // replaces/deletes that text, stop the old editor rather than letting
+        // its next keystroke restore stale content. The previous text remains
+        // in the store's undo history for recovery.
+        let editorConflicts = editing.map { edit in
+            guard let updated = fresh.first(where: { $0.id == edit.id }),
+                  case .text(let text) = updated.content else { return true }
+            return text != edit.text
+        } ?? false
         guard fresh != objects else { refreshHistory(); return }
         objects = fresh
+        if editorConflicts { endEditing() }
         afterContentChange(replacingEditorText: editing != nil)
     }
 

@@ -810,6 +810,7 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(result.canvas.id, model.canvasID)
         XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
+
     // Red-first Draw integration audit, 11 Nov. These intentionally assert the intended safety contract.
     func testDA1SecondaryPanDuringInkMustKeepTheUnfinishedStroke() throws {
         let id = try XCTUnwrap(model.canvasID)
@@ -916,6 +917,91 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(saved.style.colour, .red)
         XCTAssertEqual(saved.frame.width, shape.frame.width + 20, accuracy: 0.01)
         XCTAssertEqual(saved.frame.height, shape.frame.height + 15, accuracy: 0.01)
+    }
+
+    func testDA3AgentMoveOfLiveTextBoxMustSurviveTheOwnersNextKeystroke() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.text)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Before")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var moved = original
+        moved.frame.x += 90
+        moved.frame.y += 40
+        XCTAssertTrue(store.perform(.put([moved]), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.object(original.id)?.frame.x, moved.frame.x, "The external move reaches the board")
+        model.typed("Before!")
+        let after = try XCTUnwrap(store.open(id).objects.first)
+        XCTAssertEqual(after.frame.x, moved.frame.x, "Typing must retain the agent's new text position")
+        XCTAssertEqual(after.frame.y, moved.frame.y, "Typing must retain the agent's new text position")
+    }
+
+    func testDA3TypingBeforeStoreObservationRebasesWidthScaleAndRestyle() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Before")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var changed = original
+        changed.frame.x += 40
+        changed.frame.y += 30
+        changed.textWidth = 115
+        changed.textScale = 1.4
+        changed.style.colour = .red
+        DrawPageModel.measure(&changed, text: changed.text)
+        XCTAssertTrue(store.perform(.put([changed]), on: id).isSaved)
+        // Deliberately do not call syncExternalChanges: typing is faster than the observer.
+        model.typed("Before!")
+        let edit = try XCTUnwrap(model.editing)
+        XCTAssertEqual(edit.origin.x, changed.frame.x)
+        XCTAssertEqual(edit.origin.y, changed.frame.y)
+        XCTAssertEqual(edit.width, 115)
+        XCTAssertEqual(edit.scale, 1.4, accuracy: 0.0001)
+        let stored = try XCTUnwrap(store.open(id).objects.first)
+        XCTAssertEqual(stored.frame.x, changed.frame.x)
+        XCTAssertEqual(stored.frame.y, changed.frame.y)
+        XCTAssertEqual(stored.textWidth, 115)
+        XCTAssertEqual(stored.textScale ?? 1, 1.4, accuracy: 0.0001)
+        XCTAssertEqual(stored.style.colour, .red)
+        XCTAssertEqual(stored.text, "Before!")
+    }
+
+    func testDA3ExternalTextConflictEndsEditAndKeepsOwnerTextInUndoHistory() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Owner typed text")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        var agent = original
+        agent.content = .text("Agent's different text")
+        XCTAssertTrue(store.perform(.put([agent]), on: id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertNil(model.editing, "A conflicting live edit must close")
+        model.typed("Stale editor write")
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Agent's different text")
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Owner typed text",
+                       "Previously committed owner typing remains recoverable")
+    }
+
+    func testDA3ExternalDeleteOfEditedBoxCannotBeUndoneByTyping() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 140))
+        model.typed("Owner's saved sentence")
+        model.endEditing()
+        let original = try XCTUnwrap(store.open(id).objects.first)
+        model.edit(original.id)
+        XCTAssertTrue(store.perform(.remove([original.id]), on: id).isSaved)
+        model.typed("Owner's saved sentence!")
+        XCTAssertNil(model.editing)
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == original.id }))
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects.first?.text, "Owner's saved sentence")
     }
 
 }
