@@ -9,6 +9,36 @@ import XCTest
 /// compose in All notes' bottom bar, Back and Aa in the writing view's.
 @MainActor
 final class NotesChromeTests: XCTestCase {
+    func testBA5BlankUntouchedDraftMakesNoCreationSoundForCommandN() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil)
+        controller.start()
+        let firstSession = try XCTUnwrap(controller.active)
+        XCTAssertTrue(firstSession.isUntouchedDraft)
+        let firstID = firstSession.noteID
+        var played: [AtticSounds.Cue] = []
+        let sounds = AtticSounds.shared
+        sounds.lastPlayed = -.infinity
+        sounds.settingEnabled = { true }
+        sounds.systemAllows = { true }
+        sounds.clock = { 20_000 }
+        sounds.output = { played.append($0) }
+        defer {
+            sounds.output = nil
+            sounds.settingEnabled = nil
+            sounds.systemAllows = { true }
+            sounds.clock = { ProcessInfo.processInfo.systemUptime }
+            sounds.lastPlayed = -.infinity
+        }
+        XCTAssertTrue(NotesEditorPage.requestNewNoteAndPlayCue(controller))
+        XCTAssertEqual(controller.active?.noteID, firstID, "Command-N reuses the untouched draft")
+        XCTAssertTrue(played.isEmpty, "no session or note was created")
+        XCTAssertTrue(controller.requestNewNote(title: "A note", tags: []))
+        let writtenID = try XCTUnwrap(controller.active?.noteID)
+        XCTAssertTrue(NotesEditorPage.requestNewNoteAndPlayCue(controller))
+        XCTAssertNotEqual(controller.active?.noteID, writtenID, "Command-N starts a fresh draft after writing")
+        XCTAssertEqual(played, [.created], "a real new session keeps the creation cue")
+    }
     // MARK: Geometry
 
     /// Accepted 2026-10-30 ("Top row and bottom bar"): Search far right,
