@@ -450,6 +450,8 @@ final class AgentChatModel: ObservableObject {
     private(set) var closedAtOnce = false
 
     var isOpen: Bool { bar.isChatOpen }
+    private(set) var watchingGeneration: UInt64 = 0
+    func isWatching(_ generation: UInt64) -> Bool { isOpen && watchingGeneration == generation }
     var isConnected: Bool { runner != nil }
     var isBusy: Bool { isRunning }
 
@@ -522,6 +524,7 @@ final class AgentChatModel: ObservableObject {
     func open() {
         closedAtOnce = false
         guard !isOpen else { return }
+        watchingGeneration &+= 1
         IdleLatencyTrace.controlDispatched(.chat)
         #if DEBUG && ATTIC_LOCAL_ONLY
         AgentPassProbe.beginOpen()
@@ -542,6 +545,7 @@ final class AgentChatModel: ObservableObject {
     /// Closing never stops the run: it carries on, without touching the page.
     func close() {
         guard isOpen else { return }
+        watchingGeneration &+= 1
         stopWatching()
         if pickingItem { pickingItem = false }
         bar.isChatOpen = false

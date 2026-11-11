@@ -73,6 +73,7 @@ struct SettingsView: View {
             tint: settings.panelTint,
             tintLength: settings.panelTintLength,
             hapticsEnabled: settings.hapticsEnabled,
+            brightenGlass: settings.brightenGlass,
             animations: settings.animations,
             motion: settings.motionTuning
         )

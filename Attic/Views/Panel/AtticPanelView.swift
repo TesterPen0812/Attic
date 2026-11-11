@@ -28,6 +28,9 @@ private final class PanelRelevantSettingsObserver: ObservableObject {
             changed(settings.$panelSurfaceStyle),
             changed(settings.$panelTint),
             changed(settings.$panelTintLength),
+            // The surface's glass lift: without it, only the island (which
+            // observes every setting) changed until something else redrew.
+            changed(settings.$brightenGlass),
             changed(settings.$appearance),
             changed(settings.$hapticsEnabled),
             changed(settings.$animations),
@@ -681,6 +684,7 @@ struct AtticPanelView: View {
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
+                brightenGlass: settings.brightenGlass,
                 animations: settings.animations,
                 controls: PanelKeyTreatment.controls(isPanelKey: false, surface: settings.panelSurfaceStyle),
                 motion: settings.motionTuning

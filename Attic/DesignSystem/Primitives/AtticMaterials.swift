@@ -788,11 +788,17 @@ struct AtticSurfaceBackground<S: Shape>: View {
     var nativeGlassSize: CGSize?
 
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         ZStack {
             if model.kind != .solid {
                 underlay
+                // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
+                // Light Glass and Frosted only; never Settings' chrome.
+                if !isChrome {
+                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass))
+                }
                 // The foundation, with Dark's dark tint over it (A37).
                 shape.fill(model.backing.color)
             } else if model.porcelain {
@@ -869,6 +875,23 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // Phase 0: the palette's wash over the Frosted material.
                 shape.fill(model.materialWash.color)
             }
+        }
+    }
+}
+
+/// The glass lift (owner, 2026-11-11, option C): an additive white in the
+/// surface's shape. It raises every level by the same amount, so the
+/// desktop's detail shows through at the same contrast. Draws nothing at 0.
+struct AtticGlassLift<S: Shape>: View {
+    let shape: S
+    let strength: Double
+
+    var body: some View {
+        if strength > 0 {
+            shape.fill(Color.white.opacity(strength))
+                .blendMode(.plusLighter)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 }

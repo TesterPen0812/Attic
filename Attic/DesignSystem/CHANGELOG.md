@@ -1,9 +1,23 @@
+## 2026-11-11 · SA-4 Settings connection hint contrast
+
+Only the italic connection hint in the Settings sidebar uses its own text ink,
+tuned to at least 4.5:1 on the sidebar material, including tinted appearance,
+desktop backdrops and sidebar hover/selection states. Other chrome inks and
+surfaces remain unchanged.
+
+## 2026-11-11 · SA-3 compact dropdown text contrast
+
+The Tags dropdown heading, tag suggestion details and tag empty states use
+one compact-text ink tuned to 4.5:1 on the solid popover face and highlighted
+rows in Light and Dark. The shared helper ladder and all surface colours stay
+unchanged.
+
 ## 2026-11-11 · Tag suggestion count under Increase Contrast
 
 Only the trailing count in the tag suggestions dropdown uses maximum-contrast
 black or white ink while Increase Contrast is enabled, including on the
-highlighted row over a dark desktop. Normal helper ink and the other tag rows
-are unchanged.
+highlighted row over a dark desktop. Normal counts use the SA-3 small-text
+ink; the tag row labels are unchanged.
 
 ## 2026-11-11 · Edge light on remaining raised panel controls
 

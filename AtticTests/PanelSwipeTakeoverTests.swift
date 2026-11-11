@@ -347,27 +347,13 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         for mode in [PanelHideAnimation.slide, .swoop] {
             let rig = try makeRig(mode)
             defer { close(rig) }
+            let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
+            // Arm before releasing: a slow CI turn can finish the spring
+            // before the test reaches a post-release CALayer lookup.
+            content.freezeNextSpringForTesting(atFraction: 0.2)
+            defer { content.thawSpringForTesting() }
             try swipe(-5, steps: 8, still: 8, on: rig.panel)
-            // Slide's spring can finish during a stalled CI test turn. Park
-            // its actual presentation layer partway through the release so
-            // the next swipe must take over a known in-flight frame.
-            var pausedLayer: CALayer?
-            if mode == .slide {
-                let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
-                let layer = try XCTUnwrap(content.subviews.compactMap(\.layer)
-                    .first { $0.animation(forKey: "attic.panel.collapse") != nil })
-                let animation = try XCTUnwrap(layer.animation(forKey: "attic.panel.collapse"))
-                layer.speed = 0
-                layer.timeOffset = animation.beginTime + animation.duration * 0.2
-                CATransaction.flush()
-                pausedLayer = layer
-            } else {
-                spin(0.04)
-            }
-            defer {
-                pausedLayer?.speed = 1
-                pausedLayer?.timeOffset = 0
-            }
+            XCTAssertTrue(content.hasFrozenSpringForTesting, "\(mode): the release runs a spring")
             let springing = rig.controller.displayedProgressForProbe
             XCTAssertTrue(rig.panel.isVisible, "\(mode)")
             XCTAssertGreaterThan(springing, 0.005, "\(mode): the spring-back is still running")
@@ -376,8 +362,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
             try send(-1, phase: 2, to: rig.panel)
             let caught = rig.controller.displayedProgressForProbe
             XCTAssertEqual(caught, springing, accuracy: 0.03, "\(mode): picked up where the spring had it")
-            pausedLayer?.speed = 1
-            pausedLayer?.timeOffset = 0
+            content.thawSpringForTesting()
             for _ in 0..<20 { spin(1.0 / 120); try send(-6, phase: 2, to: rig.panel) }
             let followed = rig.controller.displayedProgressForProbe
             XCTAssertGreaterThan(followed, springing + 0.1, "\(mode): the new swipe drives the panel")

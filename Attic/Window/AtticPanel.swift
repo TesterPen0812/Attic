@@ -1195,6 +1195,29 @@ final class AtticPanelContentContainer: NSView {
     let hostingView: AtticPanelHostingView
     private let motionView = NSView()
     private static let collapseAnimationKey = "attic.panel.collapse"
+    #if DEBUG
+    /// A CI turn may be stalled for longer than a release spring. Arm the
+    /// pause before the gesture so it happens while the animation is added.
+    private var nextSpringFreezeFractionForTesting: Double?
+
+    func freezeNextSpringForTesting(atFraction fraction: Double) {
+        precondition((0..<1).contains(fraction))
+        nextSpringFreezeFractionForTesting = fraction
+    }
+
+    var hasFrozenSpringForTesting: Bool {
+        guard let layer = motionView.layer, layer.speed == 0 else { return false }
+        return layer.animation(forKey: Self.collapseAnimationKey) != nil
+            || layer.animation(forKey: Self.swoopAnimationKey) != nil
+    }
+
+    func thawSpringForTesting() {
+        nextSpringFreezeFractionForTesting = nil
+        swoopClockFrozenAt = nil
+        motionView.layer?.speed = 1
+        motionView.layer?.timeOffset = 0
+    }
+    #endif
     var allowsContentInteraction = true
     /// While a swipe's close or spring-back runs, the panel's whole area
     /// takes the first event of a new swipe (a takeover), also where the
@@ -1458,6 +1481,13 @@ final class AtticPanelContentContainer: NSView {
             animation.toValue = NSValue(caTransform3D: target)
             CATransaction.setCompletionBlock(completion)
             layer.add(animation, forKey: Self.collapseAnimationKey)
+            #if DEBUG
+            if spring != nil, let fraction = nextSpringFreezeFractionForTesting {
+                nextSpringFreezeFractionForTesting = nil
+                layer.speed = 0
+                layer.timeOffset = animation.beginTime + animation.duration * fraction
+            }
+            #endif
             if hides {
                 // The last part fades out, so the hide ends cleanly. It holds
                 // at 0 until the next motion takes the panel back.
@@ -1503,11 +1533,21 @@ final class AtticPanelContentContainer: NSView {
     private var swoopProgress: Double = 0
     private var alternateToken = 0
 
+    /// The clock Swoop's run is read by (the system's, except in a test that
+    /// has frozen it).
+    private var swoopNow: CFTimeInterval {
+        #if DEBUG
+        swoopClockFrozenAt ?? CACurrentMediaTime()
+        #else
+        CACurrentMediaTime()
+        #endif
+    }
+
     /// Where the animation is now (0 shown, 1 hidden).
     var alternateProgress: Double {
         switch alternateMode {
         case .genieLiveGlass?: genieView.currentProgress
-        case .swoop?: swoopRun?.progress(at: CACurrentMediaTime()) ?? swoopProgress
+        case .swoop?: swoopRun?.progress(at: swoopNow) ?? swoopProgress
         default: 0
         }
     }
@@ -1516,7 +1556,7 @@ final class AtticPanelContentContainer: NSView {
     var alternateVelocity: Double {
         switch alternateMode {
         case .genieLiveGlass?: genieView.currentVelocity
-        case .swoop?: swoopRun?.velocity(at: CACurrentMediaTime()) ?? 0
+        case .swoop?: swoopRun?.velocity(at: swoopNow) ?? 0
         default: 0
         }
     }
@@ -1605,6 +1645,26 @@ final class AtticPanelContentContainer: NSView {
     #if DEBUG
     /// The last flight start's cost: snapshot and live-material set-up (ms).
     private(set) var lastAlternateBeginMilliseconds: Double = 0
+    private var swoopClockFrozenAt: CFTimeInterval?
+    /// Tests: stops the running Swoop `fraction` of the way through its
+    /// duration (its clock and its layer), so a turn the runner stalls
+    /// cannot finish a spring that a test means to catch in flight. Returns
+    /// false when no Swoop runs. `thawSwoopForTesting` lets time run again.
+    func freezeSwoopForTesting(atFraction fraction: Double) -> Bool {
+        guard let run = swoopRun, let layer = motionView.layer,
+              let animation = layer.animation(forKey: Self.swoopAnimationKey) else { return false }
+        swoopClockFrozenAt = run.start + run.duration * fraction
+        layer.speed = 0
+        layer.timeOffset = animation.beginTime + animation.duration * fraction
+        CATransaction.flush()
+        return true
+    }
+    func thawSwoopForTesting() {
+        swoopClockFrozenAt = nil
+        guard let layer = motionView.layer else { return }
+        layer.speed = 1
+        layer.timeOffset = 0
+    }
     /// Tests: the progress Swoop's keyframes draw `fraction` of the way
     /// through its run's duration (nil: no Swoop run).
     func swoopProgressForTesting(atFraction fraction: Double) -> Double? {
@@ -1827,7 +1887,7 @@ final class AtticPanelContentContainer: NSView {
     ) -> TimeInterval {
         guard let layer = motionView.layer else { completion(); return 0 }
         let from = alternateProgress
-        let run = curve.run(from: from, to: target, start: CACurrentMediaTime())
+        let run = curve.run(from: from, to: target, start: swoopNow)
         swoopRun = run
         swoopProgress = target
         // 30 keyframes for a timed run; a spring gets one per 120 Hz frame.
@@ -1864,6 +1924,14 @@ final class AtticPanelContentContainer: NSView {
             }
         }
         layer.add(group, forKey: Self.swoopAnimationKey)
+        #if DEBUG
+        if case .spring = curve, let fraction = nextSpringFreezeFractionForTesting {
+            nextSpringFreezeFractionForTesting = nil
+            swoopClockFrozenAt = run.start + run.duration * fraction
+            layer.speed = 0
+            layer.timeOffset = group.beginTime + group.duration * fraction
+        }
+        #endif
         CATransaction.commit()
         return run.duration
     }

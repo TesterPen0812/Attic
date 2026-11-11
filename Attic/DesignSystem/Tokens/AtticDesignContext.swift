@@ -27,6 +27,10 @@ struct AtticDesignContext: Hashable, Sendable {
     var reduceMotion = false
     var differentiateWithoutColor = false
     var hapticsEnabled = true
+    /// Settings › Appearance › "Brighten glass over dark backgrounds". It
+    /// changes no colour token: surfaces draw the lift over their material
+    /// (`glassLift`), so it is not part of `colourKey`.
+    var brightenGlass = false
     /// What raised controls are made of. The text on them is tuned against
     /// both materials, so this changes no colour token.
     var controls: AtticControlMaterial = .liquidGlass
@@ -41,6 +45,13 @@ struct AtticDesignContext: Hashable, Sendable {
     }
 
     var isTranslucent: Bool { effectiveSurface != .solid }
+
+    /// The additive white the panel's surfaces draw over their material
+    /// (`AtticSurfaceModel.glassLift`).
+    var glassLift: Double {
+        AtticSurfaceModel.glassLift(enabled: brightenGlass, appearance: mode.themeAppearance,
+                                    kind: effectiveSurface, increaseContrast: increaseContrast)
+    }
 
     /// Reduce Transparency makes the controls opaque: the Craft style.
     var effectiveControls: AtticControlMaterial {
@@ -143,6 +154,7 @@ extension View {
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
+        brightenGlass: Bool = false,
         animations: AtticAnimationLevel = .lively,
         controls: AtticControlMaterial = .liquidGlass,
         motion: AtticMotionTuning = .current
@@ -154,6 +166,7 @@ extension View {
             tint: tint,
             tintLength: tintLength,
             hapticsEnabled: hapticsEnabled,
+            brightenGlass: brightenGlass,
             animations: animations,
             motion: motion
         ))
@@ -167,6 +180,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let tint: PanelTintLevel
     let tintLength: Double
     let hapticsEnabled: Bool
+    let brightenGlass: Bool
     let animations: AtticAnimationLevel
     let motion: AtticMotionTuning
 
@@ -209,6 +223,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
             reduceMotion: animations.reducesMotion(systemReduceMotion: systemReduceMotion),
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
+            brightenGlass: brightenGlass,
             controls: controls,
             motion: motion
         )

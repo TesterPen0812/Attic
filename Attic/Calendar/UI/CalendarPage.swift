@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -28,6 +29,7 @@ struct CalendarPage: View {
     @Environment(\.panelComposer) private var composer
     @Environment(\.panelResumeDefaults) private var resumeDefaults
     @State private var scrollPosition = ScrollPosition(y: 0)
+    @State private var nativeScroll = CalendarNativeScrollHandle()
     @State private var flags: ScrollFlags
     /// The grid is only the selected week: Week is picked and the fold to
     /// it has finished. It trails `model.isWeekPicked` while the fold runs.
@@ -107,7 +109,7 @@ struct CalendarPage: View {
         .onAppear {
             model.setVisible(isReallyVisible)
             // A retained, prewarmed Calendar is mounted but not the shown page.
-            if isReallyVisible { model.pageAppeared() }
+            if isReallyVisible { model.pageAppeared(); applyWatchedDayRequest() }
             #if DEBUG
             if isReallyVisible, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
                 model.setDayView(true)
@@ -120,7 +122,7 @@ struct CalendarPage: View {
         }
         .onChange(of: isReallyVisible) { _, current in
             model.setVisible(current)
-            if current { model.pageAppeared() }
+            if current { model.pageAppeared(); applyWatchedDayRequest() }
             #if DEBUG
             if current, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCREEN9_DAY"] == "1" {
                 model.setDayView(true)
@@ -132,8 +134,9 @@ struct CalendarPage: View {
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         // The agent picks a day while you watch (the spark taps its key).
         .onReceive(AgentWatchBoard.shared.$dayRequest.compactMap { $0 }) { request in
-            AgentWatchBoard.shared.consumeDay(request.id)
-            model.select(request.day)
+            // @Published sends before updating its stored value; check the
+            // latest request once the publication has finished.
+            Task { @MainActor in applyWatchedDayRequest(request) }
         }
         .onChange(of: snapshot.weeks.count) { _, count in
             // The week view stays the week view when the month changes
@@ -168,6 +171,7 @@ struct CalendarPage: View {
                 }
                 .padding(.bottom, CalendarDesign.agendaBottom)
                 .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
+                .background(CalendarNativeScrollReader(handle: nativeScroll).frame(width: 0, height: 0))
                 .background(PanelResumeScrollKeeper(key: "calendar", ready: !model.isLoadingEvents, navigationID: snapshot.selected.description + snapshot.query).frame(width: 0, height: 0))
                 // What scrolls under the selected week is hidden behind it and
                 // fades in below it once it is held (item 14, owner 2026-10-31).
@@ -361,7 +365,19 @@ struct CalendarPage: View {
     }
 
     private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {
-        Task { if await model.eventRows.close() { action() } }
+        model.navigateAfterClosingEvent(action)
+    }
+
+    private func applyWatchedDayRequest() {
+        if let request = AgentWatchBoard.shared.dayRequest { applyWatchedDayRequest(request) }
+    }
+
+    private func applyWatchedDayRequest(_ request: (day: DueDay, id: UUID, generation: UInt64)) {
+        let board = AgentWatchBoard.shared
+        guard board.acceptsDayRequest(id: request.id, generation: request.generation,
+                                      pageIsVisible: isReallyVisible) else { return }
+        board.consumeDay(request.id)
+        model.select(request.day)
     }
 
     private func beginSearch() {
@@ -395,6 +411,14 @@ struct CalendarPage: View {
             // Week was still animating when Month was picked. The grid is
             // already a month, but the old scroll target must be reversed.
             if !week && interruptedWeekFold {
+                // A SwiftUI scrollTo can lose this reversal to the original
+                // animated scroll. Stop its native clip at the *current*
+                // visible frame, then reverse with the same spring.
+                if let scroller = nativeScroll.scrollView {
+                    let clip = scroller.contentView
+                    clip.scroll(to: clip.bounds.origin)
+                    scroller.reflectScrolledClipView(clip)
+                }
                 withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
                     scrollPosition.scrollTo(y: 0)
                 }
@@ -603,5 +627,41 @@ struct CalendarTodayButton: View {
                 withAnimation(animation) { away = true } completion: { if away { gone = true } }
             }
         }
+    }
+}
+
+/// Access to this page's mounted native scroller without publishing any
+/// additional view state or changing the scroll view's layout.
+private final class CalendarNativeScrollHandle {
+    weak var scrollView: NSScrollView?
+}
+
+private struct CalendarNativeScrollReader: NSViewRepresentable {
+    let handle: CalendarNativeScrollHandle
+
+    func makeNSView(context: Context) -> Reader {
+        let reader = Reader()
+        reader.handle = handle
+        return reader
+    }
+
+    func updateNSView(_ reader: Reader, context: Context) {
+        reader.handle = handle
+        reader.connect()
+    }
+
+    final class Reader: NSView {
+        weak var handle: CalendarNativeScrollHandle?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            connect()
+        }
+
+        func connect() {
+            handle?.scrollView = window == nil ? nil : enclosingScrollView
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

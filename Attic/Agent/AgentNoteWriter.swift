@@ -33,13 +33,14 @@ final class AgentNoteWriter {
     /// on show. Called only while the chat is open. Given the text from
     /// before, the added text is hidden from the first frame the page draws.
     /// Set after init where the opening goes through the chat's watcher.
-    var open: (UUID, NoteDocument?) async -> AgentNoteSurface?
+    var open: (UUID, NoteDocument?, @escaping () -> Bool) async -> AgentNoteSurface?
     /// The note's text from just before the agent's write (`NoteStore`).
     private let base: (UUID) -> NoteDocument?
     var pace = Pace()
     var reducesMotion: () -> Bool = { false }
 
-    init(open: @escaping (UUID, NoteDocument?) async -> AgentNoteSurface?, base: @escaping (UUID) -> NoteDocument?) {
+    init(open: @escaping (UUID, NoteDocument?, @escaping () -> Bool) async -> AgentNoteSurface?,
+         base: @escaping (UUID) -> NoteDocument?) {
         self.open = open
         self.base = base
     }
@@ -56,7 +57,7 @@ final class AgentNoteWriter {
     private func write(noteID: UUID, before: NoteDocument, watching: @escaping () -> Bool,
                        point: (CGPoint, Bool) -> Void) async {
         guard watching(), !Task.isCancelled,
-              let surface = await open(noteID, reducesMotion() ? nil : before) else { return }
+              let surface = await open(noteID, reducesMotion() ? nil : before, watching) else { return }
         // However it ends, nothing stays hidden.
         defer { surface.liftAgentVeil() }
         guard watching(), !Task.isCancelled else { return }
@@ -109,9 +110,9 @@ final class AgentNoteWriter {
     /// forward; then its editor, once it is in the window and laid out. A
     /// task's own note is not a Notes page note: nothing opens.
     static func openInNotes(_ noteID: UUID, before: NoteDocument?, pages: NotesPageController?,
-                            select: () async -> Void) async -> AgentNoteSurface? {
-        guard let pages, let note = pages.store.note(withID: noteID), note.taskID == nil,
-              await pages.openFromLibrary(noteID: noteID) else { return nil }
+                            select: () async -> Void, stillWatching: @escaping () -> Bool = { true }) async -> AgentNoteSurface? {
+        guard stillWatching(), let pages, let note = pages.store.note(withID: noteID), note.taskID == nil,
+              await pages.openFromLibrary(noteID: noteID, isCurrent: stillWatching), stillWatching() else { return nil }
         // As a library row does: the note, not the list, is on show.
         if pages.isLibraryPresented { pages.dismissLibrary() }
         // The added text is hidden before the page is drawn, not after.
@@ -121,8 +122,18 @@ final class AgentNoteWriter {
             engine.agentVeil = insertion.range
             veiled = engine
         }
+        guard stillWatching() else {
+            veiled?.agentVeil = nil
+            return nil
+        }
         await select()
+        guard stillWatching() else {
+            veiled?.textView?.liftAgentVeil()
+            veiled?.agentVeil = nil
+            return nil
+        }
         for _ in 0..<45 {
+            guard stillWatching(), !Task.isCancelled else { break }
             if let session = pages.active, session.noteID == noteID, let view = session.engine.textView,
                view.window != nil, !view.visibleRect.isEmpty {
                 view.keepKeyboardOff()

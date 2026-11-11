@@ -150,4 +150,60 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertTrue(store.perform(.restoreObjects([image.id]), on: board.id).isSaved)
         XCTAssertTrue(try store.deletedImages(in: board.id).isEmpty)
     }
+
+    func testDA4SavedAgentUndoMustKeepEarlierOwnerInkReachableInSessionHistory() throws {
+        let store = DrawInMemoryStore()
+        let canvas = store.create(name: "Interleaved history")
+        let ink = DrawObject(content: .stroke([DrawPoint(x: 10, y: 10), DrawPoint(x: 50, y: 50)]))
+        let agentShape = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([ink]), on: canvas.id).isSaved) // Owner's earlier command.
+        XCTAssertTrue(store.perform(.put([agentShape]), on: canvas.id).isSaved) // Agent's next command.
+        let agentStepID = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        let receipt = try XCTUnwrap(store.agentUndoProof(on: canvas.id, stepID: agentStepID))
+        XCTAssertTrue(store.undoAgentStep(on: canvas.id, proof: receipt).isSaved)
+        XCTAssertNotEqual(store.undoStepID(on: canvas.id), agentStepID,
+                          "The agent reversal needs its own history identity")
+        XCTAssertEqual(try store.open(canvas.id).objects.map(\.id), [ink.id])
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved, "Undoing the agent reversal itself is supported")
+        XCTAssertEqual(Set(try store.open(canvas.id).objects.map(\.id)), Set([ink.id, agentShape.id]))
+        XCTAssertTrue(store.canUndo(on: canvas.id),
+                      "Earlier owner ink must still be reachable by Undo after the agent's saved Undo")
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved, "Undo the agent's original rectangle")
+        XCTAssertEqual(try store.open(canvas.id).objects.map(\.id), [ink.id])
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved, "Undo the owner's earlier ink")
+        XCTAssertTrue(try store.open(canvas.id).objects.isEmpty)
+    }
+
+    func testDA4SavedAgentUndoDropsStaleHistoryWhenCachedStateDiverges() throws {
+        let repository = DrawMemoryRepository()
+        let store = DrawStore(repository: repository)
+        let canvas = store.create(name: "Stale session")
+        let ink = DrawObject(content: .stroke([DrawPoint(x: 10, y: 10)]))
+        let agentShape = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([ink]), on: canvas.id).isSaved)
+        XCTAssertTrue(store.perform(.put([agentShape]), on: canvas.id).isSaved)
+        let stepID = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        let proof = try XCTUnwrap(store.agentUndoProof(on: canvas.id, stepID: stepID))
+
+        // A thumbnail update keeps the history head but changes cached state.
+        XCTAssertTrue(store.perform(.thumbnail(Data([7])), on: canvas.id).isSaved)
+        let updated = try XCTUnwrap(repository.load(canvas.id)).canvas
+        var restored = updated
+        restored.thumbnail = nil
+        restored.thumbnailDark = nil
+        guard case .committed = repository.write(DrawChange(
+            canvasID: canvas.id, before: updated, after: restored,
+            objectsBefore: [:], objectsAfter: [:]
+        )) else { return XCTFail("Could not restore the persisted proof state") }
+        XCTAssertEqual(try store.open(canvas.id).canvas.thumbnail, Data([7]))
+        XCTAssertNil(try repository.load(canvas.id)?.canvas.thumbnail)
+
+        XCTAssertTrue(store.undoAgentStep(on: canvas.id, proof: proof).isSaved)
+        XCTAssertEqual(try store.open(canvas.id).objects.map(\.id), [ink.id])
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved, "The saved reversal is still undoable")
+        XCTAssertEqual(Set(try store.open(canvas.id).objects.map(\.id)), Set([ink.id, agentShape.id]))
+        XCTAssertFalse(store.canUndo(on: canvas.id), "Stale owner history must not survive the reload")
+        XCTAssertEqual(store.undo(on: canvas.id), .unchanged, "Undo must not replay a stale step")
+    }
+
 }

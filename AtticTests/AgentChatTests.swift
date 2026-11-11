@@ -1081,6 +1081,11 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testSA5ComposerPhaseGeometryRespectsReduceMotion() {
+        XCTAssertNil(AgentChatComposer.phaseAnimation(alive: false), "Reduce Motion must move composer geometry instantly")
+        XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")
+    }
+
     override func setUp() async throws {
         model = AgentChatModel()
         model.pacing = .instant
@@ -1665,6 +1670,44 @@ final class AgentNoteWritingTests: XCTestCase {
     private var model: AgentChatModel!
     private var noteID: UUID!
     private let checklist = "Press kit to Mira"
+
+    private actor BA1DecodeGate {
+        private(set) var waiting = false
+        private var hold: CheckedContinuation<Void, Never>?
+        func decode(_ bytes: Data) async -> (content: NoteContent, onMainThread: Bool) {
+            waiting = true
+            await withCheckedContinuation { hold = $0 }
+            return (NoteContentCodec.decode(bytes), false)
+        }
+        func release() { hold?.resume(); hold = nil }
+    }
+
+    func testBA1LateWatchedOpenCannotChangeNoteOrPageAfterChatClosesAndReopens() async throws {
+        let gate = BA1DecodeGate()
+        let pages = NotesPageController(store: notes, journal: nil,
+                                        decodeOpenDocument: { bytes in await gate.decode(bytes) })
+        let chat = AgentChatModel()
+        chat.open()
+        let generation = chat.watchingGeneration
+        var section: PanelSection = .tasks
+        let open = Task {
+            await AgentNoteWriter.openInNotes(noteID, before: nil, pages: pages, select: {
+                // The former coordinator's watched navigation + unconditional fallback.
+                if chat.isOpen { section = .notes }
+                if section != .notes { section = .notes }
+            }, stillWatching: { chat.isWatching(generation) })
+        }
+        for _ in 0..<200 { if await gate.waiting { break }; await Task.yield() }
+        let waiting = await gate.waiting
+        XCTAssertTrue(waiting, "the watched note's decoder must be held")
+        chat.close()
+        chat.open() // A later session must never adopt the earlier open.
+        XCTAssertFalse(chat.isWatching(generation))
+        await gate.release()
+        _ = await open.value
+        XCTAssertEqual(section, .tasks, "a closed watching session cannot navigate to Notes")
+        XCTAssertNil(pages.active, "the stale decode cannot open a note in the background")
+    }
     /// The presentation the model is waiting on, held until released.
     private var gate: CheckedContinuation<Void, Never>?
     private var presented: [UUID] = []
@@ -1798,7 +1841,7 @@ final class AgentNoteWritingTests: XCTestCase {
     // MARK: The writer
 
     private func writer(_ surface: FakeNoteSurface?, opened: @escaping (UUID) -> Void = { _ in }) -> AgentNoteWriter {
-        let writer = AgentNoteWriter(open: { id, _ in opened(id); return surface }, base: { _ in NoteDocument(blocks: [.text("Before")]) })
+        let writer = AgentNoteWriter(open: { id, _, _ in opened(id); return surface }, base: { _ in NoteDocument(blocks: [.text("Before")]) })
         writer.pace = .init(character: 0.001, newline: 0.002, cap: 3, arrive: 0, settle: 0, hold: 0.01, frame: 0.001)
         return writer
     }
@@ -1892,6 +1935,30 @@ final class AgentChatWatchingTests: XCTestCase {
     private var gate: CheckedContinuation<Void, Never>?
     private var presented: [AgentWatchedAction] = []
     private var pagesOpened: [AgentPage] = []
+
+    func testBA4ClosingWatchingClearsDeferredCalendarDayAndOldSessionCannotReuseIt() async throws {
+        let chat = AgentChatModel()
+        let board = AgentWatchBoard()
+        let watcher = PanelAgentWatcher(chat: chat,
+            noteWriter: AgentNoteWriter(open: { _, _, _ in nil }, base: { _ in nil }), board: board)
+        watcher.pace = .instant
+        watcher.reducesMotion = { true }
+        watcher.currentPage = { .calendar }
+        chat.open()
+        let occurrence = "held@\(Date().timeIntervalSinceReferenceDate)"
+        await watcher.presentation(for: .calendarEvent(AgentTarget(page: .calendar, externalID: occurrence)))?()
+        XCTAssertNotNil(board.dayRequest, "a watched event requests its day")
+        let request = try XCTUnwrap(board.dayRequest)
+        XCTAssertFalse(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: false),
+                       "a retained, hidden Calendar must ignore the day")
+        XCTAssertTrue(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: true))
+        chat.close()
+        XCTAssertNil(board.dayRequest, "a closed chat must retire its unpublished day request")
+        XCTAssertFalse(board.acceptsDayRequest(id: request.id, generation: request.generation, pageIsVisible: true),
+                       "a retired generation cannot override a manual day selection")
+        chat.open()
+        XCTAssertNil(board.dayRequest, "a new watch session must not reuse the old day")
+    }
 
     override func setUp() async throws {
         tasks = try makeTestStore()
@@ -2056,7 +2123,7 @@ final class AgentChatWatchingTests: XCTestCase {
         let chat = AgentChatModel()
         chat.connect(ScriptedAgentRunner(tools: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), pace: 0))
         chat.open()
-        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }), board: board)
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _, _ in nil }, base: { _ in nil }), board: board)
         watcher.pace = .instant
         watcher.currentPage = { .calendar }
         let occurrence = "dentist@\(Date().timeIntervalSinceReferenceDate)"
@@ -2193,7 +2260,7 @@ final class AgentChatWatchingTests: XCTestCase {
         let sink = chat.effects.sink { effects.append($0) }
         defer { sink.cancel() }
         let board = AgentWatchBoard()
-        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }), board: board)
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _, _ in nil }, base: { _ in nil }), board: board)
         watcher.pace = .instant
         watcher.reducesMotion = { true }
         watcher.islandPoint = { _ in CGPoint(x: 10, y: 10) }
@@ -2250,7 +2317,7 @@ final class AgentChatWatchingTests: XCTestCase {
             }
         }
         defer { sink.cancel() }
-        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _ in nil }, base: { _ in nil }),
+        let watcher = PanelAgentWatcher(chat: chat, noteWriter: AgentNoteWriter(open: { _, _, _ in nil }, base: { _ in nil }),
                                         board: AgentWatchBoard())
         watcher.pace = .instant
         watcher.islandPoint = { _ in CGPoint(x: 400, y: 300) }

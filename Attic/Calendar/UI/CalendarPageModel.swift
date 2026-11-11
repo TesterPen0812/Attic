@@ -69,6 +69,11 @@ final class CalendarPageModel: ObservableObject {
     private var cachedTasks: (revision: UInt64, today: DueDay, environment: DatePresentationEnvironment,
                               entries: [CalendarTaskEntry])?
     private var isVisible = false
+    /// Calendar navigation waits behind one owned-event save. A hidden page
+    /// retires its pending actions without cancelling that save.
+    private var pendingNavigation: [@MainActor () -> Void] = []
+    private var navigationClosing = false
+    private var navigationGeneration: UInt64 = 0
     /// Exactly one clock tick source, owned by the retained model only while
     /// its page is on screen (including when the shell keeps it mounted).
     private var nowPositionTimer: Timer?
@@ -149,8 +154,37 @@ final class CalendarPageModel: ObservableObject {
             }
             startNowPositionTimer()
         } else {
+            navigationGeneration &+= 1
+            pendingNavigation.removeAll()
             nowPositionTimer?.invalidate()
             nowPositionTimer = nil
+        }
+    }
+
+    /// The page's navigation barrier: editing an owned event must close first.
+    func navigateAfterClosingEvent(_ action: @escaping @MainActor () -> Void) {
+        guard isVisible else { return }
+        pendingNavigation.append(action)
+        drainNavigationAfterClose()
+    }
+
+    private func drainNavigationAfterClose() {
+        guard !navigationClosing, !pendingNavigation.isEmpty else { return }
+        navigationClosing = true
+        let generation = navigationGeneration
+        Task {
+            let saved = await eventRows.close()
+            navigationClosing = false
+            guard generation == navigationGeneration else {
+                // The page may have been hidden and shown again during the
+                // same save. Its new requests use a fresh barrier.
+                if isVisible { drainNavigationAfterClose() }
+                return
+            }
+            let actions = pendingNavigation
+            pendingNavigation.removeAll()
+            guard saved, isVisible else { return }
+            for action in actions { action() }
         }
     }
 

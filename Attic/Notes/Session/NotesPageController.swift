@@ -535,8 +535,9 @@ final class NotesPageController: ObservableObject {
     }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
-    func openFromLibrary(noteID: UUID, searchQuery: String? = nil) async -> Bool {
-        guard await openDecoded(noteID: noteID) else { return false }
+    func openFromLibrary(noteID: UUID, searchQuery: String? = nil,
+                         isCurrent: @escaping () -> Bool = { true }) async -> Bool {
+        guard await openDecoded(noteID: noteID, isCurrent: isCurrent), isCurrent() else { return false }
         if let searchQuery, let session = active, session.noteID == noteID,
            let range = session.engine.searchParagraph(matching: searchQuery) {
             session.selection = range
@@ -545,7 +546,8 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
-    private func openDecoded(noteID: UUID) async -> Bool {
+    private func openDecoded(noteID: UUID, isCurrent: @escaping () -> Bool = { true }) async -> Bool {
+        guard isCurrent() else { return false }
         if !didRecoverAtLaunch && journal?.requiresAsyncIO == true { recoverAtLaunch() }
         guard await awaitRecoveryForUser() else { return false }
         openRequestGeneration &+= 1
@@ -557,14 +559,14 @@ final class NotesPageController: ObservableObject {
             let decoded = await decodeOpenDocument(bytes)
             coldDecodeCount += 1
             if decoded.onMainThread { coldDecodeOnMainCount += 1 }
-            guard !Task.isCancelled, generation == openRequestGeneration,
+            guard isCurrent(), !Task.isCancelled, generation == openRequestGeneration,
                   let current = store.note(withID: noteID), current.revisionID == revision,
                   current.content == bytes else { return false }
             preparedLoad = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: revision)
             preparedBytes = bytes
         }
         func stillCurrent() -> Bool {
-            guard !Task.isCancelled, generation == openRequestGeneration else { return false }
+            guard isCurrent(), !Task.isCancelled, generation == openRequestGeneration else { return false }
             guard let preparedLoad else { return true }
             guard let current = store.note(withID: noteID) else { return false }
             return current.revisionID == preparedLoad.revisionID && current.content == preparedBytes

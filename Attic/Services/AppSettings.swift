@@ -85,6 +85,7 @@ final class AppSettings: ObservableObject {
         static let panelTint = AppearanceMigration.Key.tint
         static let panelTintLength = AppearanceMigration.Key.tintLength
         static let appearance = AppearanceMigration.Key.appearance
+        static let brightenGlass = "panelBrightenGlass"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let inAppAgentBackend = "inAppAgentBackend"
         static let inAppAgentClaudeModel = "inAppAgentClaudeModel"
@@ -202,6 +203,13 @@ final class AppSettings: ObservableObject {
 
     @Published var appearance: AppearancePreference {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
+    }
+
+    /// "Brighten glass over dark backgrounds" (owner, 2026-11-11, option C):
+    /// Light glass and the island get an additive white lift everywhere
+    /// until it is turned off (`AtticSurfaceModel.glassLift`). Off by default.
+    @Published var brightenGlass: Bool {
+        didSet { defaults.set(brightenGlass, forKey: Key.brightenGlass) }
     }
 
     @Published var isAgentAccessEnabled: Bool {
@@ -465,6 +473,7 @@ final class AppSettings: ObservableObject {
             defaults.object(forKey: Key.panelTintLength) as? Double ?? PanelTintLength.defaultValue
         )
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
+        brightenGlass = (defaults.object(forKey: Key.brightenGlass) as? Bool) ?? false
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
             // Require one explicit opt-in from every existing installation.

@@ -87,14 +87,20 @@ struct AtticDropdownRule: View {
     }
 }
 
+/// Shared ink for compact dropdown labels, including section headings, empty states and details.
+enum AtticDropdownSmallText {
+    static let ink: AtticInk = .dropdownSmallText
+}
+
 /// A list's section header ("Tags"): 11 pt semibold in a light ink, on the
 /// rows' leading edge.
 struct AtticDropdownSectionHeader: View {
     let title: String
+    var ink: AtticInk = .helper
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        AtticText(verbatim: title, style: .dropdownSection, ink: .helper)
+        AtticText(verbatim: title, style: .dropdownSection, ink: ink)
             .padding(.horizontal, m.rowPadding)
             .padding(.bottom, m.sectionHeaderBottom)
             .frame(maxWidth: .infinity, minHeight: m.sectionHeaderHeight, maxHeight: m.sectionHeaderHeight, alignment: .bottomLeading)
@@ -539,6 +545,9 @@ struct AtticDropdownRow: View {
     /// A priority's mark column (`.none` keeps the column empty).
     var mark: AtticPriority?
     var detail: String?
+    /// Tags/suggestions opt into small-text contrast without recolouring
+    /// other dropdowns' secondary details.
+    var detailInk: AtticInk = .helper
     /// A narrow exception for helper text drawn over a high-contrast menu
     /// highlight; the normal dropdown helper ink is unchanged.
     var detailColour: AtticRGBA?
@@ -561,7 +570,7 @@ struct AtticDropdownRow: View {
 
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
-         detail: String? = nil, detailColour: AtticRGBA? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
+         detail: String? = nil, detailInk: AtticInk = .helper, detailColour: AtticRGBA? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
          titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
         self.position = position
@@ -573,6 +582,7 @@ struct AtticDropdownRow: View {
         self.checkGlyph = checkGlyph
         self.mark = mark
         self.detail = detail
+        self.detailInk = detailInk
         self.detailColour = detailColour
         self.shortcutHintsShown = shortcutHintsShown
         self.match = match
@@ -633,7 +643,7 @@ struct AtticDropdownRow: View {
                         AtticShortcutHint(text: detail)
                     }
                 } else {
-                    AtticText(verbatim: detail, style: .shortcut, ink: .helper)
+                    AtticText(verbatim: detail, style: .shortcut, ink: detailInk)
                         .colour(detailColour)
                         .fixedSize()
                 }

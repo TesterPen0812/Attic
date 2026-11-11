@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Shows a watched change being made on the real page (the design's
@@ -55,11 +56,16 @@ final class PanelAgentWatcher {
     /// The Draw page, where it is the Canvas page.
     var drawPage: () -> DrawPageModel? = { AtticDraw.isEnabled ? DrawPageModel.shared : nil }
     let board: AgentWatchBoard
+    private var chatVisibilityObservation: AnyCancellable?
 
     init(chat: AgentChatModel, noteWriter: AgentNoteWriter, board: AgentWatchBoard = .shared) {
         self.chat = chat
         self.noteWriter = noteWriter
         self.board = board
+        board.bindWatching(to: chat)
+        chatVisibilityObservation = chat.bar.$isChatOpen.sink { [weak board] isOpen in
+            if !isOpen { MainActor.assumeIsolated { board?.retireDayRequest() } }
+        }
     }
 
     private var watching: Bool { chat?.isOpen == true && !Task.isCancelled }
@@ -72,13 +78,15 @@ final class PanelAgentWatcher {
         case let .openPage(page):
             return { [self] in await goTo(page) }
         case let .note(id):
-            return noteWriter.presentation(for: id, watching: { [weak chat] in chat?.isOpen == true },
+            guard let generation = chat?.watchingGeneration else { return nil }
+            return noteWriter.presentation(for: id, watching: { [weak chat] in chat?.isWatching(generation) == true },
                                            point: { [weak chat] in chat?.writingAt($0, star: $1) })
         case let .calendarEvent(target):
             guard let occurrence = target.externalID else { return nil }
+            guard let generation = chat?.watchingGeneration else { return nil }
             // Hidden before the page first draws it, as a note's text is.
             if alive { board.hideEvent(occurrence) }
-            return { [self] in await showEvent(occurrence) }
+            return { [self] in await showEvent(occurrence, generation: generation) }
         case let .sketch(canvas, objects):
             guard let draw = drawPage() else { return nil }
             if alive { draw.agentVeil.formUnion(objects) }
@@ -90,15 +98,15 @@ final class PanelAgentWatcher {
 
     /// The design's `goPage`: the spark goes to the island's item, taps it
     /// (the ring, the item pressed), the page switches, the page arrives.
-    func goTo(_ page: AgentPage) async {
-        guard watching, currentPage() != page else { return }
+    func goTo(_ page: AgentPage, whileWatching isCurrent: () -> Bool = { true }) async {
+        guard watching, isCurrent(), currentPage() != page else { return }
         if alive, let at = islandPoint(page) {
             await move(to: .window(at), for: pace.toIsland)
-            guard watching else { return }
+            guard watching, isCurrent() else { return }
             chat?.watchEffect(.tap(.window(at)))
             islandTap(page)
         }
-        guard watching else { return }
+        guard watching, isCurrent() else { return }
         chat?.openPage?(page)
         await pause(pace.afterSwitch)
     }
@@ -107,12 +115,13 @@ final class PanelAgentWatcher {
 
     /// The design's `calAct`: Calendar forward, the spark picks the day, then
     /// the event's card grows in, pings and bursts.
-    private func showEvent(_ occurrence: String) async {
+    private func showEvent(_ occurrence: String, generation: UInt64) async {
         defer { board.settleEvent(occurrence) }
-        await goTo(.calendar)
-        guard watching, let day = Self.day(of: occurrence) else { return }
+        let isCurrent = { [weak chat] in chat?.isWatching(generation) == true }
+        await goTo(.calendar, whileWatching: isCurrent)
+        guard watching, isCurrent(), let day = Self.day(of: occurrence) else { return }
         guard alive else {
-            board.pick(day)
+            board.pick(day, generation: generation)
             board.settleEvent(occurrence)
             await pause(pace.hold)
             return
@@ -121,12 +130,12 @@ final class PanelAgentWatcher {
         if let key = await frame(dayKey) {
             let at = AgentWatchRect(rect: key, space: .global).centre
             await move(to: at, for: pace.toDay)
-            guard watching else { return }
+            guard watching, isCurrent() else { return }
             chat?.watchEffect(.tap(at))
         }
-        board.pick(day)
+        board.pick(day, generation: generation)
         await pause(pace.afterDay)
-        guard watching else { return }
+        guard watching, isCurrent() else { return }
         // The row takes its place now; its frame is known once laid out.
         let rowKey = AgentWatchBoard.eventKey(occurrence)
         var row = board.frame(rowKey)
@@ -134,7 +143,7 @@ final class PanelAgentWatcher {
             // The design's x of 90 px: the row's start.
             await move(to: .global(CGPoint(x: row.minX + 8, y: row.midY)), for: pace.toRow)
         }
-        guard watching else { return }
+        guard watching, isCurrent() else { return }
         board.growEvent(occurrence)
         await pause(0.05)
         row = await frame(rowKey) ?? row

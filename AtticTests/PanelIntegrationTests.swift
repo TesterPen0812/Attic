@@ -26,6 +26,13 @@ final class PanelIntegrationTests: XCTestCase {
         await panel.noteDraft.pages.startAndWait()
         XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented)
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: true), .shown)
+        // SwiftUI only exposes the full nested control tree to hosted AX
+        // queries after AppKit's enhanced-user-interface request. Other
+        // panel AX tests use the same setting; restore it for sibling tests.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
         let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
         func descendants(_ view: AnyObject) -> [AnyObject] {
             [view] + ((view.accessibilityChildren?() ?? nil) ?? []).flatMap { descendants($0 as AnyObject) }
@@ -134,6 +141,26 @@ final class PanelIntegrationTests: XCTestCase {
         let unrelatedUIStateCounts = zip(counts, beforeUnrelatedUIState).map { current, previous in current - previous }
         print("GAP_R01 unrelated_ui_state_changes shell=\(unrelatedUIStateCounts[0]) tasks_host=\(unrelatedUIStateCounts[1]) notes_host=\(unrelatedUIStateCounts[2])")
         XCTAssertEqual(unrelatedUIStateCounts, [0, 0, 0], "A composer attachment picker flag should not redraw retained pages")
+        #endif
+    }
+
+    /// "Brighten glass over dark backgrounds" draws on the shell's surface,
+    /// so switching it must redraw the panel, not only the island (owner,
+    /// 2026-11-11: "only the island seems to change").
+    func testBrightenGlassRedrawsTheShell() throws {
+        #if ATTIC_LOCAL_ONLY
+        var shell = 0
+        PanelInvalidationProbe.shell = { shell += 1 }
+        defer { PanelInvalidationProbe.shell = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        for _ in 0..<2 {
+            let before = shell
+            panel.settings.brightenGlass.toggle()
+            spin(0.25)
+            XCTAssertGreaterThan(shell, before, "Brighten glass must redraw the panel's surface")
+        }
         #endif
     }
     private struct Panel {

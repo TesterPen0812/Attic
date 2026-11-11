@@ -31,6 +31,25 @@ final class DrawPersistenceTests: XCTestCase {
         try DrawStoreContractTests().tagContract(DrawPersistentStore(container: container()))
     }
 
+    func testDA4PersistentSavedAgentUndoKeepsEarlierOwnerInkReachable() throws {
+        let store = DrawPersistentStore(container: try container())
+        let board = store.create(name: "Owner and agent")
+        let ink = DrawObject(content: .stroke([DrawPoint(x: 10, y: 10)]))
+        let rectangle = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([ink]), on: board.id).isSaved)
+        XCTAssertTrue(store.perform(.put([rectangle]), on: board.id).isSaved)
+        let stepID = try XCTUnwrap(store.undoStepID(on: board.id))
+        let proof = try XCTUnwrap(store.agentUndoProof(on: board.id, stepID: stepID))
+
+        XCTAssertTrue(store.undoAgentStep(on: board.id, proof: proof).isSaved)
+        XCTAssertEqual(try store.open(board.id).objects.map(\.id), [ink.id])
+        XCTAssertTrue(store.undo(on: board.id).isSaved, "Restore the agent rectangle")
+        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), Set([ink.id, rectangle.id]))
+        XCTAssertTrue(store.undo(on: board.id).isSaved, "Remove the agent rectangle")
+        XCTAssertTrue(store.undo(on: board.id).isSaved, "Remove the owner's ink")
+        XCTAssertTrue(try store.open(board.id).objects.isEmpty)
+    }
+
     func testPersistentClipboardContract() throws {
         try DrawStoreContractTests().clipboardContract(DrawPersistentStore(container: container()))
     }
