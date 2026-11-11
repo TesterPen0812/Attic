@@ -287,6 +287,14 @@ enum PerformanceSignposts {
 /// The inexpensive preview-only trace. Each touch yields NDJSON records on a
 /// utility writer queue; main records monotonic clocks at existing boundaries.
 /// A display-link callback is a *frame candidate*, never proof of scan-out.
+enum FirstTouchControl: String {
+    case rowTick = "row_tick"
+    case addBar = "add_bar"
+    case pageSwitch = "page_switch"
+    case chat
+    case settings
+}
+
 @MainActor
 enum IdleLatencyTrace {
     struct Context {
@@ -307,6 +315,7 @@ enum IdleLatencyTrace {
     private static var recordedMouseUpID: Int?
     static private(set) var lastClassificationForTesting: (first: Bool, idleMS: Double)?
     private static var frameWatch: IdleLatencyFirstFrameWatch?
+    private static let controlSignposter = OSSignposter(subsystem: "com.taha.Attic", category: "FirstTouch")
     private static func validPhase(_ phase: String) -> Bool {
         switch phase {
         case "reveal_decision", "hotspot_entered", "page_change_decision", "mouse_down_returned",
@@ -401,6 +410,30 @@ enum IdleLatencyTrace {
         var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
         record.stage = phase
         emit(record)
+        if phase == "commit_handoff", controlSignposter.isEnabled {
+            controlSignposter.emitEvent("ClickHandoff")
+        }
+    }
+
+    /// Mark the actual control action, which can begin after mouse-up and
+    /// before sendEvent returns. Only this closed vocabulary enters the log.
+    static func controlDispatched(_ control: FirstTouchControl) {
+        guard let trace = current, ["panel_control", "island_action"].contains(trace.kind) else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
+        record.stage = "control_dispatched"
+        record.control = control.rawValue
+        emit(record)
+        if controlSignposter.isEnabled {
+            switch control {
+            case .rowTick: controlSignposter.emitEvent("ClickAction", "row_tick")
+            case .addBar: controlSignposter.emitEvent("ClickAction", "add_bar")
+            case .pageSwitch: controlSignposter.emitEvent("ClickAction", "page_switch")
+            case .chat: controlSignposter.emitEvent("ClickAction", "chat")
+            case .settings: controlSignposter.emitEvent("ClickAction", "settings")
+            }
+        }
     }
 
     /// Timestamp the physical release separately from the mouse-down trace.
@@ -481,6 +514,7 @@ enum IdleLatencyTrace {
         guard current?.id == id else { return }
         frameWatch = nil
         emit(FirstTouchLogRecord(id: id, event: "frame_candidate", atNS: timestamp))
+        if controlSignposter.isEnabled { controlSignposter.emitEvent("ClickFrameCandidate") }
         current = nil
     }
     #else
@@ -497,6 +531,7 @@ enum IdleLatencyTrace {
     static func begin(_ kind: String, original: TimeInterval?, context: Context,
                       receivedNS: UInt64? = nil) {}
     static func point(_ phase: String) {}
+    static func controlDispatched(_ control: FirstTouchControl) {}
     static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T { try body() }
     static func followUpScheduled(at deadline: TimeInterval) {}
     static func followUpFired(scheduled: TimeInterval) {}

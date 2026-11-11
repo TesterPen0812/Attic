@@ -590,6 +590,7 @@ final class PanelIslandModel: ObservableObject {
     func clickSettings() {
         wake()
         guard !suppressesClicks else { return }
+        IdleLatencyTrace.controlDispatched(.settings)
         onOpenSettings()
     }
 

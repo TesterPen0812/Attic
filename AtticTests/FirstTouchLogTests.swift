@@ -17,6 +17,7 @@ final class FirstTouchLogTests: XCTestCase {
         var record = FirstTouchLogRecord(id: 42, event: "input", atNS: 10_000_000_000)
         record.originNS = 9_999_000_000
         record.kind = "panel_control"
+        record.control = FirstTouchControl.rowTick.rawValue
         record.idleMS = 22_000
         record.firstAfterIdle = true
         record.hiddenMS = 301_000
@@ -25,6 +26,7 @@ final class FirstTouchLogTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
         XCTAssertEqual(object["event"] as? String, "input")
         XCTAssertEqual(object["kind"] as? String, "panel_control")
+        XCTAssertEqual(object["control"] as? String, "row_tick")
         XCTAssertEqual(object["idleMS"] as? Double, 22_000)
         XCTAssertEqual(object["firstAfterIdle"] as? Bool, true)
         XCTAssertNil(object["title"])

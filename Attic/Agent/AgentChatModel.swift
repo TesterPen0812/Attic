@@ -434,6 +434,7 @@ final class AgentChatModel: ObservableObject {
     func open() {
         closedAtOnce = false
         guard !isOpen else { return }
+        IdleLatencyTrace.controlDispatched(.chat)
         chipPage = currentPage()
         chipAfterWatching = nil
         bar.isChatOpen = true
