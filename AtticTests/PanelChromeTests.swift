@@ -204,18 +204,18 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
-    /// Shapes on the pickers: the cards are surface squircles at the glass
-    /// menu's 18 pt (Accepted 2026-11-10), their rows still 13 pt, and the date
+    /// Shapes on the pickers: the cards have the glass menu's continuous 18 pt
+    /// corners (Accepted 2026-11-10; owner, 11 Nov), their rows 13 pt, and the date
     /// picker's day marks whole superellipses on curve 1.4.
     func testPickerCardsRowsAndDayMarksFollowShapes() {
         let d = AtticDropdownMetrics.self
         let card = CGRect(x: 0, y: 0, width: 224, height: 260)
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
-                       Squircle(cornerRadius: 18, exponent: AtticShape.surfaceExponent).path(in: card),
-                       "the card: a surface squircle at the glass menu's radius")
+                       Path(roundedRect: card, cornerRadius: 18, style: .continuous),
+                       "the card: the glass menu's continuous 18 pt corners")
         let row = CGRect(x: 3, y: 3, width: 218, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       Squircle(cornerRadius: 13, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 13 pt squircle")
+                       RoundedRectangle(cornerRadius: 13, style: .continuous).path(in: row), "a row: 13 pt continuous")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)

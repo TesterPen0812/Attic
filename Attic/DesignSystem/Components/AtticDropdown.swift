@@ -585,9 +585,9 @@ struct AtticDropdownRow: View {
         listOwnsHighlight ? highlighted : (highlighted || hovered)
     }
 
-    /// The row's highlight: a surface squircle, concentric with the card
-    /// (Shapes, Accepted 2026-10-30).
-    static let highlightShape = Squircle(cornerRadius: AtticDropdownMetrics.highlightRadius, exponent: AtticShape.surfaceExponent)
+    /// The row's highlight: a continuous rounded rectangle, like the card
+    /// (Loam's menus, Accepted 2026-11-10; owner, 11 Nov).
+    static let highlightShape = RoundedRectangle(cornerRadius: AtticDropdownMetrics.highlightRadius, style: .continuous)
 
     var body: some View {
         let m = AtticDropdownMetrics.self
@@ -1635,7 +1635,7 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     }
 }
 
-/// A card's outline while it unfolds: its squircle, cut to the
+/// A card's outline while it unfolds: its rounded card, cut to the
 /// revealed height from its anchor's edge (the whole card at rest).
 struct AtticUnfoldShape: InsettableShape, Equatable {
     let cornerRadius: CGFloat
@@ -1659,8 +1659,9 @@ struct AtticUnfoldShape: InsettableShape, Equatable {
         let shown = CGRect(x: rect.minX, y: fromTop ? rect.minY : rect.maxY - height, width: rect.width, height: height)
             .insetBy(dx: insetAmount, dy: insetAmount)
         let radius = max(0, min(cornerRadius, height / 2) - insetAmount)
-        // Shapes (Accepted 2026-10-30): menus are surface squircles.
-        return Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: shown)
+        // Loam's menus (Accepted 2026-11-10): continuous corners, as the
+        // glass menu's card. The squircle read as tight corners (owner, 11 Nov).
+        return Path(roundedRect: shown, cornerRadius: radius, style: .continuous)
     }
 }
 

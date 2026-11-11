@@ -128,7 +128,7 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
-    func testMenuRowsStayClippedToTheSquircleWhenTheCardIsShortened() throws {
+    func testMenuRowsStayClippedToTheCardWhenTheCardIsShortened() throws {
         let menu = open(commands())
         defer { menu.close(animated: false) }
         let root = try XCTUnwrap(menu.cards.first?.window.cardView)
@@ -136,7 +136,9 @@ final class AtticGlassMenuTests: XCTestCase {
         let mask = try XCTUnwrap(root.layer?.mask as? CAShapeLayer)
         let path = try XCTUnwrap(mask.path)
         XCTAssertFalse(path.contains(.zero))
-        XCTAssertTrue(path.contains(CGPoint(x: 2.6, y: 2.6)), "a squircle at the menu radius, rather than circular corners")
+        XCTAssertEqual(path, AtticGlassMenuShape.card.path(in: root.bounds).cgPath,
+                       "Loam's continuous 18 pt corners (owner, 11 Nov: the squircle read as tight corners)")
+        XCTAssertFalse(path.contains(CGPoint(x: 4, y: 4)), "round enough that the corner's inner 4 pt stays outside")
         XCTAssertEqual(path.boundingBoxOfPath, root.bounds)
         root.setFrameSize(CGSize(width: root.bounds.width, height: 90))
         root.layoutSubtreeIfNeeded()

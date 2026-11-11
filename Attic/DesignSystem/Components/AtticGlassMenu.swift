@@ -761,6 +761,9 @@ enum AtticGlassMenuShape {
     static let radius: CGFloat = AtticMenuMetrics.cardRadius
     static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowRadius: CGFloat = AtticMenuMetrics.highlightRadius
+    /// Loam's card: Apple's continuous rounded rectangle at 18 pt. Attic's
+    /// surface squircle at 18 pt read as tight, ~8 pt corners (owner, 11 Nov).
+    static var card: RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
 }
 
 extension AtticMenuCommand {
@@ -1258,7 +1261,7 @@ final class AtticGlassMenuLiftView: NSView {
         layer.shadowOpacity = Float(colour.alphaComponent)
         layer.shadowRadius = AtticShadows.dropdown.radius
         layer.shadowOffset = CGSize(width: 0, height: layer.contentsAreFlipped() ? AtticShadows.dropdown.y : -AtticShadows.dropdown.y)
-        layer.shadowPath = Squircle(cornerRadius: AtticGlassMenuShape.radius).path(in: bounds).cgPath
+        layer.shadowPath = AtticGlassMenuShape.card.path(in: bounds).cgPath
         CATransaction.commit()
     }
 }
@@ -1283,7 +1286,7 @@ private final class AtticGlassMenuRootView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         clip.frame = bounds
-        clip.path = Squircle(cornerRadius: AtticGlassMenuShape.radius).path(in: bounds).cgPath
+        clip.path = AtticGlassMenuShape.card.path(in: bounds).cgPath
         CATransaction.commit()
     }
 }
@@ -1293,7 +1296,7 @@ struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
 
     var body: some View {
-        let shape = Squircle(cornerRadius: AtticGlassMenuShape.radius)
+        let shape = AtticGlassMenuShape.card
         Group {
             if style.isGlass {
                 Color.clear.glassEffect(.regular, in: shape)
