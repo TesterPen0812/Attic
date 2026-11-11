@@ -420,16 +420,24 @@ class DrawStore: DrawStoreProtocol {
         guard repository.matchesAgentUndoPrestate(seal.step.change.reversed) else {
             return .held("Draw has divergent physical replicas; reconcile them before Undo")
         }
-        if undoStepID(on: id) == seal.step.id {
-            // Keep the in-session history move identical to ordinary Undo.
-            return undo(on: id)
+        // A saved agent inverse is a new owner-undoable step. Keep the earlier
+        // same-session chain only when its cached state still matches storage,
+        // including deleted objects that the visible snapshot omits.
+        let cacheMatchesStore = states[id].map { cached in
+            cached.persisted && cached.canvas == persisted.canvas &&
+                cached.objects.count == persisted.objects.count &&
+                persisted.objects.allSatisfy { cached.objects[$0.id] == $0 }
+        } ?? false
+        if !cacheMatchesStore {
+            do { try reload(id) }
+            catch { return .held("Draw has changed or refused Undo") }
+            guard (try? open(id)) == seal.saved else { return .held("Draw has changed or refused Undo") }
         }
-        do { try reload(id) }
-        catch { return .held("Draw has changed or refused Undo") }
-        guard (try? open(id)) == seal.saved else { return .held("Draw has changed or refused Undo") }
         // The inverse is the original sparse physical transition reversed;
         // repository.write again guards its expected physical before values.
-        let result = execute(seal.step.reversed, action: .edit)
+        var inverse = seal.step.reversed
+        inverse.id = UUID() // A new history entry must have its own head identity.
+        let result = execute(inverse, action: .edit)
         if result.isSaved { agentReplayHeads[id] = undoStepID(on: id) }
         return result
     }
