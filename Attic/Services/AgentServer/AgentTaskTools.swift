@@ -338,7 +338,7 @@ final class AgentTaskTools {
         AgentToolRegistration(definition: [
             "name": "create_note",
             "title": "Create Attic Note",
-            "description": "Create a note directly in Attic without using its graphical interface. Provide a body and an optional title; either a non-empty title or body is required.",
+            "description": "Create a note directly in Attic. Optional tags, pinned state and task_id are saved atomically with the writing. A task must exist and not already own a note; either title or body must be non-empty.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -355,7 +355,10 @@ final class AgentTaskTools {
                     "body": [
                         "type": "string",
                         "description": "Note body. Meaningful leading and trailing whitespace is preserved."
-                    ]
+                    ],
+                    "tags": ["type": "array", "items": ["type": "string"], "description": "Optional initial note tags."],
+                    "pinned": ["type": "boolean", "description": "Pin the note at creation."],
+                    "task_id": ["type": "string", "description": "Optional existing task UUID to attach this as the task's own note."]
                 ],
                 "additionalProperties": false
             ]
@@ -942,6 +945,17 @@ final class AgentTaskTools {
 
     private func createNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("create_note") }
+        guard arguments["tags"] == nil || arguments["tags"] is [String],
+              arguments["pinned"] == nil || arguments["pinned"] is Bool else {
+            throw AgentToolError.invalidArguments("tags must contain strings and pinned must be a boolean.")
+        }
+        let taskOwner: UUID?
+        if let raw = arguments["task_id"] {
+            guard let value = raw as? String, let id = UUID(uuidString: value) else {
+                throw AgentToolError.invalidArguments("task_id must be a task UUID.")
+            }
+            taskOwner = id
+        } else { taskOwner = nil }
         let title = (arguments["title"] as? String) ?? ""
         let body = (arguments["body"] as? String) ?? ""
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -956,7 +970,10 @@ final class AgentTaskTools {
             } catch {
                 throw AgentToolError.invalidArguments(error.localizedDescription)
             }
-            switch noteStore.createDocumentNote(id: UUID(), document: document) {
+            switch noteStore.createDocumentNote(id: UUID(), document: document,
+                                                tags: arguments["tags"] as? [String],
+                                                taskOwner: taskOwner,
+                                                pinned: arguments["pinned"] as? Bool ?? false) {
             case let .success((noteID, _)):
                 guard let note = noteStore.note(withID: noteID) else { throw AgentToolError.storeFailure("The note could not be read back.") }
                 return try encode(["note": serializeNote(note)])
