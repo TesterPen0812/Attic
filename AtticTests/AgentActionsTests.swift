@@ -75,6 +75,17 @@ final class AgentActionsTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+    func testDurableUndoJournalUsesSandboxSupportWhenNoRootIsInjected() {
+        let normal = AppRuntimeEnvironment(environment: [:], bundleIdentifier: "com.taha.Attic.preview.agentpass")
+        XCTAssertEqual(normal.agentUndoJournalURL?.lastPathComponent, "AtticAgentUndo.json")
+        XCTAssertNotNil(normal.agentUndoJournalURL, "Normal launches must actually persist inverses")
+        let testing = AppRuntimeEnvironment(environment: ["ATTIC_UI_TESTING": "1"],
+                                            processIdentifier: 42, testRunIdentifier: "agentpass",
+                                            bundleIdentifier: "com.taha.Attic.preview.agentpass")
+        XCTAssertEqual(testing.agentUndoJournalURL,
+                       testing.galleryScratchRoot.appendingPathComponent("AgentUndo.json"))
+    }
+
     func testModesEnforceEveryWriteAtRunBoundaryAndKeepStoresUnchanged() async throws {
         let f = try fixture()
         let context = ModelContext(f.store.container)
@@ -305,6 +316,51 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(undone.undone, 3)
         XCTAssertTrue(undone.failures.isEmpty)
         XCTAssertTrue(f.backend.events.isEmpty)
+    }
+
+    func testCalendarCreateEditDeleteUndoSurvivesNewActionModelWithFakeCalendar() async throws {
+        let tasks = try makeTestStore()
+        let backend = FakeCalendarEventWriteStore()
+        backend.availableCalendars = [CalendarWriteCalendar(
+            id: "home", title: "Home", colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+            sourceID: "local", sourceTitle: "Local", isWritable: true)]
+        let record = try CalendarOwnershipRecord()
+        let journal = ownedTemporaryDirectory(prefix: "AgentCalendarUndo").appendingPathComponent("undo.json")
+        let library = AtticLibrary(tasks: tasks)
+        let writer = EventKitCalendarEventWriter(store: backend, record: record,
+                                                 undoRoute: library.undo)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: library), calendarWriter: writer, journalURL: journal)
+        let request = actions.beginRequest(title: "Three event changes")
+        let start = Date(timeIntervalSince1970: 1_793_361_600)
+        let create = try approval(await actions.call(name: "calendar_create", arguments: [
+            "title": "Lunch", "start": iso(start), "end": iso(start.addingTimeInterval(3600)),
+            "calendar_id": "home"
+        ], watching: false, requestID: request))
+        let createResult = try await actions.resolve(approval: create.id, allow: true)
+        let created = try XCTUnwrap(createResult)
+        let eventID = try XCTUnwrap(payload(created.text)["id"] as? String)
+        let edit = try approval(await actions.call(name: "calendar_update", arguments: [
+            "id": eventID, "title": "Dinner"
+        ], watching: false, requestID: request))
+        _ = try await actions.resolve(approval: edit.id, allow: true)
+        let remove = try approval(await actions.call(name: "calendar_delete", arguments: [
+            "id": eventID
+        ], watching: false, requestID: request))
+        _ = try await actions.resolve(approval: remove.id, allow: true)
+        XCTAssertTrue(backend.events.isEmpty)
+
+        let newTasks = TaskStore(container: tasks.container)
+        let newLibrary = AtticLibrary(tasks: newTasks)
+        let newWriter = EventKitCalendarEventWriter(store: backend, record: record,
+                                                    undoRoute: newLibrary.undo)
+        let relaunched = AgentActions(tasks: AgentTaskTools(store: newTasks,
+            library: newLibrary), calendarWriter: newWriter, journalURL: journal)
+        XCTAssertTrue(relaunched.canRecoverUndo(request))
+        let undone = await relaunched.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 3)
+        XCTAssertTrue(undone.failures.isEmpty, "\(undone.failures)")
+        XCTAssertTrue(backend.events.isEmpty, "Reversing create, edit and delete leaves no event")
     }
 
     func testUndoWaitsForPendingOwnerApprovalBeforeReversingRequest() async throws {
@@ -566,6 +622,354 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: id)?.tags, ["important"])
     }
 
+    func testUndoCreatedNoteWithItsOwnInitialTagsAndPin() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+                                                          library: AtticLibrary(tasks: tasks, notes: notes)))
+        let request = actions.beginRequest(title: "Prepare a pinned outline")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Pinned outline", "body": "Draft", "tags": ["research", "priority"], "pinned": true
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        XCTAssertEqual(notes.note(withID: id)?.tags, ["priority", "research"])
+        XCTAssertNotNil(notes.note(withID: id)?.pinnedAt)
+        if case let .createdNote(_, revision, metadata, _) = actions.journals[request]?.entries.first {
+            XCTAssertEqual(notes.agentCreatedNoteMetadata(id), metadata, "Metadata changed immediately after creation")
+            XCTAssertEqual(Set((0..<8).compactMap { _ in notes.agentCreatedNoteMetadata(id) }), [metadata],
+                           "An unchanged note must have one stable physical Undo seal")
+            let persisted = try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+                .filter { $0.id == id }
+            XCTAssertEqual(persisted.count, 1)
+            XCTAssertTrue(persisted.allSatisfy { $0.revisionToken == revision },
+                          "Presented and persisted revisions differ immediately after creation")
+            XCTAssertTrue(persisted.allSatisfy { $0.deletedAt == nil })
+            XCTAssertTrue(persisted.allSatisfy { $0.imageCount == 0 && $0.fileCount == 0 },
+                          "A new text-only note must not contain attachments")
+            XCTAssertTrue(notes.agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata), "Created note changed before Undo")
+        } else { XCTFail("Expected one created-note inverse") }
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertNil(notes.note(withID: id))
+    }
+
+    func testUndoCreatedTaskNoteWithItsOwnInitialAssociationButNotItsTask() async throws {
+        let tasks = try makeTestStore()
+        let taskID = UUID()
+        let seed = ModelContext(tasks.container)
+        seed.insert(TaskItem(id: taskID, title: "My task"))
+        try seed.save()
+        tasks.refresh()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+                                                          library: AtticLibrary(tasks: tasks, notes: notes)))
+        let request = actions.beginRequest(title: "Write in a task")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Task note", "body": "Draft", "task_id": taskID.uuidString
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        XCTAssertEqual(notes.note(withID: id)?.taskID, taskID)
+        if case let .createdNote(_, revision, metadata, _) = actions.journals[request]?.entries.first {
+            XCTAssertEqual(notes.agentCreatedNoteMetadata(id), metadata, "Task-note association metadata changed after creation")
+            XCTAssertTrue(notes.agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata))
+        } else { XCTFail("Expected one created-note inverse") }
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertNil(notes.note(withID: id))
+        XCTAssertNotNil(tasks.task(withID: taskID))
+    }
+
+    func testUndoCreatedNoteWithInitialMetadataRefusesAnOwnerPinChange() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+                                                          library: AtticLibrary(tasks: tasks, notes: notes)))
+        let request = actions.beginRequest(title: "Create a pinned note")
+        let created = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Pinned", "body": "Draft", "pinned": true
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        XCTAssertTrue(notes.setPinned(false, noteID: id))
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0)
+        XCTAssertNotNil(undone.remaining)
+        XCTAssertNotNil(notes.note(withID: id))
+    }
+
+    func testAgentCreatedNoteUndoSurvivesNewStoreAndModelAndRefusesEditedReplica() async throws {
+        let tasks = try makeTestStore()
+        let root = ownedTemporaryDirectory(prefix: "AgentDurableUndo")
+        let journalURL = root.appendingPathComponent("undo.json")
+        let attachments = makeTestAttachmentFileStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+                                                          library: AtticLibrary(tasks: tasks, notes: notes)),
+                                   journalURL: journalURL)
+        let request = actions.beginRequest(title: "Write a note")
+        let result = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Saved for later", "body": "The draft", "tags": ["review"], "pinned": true
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(result.step.targets.first?.itemID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: journalURL.path))
+        let relaunchedTasks = TaskStore(container: tasks.container)
+        let relaunchedNotes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let relaunched = AgentActions(tasks: AgentTaskTools(store: relaunchedTasks, noteStore: relaunchedNotes,
+                                                             library: AtticLibrary(tasks: relaunchedTasks, notes: relaunchedNotes)),
+                                      journalURL: journalURL)
+        XCTAssertTrue(relaunched.canRecoverUndo(request))
+        let recoveredUndo = await relaunched.undo(changeSet: request)
+        XCTAssertEqual(recoveredUndo.undone, 1)
+        XCTAssertNil(relaunchedNotes.note(withID: id))
+
+        let next = relaunched.beginRequest(title: "Write another")
+        let second = try performed(await relaunched.call(name: "create_note", arguments: [
+            "title": "Protected from old Undo", "body": "Draft"
+        ], watching: false, requestID: next))
+        let secondID = try XCTUnwrap(second.step.targets.first?.itemID)
+        let modified = try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+            .filter { $0.id == secondID }
+        XCTAssertEqual(modified.count, 1)
+        XCTAssertTrue(relaunchedNotes.setPinned(true, noteID: secondID))
+        let again = AgentActions(tasks: AgentTaskTools(store: TaskStore(container: tasks.container),
+            noteStore: NoteStore(container: tasks.container, attachmentFileStore: attachments)), journalURL: journalURL)
+        let refusal = await again.undo(changeSet: next)
+        XCTAssertEqual(refusal.undone, 0)
+        XCTAssertFalse(refusal.failures.isEmpty)
+        XCTAssertNotNil(again.tasks.noteStore?.note(withID: secondID))
+    }
+
+    func testTaskEditUndoSurvivesNewStoreAndModelButRefusesChangedReplica() async throws {
+        let tasks = try makeTestStore()
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentTaskUndo").appendingPathComponent("undo.json")
+        let id = UUID()
+        let context = ModelContext(tasks.container)
+        // Both replicas have the versioned list order production receives at
+        // startup. Inserting a legacy version-0 row after startup would cause
+        // the *next* TaskStore initializer to migrate it during this test.
+        for _ in 0..<2 {
+            let replica = TaskItem(id: id, title: "Before")
+            replica.manualOrder = 1_024
+            replica.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(replica)
+        }
+        try context.save()
+        tasks.refresh()
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journalURL)
+        let request = actions.beginRequest(title: "Rename task")
+        _ = try performed(await actions.call(name: "update_task", arguments: [
+            "id": id.uuidString, "title": "After"
+        ], watching: false, requestID: request))
+
+        let restoredTasks = TaskStore(container: tasks.container)
+        let restored = AgentActions(tasks: AgentTaskTools(store: restoredTasks,
+            library: AtticLibrary(tasks: restoredTasks)), journalURL: journalURL)
+        XCTAssertTrue(restored.canRecoverUndo(request), "Every committed task edit needs a durable inverse")
+        if let entry = restored.journals[request]?.entries.first,
+           case let .taskEdit(_, after, proof, _) = entry {
+            let freshContext = ModelContext(tasks.container)
+            let replicas = try freshContext.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == id }
+            XCTAssertEqual(replicas.count, 2)
+            for replica in replicas { XCTAssertEqual(TaskEditableState(replica), after, "Editable state drifted before Undo") }
+            let actual = try WorkspaceModelToken.read(WorkspaceOwner(entity: .task, id: id), in: freshContext)
+            XCTAssertEqual(actual.replicas.count, proof.replicas.count)
+            XCTAssertEqual(actual.replicas.map(\.physicalID), proof.replicas.map(\.physicalID), "Physical identities drifted")
+            for (index, row) in actual.replicas.enumerated() where index < proof.replicas.count {
+                XCTAssertEqual(row.fields.keys.sorted(), proof.replicas[index].fields.keys.sorted())
+                XCTAssertEqual(row.fields.filter { proof.replicas[index].fields[$0.key] != $0.value }.keys.sorted(), [], "Fingerprint fields drifted")
+            }
+        } else { XCTFail("Task inverse was not recovered") }
+        let applied = await restored.undo(changeSet: request)
+        XCTAssertEqual(applied.undone, 1)
+        XCTAssertTrue(applied.failures.isEmpty, "\(applied.failures)")
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.id == id }.map(\.title), ["Before", "Before"])
+
+        let another = restored.beginRequest(title: "Rename again")
+        _ = try performed(await restored.call(name: "update_task", arguments: [
+            "id": id.uuidString, "title": "Again"
+        ], watching: false, requestID: another))
+        let owner = ModelContext(tasks.container)
+        let ownerRows = try owner.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == id }
+        ownerRows[0].title = "Owner changed one replica"
+        try owner.save()
+        let newestTasks = TaskStore(container: tasks.container)
+        let newest = AgentActions(tasks: AgentTaskTools(store: newestTasks,
+            library: AtticLibrary(tasks: newestTasks)), journalURL: journalURL)
+        let blocked = await newest.undo(changeSet: another)
+        XCTAssertEqual(blocked.undone, 0)
+        XCTAssertFalse(blocked.failures.isEmpty)
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.id == id && $0.title == "Owner changed one replica" }.count, 1)
+    }
+
+    func testTaskCreationUndoSurvivesNewStoreAndRefusesEditedReplica() async throws {
+        let tasks = try makeTestStore()
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentCreatedTaskUndo").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journalURL)
+        let request = actions.beginRequest(title: "Create two tasks")
+        let result = try performed(await actions.call(name: "create_tasks", arguments: [
+            "tasks": [["title": "Task one"], ["title": "Task two"]]
+        ], watching: false, requestID: request))
+        let ids = result.step.targets.compactMap(\.itemID)
+        XCTAssertEqual(ids.count, 2)
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let fresh = AgentActions(tasks: AgentTaskTools(store: freshTasks, library: AtticLibrary(tasks: freshTasks)),
+                                 journalURL: journalURL)
+        XCTAssertTrue(fresh.canRecoverUndo(request), "Creation of a task must have an inverse after relaunch")
+        let undo = await fresh.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 2)
+        XCTAssertTrue(undo.failures.isEmpty, "\(undo.failures)")
+        XCTAssertTrue(ids.allSatisfy { freshTasks.task(withID: $0) == nil })
+
+        let another = fresh.beginRequest(title: "A new task")
+        let added = try performed(await fresh.call(name: "create_task", arguments: [
+            "title": "Preserve owner edits"
+        ], watching: false, requestID: another))
+        let id = try XCTUnwrap(added.step.targets.first?.itemID)
+        let context = ModelContext(tasks.container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first(where: { $0.id == id }))
+        row.title = "Edited by the owner"
+        try context.save()
+
+        let relaunchedTasks = TaskStore(container: tasks.container)
+        let relaunched = AgentActions(tasks: AgentTaskTools(store: relaunchedTasks,
+            library: AtticLibrary(tasks: relaunchedTasks)), journalURL: journalURL)
+        let refused = await relaunched.undo(changeSet: another)
+        XCTAssertEqual(refused.undone, 0)
+        XCTAssertFalse(refused.failures.isEmpty)
+        XCTAssertEqual(relaunchedTasks.task(withID: id)?.title, "Edited by the owner")
+    }
+
+    func testBatchTaskEditsRecoverTwoIndependentInversesAfterRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let created = try XCTUnwrap(AtticLibrary(tasks: tasks).createTasks([
+            TaskDraft(title: "Plan"), TaskDraft(title: "Review")
+        ]))
+        let journal = ownedTemporaryDirectory(prefix: "AgentBatchTaskUndo").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journal)
+        let request = actions.beginRequest(title: "Priorities")
+        _ = try performed(await actions.call(name: "update_tasks", arguments: ["updates": [
+            ["id": created[0].id.uuidString, "priority": "high"],
+            ["id": created[1].id.uuidString, "priority": "high"]
+        ]], watching: false, requestID: request))
+        let relaunchedTasks = TaskStore(container: tasks.container)
+        let relaunched = AgentActions(tasks: AgentTaskTools(store: relaunchedTasks,
+            library: AtticLibrary(tasks: relaunchedTasks)), journalURL: journal)
+        XCTAssertTrue(relaunched.canRecoverUndo(request))
+        let result = await relaunched.undo(changeSet: request)
+        XCTAssertEqual(result.undone, 2)
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        for item in created {
+            XCTAssertEqual(relaunchedTasks.task(withID: item.id)?.priority, TaskPriority.none)
+        }
+    }
+
+    func testLegacyPlainTextNoteEditUndoSurvivesRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let attachments = makeTestAttachmentFileStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let original = try XCTUnwrap(notes.create(title: "Legacy note", body: "Before"))
+        let journal = ownedTemporaryDirectory(prefix: "AgentPlainNoteUndo").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+            library: AtticLibrary(tasks: tasks, notes: notes)), journalURL: journal)
+        let request = actions.beginRequest(title: "Edit older note")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "id": original.id.uuidString, "body": "After"
+        ], watching: false, requestID: request))
+        let relaunchedTasks = TaskStore(container: tasks.container)
+        let relaunchedNotes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let relaunched = AgentActions(tasks: AgentTaskTools(store: relaunchedTasks,
+            noteStore: relaunchedNotes, library: AtticLibrary(tasks: relaunchedTasks, notes: relaunchedNotes)),
+            journalURL: journal)
+        XCTAssertTrue(relaunched.canRecoverUndo(request))
+        let result = await relaunched.undo(changeSet: request)
+        XCTAssertEqual(result.undone, 1)
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(relaunchedNotes.note(withID: original.id)?.body, "Before")
+    }
+
+    func testRecoveredUndoOnlyOffersTheNewestChangeSet() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentNewestUndo").appendingPathComponent("undo.json")
+        let library = AtticLibrary(tasks: tasks)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: library), journalURL: journal)
+        let older = actions.beginRequest(title: "First creation")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "First"],
+                                             watching: false, requestID: older))
+        let newer = actions.beginRequest(title: "Second creation")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Second"],
+                                             watching: false, requestID: newer))
+
+        let relaunchedTasks = TaskStore(container: tasks.container)
+        let relaunchedLibrary = AtticLibrary(tasks: relaunchedTasks)
+        let restored = AgentActions(tasks: AgentTaskTools(store: relaunchedTasks, library: relaunchedLibrary),
+                                    journalURL: journal)
+        XCTAssertFalse(restored.canRecoverUndo(older), "An older receipt must not show an unusable Undo button")
+        XCTAssertTrue(restored.canRecoverUndo(newer))
+        let newestUndo = await restored.undo(changeSet: newer)
+        XCTAssertEqual(newestUndo.undone, 1)
+        XCTAssertTrue(newestUndo.failures.isEmpty)
+        XCTAssertTrue(restored.canRecoverUndo(older), "Undo of the newer change reveals the prior one")
+    }
+
+    func testDrawCreationUndoSurvivesNewStoreAndModel() async throws {
+        let tasks = try makeTestStore()
+        let repository = DrawMemoryRepository()
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentCanvasUndo").appendingPathComponent("undo.json")
+        let firstDraw = DrawStore(repository: repository)
+        let first = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                 draw: firstDraw, journalURL: journalURL)
+        let request = first.beginRequest(title: "Create canvas")
+        let result = try performed(await first.call(name: "draw_create_canvas", arguments: [
+            "name": "Reopen and undo"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(result.step.targets.first?.itemID)
+        let freshDraw = DrawStore(repository: repository)
+        let freshTasks = TaskStore(container: tasks.container)
+        let fresh = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), draw: freshDraw, journalURL: journalURL)
+        XCTAssertTrue(fresh.canRecoverUndo(request), "Canvas's save step must survive the new DrawStore")
+        let undone = await fresh.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertFalse(try freshDraw.library().contains(where: { $0.id == id }))
+    }
+
+    func testTwoDrawEditsUndoInOrderAfterNewStoreAndModel() async throws {
+        let tasks = try makeTestStore()
+        let repository = DrawMemoryRepository()
+        let draw = DrawStore(repository: repository)
+        let canvas = draw.create(name: "One canvas")
+        let object = DrawObject(content: .text("Before"))
+        XCTAssertTrue(draw.perform(.put([object]), on: canvas.id).isSaved)
+        let journal = ownedTemporaryDirectory(prefix: "AgentDrawChainUndo").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), draw: draw, journalURL: journal)
+        let request = actions.beginRequest(title: "Two changes to one canvas")
+        for (old, new) in [("Before", "Middle"), ("Middle", "After")] {
+            _ = try performed(await actions.call(name: "draw_edit_text", arguments: [
+                "canvas_id": canvas.id.uuidString, "object_id": object.id.uuidString,
+                "expected_text": old, "text": new
+            ], watching: false, requestID: request))
+        }
+
+        let restoredDraw = DrawStore(repository: repository)
+        let restoredTasks = TaskStore(container: tasks.container)
+        let restored = AgentActions(tasks: AgentTaskTools(store: restoredTasks,
+            library: AtticLibrary(tasks: restoredTasks)), draw: restoredDraw, journalURL: journal)
+        XCTAssertTrue(restored.canRecoverUndo(request))
+        let undone = await restored.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 2)
+        XCTAssertTrue(undone.failures.isEmpty, "\(undone.failures)")
+        XCTAssertEqual(try restoredDraw.open(canvas.id).objects.first, object)
+    }
+
     func testDrawReadAndMoveObjectRespectReadOnlyAndUndo() async throws {
         let f = try fixture()
         let canvas = f.draw.create(name: "Plan")
@@ -725,6 +1129,88 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(try f.draw.open(canvas.id).canvas.name, "Owner's name")
         XCTAssertNil(f.actions.changeSet(for: request))
     }
+
+    func testAgentCanPersistEmptyCanvasDuplicateItAndUndoEachCreation() async throws {
+        let f = try fixture()
+        let create = f.actions.beginRequest(title: "New sketch")
+        let created = try performed(await f.actions.call(name: "draw_create_canvas", arguments: [
+            "name": "A blank page"
+        ], watching: false, requestID: create))
+        let id = try XCTUnwrap(created.step.targets.first?.itemID)
+        XCTAssertEqual(try f.draw.library().map(\.id), [id], "Empty canvases must be saved")
+        let copy = f.actions.beginRequest(title: "Duplicate blank sketch")
+        let duplicated = try performed(await f.actions.call(name: "draw_duplicate_canvas", arguments: [
+            "canvas_id": id.uuidString, "name": "Blank copy"
+        ], watching: false, requestID: copy))
+        let copyID = try XCTUnwrap(duplicated.step.targets.first?.itemID)
+        XCTAssertEqual(Set(try f.draw.library().map(\.id)), [id, copyID])
+        let undoneCopy = await f.actions.undo(changeSet: copy)
+        XCTAssertEqual(undoneCopy.undone, 1)
+        XCTAssertEqual(try f.draw.library().map(\.id), [id])
+        let undoneOriginal = await f.actions.undo(changeSet: create)
+        XCTAssertEqual(undoneOriginal.undone, 1)
+        XCTAssertTrue(try f.draw.library().isEmpty)
+    }
+
+    func testAgentRestyleResizeAndApprovedObjectDeletionUndoExactly() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Map")
+        let original = DrawObject(frame: DrawFrame(x: 10, y: 20, width: 80, height: 60),
+                                  content: .shape(.rectangle))
+        XCTAssertTrue(f.draw.perform(.put([original]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Edit map")
+        func token() async throws -> String {
+            let read = try performed(await f.actions.call(name: "draw_read_canvas", arguments: [
+                "canvas_id": canvas.id.uuidString
+            ], watching: false, requestID: request))
+            let response = try payload(read.text)
+            return try XCTUnwrap((response["objects"] as? [[String: Any]])?.first?["object_token"] as? String)
+        }
+        _ = try performed(await f.actions.call(name: "draw_restyle_object", arguments: [
+            "canvas_id": canvas.id.uuidString, "object_id": original.id.uuidString,
+            "object_token": try await token(), "colour": "red", "corners": "rounded"
+        ], watching: false, requestID: request))
+        _ = try performed(await f.actions.call(name: "draw_resize_object", arguments: [
+            "canvas_id": canvas.id.uuidString, "object_id": original.id.uuidString,
+            "object_token": try await token(), "width": 120, "height": 90
+        ], watching: false, requestID: request))
+        let approval = try approval(await f.actions.call(name: "draw_delete_object", arguments: [
+            "canvas_id": canvas.id.uuidString, "object_id": original.id.uuidString,
+            "object_token": try await token()
+        ], watching: false, requestID: request))
+        XCTAssertEqual(try f.draw.open(canvas.id).objects.count, 1)
+        _ = try await f.actions.resolve(approval: approval.id, allow: true)
+        XCTAssertTrue(try f.draw.open(canvas.id).objects.isEmpty)
+        let reverted = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(reverted.undone, 3)
+        XCTAssertTrue(reverted.failures.isEmpty)
+        XCTAssertEqual(try f.draw.open(canvas.id).objects, [original])
+    }
+
+    func testApprovedDrawDeletionRefusesStaleObjectToken() async throws {
+        let f = try fixture()
+        let canvas = f.draw.create(name: "Keep work")
+        let object = DrawObject(content: .text("Keep"))
+        XCTAssertTrue(f.draw.perform(.put([object]), on: canvas.id).isSaved)
+        let request = f.actions.beginRequest(title: "Remove old text")
+        let read = try performed(await f.actions.call(name: "draw_read_canvas", arguments: [
+            "canvas_id": canvas.id.uuidString
+        ], watching: false, requestID: request))
+        let token = try XCTUnwrap((try payload(read.text)["objects"] as? [[String: Any]])?.first?["object_token"] as? String)
+        let pending = try approval(await f.actions.call(name: "draw_delete_object", arguments: [
+            "canvas_id": canvas.id.uuidString, "object_id": object.id.uuidString,
+            "object_token": token
+        ], watching: false, requestID: request))
+        var ownerCopy = object
+        ownerCopy.content = .text("Changed by owner")
+        XCTAssertTrue(f.draw.perform(.put([ownerCopy]), on: canvas.id).isSaved)
+        do {
+            _ = try await f.actions.resolve(approval: pending.id, allow: true)
+            XCTFail("An owner change must invalidate approval")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("changed")) }
+        XCTAssertEqual(try f.draw.open(canvas.id).objects, [ownerCopy])
+        XCTAssertNil(f.actions.changeSet(for: request))
+    }
     #endif
 
     func testUndoPutsBackANoteLeftOnScreenByAWatchedWriteOnlyWhenItsEditorIsClean() async throws {
@@ -787,17 +1273,22 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: id)?.body, "Owner text")
     }
 
-    func testUndoRefusesToReverseNewerOwnerEdit() async throws {
+    func testUndoCreatedTaskPreservesAnUnrelatedNewOwnerTask() async throws {
         let f = try fixture()
         let request = f.actions.beginRequest(title: "One task")
-        _ = try await f.actions.call(name: "create_task", arguments: ["title": "Agent"],
-                                     watching: false, requestID: request)
+        let created = try performed(await f.actions.call(name: "create_task", arguments: ["title": "Agent"],
+                                                          watching: false, requestID: request))
+        let createdID = try XCTUnwrap(created.step.targets.first?.itemID)
         XCTAssertNotNil(f.library.createTasks([TaskDraft(title: "Owner")]))
+        // AG-08 reverses only the agent's unchanged physical task family.
+        // Adding an independent task must not block that precise inverse,
+        // and must not delete the owner's newer task.
         let undone = await f.actions.undo(changeSet: request)
-        XCTAssertEqual(undone.undone, 0)
-        XCTAssertEqual(undone.failures.count, 1)
-        XCTAssertEqual(f.store.tasks.count, 2)
-        XCTAssertNotNil(undone.remaining)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty)
+        XCTAssertNil(f.store.task(withID: createdID))
+        XCTAssertEqual(f.store.tasks.map(\.title), ["Owner"])
+        XCTAssertNil(undone.remaining)
     }
 
     func testMCPRunDiscoveryPreservesUnscopedExternalClients() async throws {

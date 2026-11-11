@@ -274,6 +274,7 @@ final class AgentRunEngine: AgentRunning {
     private let makeHelper: HelperFactory
     private let makeTools: ToolFactory
     private let undoChanges: (@MainActor (UUID) async throws -> Void)?
+    private let recoverUndo: @MainActor (UUID) -> Bool
     private let describeContext: @MainActor (AgentRequestContext) -> String
     private let journalURL: URL
     private let history: AgentChatHistoryStore
@@ -309,6 +310,7 @@ final class AgentRunEngine: AgentRunning {
         tools: @escaping ToolFactory,
         journalURL: URL? = nil,
         undo: (@MainActor (UUID) async throws -> Void)? = nil,
+        recoverUndo: @escaping @MainActor (UUID) -> Bool = { _ in false },
         describeContext: @escaping @MainActor (AgentRequestContext) -> String = AgentRunEngine.plainContext
     ) {
         self.selectedBackend = selectedBackend
@@ -316,6 +318,7 @@ final class AgentRunEngine: AgentRunning {
         makeHelper = helper
         makeTools = tools
         undoChanges = undo
+        self.recoverUndo = recoverUndo
         self.describeContext = describeContext
         let resolvedJournalURL = journalURL ?? Self.defaultJournalURL
         self.journalURL = resolvedJournalURL
@@ -402,6 +405,8 @@ final class AgentRunEngine: AgentRunning {
         guard let undoChanges else { throw AgentRunError.undoUnavailable }
         try await undoChanges(id)
     }
+
+    func canUndoRecovered(_ id: UUID) -> Bool { recoverUndo(id) }
 
     func cancel() {
         guard isRunning else { return }

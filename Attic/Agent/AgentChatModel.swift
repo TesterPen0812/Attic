@@ -1,5 +1,82 @@
 import Combine
 import Foundation
+#if DEBUG && ATTIC_LOCAL_ONLY
+import Darwin
+
+/// Opt-in probe for the isolated agent-pass preview. Only numeric timings and
+/// process footprint are written; message text, credentials and IDs never are.
+@MainActor
+enum AgentPassProbe {
+    private static let enabled = Bundle.main.bundleIdentifier == "com.taha.Attic.preview.agentpass"
+        && ProcessInfo.processInfo.environment["ATTIC_AGENT_PASS_METRICS"] == "1"
+    private static let cliDiagnostics = ProcessInfo.processInfo.environment["ATTIC_AGENT_PASS_CLI_DIAGNOSTICS"] == "1"
+    private static var opening: UInt64?
+    private static var sending: UInt64?
+    private static var awaitingFirstDelta = false
+    private static let destination: URL? = {
+        guard enabled, let support = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                               in: .userDomainMask).first else { return nil }
+        return support.appendingPathComponent("AgentPassTimings.ndjson")
+    }()
+
+    private static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
+    private static func record(_ name: String, value: Double) {
+        guard let destination, value.isFinite else { return }
+        let payload: [String: Any] = ["name": name, "value": value]
+        guard var data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        data.append(10)
+        try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: destination) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
+    }
+
+    static func beginOpen() { if enabled { opening = now() } }
+    static func stageUpdated() {
+        if let start = opening {
+            opening = nil
+            record("ChatOpenToStageUpdate.ms", value: Double(now() - start) / 1_000_000)
+        }
+    }
+    static func beginSend() {
+        guard enabled else { return }
+        sending = now()
+        awaitingFirstDelta = true
+    }
+    static func firstDelta() {
+        guard awaitingFirstDelta, let start = sending else { return }
+        awaitingFirstDelta = false
+        sending = nil
+        record("SendToFirstDelta.ms", value: Double(now() - start) / 1_000_000)
+        mark("FirstDelta")
+    }
+    /// Preview-only, numeric control outcomes. No prompts, item IDs, models,
+    /// tool arguments, token values or vendor stderr enter this file.
+    static func mark(_ name: String, value: Double = 1) {
+        guard enabled, cliDiagnostics else { return }
+        record("CLI.\(name)", value: value)
+    }
+    static func footprint(_ name: String) {
+        guard enabled else { return }
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status: kern_return_t = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        if status == KERN_SUCCESS {
+            record("\(name).footprintMiB", value: Double(info.phys_footprint) / 1_048_576)
+        }
+    }
+}
+#endif
 
 /// How far the agent may go on its own. The composer's Mode picker writes it.
 enum AgentChatMode: String, CaseIterable, Identifiable, Sendable {
@@ -264,7 +341,14 @@ final class AgentChatModel: ObservableObject {
     /// Who answers the next message: the same setting as Settings → In-app
     /// agent → Agent. A change never touches a run already going.
     @Published var agent: AgentBackend = .claude {
-        didSet { if agent != oldValue { agentChanged?(agent) } }
+        didSet {
+            if agent != oldValue {
+                agentChanged?(agent)
+                #if DEBUG && ATTIC_LOCAL_ONLY
+                AgentPassProbe.mark(agent == .claude ? "SelectedClaude" : "SelectedCodex")
+                #endif
+            }
+        }
     }
     var agentChanged: ((AgentBackend) -> Void)?
     /// Why an agent can't answer, in Settings' words ("Not installed"); absent when it can.
@@ -287,6 +371,7 @@ final class AgentChatModel: ObservableObject {
     #if DEBUG
     /// UI-testing seam: text typed into Task or note….
     @Published var uiTestQuery: String?
+    private var uiTestSeededPairs = 0
     #endif
     /// Saved chats, newest first, for the clock's list.
     @Published private(set) var history: [AgentChatSummary] = []
@@ -411,6 +496,7 @@ final class AgentChatModel: ObservableObject {
             case "tool", "error", "notice": entries.append(AgentChatEntry(.note(message.text)))
             case "receipt":
                 if let set = message.changeSet {
+                    let canUndo = runner?.canUndoRecovered(set.id) == true
                     let targets = message.targets ?? []
                     let items = targets.map { target in
                         AgentChatChange(title: target.title ?? target.page.rawValue.capitalized,
@@ -421,8 +507,10 @@ final class AgentChatModel: ObservableObject {
                     }
                     entries.append(AgentChatEntry(.changes(AgentChatChanges(
                         set: set, items: items.isEmpty ? fallback : items, steps: [], week: nil,
-                        state: .recovered))))
-                    entries.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
+                        state: canUndo ? .ready : .recovered))))
+                    if !canUndo {
+                        entries.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
+                    }
                 }
             default: break
             }
@@ -435,6 +523,9 @@ final class AgentChatModel: ObservableObject {
         closedAtOnce = false
         guard !isOpen else { return }
         IdleLatencyTrace.controlDispatched(.chat)
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        AgentPassProbe.beginOpen()
+        #endif
         chipPage = currentPage()
         chipAfterWatching = nil
         bar.isChatOpen = true
@@ -515,6 +606,38 @@ final class AgentChatModel: ObservableObject {
                 }
                 continue
             }
+            if pieces[0].hasPrefix("mem:") {
+                let target = min(240, max(0, Int(pieces[0].dropFirst(4)) ?? 0))
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    guard let self else { return }
+                    while self.uiTestSeededPairs < target {
+                        self.seedExchangeForUITesting(
+                            asked: "How can I plan this task?",
+                            reply: String(repeating: "Plan a short task, record progress, review priorities. ", count: 10))
+                        self.uiTestSeededPairs += 1
+                    }
+                    #if ATTIC_LOCAL_ONLY
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        AgentPassProbe.footprint("Thread\(target)")
+                    }
+                    #endif
+                }
+                continue
+            }
+            if pieces[0] == "stop" || pieces[0] == "new-chat" {
+                let command = String(pieces[0])
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    if command == "stop" { self?.stop() } else { self?.newChat() }
+                }
+                continue
+            }
+            if pieces[0].hasPrefix("agent:") {
+                let backend = String(pieces[0].dropFirst(6))
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    if let selection = AgentBackend(rawValue: backend) { self?.agent = selection }
+                }
+                continue
+            }
             if pieces[0].hasPrefix("send:") {
                 let text = String(pieces[0].dropFirst(5))
                 DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
@@ -565,7 +688,14 @@ final class AgentChatModel: ObservableObject {
 
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        if isRunning { AgentPassProbe.mark("SendRejectedWhileRunning") }
+        #endif
         guard !text.isEmpty, !isRunning, let runner else { return }
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        AgentPassProbe.beginSend()
+        AgentPassProbe.mark("SendStarted")
+        #endif
         draft = ""
         let entry = AgentChatEntry(.asked(text))
         entries.append(entry)
@@ -788,6 +918,9 @@ final class AgentChatModel: ObservableObject {
 
     func stop() {
         guard isRunning else { return }
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        AgentPassProbe.mark("StopRequested")
+        #endif
         runner?.cancel()
     }
 
@@ -961,6 +1094,9 @@ final class AgentChatModel: ObservableObject {
     }
 
     private func undoFinished(_ id: UUID, failure: String?) {
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        AgentPassProbe.mark(failure == nil ? "UndoSucceeded" : "UndoRefused")
+        #endif
         update(id) {
             guard case var .changes(changes) = $0 else { return }
             changes.state = failure == nil ? .undone : .ready
@@ -1063,27 +1199,48 @@ final class AgentChatModel: ObservableObject {
         case let .textDelta(text): appendText(text)
         case let .stepStarted(step): stepStarted(step)
         case let .stepReworded(step): update(step.id) { $0 = .step(step) }
-        case let .stepFinished(step): stepFinished(step)
+        case let .stepFinished(step):
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            if case .done = step.state { AgentPassProbe.mark("StepDone") }
+            #endif
+            stepFinished(step)
         case let .progress(done, total):
             progress = (done, total)
             refreshBar()
         case let .approvalNeeded(request):
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            AgentPassProbe.mark("ApprovalRequested")
+            #endif
             guard approval?.id != request.id,
                   !queuedApprovals.contains(where: { $0.id == request.id }) else { return }
             if approval == nil { approval = request }
             else { queuedApprovals.append(request) }
             phase = .needsYou
             refreshBar()
-        case let .changes(set): changesArrived(set)
+        case let .changes(set):
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            AgentPassProbe.mark("ReceiptChanges", value: Double(set.count))
+            #endif
+            changesArrived(set)
         case let .notice(message): entries.append(AgentChatEntry(.note(message)))
-        case .finished: runEnded()
+        case .finished:
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            AgentPassProbe.mark("RunFinished")
+            #endif
+            runEnded()
         case let .failed(message):
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            AgentPassProbe.mark("RunFailed")
+            #endif
             entries.append(AgentChatEntry(.note(message)))
             runEnded()
         }
     }
 
     private func appendText(_ text: String) {
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        if !restoring && !text.isEmpty { AgentPassProbe.firstDelta() }
+        #endif
         phase = .acting
         let time = now()
         var reply = AgentChatReply()

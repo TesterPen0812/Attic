@@ -125,7 +125,7 @@ struct DrawCanvas: Identifiable, Codable, Equatable, Sendable {
     var textIndex: String = ""
 }
 
-struct DrawSnapshot: Equatable, Sendable {
+struct DrawSnapshot: Codable, Equatable, Sendable {
     var canvas: DrawCanvas
     var objects: [DrawObject]
 }
@@ -158,6 +158,8 @@ struct DrawSearchMatch: Equatable, Sendable {
 }
 
 enum DrawCommand: Sendable {
+    /// Persist a new, empty canvas without adding an invisible object.
+    case saveCanvas
     /// Add, replace, transform or restyle any set of objects as one Undo step.
     case put([DrawObject])
     case remove([UUID])
@@ -232,6 +234,10 @@ protocol DrawStoreProtocol: AnyObject {
     /// be consumed by Recently Deleted's grouped Undo.
     func undoStepID(on id: UUID) -> UUID?
     func redoStepID(on id: UUID) -> UUID?
+    /// A self-contained inverse sealed to the physical state after one saved
+    /// edit, for the agent's versioned Undo journal across launches.
+    func agentUndoProof(on id: UUID, stepID: UUID) -> Data?
+    func undoAgentStep(on id: UUID, proof: Data) -> DrawSaveResult
     func undo(on id: UUID) -> DrawSaveResult
     func redo(on id: UUID) -> DrawSaveResult
     func duplicate(_ id: UUID, name: String?) throws -> DrawCanvas?

@@ -1353,19 +1353,112 @@ final class NoteStore: ObservableObject {
         return presentationByID?[id]
     }
 
-    /// An agent may undo a newly created note only while *every physical
-    /// replica* still has the revision it created. The presentation lookup
-    /// above is deduplicated and cannot prove that the owner changed no copy.
-    func agentCreatedNoteIsUnchanged(_ id: UUID, revision: String) -> Bool {
+    /// Captures metadata whose changes do not necessarily increment a note's
+    /// document revision. Content edits are guarded separately by revision.
+    /// Physical identities prevent an additional identical UUID replica from
+    /// being mistaken for the original family after relaunch.
+    func agentCreatedNoteMetadata(_ id: UUID) -> String? {
+        struct Metadata: Encodable {
+            let physicalIdentity: Data
+            let createdAt: Date
+            let tags: String
+            let pinnedAt: Date?
+            let taskID: UUID?
+            let associationGeneration: Int64
+            let deletedAt: Date?
+            let deletionGroupID: UUID?
+            let imageCount: Int
+            let fileCount: Int
+            let firstFileName: String?
+        }
+        struct Association: Encodable {
+            let physicalIdentity: Data
+            let id: UUID
+            let taskID: UUID
+            let noteID: UUID
+            let taskGeneration: Int64
+            let noteGeneration: Int64
+            let detachedAt: Date?
+            let detachedPreservationID: UUID?
+        }
+        do {
+            // This string is a durable, exact-match Undo seal. JSONEncoder's
+            // default object-key order is unspecified, including for the
+            // nested SwiftData persistent identifiers; encoding the same
+            // unchanged row twice must produce identical bytes.
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let fresh = ModelContext(container)
+            let replicas = try storedNotesIncludingDeleted(matching: id, in: fresh)
+            guard !replicas.isEmpty else { return nil }
+            let strings = try replicas.map { note -> String in
+                let metadata = Metadata(physicalIdentity: try encoder.encode(note.persistentModelID),
+                                        createdAt: note.createdAt, tags: note.tagsRaw, pinnedAt: note.pinnedAt,
+                                        taskID: note.taskID,
+                                        associationGeneration: note.associationGeneration,
+                                        deletedAt: note.deletedAt, deletionGroupID: note.deletionGroupID,
+                                        imageCount: note.imageCount, fileCount: note.fileCount,
+                                        firstFileName: note.firstFileName)
+                return try encoder.encode(metadata).base64EncodedString()
+            }.sorted()
+            let links = WorkspaceItemLifecycle.has("TaskNoteAssociation", in: fresh)
+                ? try fresh.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == id })) : []
+            let associations = try links.map { link -> String in
+                let metadata = Association(physicalIdentity: try encoder.encode(link.persistentModelID),
+                                           id: link.id, taskID: link.taskID, noteID: link.noteID,
+                                           taskGeneration: link.taskGeneration, noteGeneration: link.noteGeneration,
+                                           detachedAt: link.detachedAt, detachedPreservationID: link.detachedPreservationID)
+                return try encoder.encode(metadata).base64EncodedString()
+            }.sorted()
+            return strings.joined(separator: "|") + "#" + associations.joined(separator: "|")
+        } catch { return nil }
+    }
+
+    func agentCreatedNoteIsUnchanged(_ id: UUID, revision: String, metadata: String) -> Bool {
         do {
             let fresh = ModelContext(container)
             let replicas = try storedNotesIncludingDeleted(matching: id, in: fresh)
             return !replicas.isEmpty && replicas.allSatisfy {
                 $0.deletedAt == nil && $0.revisionToken == revision &&
-                $0.tagsRaw.isEmpty && $0.pinnedAt == nil && $0.taskID == nil &&
                 $0.imageCount == 0 && $0.fileCount == 0
-            }
+            } && agentCreatedNoteMetadata(id) == metadata
         } catch { return false }
+    }
+
+    /// Reverse an agent's newly created note without deleting the task that
+    /// owns its writing. A task note's newly created association is detached
+    /// in the same commit, leaving the task available for another own note.
+    /// Refuse a changed physical note or association before staging anything.
+    @discardableResult
+    func undoAgentCreatedNote(_ id: UUID, revision: String, metadata: String) -> Bool {
+        guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: id, container: container) }
+        catch { lastErrorMessage = error.localizedDescription; return false }
+        defer { release() }
+        guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
+        do {
+            let rows = try storedNotesIncludingDeleted(matching: id)
+            guard !rows.isEmpty, rows.allSatisfy({ $0.deletedAt == nil && $0.revisionToken == revision }),
+                  agentCreatedNoteMetadata(id) == metadata else { return false }
+            let links = WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context)
+                ? try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == id })) : []
+            let timestamp = now()
+            try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: timestamp, in: context)
+            WorkspaceLegacyBridge.prepareMutations(
+                rows.map { $0 as any PersistentModel } + links.map { $0 as any PersistentModel }, in: context)
+            for row in rows where row.taskID != nil {
+                row.taskID = nil
+                row.associationGeneration += 1
+            }
+            for link in links where link.detachedAt == nil {
+                link.detachedAt = timestamp
+                link.noteGeneration += 1
+            }
+        } catch { context.rollback(); lastErrorMessage = error.localizedDescription; return false }
+        guard save() else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
     }
 
     private func currentPresentationIndex() -> PresentationIndex {

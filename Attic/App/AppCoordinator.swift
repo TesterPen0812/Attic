@@ -119,6 +119,15 @@ struct AppRuntimeEnvironment {
 
     var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests || isGalleryLaunch }
 
+    /// The normal launch has no injected support URL. Resolve its sandbox
+    /// directory here so agent Undo can survive a genuine app relaunch.
+    var agentUndoJournalURL: URL? {
+        if usesEphemeralAgentCredential {
+            return galleryScratchRoot.appendingPathComponent("AgentUndo.json")
+        }
+        return resolvedApplicationSupportURL?.appendingPathComponent("AtticAgentUndo.json")
+    }
+
     var shouldStartInteractiveShellServices: Bool {
         !isUnitTestHost
     }
@@ -686,7 +695,8 @@ final class AppCoordinator: ObservableObject {
                 }
                 uiState.selectSection(section)
                 return uiState.selectedSection == section
-            }
+            },
+            journalURL: runtime.agentUndoJournalURL
         )
         agentChat.searchItems = { [weak agentActions] in agentActions?.pickerMatches($0) ?? [] }
         agentChat.checkAgents = { [weak agentChat] in
@@ -720,6 +730,7 @@ final class AppCoordinator: ObservableObject {
                     )
                 }
             },
+            recoverUndo: { [weak agentActions] in agentActions?.canRecoverUndo($0) == true },
             describeContext: { [weak agentActions] in agentActions?.requestContext($0) ?? AgentRunEngine.plainContext($0) }
         )
         agentChat.connect(agentRunner)
@@ -733,6 +744,10 @@ final class AppCoordinator: ObservableObject {
                 _ = try? agentTools.call(name: "create_note", arguments: [
                     "title": "Write the launch blog post",
                     "body": "Draft 3: Attic keeps your tasks and notes one keystroke away."])
+            }
+            if parts.contains("task") {
+                _ = try? agentTools.call(name: "create_task", arguments: [
+                    "title": "Agent pass disposable task"])
             }
             if parts.contains("sketch"), let draw = DrawLibraryHub.activeStore,
                (try? draw.library(deleted: false))?.contains(where: { $0.name == "Launch plan" }) != true {

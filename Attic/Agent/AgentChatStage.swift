@@ -262,6 +262,9 @@ struct AgentChatStage: View {
         .onChange(of: shown) { _, now in
             fx.emptyThread = now && model.entries.isEmpty
             wipe(to: now)
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            if now { DispatchQueue.main.async { AgentPassProbe.stageUpdated() } }
+            #endif
         }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
         .onChange(of: model.watch == .watching) { _, now in
@@ -304,6 +307,9 @@ struct AgentChatStage: View {
     }
 
     private func appeared() {
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        if shown { DispatchQueue.main.async { AgentPassProbe.stageUpdated() } }
+        #endif
         fx.wipeOrigin = star
         if alive { fx.open(at: star) } else { fx.clearLive() }
         wipe(to: shown)

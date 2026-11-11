@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 extension AgentActions {
     private static func schema(_ properties: [String: Any], required: [String] = []) -> [String: Any] {
@@ -68,6 +69,19 @@ extension AgentActions {
                        required: ["name", "expected_name"]),
             definition("draw_delete_canvas", "Move a saved Draw canvas to Recently Deleted. Requires the owner's approval and is undoable; permanent deletion is unavailable.",
                        canvas),
+            definition("draw_create_canvas", "Create and save a Draw canvas, including an empty one. Supply an optional name; the canvas can be undone.",
+                       ["name": string]),
+            definition("draw_duplicate_canvas", "Duplicate a saved canvas and all its visible objects into a new canvas. The new canvas can be undone.",
+                       canvas.merging(["name": string]) { _, new in new }),
+            definition("draw_delete_object", "Remove a Draw object from its canvas. Requires owner approval. Supply object_id and object_token from draw_read_canvas; an intervening edit cancels deletion. Undo restores the object.",
+                       canvas.merging(["object_id": string, "object_token": string]) { _, new in new },
+                       required: ["object_id", "object_token"]),
+            definition("draw_restyle_object", "Change an existing Draw object's colour, size or corners. Use its current object_token from draw_read_canvas to avoid overwriting intervening edits.",
+                       canvas.merging(style.merging(["object_id": string, "object_token": string]) { _, new in new }) { _, new in new },
+                       required: ["object_id", "object_token"]),
+            definition("draw_resize_object", "Resize a Draw object from its top-left corner in points using the same geometry transformations as the page. Images keep their proportions. Use object_token from draw_read_canvas.",
+                       canvas.merging(["object_id": string, "object_token": string, "width": number, "height": number]) { _, new in new },
+                       required: ["object_id", "object_token", "width", "height"]),
             definition("draw_add_text", "Add a text box to an existing Draw canvas; geometry is in points.",
                        canvas.merging(frame.merging(style) { _, new in new }.merging(["text": string]) { _, new in new }) { _, new in new },
                        required: ["text", "x", "y"]),
@@ -313,15 +327,42 @@ extension AgentActions {
                                     targets: canvases.map { AgentTarget(page: .draw, itemID: $0.id, title: $0.name) },
                                     state: .done), nil)
         }
+        if name == "draw_create_canvas" {
+            let canvas = draw.create(name: args["name"] as? String)
+            let save = draw.perform(.saveCanvas, on: canvas.id)
+            guard save.isSaved else { throw AgentActionsError.invalid("Draw canvas did not save: \(save)") }
+            let saved = try draw.open(canvas.id)
+            return (try Self.json(["canvas_id": canvas.id.uuidString, "canvas_name": saved.canvas.name]),
+                    AgentStep(id: UUID(), title: "Create Draw canvas", kind: .create,
+                              targets: [AgentTarget(page: .draw, itemID: canvas.id, title: saved.canvas.name)], state: .done), saved)
+        }
         let canvasID = try Self.uuid(args["canvas_id"], "canvas_id")
         let snapshot = try draw.open(canvasID)
+        if name == "draw_duplicate_canvas" {
+            guard let copy = try draw.duplicate(canvasID, name: args["name"] as? String) else {
+                throw AgentActionsError.invalid("Could not duplicate this Draw canvas.")
+            }
+            if snapshot.objects.isEmpty {
+                let save = draw.perform(.saveCanvas, on: copy.id)
+                guard save.isSaved else { throw AgentActionsError.invalid("Draw duplicate did not save: \(save)") }
+            }
+            guard try draw.library().contains(where: { $0.id == copy.id }) else {
+                throw AgentActionsError.invalid("The new Draw canvas has not finished saving.")
+            }
+            let saved = try draw.open(copy.id)
+            return (try Self.json(["canvas_id": copy.id.uuidString, "canvas_name": saved.canvas.name,
+                                   "object_count": saved.objects.count]),
+                    AgentStep(id: UUID(), title: "Duplicate Draw canvas", kind: .create,
+                              targets: [AgentTarget(page: .draw, itemID: copy.id, title: saved.canvas.name)], state: .done), saved)
+        }
         if name == "draw_read_canvas" {
             let objects: [[String: Any]] = snapshot.objects.prefix(100).map { object in
                 var row: [String: Any] = [
                     "id": object.id.uuidString, "x": object.frame.x, "y": object.frame.y,
                     "width": object.frame.width, "height": object.frame.height,
                     "z_index": object.zIndex, "colour": object.style.colour.rawValue,
-                    "size": object.style.size.rawValue, "corners": object.style.corners.rawValue
+                    "size": object.style.size.rawValue, "corners": object.style.corners.rawValue,
+                    "object_token": Self.drawToken(object)
                 ]
                 switch object.content {
                 case let .text(text): row["kind"] = "text"; row["text"] = text
@@ -387,6 +428,52 @@ extension AgentActions {
                                                        title: snapshot.canvas.name, containerID: canvasID)], state: .done)
             return (try Self.json(["object_id": objectID.uuidString, "canvas_id": canvasID.uuidString,
                                    "x": x, "y": y]), step, after)
+        }
+        if ["draw_delete_object", "draw_restyle_object", "draw_resize_object"].contains(name) {
+            let objectID = try Self.uuid(args["object_id"], "object_id")
+            guard let existing = snapshot.objects.first(where: { $0.id == objectID }) else {
+                throw AgentActionsError.invalid("That object is no longer on this canvas. Read the canvas again.")
+            }
+            guard let token = args["object_token"] as? String, token == Self.drawToken(existing) else {
+                throw AgentActionsError.invalid("The object changed since it was read. Read the canvas again.")
+            }
+            let command: DrawCommand
+            let kind: AgentStepKind
+            switch name {
+            case "draw_delete_object":
+                command = .remove([objectID]); kind = .delete
+            case "draw_restyle_object":
+                guard args["colour"] != nil || args["size"] != nil || args["corners"] != nil else {
+                    throw AgentActionsError.invalid("Specify a colour, size or corners to change.")
+                }
+                var styled = existing
+                styled.style = DrawStyle(
+                    colour: try Self.enumValue(DrawColour.self, args["colour"], name: "colour", default: existing.style.colour),
+                    size: try Self.enumValue(DrawSize.self, args["size"], name: "size", default: existing.style.size),
+                    corners: try Self.enumValue(DrawCorners.self, args["corners"], name: "corners", default: existing.style.corners))
+                guard styled != existing else { throw AgentActionsError.invalid("The object already has that style.") }
+                command = .put([styled]); kind = .update
+            default:
+                let width = try Self.number(args["width"], "width")
+                let height = try Self.number(args["height"], "height")
+                guard width > 0, height > 0 else { throw AgentActionsError.invalid("Draw dimensions must be positive.") }
+                let resized = DrawPageModel.resized([existing], handle: .bottomRight,
+                    delta: CGPoint(x: width - existing.frame.width, y: height - existing.frame.height), shift: false)
+                guard let updated = resized.first, updated != existing else {
+                    throw AgentActionsError.invalid("The object already has that size.")
+                }
+                command = .put([updated]); kind = .update
+            }
+            let save = draw.perform(command, on: canvasID)
+            guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
+            let after = try draw.open(canvasID)
+            let step = AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
+                                 kind: kind, targets: [AgentTarget(page: .draw, itemID: objectID,
+                                                                   title: snapshot.canvas.name, containerID: canvasID)],
+                                 state: .done)
+            return (try Self.json(["canvas_id": canvasID.uuidString, "canvas_name": snapshot.canvas.name,
+                                   "object_id": objectID.uuidString, "deleted": name == "draw_delete_object"]),
+                    step, after)
         }
         if name == "draw_rename_canvas" || name == "draw_delete_canvas" {
             let command: DrawCommand
@@ -486,5 +573,14 @@ extension AgentActions {
             throw AgentActionsError.invalid("Invalid \(name).")
         }
         return value
+    }
+
+    /// Include the object's full content so approval cannot silently discard
+    /// an owner edit to a stroke or image between Read and Apply.
+    private static func drawToken(_ object: DrawObject) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let bytes = try? encoder.encode(object) else { return "" }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 }
