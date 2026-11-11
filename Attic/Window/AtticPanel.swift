@@ -1492,11 +1492,21 @@ final class AtticPanelContentContainer: NSView {
     private var swoopProgress: Double = 0
     private var alternateToken = 0
 
+    /// The clock Swoop's run is read by (the system's, except in a test that
+    /// has frozen it).
+    private var swoopNow: CFTimeInterval {
+        #if DEBUG
+        swoopClockFrozenAt ?? CACurrentMediaTime()
+        #else
+        CACurrentMediaTime()
+        #endif
+    }
+
     /// Where the animation is now (0 shown, 1 hidden).
     var alternateProgress: Double {
         switch alternateMode {
         case .genieLiveGlass?: genieView.currentProgress
-        case .swoop?: swoopRun?.progress(at: CACurrentMediaTime()) ?? swoopProgress
+        case .swoop?: swoopRun?.progress(at: swoopNow) ?? swoopProgress
         default: 0
         }
     }
@@ -1505,7 +1515,7 @@ final class AtticPanelContentContainer: NSView {
     var alternateVelocity: Double {
         switch alternateMode {
         case .genieLiveGlass?: genieView.currentVelocity
-        case .swoop?: swoopRun?.velocity(at: CACurrentMediaTime()) ?? 0
+        case .swoop?: swoopRun?.velocity(at: swoopNow) ?? 0
         default: 0
         }
     }
@@ -1594,6 +1604,26 @@ final class AtticPanelContentContainer: NSView {
     #if DEBUG
     /// The last flight start's cost: snapshot and live-material set-up (ms).
     private(set) var lastAlternateBeginMilliseconds: Double = 0
+    private var swoopClockFrozenAt: CFTimeInterval?
+    /// Tests: stops the running Swoop `fraction` of the way through its
+    /// duration (its clock and its layer), so a turn the runner stalls
+    /// cannot finish a spring that a test means to catch in flight. Returns
+    /// false when no Swoop runs. `thawSwoopForTesting` lets time run again.
+    func freezeSwoopForTesting(atFraction fraction: Double) -> Bool {
+        guard let run = swoopRun, let layer = motionView.layer,
+              let animation = layer.animation(forKey: Self.swoopAnimationKey) else { return false }
+        swoopClockFrozenAt = run.start + run.duration * fraction
+        layer.speed = 0
+        layer.timeOffset = animation.beginTime + animation.duration * fraction
+        CATransaction.flush()
+        return true
+    }
+    func thawSwoopForTesting() {
+        swoopClockFrozenAt = nil
+        guard let layer = motionView.layer else { return }
+        layer.speed = 1
+        layer.timeOffset = 0
+    }
     /// Tests: the progress Swoop's keyframes draw `fraction` of the way
     /// through its run's duration (nil: no Swoop run).
     func swoopProgressForTesting(atFraction fraction: Double) -> Double? {
@@ -1816,7 +1846,7 @@ final class AtticPanelContentContainer: NSView {
     ) -> TimeInterval {
         guard let layer = motionView.layer else { completion(); return 0 }
         let from = alternateProgress
-        let run = curve.run(from: from, to: target, start: CACurrentMediaTime())
+        let run = curve.run(from: from, to: target, start: swoopNow)
         swoopRun = run
         swoopProgress = target
         // 30 keyframes for a timed run; a spring gets one per 120 Hz frame.
