@@ -1,3 +1,10 @@
+## 2026-11-11 · SA-4 Settings connection hint contrast
+
+Only the italic connection hint in the Settings sidebar uses its own text ink,
+tuned to at least 4.5:1 on the sidebar material, including tinted appearance,
+desktop backdrops and sidebar hover/selection states. Other chrome inks and
+surfaces remain unchanged.
+
 ## 2026-11-11 · SA-3 compact dropdown text contrast
 
 The Tags dropdown heading, tag suggestion details and tag empty states use

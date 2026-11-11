@@ -33,9 +33,10 @@ struct AtticSidebarHeading: View {
 /// A quiet italic hint under a group (shown when the group needs one).
 struct AtticSidebarHint: View {
     let text: String
+    static let ink: AtticInk = .sidebarConnectionHint
 
     var body: some View {
-        AtticText(verbatim: text, style: .settingsHint, ink: .chromeHint)
+        AtticText(verbatim: text, style: .settingsHint, ink: Self.ink)
             .padding(.leading, AtticLayout.sidebarIconX)
             .frame(height: AtticSettingsMetrics.sidebarHintHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
