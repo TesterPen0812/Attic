@@ -1360,6 +1360,11 @@ final class NoteStore: ObservableObject {
     func agentCreatedNoteMetadata(_ id: UUID) -> String? {
         struct Metadata: Encodable {
             let physicalIdentity: Data
+            let title: [UInt16]
+            let body: [UInt16]
+            let contentDigest: String
+            let contentFormat: Int
+            let plainText: [UInt16]
             let createdAt: Date
             let tags: String
             let pinnedAt: Date?
@@ -1393,6 +1398,9 @@ final class NoteStore: ObservableObject {
             guard !replicas.isEmpty else { return nil }
             let strings = try replicas.map { note -> String in
                 let metadata = Metadata(physicalIdentity: try encoder.encode(note.persistentModelID),
+                                        title: Array(note.title.utf16), body: Array(note.body.utf16),
+                                        contentDigest: NoteItem.fingerprint(note.content),
+                                        contentFormat: note.contentFormat, plainText: Array(note.plainText.utf16),
                                         createdAt: note.createdAt, tags: note.tagsRaw, pinnedAt: note.pinnedAt,
                                         taskID: note.taskID,
                                         associationGeneration: note.associationGeneration,

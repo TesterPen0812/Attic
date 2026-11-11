@@ -698,6 +698,42 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertNotNil(notes.note(withID: id))
     }
 
+    func testCreatedNoteUndoRefusesChangedContentWithUnchangedRevision() async throws {
+        let tasks = try makeTestStore()
+        let attachments = makeTestAttachmentFileStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentNoteSeal").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+            library: AtticLibrary(tasks: tasks, notes: notes)), journalURL: journalURL)
+        let request = actions.beginRequest(title: "Draft a note")
+        let result = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Agent title", "body": "Agent body"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(result.step.targets.first?.itemID)
+        let context = ModelContext(tasks.container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let revision = row.revisionID
+        row.title = "Owner's title"
+        row.body = "Owner's imported content"
+        row.content = try NoteContentCodec.encode(NoteDocument(blocks: [
+            .text("Owner's title"), .text("Owner's imported content")
+        ]))
+        try context.save()
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+            .first { $0.id == id }?.revisionID, revision)
+        let reopenedTasks = TaskStore(container: tasks.container)
+        let reopenedNotes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let reopened = AgentActions(tasks: AgentTaskTools(store: reopenedTasks, noteStore: reopenedNotes,
+            library: AtticLibrary(tasks: reopenedTasks, notes: reopenedNotes)), journalURL: journalURL)
+        let undo = await reopened.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 0, "Imported content must prevent a destructive Undo")
+        XCTAssertFalse(undo.failures.isEmpty)
+        let preserved = try XCTUnwrap(ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+            .first { $0.id == id })
+        XCTAssertNil(preserved.deletedAt)
+        XCTAssertEqual(preserved.body, "Owner's imported content")
+    }
+
     func testAgentCreatedNoteUndoSurvivesNewStoreAndModelAndRefusesEditedReplica() async throws {
         let tasks = try makeTestStore()
         let root = ownedTemporaryDirectory(prefix: "AgentDurableUndo")
