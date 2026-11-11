@@ -248,6 +248,44 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertFalse(rig.controller.isPanelVisible)
     }
 
+    /// A local click in Settings (including an attached sheet) belongs to
+    /// Attic even when the pointer is well outside the panel's geometry.
+    func testClickAwayKeepsPanelForOwnedSettingsAndChildWindowPresses() throws {
+        let rig = try makePanel()
+        rig.settings.revealOnHover = false
+        rig.settings.panelDismissMode = .clickAway
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+
+        let frame = rig.controller.visibleContentFrameForTesting
+        let outside = CGPoint(x: frame.midX - 700, y: frame.midY - 700)
+        let settingsWindow = SettingsWindow(contentRect: CGRect(x: -4000, y: -4000, width: 640, height: 480),
+                                            styleMask: [.titled], backing: .buffered, defer: false)
+        settingsWindow.isReleasedWhenClosed = false
+        defer { settingsWindow.close() }
+        XCTAssertTrue(NSApp.windows.contains { $0 === settingsWindow })
+
+        rig.controller.handlePressForTesting(at: outside, in: settingsWindow)
+        spin(0.4)
+        XCTAssertTrue(rig.controller.isPanelVisible, "Settings is owned by Attic")
+
+        let sheet = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 220, height: 160),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        settingsWindow.addChildWindow(sheet, ordered: .above)
+        defer { settingsWindow.removeChildWindow(sheet); sheet.close() }
+        rig.controller.handlePressForTesting(at: outside, in: sheet)
+        spin(0.4)
+        XCTAssertTrue(rig.controller.isPanelVisible, "a child sheet or popover belongs to Attic")
+
+        let menuCard = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 210, height: 180),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        defer { menuCard.close() }
+        rig.controller.handlePressForTesting(at: outside, in: menuCard)
+        spin(0.4)
+        XCTAssertTrue(rig.controller.isPanelVisible, "a separate Attic menu card is an owned window")
+    }
+
     func testPointerLeavingCornerCancelsHiddenWarmerRetries() throws {
         let rig = try makePanel()
         rig.monitor.start()
