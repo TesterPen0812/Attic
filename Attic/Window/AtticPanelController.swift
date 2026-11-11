@@ -1754,7 +1754,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             live: PanelGenieLiveMaterial(
                 kind: treatment.kind == .glass ? .glass : .frosted,
                 colorScheme: scheme,
-                cornerRadius: hostingView.panelCornerRadius
+                cornerRadius: hostingView.panelCornerRadius,
+                lift: AtticSurfaceModel.glassLift(
+                    enabled: settings.brightenGlass, appearance: treatment.appearance,
+                    kind: treatment.kind, increaseContrast: increaseContrast
+                )
             ),
             translucent: true
         )

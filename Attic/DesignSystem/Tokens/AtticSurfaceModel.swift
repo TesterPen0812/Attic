@@ -84,6 +84,28 @@ struct AtticSurfaceModel: Equatable, Sendable {
         return copy
     }
 
+    /// "Brighten glass over dark backgrounds" (owner, 2026-11-11, option C;
+    /// Bright Test's lift, 2 Nov): the strength of the additive white
+    /// (`.plusLighter`) laid over the native material. Additive white raises
+    /// every level by the same amount, so the desktop's detail shows through
+    /// at the same contrast (a normal white fill would fog it).
+    static let glassLiftStrength = 0.14
+
+    /// The lift for a surface: `glassLiftStrength` on see-through Light
+    /// surfaces (Glass and Frosted) when the setting is on; 0 in Dark, on
+    /// Solid (also when Reduce Transparency makes the surface solid) and
+    /// under Increase Contrast.
+    static func glassLift(enabled: Bool, appearance: AtticPanelThemeAppearance,
+                          kind: AtticPanelSurfaceTreatment.Kind, increaseContrast: Bool) -> Double {
+        guard enabled, appearance == .light, kind != .solid, !increaseContrast else { return 0 }
+        return glassLiftStrength
+    }
+
+    /// This surface's lift when the setting is `enabled`.
+    func glassLift(enabled: Bool) -> Double {
+        Self.glassLift(enabled: enabled, appearance: appearance, kind: kind, increaseContrast: increaseContrast)
+    }
+
     /// Visual A: the default surface's top sheen, within the first 24 pt.
     static let calmSheenHeight: CGFloat = 24
     /// None in Light (the surface is pure white, owner 2026-09-26).

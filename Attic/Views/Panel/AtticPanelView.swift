@@ -681,6 +681,7 @@ struct AtticPanelView: View {
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
+                brightenGlass: settings.brightenGlass,
                 animations: settings.animations,
                 controls: PanelKeyTreatment.controls(isPanelKey: false, surface: settings.panelSurfaceStyle),
                 motion: settings.motionTuning

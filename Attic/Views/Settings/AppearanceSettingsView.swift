@@ -150,6 +150,15 @@ struct AppearanceSettingsView: View {
                 identifier: "setting-panel-tint"
             )
             .help(settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint))
+            AtticGroupDivider()
+            // Option C (owner, 2026-11-11): Light Glass, Frosted and the
+            // island get the lift everywhere until it is turned off.
+            AtticSwitchRow(
+                title: String(localized: "Brighten glass over dark backgrounds"),
+                isOn: $settings.brightenGlass,
+                identifier: "setting-brighten-glass"
+            )
+            .help(String(localized: "Brightens Light glass and the island wherever the panel is. Dark and Solid stay as they are."))
         }
     }
 
