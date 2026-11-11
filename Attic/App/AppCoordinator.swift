@@ -633,9 +633,10 @@ final class AppCoordinator: ObservableObject {
         // Watched note edits are shown being written: Notes forward on the
         // note, then back. Only ever asked while the chat is open.
         let noteWriter = AgentNoteWriter(
-            open: { [weak uiState, weak pages = noteDraft.pages] id, before in
+            open: { [weak uiState, weak pages = noteDraft.pages] id, before, isCurrent in
                 await AgentNoteWriter.openInNotes(id, before: before, pages: pages,
-                                                  select: { uiState?.selectSection(.notes) })
+                                                  select: { if isCurrent() { uiState?.selectSection(.notes) } },
+                                                  stillWatching: isCurrent)
             },
             base: { [weak noteStore] id in noteStore?.takeAgentWriteBase(id) }
         )
@@ -645,12 +646,15 @@ final class AppCoordinator: ObservableObject {
         let agentWatcher = PanelAgentWatcher(chat: agentChat, noteWriter: noteWriter)
         agentWatcher.reducesMotion = { AtticMotionPreference.reducesMotion }
         agentWatcher.currentPage = { [weak uiState] in uiState.flatMap { AgentPage(PanelPage($0.selectedSection)) } }
-        noteWriter.open = { [weak uiState, weak pages = noteDraft.pages, weak agentWatcher] id, before in
+        noteWriter.open = { [weak uiState, weak pages = noteDraft.pages, weak agentWatcher] id, before, isCurrent in
             await AgentNoteWriter.openInNotes(id, before: before, pages: pages, select: {
-                if let agentWatcher { await agentWatcher.goTo(.notes) } else { uiState?.selectSection(.notes) }
+                guard isCurrent() else { return }
+                if let agentWatcher { await agentWatcher.goTo(.notes, whileWatching: isCurrent) }
+                else { uiState?.selectSection(.notes) }
                 // However the page came, it is Notes now.
+                guard isCurrent() else { return }
                 if uiState?.selectedSection != .notes { uiState?.selectSection(.notes) }
-            })
+            }, stillWatching: isCurrent)
         }
         agentChat.presentWatched = { [agentWatcher] in agentWatcher.presentation(for: $0) }
         uiState.agentWatcher = agentWatcher

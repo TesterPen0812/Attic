@@ -72,7 +72,8 @@ final class PanelAgentWatcher {
         case let .openPage(page):
             return { [self] in await goTo(page) }
         case let .note(id):
-            return noteWriter.presentation(for: id, watching: { [weak chat] in chat?.isOpen == true },
+            guard let generation = chat?.watchingGeneration else { return nil }
+            return noteWriter.presentation(for: id, watching: { [weak chat] in chat?.isWatching(generation) == true },
                                            point: { [weak chat] in chat?.writingAt($0, star: $1) })
         case let .calendarEvent(target):
             guard let occurrence = target.externalID else { return nil }
@@ -90,15 +91,15 @@ final class PanelAgentWatcher {
 
     /// The design's `goPage`: the spark goes to the island's item, taps it
     /// (the ring, the item pressed), the page switches, the page arrives.
-    func goTo(_ page: AgentPage) async {
-        guard watching, currentPage() != page else { return }
+    func goTo(_ page: AgentPage, whileWatching isCurrent: () -> Bool = { true }) async {
+        guard watching, isCurrent(), currentPage() != page else { return }
         if alive, let at = islandPoint(page) {
             await move(to: .window(at), for: pace.toIsland)
-            guard watching else { return }
+            guard watching, isCurrent() else { return }
             chat?.watchEffect(.tap(.window(at)))
             islandTap(page)
         }
-        guard watching else { return }
+        guard watching, isCurrent() else { return }
         chat?.openPage?(page)
         await pause(pace.afterSwitch)
     }
