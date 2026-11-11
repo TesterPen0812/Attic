@@ -796,21 +796,17 @@ struct AgentChatComposer: View {
 
     /// The design's +: Task or note…, This page, File….
     private var addMenu: some View {
-        Menu {
-            Button(String(localized: "Task or note…")) { model.pickingItem = true }
-            Button(String(localized: "This page")) { model.addPage() }
-            Button(String(localized: "File…")) { pickFile() }
-        } label: {
+        AtticCommandMenu(commands: [
+            AtticMenuCommand("Task or note…") { model.pickingItem = true },
+            AtticMenuCommand("This page") { model.addPage() },
+            AtticMenuCommand("File…") { pickFile() },
+        ], accessibilityLabel: String(localized: "Add a task, note or file")) {
             Image(systemName: "plus")
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
                 .frame(width: 21, height: 21)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .help(String(localized: "Add a task, note or file"))
         .accessibilityLabel(String(localized: "Add a task, note or file"))
         .accessibilityIdentifier("agent-chat-add")
@@ -1036,15 +1032,10 @@ struct AgentChatHistoryButton: View {
     @State private var hovered = false
 
     var body: some View {
-        Menu {
-            ForEach(model.history) { chat in
-                Button { model.reopen(chat.id) } label: {
-                    Text(chat.title)
-                    Text(AgentChatModel.dayLabel(chat.updated))
-                }
-                .disabled(model.isBusy)
-            }
-        } label: {
+        AtticCommandMenu(commands: model.history.map { chat in
+            AtticMenuCommand(verbatim: chat.title, isDisabled: model.isBusy,
+                             detail: AgentChatModel.dayLabel(chat.updated)) { model.reopen(chat.id) }
+        }, accessibilityLabel: String(localized: "Chats")) {
             Image(systemName: "clock")
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
@@ -1052,10 +1043,6 @@ struct AgentChatHistoryButton: View {
                 .background(hovered ? AgentChatFill.quiet(design) : .clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .onHover { hovered = $0 }
         .help(String(localized: "Chats"))
         .accessibilityLabel(String(localized: "Chats"))
