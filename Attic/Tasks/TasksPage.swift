@@ -3325,7 +3325,7 @@ struct TasksPage: View {
         }
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
-        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
+        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false, edgeLight: true)
     }
 
     /// The selection bar's turn in the tag bar's place (T2): two or more

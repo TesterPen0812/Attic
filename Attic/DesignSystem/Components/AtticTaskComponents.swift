@@ -1382,7 +1382,7 @@ struct AtticJoinedSelectedRuns: View {
                 ForEach(Self.joined(pieces)) { group in
                     Color.clear
                         .frame(width: group.frame.width, height: group.frame.height)
-                        .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius, interactive: false)
+                        .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius, interactive: false, edgeLight: true)
                         .position(x: group.frame.midX, y: group.frame.midY)
                 }
             }

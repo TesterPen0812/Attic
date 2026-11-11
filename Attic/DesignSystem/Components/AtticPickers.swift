@@ -1601,7 +1601,7 @@ private struct AtticStripButton: View {
         }
         .frame(height: height)
         .background { if let fill { shape.fill(fill.color) } }
-        .atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled)
+        .atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled, edgeLight: true)
         .contentShape(shape)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: value != nil), value: value)

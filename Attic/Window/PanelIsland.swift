@@ -1048,7 +1048,7 @@ private struct PanelIslandLabelSurface: ViewModifier {
         if flat {
             content.atticFlatSurface(cornerRadius: cornerRadius)
         } else {
-            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true, edgeLight: true)
         }
     }
 }

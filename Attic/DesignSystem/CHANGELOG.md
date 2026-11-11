@@ -1,3 +1,10 @@
+## 2026-11-11 · Edge light on remaining raised panel controls
+
+Draw's tool and title capsules, the Tasks selection-action capsule and add
+bar, joined and single task selection chips, the task paste-offer bar, picker
+strip and island label opt into the shared Glass edge light. The modifier
+continues to omit it in Increase Contrast, Craft and reduced transparency.
+
 ## 2026-11-11 · Joined task selection glass
 
 Touching selected Tasks rows share one raised glass backing across the full

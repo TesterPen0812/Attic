@@ -236,7 +236,7 @@ struct DrawToolBar: View {
         .padding(.horizontal, m.capsulePadding)
         .frame(height: m.capsule)
         .clipShape(shape)
-        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticShape.controlRadius(height: m.capsule), interactive: false))
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticShape.controlRadius(height: m.capsule), interactive: false, edgeLight: true))
         .fixedSize()
         .animation(m.fold(design.reduceMotion), value: model.strip)
         .accessibilityElement(children: .contain)
