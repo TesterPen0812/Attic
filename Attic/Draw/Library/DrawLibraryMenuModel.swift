@@ -273,7 +273,10 @@ final class DrawLibraryMenuModel: ObservableObject {
         case let .canvas(canvas):
             IdleLatencyTrace.controlDispatched(.drawLibrary)
             finish()
-            actions.open(canvas.id)
+            // The checked row already owns this board. Reopening it would
+            // fetch every object, publish the entire board and fit it again
+            // just to dismiss the menu. Other canvas choices still load.
+            if canvas.id != currentCanvasID { actions.open(canvas.id) }
         case .noMatch:
             return
         case let .newCanvas(name):
