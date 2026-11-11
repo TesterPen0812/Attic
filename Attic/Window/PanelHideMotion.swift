@@ -1087,6 +1087,13 @@ final class PanelGenieView: NSView {
                 let blur = variableBlur(of: layer)
                 backdrops.append(GlassBand(rect: frame, clip: clip, strengths: blur.strengths, radius: blur.radius))
             }
+            // The surface's glass lift ("Brighten glass over dark
+            // backgrounds") is a surface-sized additive white. The live
+            // material under the mesh draws it (`PanelGenieMaterialView`),
+            // so the snapshot leaves it out, or the flight is lit twice.
+            if !layer.isHidden, surfaceSized(frame), isAdditive(layer), !glassLayerNames.contains(name) {
+                scan.hidden.append(layer)
+            }
             if glassLayerNames.contains(name), !layer.isHidden {
                 scan.hidden.append(layer)
                 if name == "CASDFLayer" { groups.append((frame, shown ? clip : .null)) }
@@ -1102,7 +1109,8 @@ final class PanelGenieView: NSView {
         for parent in materialParents {
             for sibling in parent.sublayers ?? [] where !sibling.isHidden && className(sibling) != "CABackdropLayer" {
                 let frame = root.convert(sibling.bounds, from: sibling)
-                guard surfaceSized(frame), sibling.compositingFilter != nil || className(sibling) == "CAChameleonLayer" else { continue }
+                guard surfaceSized(frame), sibling.compositingFilter != nil || className(sibling) == "CAChameleonLayer",
+                      !scan.hidden.contains(where: { $0 === sibling }) else { continue }
                 scan.hidden.append(sibling)
                 scan.materialLayers.append(className(sibling))
             }
@@ -1243,6 +1251,12 @@ final class PanelGenieView: NSView {
             return ((0..<rows).map { CGFloat(data[$0 * context.bytesPerRow]) / 255 }, radius ?? AtticEdgeBlurMetrics.radius)
         }
         return ([], AtticEdgeBlurMetrics.radius)
+    }
+
+    /// A layer composited with `.plusLighter` (Core Animation's `plusL`).
+    static func isAdditive(_ layer: CALayer) -> Bool {
+        guard let filter = layer.compositingFilter else { return false }
+        return String(describing: filter).contains("plusL")
     }
 
     private static let glassLayerNames: Set<String> = [

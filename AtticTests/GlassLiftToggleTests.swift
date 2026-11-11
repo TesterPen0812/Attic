@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -46,5 +48,63 @@ final class GlassLiftToggleTests: XCTestCase {
         XCTAssertEqual(light.tokens.panel.glassLift(enabled: true), AtticSurfaceModel.glassLiftStrength)
         let dark = AtticDesignContext(mode: .dark, surface: .glass, brightenGlass: true)
         XCTAssertEqual(dark.tokens.panel.glassLift(enabled: true), 0)
+    }
+
+    // MARK: - Genie snapshot
+
+    /// Genie draws the panel's material live under the bent snapshot, and
+    /// `PanelGenieMaterialView` adds the lift there. The snapshot (the scan's
+    /// hidden layers, then `renderTier`) must leave the lift out exactly as
+    /// it leaves the material out, or the flight is brightened twice.
+    func testGenieSnapshotLeavesTheLiftOut() throws {
+        for surface in [PanelSurfaceStyle.glass, .frosted] {
+            let off = try snapshotSum(surface: surface, brightenGlass: false)
+            let on = try snapshotSum(surface: surface, brightenGlass: true)
+            XCTAssertGreaterThan(on.liftLayers, 0, "\(surface): the lift is drawn")
+            XCTAssertEqual(on.liftHidden, on.liftLayers, "\(surface): every lift layer is hidden")
+            XCTAssertEqual(on.hidden - off.hidden, on.liftLayers, "\(surface): only the lift is added")
+            XCTAssertEqual(on.sum, off.sum, accuracy: off.sum * 0.002 + 1, "\(surface): the snapshot carries no lift")
+        }
+    }
+
+    private func snapshotSum(surface: PanelSurfaceStyle, brightenGlass: Bool) throws
+        -> (sum: Double, hidden: Int, liftLayers: Int, liftHidden: Int) {
+        let size = CGSize(width: 320, height: 480)
+        let context = AtticDesignContext(mode: .light, surface: surface, brightenGlass: brightenGlass)
+        let shape = Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
+        let host = NSHostingView(rootView: AtticSurfaceBackground(model: context.tokens.panel, shape: shape)
+            .frame(width: size.width, height: size.height)
+            .atticDesign(context))
+        host.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.close() }
+        host.layoutSubtreeIfNeeded()
+        host.display()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        let root = try XCTUnwrap(host.layer)
+        // As the controller: only live Frosted hides the surface material.
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: host.bounds, hidesSurfaceMaterial: surface == .frosted)
+        let liftLayers = Self.layers(in: root).filter { ($0.compositingFilter as AnyObject?)?.description.contains("plusL") == true }
+        let image = try XCTUnwrap(PanelGenieView.renderTier(of: host, hiding: scan.hidden, scale: 1))
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let bitmap = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                             bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        bitmap.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let hidden = Set(scan.hidden.map(ObjectIdentifier.init))
+        return (pixels.reduce(0) { $0 + Double($1) }, hidden.count, liftLayers.count,
+                liftLayers.filter { hidden.contains(ObjectIdentifier($0)) }.count)
+    }
+
+    private static func layers(in layer: CALayer) -> [CALayer] {
+        [layer] + (layer.sublayers ?? []).flatMap { layers(in: $0) }
     }
 }
