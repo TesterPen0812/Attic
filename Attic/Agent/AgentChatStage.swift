@@ -590,6 +590,12 @@ struct AgentChatComposer: View {
     /// Where the field's text and the mode's label both start, inside the card.
     private static let textInset: CGFloat = 4
 
+    /// The phase drives composer geometry; keep its transaction distinct from
+    /// the label's reduced-motion fade above it.
+    static func phaseAnimation(alive: Bool) -> Animation? {
+        alive ? .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.3) : nil
+    }
+
     private var insets: EdgeInsets { PanelSharedBottomBar.plusInsets(layout: layout) }
     private var width: CGFloat { max(0, layout.panelSize.width - insets.leading - insets.trailing) }
     private var side: CGFloat { AtticControlSize.headerControl }
@@ -629,7 +635,7 @@ struct AgentChatComposer: View {
         .padding(.leading, insets.leading)
         .padding(.trailing, insets.trailing)
         .padding(.bottom, insets.bottom)
-        .animation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.3), value: model.phase)
+        .animation(Self.phaseAnimation(alive: alive), value: model.phase)
         .onChange(of: shown, initial: true) { _, now in transition(now) }
         .onChange(of: focused) { _, now in setTyping(now) }
         .onChange(of: model.pickingItem) { _, now in if !now { focusSoon() } }

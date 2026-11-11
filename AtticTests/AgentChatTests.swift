@@ -1081,6 +1081,11 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testSA5ComposerPhaseGeometryRespectsReduceMotion() {
+        XCTAssertNil(AgentChatComposer.phaseAnimation(alive: false), "Reduce Motion must move composer geometry instantly")
+        XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")
+    }
+
     override func setUp() async throws {
         model = AgentChatModel()
         model.pacing = .instant
