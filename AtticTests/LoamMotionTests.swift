@@ -208,6 +208,18 @@ final class LoamMotionTests: XCTestCase {
         XCTAssertEqual(AtticMotionScale.resolved(.easeOut(duration: 0.3), reduceMotion: false), .easeOut(duration: 0.3))
     }
 
+    func testReducedPickerCardsFadeOpacityForFadeAndAppearInstantlyForInstant() {
+        AtticReducedMotionStyle.current = .fade
+        XCTAssertEqual(AtticDropdownReveal.reducedOpacityAnimation(reduceMotion: true), AtticMotionScale.reducedFade,
+                       "the picker and unfold cards must fade for 0.12 s")
+        AtticReducedMotionStyle.current = .instant
+        XCTAssertNil(AtticDropdownReveal.reducedOpacityAnimation(reduceMotion: true),
+                     "the current Instant behavior remains")
+        AtticReducedMotionStyle.current = .fade
+        XCTAssertNil(AtticDropdownReveal.reducedOpacityAnimation(reduceMotion: false),
+                     "the standard spring/unfold path must remain unchanged")
+    }
+
     /// The choice persists like the other appearance settings; the row
     /// shows only while motion is reduced.
     func testTheReducedChoicePersistsAndShowsOnlyWhenReduced() throws {
