@@ -6,6 +6,13 @@ struct GeneralSettingsView: View {
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var globalHotKey: GlobalHotKey
 
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
+    /// The Reduced motion row shows only while motion is reduced.
+    static func showsReducedStyle(level: AtticAnimationLevel, systemReduceMotion: Bool) -> Bool {
+        level.reducesMotion(systemReduceMotion: systemReduceMotion)
+    }
+
     var body: some View {
         SettingsPage(section: .general) {
             SettingsGroup(title: String(localized: "Startup")) {
@@ -45,6 +52,12 @@ struct GeneralSettingsView: View {
                     identifier: "setting-haptics"
                 )
                 AtticGroupDivider()
+                AtticSwitchRow(
+                    title: String(localized: "Sounds"),
+                    isOn: soundsBinding,
+                    identifier: "setting-sounds"
+                )
+                AtticGroupDivider()
                 // Lively (the default) or Subtle springs, or Reduced to
                 // crossfades and instant changes (round 9, owner item 26;
                 // Lively and Subtle: the Motion Lab's finish).
@@ -54,6 +67,17 @@ struct GeneralSettingsView: View {
                     selection: $settings.animations,
                     identifier: "setting-animations"
                 )
+                // Reduced, or macOS Reduce Motion: Instant (today's) or
+                // Fade (Accepted 2026-11-10, "Reduced motion, both").
+                if Self.showsReducedStyle(level: settings.animations, systemReduceMotion: systemReduceMotion) {
+                    AtticGroupDivider()
+                    AtticPopUpRow(
+                        label: String(localized: "Reduced motion"),
+                        choices: AtticReducedMotionStyle.allCases.map { ($0, $0.title) },
+                        selection: $settings.reducedMotionStyle,
+                        identifier: "setting-reduced-motion-style"
+                    )
+                }
                 AtticGroupDivider()
                 // The four hide animations, a user choice (owner, 2026-10-19).
                 AtticPopUpRow(
@@ -156,5 +180,19 @@ struct GeneralSettingsView: View {
             get: { loginItemService.isEnabled },
             set: { loginItemService.setEnabled($0) }
         )
+    }
+
+    private var soundsBinding: Binding<Bool> {
+        Binding(
+            get: { settings.soundsEnabled },
+            set: { Self.setSounds($0, in: settings) }
+        )
+    }
+
+    /// The Sounds switch: turned on, it plays the done sound once, so the
+    /// person hears what they chose.
+    static func setSounds(_ isOn: Bool, in settings: AppSettings, sounds: AtticSounds = .shared) {
+        settings.soundsEnabled = isOn
+        if isOn { sounds.play(.done) }
     }
 }

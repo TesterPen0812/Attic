@@ -3,9 +3,10 @@ import Combine
 import QuartzCore
 
 /// The Draw board (restart plan §2): live ink draws incrementally on its own
-/// layers; committed content is one raster from the background renderer,
-/// latest request winning; live ink stays until a raster that includes it
-/// is installed. Input handlers only move layers and queue rasters.
+/// layers; committed content is a world-space raster from the background
+/// renderer. Its pixels cover the drawing, independent of pan and zoom, so
+/// input can transform it without waiting for another raster. Live ink stays
+/// until a raster that includes it is installed.
 ///
 /// The view is unflipped; the page model's screen points are y down, so
 /// every conversion flips once here.
@@ -15,6 +16,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     private let dotsLayer = CALayer()
     private let committedLayer = CALayer()
+    /// A screen-resolution raster replaces the world backing while the
+    /// viewport is resting. Pan/zoom restores the complete world backing.
+    private let detailLayer = CALayer()
     /// Live overlays in world points: ink, the shape being dragged out.
     private let worldLayer = CALayer()
     private let selectionLayer = CAShapeLayer()
@@ -27,9 +31,13 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private(set) var pendingOverlays: [(revision: Int, layer: CALayer)] = []
     private var requestedKey: DrawRasterKey?
     private(set) var installedKey: DrawRasterKey?
+    private var detailRequestedKey: DrawRasterKey?
+    private var detailInstalledKey: DrawRasterKey?
+    private var detailSettle: DispatchWorkItem?
     private var needsRaster = true
     private var dots = DrawDots()
     private(set) var editor: DrawTextEditorView?
+    private var appliedEditorPresentation: (zoom: CGFloat, dark: Bool)?
     /// Whether the scroll gesture under way began over the board's clear
     /// area (it pans and zooms) or over the top row or bar (it doesn't).
     private var scrollGestureIsOwn = true
@@ -65,6 +73,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     /// Test seam: rasters requested and installed by this board.
     private(set) var rasterRequests = 0
     private(set) var rasterInstalls = 0
+    private(set) var detailInstalls = 0
     #endif
 
     private lazy var renderer = DrawLatestRenderer<DrawRasterRequest, DrawRasterImage>(
@@ -72,12 +81,17 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         install: { [weak self] request, image in self?.install(request, image) }
     )
 
+    private lazy var detailRenderer = DrawLatestRenderer<DrawRasterRequest, DrawRasterImage>(
+        work: { request, stale in DrawRaster.render(request, cancelled: stale) },
+        install: { [weak self] request, image in self?.installDetail(request, image) }
+    )
+
     init(model: DrawPageModel) {
         self.model = model
         super.init(frame: CGRect(origin: .zero, size: model.boardSize))
         wantsLayer = true
         layerContentsRedrawPolicy = .never
-        for sublayer in [dotsLayer, committedLayer, worldLayer] {
+        for sublayer in [dotsLayer, committedLayer, detailLayer, worldLayer] {
             sublayer.anchorPoint = .zero
             sublayer.position = .zero
             sublayer.actions = Self.noActions
@@ -138,8 +152,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         model.setBoard(size: newSize, clearInsets: model.clearInsets)
+        invalidateDetail()
         layoutLayers()
         requestRaster()
+        scheduleDetail()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -149,8 +165,18 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        refreshEditorAppearance()
         layoutLayers()
         requestRaster()
+    }
+
+    private func refreshEditorAppearance() {
+        guard let editor, let edit = model.editing else { return }
+        let zoom = model.viewport.zoom
+        let dark = isDark
+        if let applied = appliedEditorPresentation, applied.zoom == zoom, applied.dark == dark { return }
+        editor.apply(edit, zoom: zoom, palette: DrawPalette(dark: dark), replacingText: false)
+        appliedEditorPresentation = (zoom, dark)
     }
 
     private func layoutLayers() {
@@ -164,12 +190,10 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         if let installed = installedKey {
             // The installed raster, carried to the current viewport until the
             // next one arrives (a pan or zoom never waits for it).
-            let s = viewport.zoom / installed.viewport.zoom
-            committedLayer.bounds = CGRect(origin: .zero, size: installed.size)
-            committedLayer.setAffineTransform(CGAffineTransform(
-                a: s, b: 0, c: 0, d: s,
-                tx: viewport.x - s * installed.viewport.x,
-                ty: height - s * installed.size.height + s * installed.viewport.y - viewport.y))
+            placeRaster(committedLayer, key: installed, viewport: viewport, height: height)
+        }
+        if let installed = detailInstalledKey {
+            placeRaster(detailLayer, key: installed, viewport: viewport, height: height)
         }
         dots.place(in: dotsLayer, viewport: viewport, size: bounds.size, dark: isDark)
         updateSelection()
@@ -177,11 +201,49 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         CATransaction.commit()
     }
 
+    private func placeRaster(_ layer: CALayer, key: DrawRasterKey, viewport: DrawViewport, height: CGFloat) {
+        let s = viewport.zoom / key.viewport.zoom
+        layer.bounds = CGRect(origin: .zero, size: key.size)
+        layer.setAffineTransform(CGAffineTransform(
+            a: s, b: 0, c: 0, d: s,
+            tx: viewport.x - s * key.viewport.x,
+            ty: height - s * key.size.height + s * key.viewport.y - viewport.y))
+    }
+
     // MARK: Rasters
+
+    /// The backing image covers every committed object, including geometry
+    /// being moved or replaced. A raster clipped to the current viewport
+    /// cannot reveal pixels that scroll into view during a continuous pinch.
+    private func rasterCoverage() -> CGRect {
+        var coverage = DrawGeometry.union(model.objects) ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        if let move = model.rasterMove {
+            for object in model.objects where move.ids.contains(object.id) {
+                coverage = coverage.union(DrawGeometry.bounds(object.translated(
+                    by: DrawPoint(x: move.offset.x, y: move.offset.y), id: object.id)))
+            }
+        }
+        for object in model.rasterReplacements.values {
+            coverage = coverage.union(DrawGeometry.bounds(object))
+        }
+        // Includes stroke caps, image rounded corners and antialiasing.
+        coverage = coverage.insetBy(dx: -12, dy: -12)
+        return CGRect(x: floor(coverage.minX), y: floor(coverage.minY),
+                      width: ceil(coverage.maxX) - floor(coverage.minX),
+                      height: ceil(coverage.maxY) - floor(coverage.minY))
+    }
 
     private func currentKey() -> DrawRasterKey {
         let move = model.rasterMove
-        return DrawRasterKey(revision: model.contentRevision, viewport: model.viewport, size: bounds.size, scale: scale,
+        let coverage = rasterCoverage()
+        // A large or sparse canvas must never allocate an unbounded bitmap.
+        // Keep its complete extent, reducing the backing density if needed.
+        let maxPixels: CGFloat = 12_000_000
+        let density = min(scale, 8192 / max(coverage.width, coverage.height),
+                          sqrt(maxPixels / (coverage.width * coverage.height)))
+        let rasterViewport = DrawViewport(x: -coverage.minX, y: -coverage.minY)
+        return DrawRasterKey(revision: model.contentRevision, viewport: rasterViewport,
+                             size: coverage.size, scale: density,
                              dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero,
                              replaced: model.rasterReplacements.mapValues(\.frame))
     }
@@ -194,10 +256,68 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         guard key != requestedKey || needsRaster else { return }
         needsRaster = false
         requestedKey = key
+        invalidateDetail()
+        scheduleDetail()
         #if DEBUG
         rasterRequests += 1
         #endif
         renderer.request(DrawRasterRequest(key: key, objects: model.objects, replacements: model.rasterReplacements))
+    }
+
+    private func detailKey() -> DrawRasterKey {
+        let move = model.rasterMove
+        return DrawRasterKey(revision: model.contentRevision, viewport: model.viewport, size: bounds.size, scale: scale,
+                             dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero,
+                             replaced: model.rasterReplacements.mapValues(\.frame))
+    }
+
+    /// Stop displaying a viewport-clipped image as soon as any movement
+    /// begins. The world raster underneath has all pixels to move into view.
+    private func invalidateDetail() {
+        detailSettle?.cancel()
+        detailSettle = nil
+        detailRenderer.cancel()
+        detailRequestedKey = nil
+        detailInstalledKey = nil
+        detailLayer.isHidden = true
+        committedLayer.isHidden = false
+    }
+
+    private func scheduleDetail() {
+        guard model.isShown else { return }
+        // At normal size the world bitmap already supplies one device pixel
+        // per pixel. Detail is only useful when it would be visibly sharper.
+        let worldDensity = requestedKey?.scale ?? installedKey?.scale ?? 0
+        guard worldDensity < scale * model.viewport.zoom * 0.99 else { return }
+        detailSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.requestDetail() }
+        detailSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.035, execute: work)
+    }
+
+    private func requestDetail() {
+        guard model.isShown, bounds.width > 0, bounds.height > 0 else { return }
+        let key = detailKey()
+        detailRequestedKey = key
+        detailRenderer.request(DrawRasterRequest(key: key, objects: model.objects,
+                                                replacements: model.rasterReplacements))
+    }
+
+    private func installDetail(_ request: DrawRasterRequest, _ result: DrawRasterImage) {
+        guard model.isShown, request.key == detailRequestedKey, request.key == detailKey() else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        detailLayer.contents = result.image
+        detailLayer.contentsScale = request.key.scale
+        detailInstalledKey = request.key
+        layoutLayers()
+        detailLayer.isHidden = false
+        committedLayer.isHidden = true
+        CATransaction.commit()
+        #if DEBUG
+        rasterInstalls += 1
+        detailInstalls += 1
+        #endif
     }
 
     private func install(_ request: DrawRasterRequest, _ result: DrawRasterImage) {
@@ -229,15 +349,18 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     func drawViewportChanged() {
+        refreshEditorAppearance()
+        invalidateDetail()
         layoutLayers()
-        requestRaster()
+        scheduleDetail()
         queueCursorRefresh()
     }
 
     func drawSelectionChanged() { updateSelection(); queueObjectAccessibilityUpdate() }
 
     func drawVisibilityChanged() {
-        if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil; releaseCursor() }
+        if model.isShown { needsRaster = true; requestRaster() }
+        else { renderer.cancel(); requestedKey = nil; invalidateDetail(); releaseCursor() }
         if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
     }
@@ -273,15 +396,16 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         defer { CATransaction.commit() }
         marqueeLayer.path = nil
         switch model.live {
-        case .ink(let points):
-            if liveInk == nil {
+        case .ink(let trace):
+            if liveInk == nil || (trace.hasPressure && liveInk?.usesPressure == false) {
+                liveInk?.container.removeFromSuperlayer()
                 liveStartRevision = model.contentRevision
                 let ink = DrawLiveInk(colour: DrawPalette(dark: isDark).cgColor(model.colour),
-                                      width: CGFloat(model.strokeSize.strokeWidth))
+                                      width: CGFloat(model.strokeSize.strokeWidth), usesPressure: trace.hasPressure)
                 worldLayer.addSublayer(ink.container)
                 liveInk = ink
             }
-            liveInk?.update(points)
+            liveInk?.update(trace)
         case .shape(let kind, let start, let end):
             if liveShape == nil {
                 liveStartRevision = model.contentRevision
@@ -339,9 +463,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                                    cornerWidth: 2, cornerHeight: 2, transform: nil))
         }
         for object in chosen {
-            let moved = object.translated(by: DrawPoint(x: offset.x, y: offset.y), id: object.id)
-            if chosen.count == 1, case .shape(let kind) = moved.content, kind == .line || kind == .arrow { continue }
-            let rect = viewRect(viewport.screen(DrawGeometry.bounds(moved)).insetBy(dx: -gap, dy: -gap))
+            if chosen.count == 1, case .shape(let kind) = object.content, kind == .line || kind == .arrow { continue }
+            let bounds = DrawGeometry.bounds(object).offsetBy(dx: offset.x, dy: offset.y)
+            let rect = viewRect(viewport.screen(bounds).insetBy(dx: -gap, dy: -gap))
             outline.addPath(CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
         }
         // One object's handles, or the corners around several (they scale
@@ -359,16 +483,19 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawEditingChanged(replacingText: Bool) {
         guard let edit = model.editing else {
             if let editor {
+                let wasEditingFirstResponder = window?.firstResponder === editor
                 editor.owner = nil
                 editor.removeFromSuperview()
                 self.editor = nil
-                window?.makeFirstResponder(self)
+                appliedEditorPresentation = nil
+                if wasEditingFirstResponder { window?.makeFirstResponder(self) }
             }
             updateSelection()
             return
         }
         let editor = self.editor ?? makeEditor()
         editor.apply(edit, zoom: model.viewport.zoom, palette: DrawPalette(dark: isDark), replacingText: replacingText)
+        appliedEditorPresentation = (model.viewport.zoom, isDark)
         updateEditorFrame()
         if window?.firstResponder !== editor { window?.makeFirstResponder(editor) }
         updateSelection()
@@ -403,19 +530,34 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     override func mouseDown(with event: NSEvent) {
         if model.editing == nil { window?.makeFirstResponder(self) }
         let point = boardPoint(event)
-        if event.clickCount == 2, model.live == nil {
+        if event.clickCount == 2, model.tool == .select, model.live == nil {
             model.doubleClick(at: point)
             return
         }
-        model.pointerDown(at: point, shift: event.modifierFlags.contains(.shift))
+        model.pointerDown(at: point, shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift))
+        model.pointerDragged(to: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
     }
 
     override func mouseUp(with event: NSEvent) {
-        model.pointerUp(at: boardPoint(event))
+        model.pointerUp(at: boardPoint(event), shift: event.modifierFlags.contains(.shift), pressure: penPressure(event))
+    }
+
+    /// Tablet-point samples may arrive separately from mouse drags; include
+    /// their pressure and coordinates only while a pen gesture is active.
+    override func tabletPoint(with event: NSEvent) {
+        guard case .ink = model.live, let pressure = penPressure(event) else { return }
+        model.pointerDragged(to: boardPoint(event), pressure: pressure)
+    }
+
+    /// Trackpads and ordinary mice can report force, but pen pressure is
+    /// meaningful only on tablet-point events. Keep their strokes constant.
+    private func penPressure(_ event: NSEvent) -> CGFloat? {
+        guard (event.type == .tabletPoint || event.subtype == .tabletPoint), event.pressure.isFinite else { return nil }
+        let pressure = CGFloat(event.pressure)
+        return Swift.min(CGFloat(1), Swift.max(CGFloat(0), pressure))
     }
 
     override func otherMouseDown(with event: NSEvent) { model.pointerDown(at: boardPoint(event), panButton: true) }
@@ -889,14 +1031,16 @@ final class DrawLiveInk {
     let container = CALayer()
     private var tail: CAShapeLayer
     private var startIndex = 1
-    private var startPoint: CGPoint?
+    private var startPoint: DrawInkSample?
     private let colour: CGColor
     private let width: CGFloat
+    let usesPressure: Bool
     static let chunk = 32
 
-    init(colour: CGColor, width: CGFloat) {
+    init(colour: CGColor, width: CGFloat, usesPressure: Bool = false) {
         self.colour = colour
         self.width = width
+        self.usesPressure = usesPressure
         container.actions = DrawBoardView.noActions
         tail = CAShapeLayer()
         tail = makeLayer()
@@ -905,8 +1049,8 @@ final class DrawLiveInk {
     private func makeLayer() -> CAShapeLayer {
         let layer = CAShapeLayer()
         layer.actions = DrawBoardView.noActions
-        layer.fillColor = nil
-        layer.strokeColor = colour
+        layer.fillColor = usesPressure ? colour : nil
+        layer.strokeColor = usesPressure ? nil : colour
         layer.lineWidth = width
         layer.lineCap = .round
         layer.lineJoin = .round
@@ -916,24 +1060,40 @@ final class DrawLiveInk {
 
     var layerCount: Int { container.sublayers?.count ?? 0 }
 
-    func update(_ points: [CGPoint]) {
+    func update(_ trace: DrawInkTrace) {
+        let points = trace.samples
         guard let first = points.first else { return }
         if startPoint == nil { startPoint = first }
         if points.count - startIndex > Self.chunk, let start = startPoint {
             // Freeze everything up to the last midpoint; the tail restarts there.
-            let frozen = CGMutablePath()
-            frozen.move(to: start)
-            for index in startIndex..<(points.count - 1) {
-                frozen.addQuadCurve(to: DrawInk.mid(points[index], points[index + 1]), control: points[index])
+            let last = points.count - 1
+            let middle = DrawInkSample(point: DrawInk.mid(points[last - 1].point, points[last].point),
+                                       pressure: points[last - 1].pressure == nil && points[last].pressure == nil
+                                           ? nil : ((points[last - 1].pressure ?? 0.5) + (points[last].pressure ?? 0.5)) / 2)
+            if usesPressure {
+                let segment = [start] + Array(points[startIndex..<last]) + [middle]
+                tail.path = DrawInk.pressureOutline(DrawInk.smooth(segment), baseWidth: width)
+            } else {
+                let frozen = CGMutablePath()
+                frozen.move(to: start.point)
+                for index in startIndex..<last {
+                    frozen.addQuadCurve(to: DrawInk.mid(points[index].point, points[index + 1].point), control: points[index].point)
+                }
+                tail.path = frozen
             }
-            tail.path = frozen
             tail = makeLayer()
-            startPoint = DrawInk.mid(points[points.count - 2], points[points.count - 1])
+            startPoint = middle
             startIndex = points.count - 1
         }
-        let path = CGMutablePath()
-        DrawInk.livePath(start: startPoint ?? first, points: points[min(startIndex, points.count)...], into: path)
-        tail.path = path
+        if usesPressure {
+            let segment = [startPoint ?? first] + Array(points[min(startIndex, points.count)...])
+            tail.path = DrawInk.pressureOutline(DrawInk.smooth(segment), baseWidth: width)
+        } else {
+            let path = CGMutablePath()
+            DrawInk.livePath(start: (startPoint ?? first).point,
+                             points: points[min(startIndex, points.count)...], into: path)
+            tail.path = path
+        }
     }
 }
 
@@ -1127,11 +1287,30 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
         textContainer?.size = CGSize(width: wrap ?? .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         applying = true
         if replacingText, string != edit.text, !hasMarkedText() {
+            let caret = Self.caretAfterChange(from: string, to: edit.text)
             string = edit.text
-            setSelectedRange(NSRange(location: (edit.text as NSString).length, length: 0))
+            setSelectedRange(NSRange(location: caret, length: 0))
         }
         textStorage?.setAttributes(attributes, range: NSRange(location: 0, length: textStorage?.length ?? 0))
         applying = false
+    }
+
+    /// Undo and Redo replace text from the store. Return to the changed
+    /// grapheme boundary, including for edits before emoji or RTL writing.
+    private static func caretAfterChange(from before: String, to after: String) -> Int {
+        let old = Array(before), new = Array(after)
+        var prefix = 0
+        while prefix < min(old.count, new.count), old[prefix] == new[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(old.count, new.count) - prefix,
+              old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
+        return String(new.dropLast(suffix)).utf16.count
+    }
+
+    /// A text box has one font and one colour: rich text inserted by the
+    /// Character Viewer or an input method takes the box's style.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText((string as? NSAttributedString)?.string ?? string, replacementRange: replacementRange)
     }
 
     func textDidChange(_ notification: Notification) {

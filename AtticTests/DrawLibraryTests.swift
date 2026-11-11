@@ -112,6 +112,31 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertTrue(model.rows.contains { $0.title == "Revised canvas" }, "a durable change invalidates the snapshot")
     }
 
+    /// Air timing: opening the capsule with hundreds of saved canvases must
+    /// use metadata and remain practical even when the whole list is tall.
+    func testHundredsOfCanvasesMenuOpeningTimeAndFiltering() {
+        let store = DrawInMemoryStore()
+        for index in 0..<360 {
+            let canvas = store.create(name: "Board \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Content \(index)"))]), on: canvas.id).isSaved)
+        }
+        let model = DrawLibraryMenuModel(store: store, actions: actions())
+        let start = DispatchTime.now().uptimeNanoseconds
+        let rows = model.rows
+        let queried = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        XCTAssertEqual(rows.compactMap(\.canvas).count, 360)
+        let host = NSHostingView(rootView: DrawLibraryMenu(model: model).atticDesign(AtticDesignContext()))
+        let renderStart = DispatchTime.now().uptimeNanoseconds
+        host.layout()
+        _ = host.fittingSize
+        let rendered = Double(DispatchTime.now().uptimeNanoseconds - renderStart) / 1_000_000
+        let filterStart = DispatchTime.now().uptimeNanoseconds
+        model.filter = "Board 359"
+        XCTAssertEqual(model.rows.compactMap(\.canvas).count, 1)
+        let filtered = Double(DispatchTime.now().uptimeNanoseconds - filterStart) / 1_000_000
+        print("CANVAS_BOARD_MENU_PERF canvases=360 metadata_ms=\(queried) layout_ms=\(rendered) filter_ms=\(filtered)")
+    }
+
     // MARK: The menu
 
     func testTheFilterMatchesNamesTagsAndText() {

@@ -32,7 +32,8 @@ final class AgentNoteWriter {
     /// Brings Notes forward on the note and hands back its editor once it is
     /// on show. Called only while the chat is open. Given the text from
     /// before, the added text is hidden from the first frame the page draws.
-    private let open: (UUID, NoteDocument?) async -> AgentNoteSurface?
+    /// Set after init where the opening goes through the chat's watcher.
+    var open: (UUID, NoteDocument?) async -> AgentNoteSurface?
     /// The note's text from just before the agent's write (`NoteStore`).
     private let base: (UUID) -> NoteDocument?
     var pace = Pace()
@@ -108,7 +109,7 @@ final class AgentNoteWriter {
     /// forward; then its editor, once it is in the window and laid out. A
     /// task's own note is not a Notes page note: nothing opens.
     static func openInNotes(_ noteID: UUID, before: NoteDocument?, pages: NotesPageController?,
-                            select: () -> Void) async -> AgentNoteSurface? {
+                            select: () async -> Void) async -> AgentNoteSurface? {
         guard let pages, let note = pages.store.note(withID: noteID), note.taskID == nil,
               await pages.openFromLibrary(noteID: noteID) else { return nil }
         // As a library row does: the note, not the list, is on show.
@@ -120,7 +121,7 @@ final class AgentNoteWriter {
             engine.agentVeil = insertion.range
             veiled = engine
         }
-        select()
+        await select()
         for _ in 0..<45 {
             if let session = pages.active, session.noteID == noteID, let view = session.engine.textView,
                view.window != nil, !view.visibleRect.isEmpty {

@@ -2732,7 +2732,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Pasteboard
 
-    static let fragmentType = NSPasteboard.PasteboardType("com.taha.attic.note-fragment")
+    nonisolated static let fragmentType = NSPasteboard.PasteboardType("com.taha.attic.note-fragment")
 
     func fragment(for range: NSRange) -> NoteDocument {
         var fragment = NoteTextCodec.document(from: textStorage.attributedSubstring(from: range),
@@ -4902,7 +4902,7 @@ extension NoteEditorEngine {
         let applied = performEdit(session.range, with: replacement, name: "Insert File",
                                   selection: NSRange(location: session.range.location + replacement.length, length: 0))
         if !applied, let id = item.staged?.id { staged[id] = nil }
-        return applied
+        return AtticSounds.play(.attached, if: applied)
     }
 }
 

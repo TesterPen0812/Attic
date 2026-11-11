@@ -453,6 +453,8 @@ final class AppCoordinator: ObservableObject {
         let inMemoryStore = runtime.usesInMemoryStore
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
+        // Sounds play in the real app only: never in tests or the gallery.
+        if !isUITesting, !isRunningTests, !runtime.isGalleryLaunch { AtticSounds.shared.connect(settings) }
         #if DEBUG && !ATTIC_LOCAL_ONLY
         if !inMemoryStore {
             do {
@@ -629,10 +631,27 @@ final class AppCoordinator: ObservableObject {
             base: { [weak noteStore] id in noteStore?.takeAgentWriteBase(id) }
         )
         noteWriter.reducesMotion = { AtticMotionPreference.reducesMotion }
-        agentChat.writeInNote = { [weak agentChat, noteWriter] id in
-            noteWriter.presentation(for: id, watching: { agentChat?.isOpen == true },
-                                    point: { agentChat?.writingAt($0, star: $1) })
+        // Every watched change goes through one watcher: the spark to the
+        // island, the page forward, the change played in, then back.
+        let agentWatcher = PanelAgentWatcher(chat: agentChat, noteWriter: noteWriter)
+        agentWatcher.reducesMotion = { AtticMotionPreference.reducesMotion }
+        agentWatcher.currentPage = { [weak uiState] in uiState.flatMap { AgentPage(PanelPage($0.selectedSection)) } }
+        noteWriter.open = { [weak uiState, weak pages = noteDraft.pages, weak agentWatcher] id, before in
+            await AgentNoteWriter.openInNotes(id, before: before, pages: pages, select: {
+                if let agentWatcher { await agentWatcher.goTo(.notes) } else { uiState?.selectSection(.notes) }
+                // However the page came, it is Notes now.
+                if uiState?.selectedSection != .notes { uiState?.selectSection(.notes) }
+            })
         }
+        agentChat.presentWatched = { [agentWatcher] in agentWatcher.presentation(for: $0) }
+        uiState.agentWatcher = agentWatcher
+        #if DEBUG
+        // A watched event lands on a Calendar the page shows (fakes only).
+        if isUITesting, environment["ATTIC_UI_TEST_CHAT"]?.contains("calendar") == true {
+            UITestingCalendar.isOn = true
+            UITestingCalendar.seed()
+        }
+        #endif
         let calendarSource = CalendarEventSources.makeDefault(environment: runtime)
         agentChat.weekDays = { [weak store, weak calendarSource] day in
             let week = AgentChatModel.emptyWeek(holding: day)
@@ -652,6 +671,12 @@ final class AppCoordinator: ObservableObject {
             draw: DrawLibraryHub.activeStore,
             openPage: { [weak uiState] page in
                 guard let uiState else { return false }
+                // Watching: the chat takes the agent there itself, the spark
+                // tapping the island first, when its step reaches the thread.
+                // Closed, nothing comes forward.
+                if uiState.agentChat.isConnected {
+                    return uiState.agentChat.isOpen
+                }
                 let section: PanelSection
                 switch page {
                 case .tasks: section = .tasks
@@ -709,10 +734,25 @@ final class AppCoordinator: ObservableObject {
                     "title": "Write the launch blog post",
                     "body": "Draft 3: Attic keeps your tasks and notes one keystroke away."])
             }
+            if parts.contains("sketch"), let draw = DrawLibraryHub.activeStore,
+               (try? draw.library(deleted: false))?.contains(where: { $0.name == "Launch plan" }) != true {
+                // The design's launch sketch: Launch day, for a press kit to follow.
+                let canvas = draw.create(name: "Launch plan")
+                _ = draw.perform(.put([
+                    DrawObject(frame: DrawFrame(x: 240, y: 160, width: 100, height: 44), zIndex: 1,
+                               style: DrawStyle(corners: .rounded), content: .shape(.rectangle)),
+                    DrawObject(frame: DrawFrame(x: 255, y: 172, width: 80, height: 20), zIndex: 2,
+                               content: .text("Launch day")),
+                    // Around it, so the page's fit leaves room below for the sketch.
+                    DrawObject(frame: DrawFrame(x: 120, y: 70, width: 70, height: 20), zIndex: 3, content: .text("Brief")),
+                    DrawObject(frame: DrawFrame(x: 330, y: 420, width: 60, height: 20), zIndex: 4, content: .text("Retro")),
+                ]), on: canvas.id)
+            }
             if parts.contains("motion:reduced") { settings.animations = .reduced }
             if parts.contains("motion:lively") { settings.animations = .lively }
             if parts.contains("scripted") {
-                let scripted = ScriptedAgentRunner(tools: agentTools, mode: { [weak agentChat] in agentChat?.mode ?? .askFirst })
+                let scripted = ScriptedAgentRunner(tools: agentTools, actions: agentActions,
+                                                   mode: { [weak agentChat] in agentChat?.mode ?? .askFirst })
                 if parts.contains("history") { scripted.seedHistoryForUITesting() }
                 agentChat.connect(scripted)
                 agentChat.refreshHistory()

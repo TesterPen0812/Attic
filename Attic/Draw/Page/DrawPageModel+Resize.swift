@@ -52,15 +52,16 @@ extension DrawPageModel {
         let chosen = displayedSelection
         guard !chosen.isEmpty, editing == nil else { return [] }
         let offset = rasterMove?.offset ?? .zero
-        let shown = chosen.map { $0.translated(by: DrawPoint(x: offset.x, y: offset.y), id: $0.id) }
-        if shown.count == 1, case .shape(let kind) = shown[0].content, kind == .line || kind == .arrow {
-            let (a, b) = DrawGeometry.endpoints(shown[0].frame)
-            return [DrawHandleSpot(handle: .start, point: viewport.screen(a)),
-                    DrawHandleSpot(handle: .end, point: viewport.screen(b))]
+        if chosen.count == 1, case .shape(let kind) = chosen[0].content, kind == .line || kind == .arrow {
+            let (a, b) = DrawGeometry.endpoints(chosen[0].frame)
+            return [DrawHandleSpot(handle: .start, point: viewport.screen(CGPoint(x: a.x + offset.x, y: a.y + offset.y))),
+                    DrawHandleSpot(handle: .end, point: viewport.screen(CGPoint(x: b.x + offset.x, y: b.y + offset.y)))]
         }
-        guard let union = DrawGeometry.union(shown) else { return [] }
+        // Moving a selection changes only its position; translating stroke
+        // point arrays here would allocate every sample on every mouse event.
+        guard let union = DrawGeometry.union(chosen)?.offsetBy(dx: offset.x, dy: offset.y) else { return [] }
         let rect = viewport.screen(union).insetBy(dx: -Self.outlineGap, dy: -Self.outlineGap)
-        if shown.count == 1, case .text = shown[0].content {
+        if chosen.count == 1, case .text = chosen[0].content {
             return [DrawHandleSpot(handle: .left, point: CGPoint(x: rect.minX, y: rect.midY)),
                     DrawHandleSpot(handle: .right, point: CGPoint(x: rect.maxX, y: rect.midY))]
         }
@@ -142,7 +143,11 @@ extension DrawPageModel {
                 let p = map(a.x, a.y), q = map(b.x, b.y)
                 object.frame = DrawFrame(x: p.x, y: p.y, width: q.x - p.x, height: q.y - p.y)
             case .stroke(let points):
-                let mapped = points.map { map($0.x, $0.y) }
+                let mapped = points.map { point in
+                    var transformed = map(point.x, point.y)
+                    transformed.pressure = point.pressure
+                    return transformed
+                }
                 object.content = .stroke(mapped)
                 object.frame = DrawGeometry.strokeFrame(mapped)
             default:

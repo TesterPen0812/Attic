@@ -60,8 +60,8 @@ struct TasksGroupHeader: View {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .onHover { hovered = $0 }
-        .animation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.2), value: folded)
-        .animation(design.reduceMotion ? nil : .easeOut(duration: 0.15), value: lit)
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.2), value: folded)
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange : .easeOut(duration: 0.15), value: lit)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)

@@ -33,22 +33,23 @@ struct DrawPageHost: View {
 
     var body: some View {
         let dim = model.isDrawingLive ? DrawPageMetrics.dimmed : 1
-        let dimAnimation = design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast)
+        let dimAnimation = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast)
         ZStack(alignment: .topLeading) {
             DrawBoardRepresentable(model: model, clearInsets: clearInsets)
             // The page's floating controls fold away under the chat, as the
             // top row does: blurred, their glass would still glow through.
+            // Unlike the top row, they stay folded while the chat watches.
             DrawSelectionOverlay(model: model, viewportState: model.viewportState)
                 .opacity(model.isDrawingLive ? 0 : 1)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
             DrawZoomPill(model: model, viewportState: model.viewportState)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, barInsets.bottom + DrawPageMetrics.capsule + DrawPageMetrics.pillGap)
             DrawToolBar(model: model)
                 .opacity(dim)
                 .animation(dimAnimation, value: model.isDrawingLive)
-                .modifier(PanelChatFold(state: topRowState, page: .canvas))
+                .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.leading, barInsets.leading)
                 .padding(.bottom, barInsets.bottom)
@@ -58,7 +59,10 @@ struct DrawPageHost: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus),
-                        actions: PanelBottomBarActions(plus: { [weak model] in model?.newCanvas() }))
+                        actions: PanelBottomBarActions(plus: { [weak model] in
+                            guard let model else { return }
+                            AtticSounds.play(.created, if: model.newCanvas())
+                        }))
         .onAppear { model.start() }
         .onChange(of: isCurrent, initial: true) { _, _ in updateShown() }
         .onReceive(uiState.$hideCount.dropFirst()) { _ in panelHidden = true; updateShown() }

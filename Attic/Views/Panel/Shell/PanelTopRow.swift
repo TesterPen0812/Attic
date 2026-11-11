@@ -92,6 +92,14 @@ final class PanelTopRowState: ObservableObject {
     /// away, so they don't show through its blur as dead buttons beside the
     /// chat's own (Accepted 2026-11-06: the panel blurs, controls float on it).
     @Published var chatOver = false
+    /// The chat is watching the agent work on the page: its glass has
+    /// cleared, so the page's own top row shows again beside the chat's
+    /// controls, as drawn (Accepted 2026-11-06, the whole drawing 10 Nov).
+    /// It takes no input meanwhile: the chat's cleared glass lies over it,
+    /// and a click there closes the chat, as anywhere else on the page.
+    @Published var chatWatching = false
+    /// The chat folds the top row away: open, and not watching.
+    var chatFolds: Bool { chatOver && !chatWatching }
 
     /// Each page's controls, from the panel's left and right edges.
     struct Footprint: Equatable {
@@ -152,7 +160,7 @@ final class PanelTopRowState: ObservableObject {
     func isSearching(_ page: PanelPage) -> Bool { searchingPages.contains(page) }
 
     /// The page's top-row controls are folded away: by its search or the chat.
-    func isAway(_ page: PanelPage) -> Bool { isSearching(page) || chatOver }
+    func isAway(_ page: PanelPage) -> Bool { isSearching(page) || chatFolds }
 
     /// The pages whose top row is dimmed (Draw's D6: during a stroke the
     /// shell's Pin, ••• and Search dim with the page's own controls).
@@ -175,7 +183,7 @@ struct PanelHeaderDim: ViewModifier {
         let dimmed = state.dimmedPages.contains(page)
         content
             .opacity(dimmed ? 0.35 : 1)
-            .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: dimmed)
+            .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: dimmed)
     }
 }
 
@@ -572,10 +580,14 @@ struct PanelTopRowMoreButton: View {
 struct PanelChatFold: ViewModifier {
     let state: PanelTopRowState?
     let page: PanelPage
+    /// Part of the page's top row: it shows again while the chat watches the
+    /// agent work (`chatWatching`). Off for controls lower on the page, which
+    /// stay folded under the composer.
+    var topRow = true
 
     func body(content: Content) -> some View {
         if let state {
-            Observer(state: state, page: page) { content }
+            Observer(state: state, page: page, topRow: topRow) { content }
         } else {
             content
         }
@@ -584,10 +596,12 @@ struct PanelChatFold: ViewModifier {
     private struct Observer<Row: View>: View {
         @ObservedObject var state: PanelTopRowState
         let page: PanelPage
+        let topRow: Bool
         @ViewBuilder var row: () -> Row
 
         var body: some View {
-            PanelControlFold(folded: state.chatOver, preservesUnfoldedAccessibility: page == .canvas, content: row)
+            PanelControlFold(folded: topRow ? state.chatFolds : state.chatOver,
+                             preservesUnfoldedAccessibility: page == .canvas, content: row)
         }
     }
 }

@@ -63,7 +63,7 @@ struct DrawSelectionOverlay: View {
                 DrawSelectionBar(model: model, actions: actions, styleAbove: place.above)
                     .fixedSize()
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { barSize = $0 }
-                    .offset(x: place.origin.x, y: place.origin.y - (model.isSelectionStyleOpen && place.above ? DrawSelectionBarMetrics.line : 0))
+                    .offset(x: place.origin.x, y: place.origin.y)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
@@ -95,12 +95,14 @@ struct DrawSelectionBar: View {
                         .padding(.leading, m.countPadding.leading)
                         .padding(.trailing, m.countPadding.trailing)
                 }
-                ForEach(actions, id: \.self) { action in
+                // The buttons arrive one after another, 30 ms apart
+                // (240 ms at most; Accepted 2026-11-10).
+                ForEach(Array(actions.enumerated()), id: \.element) { index, action in
                     if action == .style {
-                        styleButton
+                        styleButton.modifier(AtticStaggeredArrival(index: index))
                         if open { colours.transition(.opacity) }
                     } else if !open {
-                        button(action).transition(.opacity)
+                        button(action).modifier(AtticStaggeredArrival(index: index)).transition(.opacity)
                     }
                 }
             }

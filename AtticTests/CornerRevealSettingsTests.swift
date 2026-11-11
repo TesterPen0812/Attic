@@ -93,12 +93,13 @@ final class CornerRevealSettingsTests: XCTestCase {
     func testPanelDismissModeDefaultsPersistsAndRejectsUnknownStoredValues() throws {
         let defaults = try makeDefaults()
         let settings = AppSettings(defaults: defaults)
-        XCTAssertEqual(settings.panelDismissMode, .moveCursorAway)
+        // Owner, 5 Nov (Planning.md Accepted): an unpinned panel goes away on a click off it.
+        XCTAssertEqual(settings.panelDismissMode, .clickAway)
         XCTAssertEqual(PanelDismissMode.allCases.map(\.title), ["Move cursor away", "Click away"])
-        settings.panelDismissMode = .clickAway
-        XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .clickAway)
-        defaults.set("unknown", forKey: "panelDismissMode")
+        settings.panelDismissMode = .moveCursorAway
         XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .moveCursorAway)
+        defaults.set("unknown", forKey: "panelDismissMode")
+        XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .clickAway)
     }
 
     // MARK: - The page's words
@@ -175,6 +176,8 @@ final class CornerRevealSettingsTests: XCTestCase {
     func testClickAwayPressMonitorOnlyLivesWhileVisibleUnpinnedAndSelected() throws {
         let rig = try makePanel()
         rig.settings.revealOnHover = false
+        // Start in cursor-away mode so the test sees monitoring switch on.
+        rig.settings.panelDismissMode = .moveCursorAway
         rig.monitor.start()
         defer { rig.monitor.stop(); spin(0.4) }
         XCTAssertFalse(rig.controller.isOutsidePressMonitoringForTesting)
@@ -334,6 +337,8 @@ final class CornerRevealSettingsTests: XCTestCase {
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = previous }
         let rig = try makePanel()
+        // The automatic hide under test is the cursor-away one.
+        rig.settings.panelDismissMode = .moveCursorAway
         rig.monitor.start()
         defer { rig.monitor.stop(); spin(0.4) }
         XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)

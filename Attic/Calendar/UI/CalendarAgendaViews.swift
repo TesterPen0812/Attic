@@ -88,6 +88,7 @@ struct CalendarAgendaDay: View {
                         .accessibilityIdentifier("calendar-task-\(task.id.uuidString)")
                     case let .event(event):
                         CalendarEventRow(event: event, day: group.day, today: today, rows: eventRows)
+                            .modifier(AgentEventArrival(id: event.id))
                     case .now:
                         CalendarNowLine()
                     }
@@ -301,7 +302,8 @@ struct CalendarEventRow: View {
                     .padding(.leading, metrics.textX)
                     .padding(.trailing, metrics.trailing)
                     .padding(.bottom, isBlock ? metrics.paddingY : 8)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    // Drops in 4 pt, never a slide from the edge (Accepted 2026-11-10).
+                    .transition(design.reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -AtticMotionScale.detailsDrop)))
             }
         }
         .background {

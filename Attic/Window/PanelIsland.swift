@@ -441,6 +441,12 @@ final class PanelIslandModel: ObservableObject {
     @Published private(set) var page: PanelPage = .tasks
     /// Pages the agent changed that you have not been back to.
     @Published var agentDots: Set<AgentPage> = []
+    /// The agent's spark tapping an item as it opens that page while you
+    /// watch: the item pressed (the design's `goPage`). The ring is the
+    /// chat's, drawn whole over the island by its reach window.
+    @Published private(set) var agentTapped: (page: PanelPage, id: UUID)?
+
+    func agentTap(_ page: PanelPage) { agentTapped = (page, UUID()) }
     /// The item under the pointer. Never switches.
     @Published private(set) var pointedItem: PanelIslandItem?
     /// The item whose name label shows (L8): the first after 400 ms, the
@@ -649,6 +655,8 @@ struct PanelIslandView: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
     @FocusState private var focused: PanelIslandItem?
+    /// The item the agent's spark is pressing (the design's 0.86 press).
+    @State private var agentPressed: PanelPage?
 
     private typealias L = PanelIslandLayout
 
@@ -753,6 +761,7 @@ struct PanelIslandView: View {
                     }
                 }
                 .frame(width: rect.width, height: rect.height)
+                .scaleEffect(agentPressed == page ? 0.86 : 1)
                 .offset(x: rect.minX, y: rect.minY)
             }
             ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
@@ -772,6 +781,13 @@ struct PanelIslandView: View {
             .offset(x: settings.minX, y: settings.minY)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .onChange(of: model.agentTapped?.id) { _, id in
+            guard id != nil, let page = model.agentTapped?.page, !design.reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.15)) { agentPressed = page }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                withAnimation(.easeOut(duration: 0.15)) { if agentPressed == page { agentPressed = nil } }
+            }
+        }
     }
 
     /// A page the agent changed while you were elsewhere: a small iris dot on

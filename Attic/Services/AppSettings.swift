@@ -97,8 +97,10 @@ final class AppSettings: ObservableObject {
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
+        static let soundsEnabled = "soundsEnabled"
         static let nextEventInNow = "nextEventInNow"
         static let animations = "animations"
+        static let reducedMotionStyle = "reducedMotionStyle"
         static let hideAnimation = "panelHideAnimation"
         static let islandSpot = "panelIslandSpot"
         static let hideSpeedLab = "motionLabHideSpeeds"
@@ -251,6 +253,12 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
     }
 
+    /// Short, quiet sounds when something lands (Accepted 2026-11-10,
+    /// "Sounds"; `AtticSounds`). On by default.
+    @Published var soundsEnabled: Bool {
+        didSet { defaults.set(soundsEnabled, forKey: Key.soundsEnabled) }
+    }
+
     /// "Next event in Now" (Accepted 2026-10-29): today's next event at the
     /// top of Now's Today, once Calendar access has been granted. On by
     /// default, as the design's switch is.
@@ -268,6 +276,15 @@ final class AppSettings: ObservableObject {
             AtticMotionPreference.level = animations
             guard oldValue != animations else { return }
             applyAnimationLevel()
+        }
+    }
+
+    /// When motion is reduced (Animations: Reduced, or macOS Reduce
+    /// Motion): Instant (the default) or Fade (Accepted 2026-11-10).
+    @Published var reducedMotionStyle: AtticReducedMotionStyle {
+        didSet {
+            defaults.set(reducedMotionStyle.rawValue, forKey: Key.reducedMotionStyle)
+            AtticReducedMotionStyle.current = reducedMotionStyle
         }
     }
 
@@ -430,7 +447,7 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
-        panelDismissMode = PanelDismissMode(rawValue: defaults.string(forKey: Key.panelDismissMode) ?? "") ?? .moveCursorAway
+        panelDismissMode = PanelDismissMode(rawValue: defaults.string(forKey: Key.panelDismissMode) ?? "") ?? .clickAway
         // Before any appearance key is read: the retired translucency /
         // glass-style / gradient preferences become Surface and Tint
         // exactly once, and a fresh install receives the new defaults.
@@ -458,6 +475,7 @@ final class AppSettings: ObservableObject {
         inAppAgentBackend = AgentBackend(rawValue: defaults.string(forKey: Key.inAppAgentBackend) ?? "") ?? .claude
         inAppAgentChoices = Self.storedChoices(defaults)
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        soundsEnabled = (defaults.object(forKey: Key.soundsEnabled) as? Bool) ?? true
         nextEventInNow = (defaults.object(forKey: Key.nextEventInNow) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
@@ -479,6 +497,9 @@ final class AppSettings: ObservableObject {
         }
         animations = storedAnimations
         AtticMotionPreference.level = storedAnimations
+        let storedReduced = defaults.string(forKey: Key.reducedMotionStyle).flatMap(AtticReducedMotionStyle.init(rawValue:)) ?? .default
+        reducedMotionStyle = storedReduced
+        AtticReducedMotionStyle.current = storedReduced
         // Preserve the native-popover experiment from older lab data, ignoring retired tuning choices.
         let storedTuning = motionLabAvailable
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }

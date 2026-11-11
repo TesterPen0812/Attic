@@ -39,6 +39,59 @@ final class DrawPersistenceTests: XCTestCase {
         try DrawStoreContractTests().typingContract(DrawPersistentStore(container: container()))
     }
 
+    func testTextSavedDuringEditingSurvivesAnUncleanRelaunch() throws {
+        let root = try temporaryDirectory()
+        var canvasID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root))
+            let model = DrawPageModel(store: store)
+            model.start()
+            canvasID = try XCTUnwrap(model.canvasID)
+            model.setTool(.text)
+            model.pointerDown(at: CGPoint(x: 80, y: 120))
+            model.typed("Draft")
+            model.typed("Draft 👩🏽‍🚀")
+            XCTAssertNotNil(model.editing, "No blur or graceful shutdown should be needed to save text")
+            XCTAssertFalse(store.hasUnsettledEdits)
+            XCTAssertEqual(try store.open(canvasID).objects.map(\.text), ["Draft 👩🏽‍🚀"])
+        }
+
+        let reopened = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try reopened.open(canvasID).objects.map(\.text), ["Draft 👩🏽‍🚀"])
+        XCTAssertFalse(reopened.canUndo(on: canvasID), "Undo history is session-scoped")
+    }
+
+    func testFinishedInkSurvivesUncleanRelaunchWhileUnfinishedInkWasNeverCommitted() throws {
+        let root = try temporaryDirectory()
+        var canvasID = UUID()
+        var completed: [DrawObject] = []
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root))
+            let model = DrawPageModel(store: store)
+            model.start()
+            canvasID = try XCTUnwrap(model.canvasID)
+            model.pointerDown(at: CGPoint(x: 20, y: 60), pressure: 0.3)
+            model.pointerDragged(to: CGPoint(x: 50, y: 80), pressure: 0.7)
+            model.pointerUp(at: CGPoint(x: 90, y: 60), pressure: 1)
+            completed = try store.open(canvasID).objects
+            XCTAssertEqual(completed.count, 1)
+            XCTAssertFalse(store.hasUnsettledEdits)
+            // Simulate a kill before mouse-up. Never run the graceful-quit
+            // path (which deliberately finishes the active second stroke).
+            model.pointerDown(at: CGPoint(x: 20, y: 120))
+            model.pointerDragged(to: CGPoint(x: 50, y: 140))
+            XCTAssertEqual(try store.open(canvasID).objects, completed)
+        }
+
+        let relaunched = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try relaunched.open(canvasID).objects, completed,
+                       "a saved stroke survives unclean termination, unfinished input was never saved")
+        XCTAssertFalse(relaunched.canUndo(on: canvasID), "history is session-scoped; saved ink survives a relaunch")
+        guard case .stroke(let samples) = completed[0].content else { return XCTFail("Stored object is not a stroke") }
+        XCTAssertEqual(samples.first?.pressure, 0.3)
+        XCTAssertEqual(samples.last?.pressure, 1)
+    }
+
     func testFailedFirstSaveRollsBackKeepsDraftAndRetriesOnce() throws {
         let container = try container()
         var fail = true

@@ -465,6 +465,7 @@ final class RecentlyDeletedModel: ObservableObject {
             message = report.failure.map {
                 Message(text: String(localized: "“\(entry.title)” couldn’t be restored: \($0)"), tone: .error)
             }
+            AtticSounds.play(report.restored > 0 ? .restored : .failed)
             reload()
             return
         }
@@ -474,6 +475,7 @@ final class RecentlyDeletedModel: ObservableObject {
         case let .attachment(attachment): library.restoreAttachment(attachment)
         case .draw: false
         }
+        AtticSounds.play(restored ? .restored : .failed)
         message = restored
             ? nil
             : Message(
@@ -518,6 +520,7 @@ final class RecentlyDeletedModel: ObservableObject {
             Message(text: RecentlyDeletedPresentation.restoreFailure(count: failures.count, reason: reason), tone: .error)
         }
         reload()
+        if restored > 0 || !failures.isEmpty { AtticSounds.play(restored > 0 ? .restored : .failed) }
         if restored > 0 {
             AccessibilityNotification.Announcement(RecentlyDeletedPresentation.restoredPhrase(restored)).post()
         }
@@ -563,18 +566,26 @@ final class RecentlyDeletedModel: ObservableObject {
     func confirmEmpty() {
         guard let request = emptyRequest else { return }
         emptyRequest = nil
-        if !request.drawn.isEmpty { _ = draw()?.purge(request.drawn) }
-        guard let library, !request.selection.isEmpty else { return finishEmpty(request) }
-        library.emptyRecentlyDeleted(request.selection)
+        let drawRemoved = request.drawn.isEmpty ? 0 : draw()?.purge(request.drawn).removed ?? 0
+        guard let library, !request.selection.isEmpty else {
+            finishEmpty(request)
+            if drawRemoved > 0 { AtticSounds.play(.emptied) }
+            return
+        }
+        let report = library.emptyRecentlyDeleted(request.selection)
+        let removed = drawRemoved + report.itemCount + report.attachmentCount
         finishEmpty(request)
         let feedbackAtStart = messageGeneration
         // Deleted tasks with notes finish through the coordinated purge
         // (Phase 3); the list and its message follow when they are done.
         if library.taskNotePurge != nil, !request.selection.items(.task).isEmpty || !request.selection.items(.note).isEmpty {
             Task { @MainActor [weak self] in
-                guard !(await library.emptyTaskNoteFamilies(request.selection)).isEmpty else { return }
-                self?.finishEmpty(request, onlyIfFeedbackIs: feedbackAtStart)
+                let families = await library.emptyTaskNoteFamilies(request.selection)
+                if !families.isEmpty { self?.finishEmpty(request, onlyIfFeedbackIs: feedbackAtStart) }
+                if removed > 0 || !families.isEmpty { AtticSounds.play(.emptied) }
             }
+        } else if removed > 0 {
+            AtticSounds.play(.emptied)
         }
     }
 

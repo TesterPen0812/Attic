@@ -1041,6 +1041,7 @@ struct TaskNotePage: View {
                 return
             }
             reopen()
+            AtticSounds.play(.restored)
             let message = restored.separate ? String(localized: "Note restored as a separate note")
                 : String(localized: "Note restored")
             toasts?.show(message, answersUndoKey: false, performingAsync: { [weak controller] in

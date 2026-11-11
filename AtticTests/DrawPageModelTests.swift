@@ -170,6 +170,70 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertTrue(stored.isEmpty, "A horizontal path must hit between two endpoints outside the stroke bounds")
     }
 
+    func testEraserRespectsThinPressureNibAndCrossesStrokesUnderShapes() throws {
+        let light = DrawObject(frame: DrawFrame(x: 60, y: 100, width: 40, height: 0),
+                               style: DrawStyle(colour: .blue, size: .small, corners: .square),
+                               content: .stroke([DrawPoint(x: 60, y: 100, pressure: 0), DrawPoint(x: 100, y: 100, pressure: 0)]))
+        let covered = DrawObject(frame: DrawFrame(x: 60, y: 150, width: 40, height: 0),
+                                 style: DrawStyle(colour: .green, size: .large, corners: .square),
+                                 content: .stroke([DrawPoint(x: 60, y: 150, pressure: 1), DrawPoint(x: 100, y: 150, pressure: 1)]))
+        let shape = DrawObject(frame: DrawFrame(x: 50, y: 140, width: 70, height: 30),
+                               zIndex: 100, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([light, covered, shape])).isSaved)
+        model.setTool(.eraser)
+        // 5pt cursor reach + 0.375pt half-width of a 0-pressure thin pen.
+        drag([CGPoint(x: 65, y: 105.5), CGPoint(x: 105, y: 105.5)])
+        XCTAssertTrue(stored.contains(where: { $0.id == light.id }), "outside the visible thin nib must not erase")
+        drag([CGPoint(x: 80, y: 133), CGPoint(x: 80, y: 170)])
+        XCTAssertFalse(stored.contains(where: { $0.id == covered.id }), "fast crossing must erase under a shape")
+        XCTAssertTrue(stored.contains(where: { $0.id == shape.id }), "eraser never removes shapes")
+    }
+
+    func testPenPressureSmoothsAndSurvivesMoveAndResize() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100), pressure: 0)
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.5)
+        model.pointerUp(at: CGPoint(x: 130, y: 100), pressure: 1)
+        let original = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = original.content else { return XCTFail("Not a stroke") }
+        XCTAssertGreaterThan(points.count, 3)
+        XCTAssertEqual(points.first?.pressure, 0)
+        XCTAssertEqual(points.last?.pressure, 1)
+        XCTAssertTrue(points.contains { ($0.pressure ?? 0) > 0 && ($0.pressure ?? 0) < 1 })
+        let moved = original.translated(by: DrawPoint(x: 12, y: 20), id: original.id)
+        guard case .stroke(let translated) = moved.content else { return XCTFail("Move lost ink") }
+        XCTAssertEqual(translated.map(\.pressure), points.map(\.pressure))
+        let resized = DrawPageModel.resized([moved], handle: .bottomRight,
+                                           delta: CGPoint(x: 50, y: 20), shift: false)
+        guard case .stroke(let stretched) = resized.first?.content else { return XCTFail("Resize lost ink") }
+        XCTAssertEqual(stretched.map(\.pressure), points.map(\.pressure))
+        let data = try JSONEncoder().encode(moved)
+        let roundTripped = try JSONDecoder().decode(DrawObject.self, from: data)
+        XCTAssertEqual(roundTripped, moved)
+    }
+
+    func testPressureInkRendersThinAtLightContactAndBroadAtFirmContact() {
+        let outline = DrawInk.pressureOutline([
+            DrawPoint(x: 20, y: 20, pressure: 0),
+            DrawPoint(x: 120, y: 20, pressure: 1),
+        ], baseWidth: 10)
+        XCTAssertFalse(outline.contains(CGPoint(x: 30, y: 25)), "light nib stays narrower than 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 110, y: 25)), "firm nib grows beyond 10pt")
+        XCTAssertTrue(outline.contains(CGPoint(x: 20, y: 20)))
+        XCTAssertTrue(outline.contains(CGPoint(x: 120, y: 20)))
+    }
+
+    func testTabletPressureIsNotResetByAnInterleavedMouseRelease() throws {
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120), pressure: 0.8)
+        model.pointerDragged(to: CGPoint(x: 100, y: 110))
+        model.pointerUp(at: CGPoint(x: 130, y: 100))
+        let saved = try XCTUnwrap(stored.first)
+        guard case .stroke(let points) = saved.content else { return XCTFail("Not a stroke") }
+        XCTAssertEqual(try XCTUnwrap(points.last?.pressure), 0.8, accuracy: 0.0001)
+    }
+
     func testTextPlacesABoxAndTypesStraightAway() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -180,6 +244,21 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertGreaterThan(stored[0].frame.width, 6)
         model.endEditing()
         XCTAssertEqual(model.tool, .select)
+    }
+
+    func testVeryNarrowWrappingKeepsEmojiAndRTLTextIntact() {
+        let samples = [
+            "Start 👩🏽‍🚀 אבג 🧑‍💻 End",
+            "Start\r👩🏽‍🚀\rאבג End",
+            String(repeating: "á👩‍👩‍👧‍👧אבג", count: 48)
+        ]
+        for text in samples {
+            for width in [CGFloat(0.01), 0.5, 2, 8, 15, 55] {
+                let lines = DrawText.lines(text, size: 14, width: width)
+                XCTAssertEqual(lines.joined(), text, "Wrap at \(width)pt must not lose source characters")
+                XCTAssertEqual(lines.flatMap { Array($0) }, Array(text), "A wrapped line must not split a grapheme")
+            }
+        }
     }
 
     func testShapeIsDraggedOutThenReturnsToSelectWithNothingSelected() {
@@ -207,6 +286,36 @@ final class DrawPageModelTests: XCTestCase {
         let (a, b) = DrawGeometry.endpoints(stored[0].frame)
         XCTAssertEqual(a.x, 160, accuracy: 0.01)
         XCTAssertEqual(b.x, 60, accuracy: 0.01)
+    }
+
+    func testShiftConstrainedShapeCommitsTheGeometryShownBeforeMouseUp() throws {
+        model.pickShape(.rectangle)
+        let end = CGPoint(x: 160, y: 260)
+        model.pointerDown(at: CGPoint(x: 60, y: 200))
+        model.pointerDragged(to: end, shift: true)
+        guard case .shape(_, let start, let previewEnd) = model.live else { return XCTFail("Missing shape preview") }
+        let preview = DrawGeometry.boxFrame(from: start, to: previewEnd)
+        XCTAssertEqual(preview.width, preview.height, accuracy: 0.01)
+        model.pointerUp(at: end)
+        let saved = try XCTUnwrap(stored.first)
+        XCTAssertEqual(saved.frame, preview, "Mouse-up must preserve Shift-constrained geometry")
+    }
+
+    func testShiftConstrainedResizeCommitsTheGeometryShownBeforeMouseUp() throws {
+        let rectangle = DrawObject(frame: DrawFrame(x: 60, y: 140, width: 90, height: 50),
+                                   content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([rectangle])).isSaved)
+        model.setTool(.select)
+        model.select([rectangle.id])
+        let corner = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        let end = CGPoint(x: corner.point.x + 80, y: corner.point.y + 10)
+        model.pointerDown(at: corner.point)
+        model.pointerDragged(to: end, shift: true)
+        guard case .resize(let preview) = model.live else { return XCTFail("Missing resize preview") }
+        let expected = try XCTUnwrap(preview.current.first)
+        XCTAssertNotEqual(expected.frame, rectangle.frame)
+        model.pointerUp(at: end)
+        XCTAssertEqual(stored.first, expected, "Mouse-up must preserve Shift-constrained resize")
     }
 
     // MARK: Strips (Shape, D1, D2) and D3
@@ -353,6 +462,87 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.count, 4)
     }
 
+    func testSendToBackPutsEverySelectedObjectBehindUnselectedAndUndoesTogether() {
+        let bottom = DrawObject(zIndex: 1, content: .shape(.rectangle))
+        let middle = DrawObject(zIndex: 2, content: .shape(.ellipse))
+        let front = DrawObject(zIndex: 3, content: .shape(.arrow))
+        let top = DrawObject(zIndex: 4, content: .shape(.line))
+        XCTAssertTrue(model.perform(.put([bottom, middle, front, top])).isSaved)
+        model.select([front.id, top.id])
+        model.runMore(.sendToBack)
+
+        XCTAssertEqual(stored.map(\.id), [front.id, top.id, bottom.id, middle.id],
+                       "Both selected objects must move behind the old bottom, without a z-index tie")
+        XCTAssertEqual(stored.count, 4)
+        model.undo()
+        XCTAssertEqual(stored, [bottom, middle, front, top], "The group reorder is one Undo step")
+        model.redo()
+        XCTAssertEqual(stored.map(\.id), [front.id, top.id, bottom.id, middle.id])
+    }
+
+    func testMovingSelectedStrokeAndShapeTracksHandlesAndSavesOnlyOnRelease() throws {
+        let points = (0..<3000).map { DrawPoint(x: 180 + Double($0) / 15, y: 300 + sin(Double($0) / 10) * 15) }
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: 1, content: .stroke(points))
+        let shape = DrawObject(frame: DrawFrame(x: 70, y: 140, width: 55, height: 30),
+                               zIndex: 2, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([stroke, shape])).isSaved)
+        model.setViewport(DrawViewport(x: 0, y: 0, zoom: 1), byUser: true)
+        model.setTool(.select)
+        model.select([stroke.id, shape.id])
+        let before = model.handleSpots
+        let original = stored
+        let delta = CGPoint(x: 23, y: 16)
+        model.pointerDown(at: CGPoint(x: 90, y: 155))
+        model.pointerDragged(to: CGPoint(x: 90 + delta.x, y: 155 + delta.y))
+        guard case .move = model.live else { return XCTFail("Expected a live selection move") }
+        XCTAssertEqual(stored, original, "A live drag does not persist intermediate frames")
+        for (first, current) in zip(before, model.handleSpots) {
+            XCTAssertEqual(first.handle, current.handle)
+            XCTAssertEqual(current.point.x, first.point.x + delta.x, accuracy: 0.01)
+            XCTAssertEqual(current.point.y, first.point.y + delta.y, accuracy: 0.01)
+        }
+        model.pointerUp()
+        XCTAssertEqual(model.object(shape.id)?.frame.x, shape.frame.x + Double(delta.x))
+        XCTAssertEqual(model.object(stroke.id)?.frame.x, stroke.frame.x + Double(delta.x))
+        model.undo()
+        XCTAssertEqual(stored, original, "Both objects move and undo in one save")
+    }
+
+    func testInkEraseColourAndWidthUndoRedoThirtyStepsExactly() {
+        var history: [[DrawObject]] = [stored]
+        for index in 0..<25 {
+            model.setTool(.pen)
+            drag([CGPoint(x: 60, y: 100 + CGFloat(index) * 18),
+                  CGPoint(x: 90, y: 105 + CGFloat(index) * 18),
+                  CGPoint(x: 130, y: 100 + CGFloat(index) * 18)])
+            history.append(stored)
+        }
+        let target = stored[0].id
+        model.setTool(.select)
+        model.select([target])
+        model.styleSelection(colour: .red)
+        history.append(stored)
+        model.styleSelection(size: .large)
+        history.append(stored)
+        model.setTool(.eraser)
+        drag([CGPoint(x: 90, y: 90), CGPoint(x: 90, y: 108)])
+        XCTAssertLessThan(stored.count, 25, "eraser removes whole strokes")
+        history.append(stored)
+
+        for index in stride(from: history.count - 2, through: 0, by: -1) {
+            XCTAssertTrue(key("z", command: true))
+            XCTAssertEqual(stored, history[index], "undo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canUndo)
+        for index in 1..<history.count {
+            XCTAssertTrue(key("z", command: true, shift: true))
+            XCTAssertEqual(stored, history[index], "redo exactly restores step \(index)")
+        }
+        XCTAssertFalse(model.canRedo)
+        model.undo() // The toolbar's action is the same undo path.
+        XCTAssertEqual(stored, history[history.count - 2])
+    }
+
     func testDeleteReturnAndEscape() {
         model.setTool(.text)
         model.pointerDown(at: CGPoint(x: 80, y: 120))
@@ -439,8 +629,8 @@ final class DrawPageModelTests: XCTestCase {
         model.setBoard(size: CGSize(width: 360, height: 500), clearInsets: model.clearInsets)
         model.scroll(dx: 10, dy: 10, command: false, at: .zero)
         model.pointerDragged(to: CGPoint(x: 140, y: 130))
-        guard case .ink(let points) = model.live else { return XCTFail("The stroke is still live") }
-        XCTAssertEqual(points.count, 4)
+        guard case .ink(let trace) = model.live else { return XCTFail("The stroke is still live") }
+        XCTAssertEqual(trace.samples.count, 4)
         model.pointerUp()
         XCTAssertEqual(stored.count, 1)
     }
@@ -482,6 +672,38 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(stored.map(\.text), ["x"])
         model.redo()
         XCTAssertEqual(stored.map(\.text), ["x"], "Typing after Undo starts a new branch")
+    }
+
+    func testUndoRedoRestoresTextMoveAndStyleInOrder() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Draft")
+        let typed = stored
+        let box = try XCTUnwrap(typed.first)
+        model.endEditing()
+
+        var moved = box
+        moved.frame.x += 40
+        XCTAssertTrue(model.perform(.put([moved])).isSaved)
+        XCTAssertEqual(stored, [moved])
+        model.select([moved.id])
+        model.styleSelection(colour: .red)
+        let styled = stored
+        XCTAssertEqual(styled.first?.style.colour, .red)
+
+        model.undo()
+        XCTAssertEqual(stored, [moved], "First Undo restores the previous colour")
+        model.undo()
+        XCTAssertEqual(stored, typed, "Second Undo restores the original position")
+        model.undo()
+        XCTAssertTrue(stored.isEmpty, "Third Undo removes the first typed content")
+
+        model.redo()
+        XCTAssertEqual(stored, typed)
+        model.redo()
+        XCTAssertEqual(stored, [moved])
+        model.redo()
+        XCTAssertEqual(stored, styled, "Redo restores text, position and style exactly")
     }
 
     func testSwatchStylesTheOpenTextBox() {
@@ -573,5 +795,19 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection.count, 1)
         model.closeSearch()
         XCTAssertEqual(model.search.query, "")
+    }
+
+    func testOpeningSharedSearchEndsTheCurrentTextEditAndFindsItsSavedText() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Find this draft")
+        XCTAssertNotNil(model.editing)
+
+        model.openSearch()
+        XCTAssertNil(model.editing, "Opening the top Search finishes the active text box")
+        model.search.query = "draft"
+        let result = try XCTUnwrap(model.search.results.first)
+        XCTAssertEqual(result.canvas.id, model.canvasID)
+        XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
 }

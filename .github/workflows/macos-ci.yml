@@ -251,6 +251,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_pf*.py'
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_integration_cost_reference.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_generate_sounds.py
 
       - name: Verify branch ancestry and initial cleanliness
         run: |

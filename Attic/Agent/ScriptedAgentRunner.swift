@@ -6,12 +6,14 @@ import Foundation
 /// every agent change takes, so undo and Recently Deleted behave as they will.
 ///
 /// The real runner replaces it with one line: `AppCoordinator`'s
-/// `agentChat.connect(...)`. Calendar and Draw have no tools yet, so "book" adds
-/// a dated task and nothing here touches Calendar or Draw data.
+/// `agentChat.connect(...)`. Given `AgentActions`, "book" adds the event
+/// through the Calendar writer and "sketch" draws on Draw, through the same
+/// actions (and approvals) a real run uses; without them "book" adds a dated
+/// task and nothing here touches Calendar or Draw data.
 @MainActor
 final class ScriptedAgentRunner: AgentRunning {
     enum Script: Equatable {
-        case tidy, plan, week, note, book, all
+        case tidy, plan, week, note, book, sketch, all
     }
 
     private struct OpenTask {
@@ -27,9 +29,15 @@ final class ScriptedAgentRunner: AgentRunning {
         var tool = ""
         var arguments: [String: Any] = [:]
         var restore: (() -> Bool)?
+        /// Undoes what went through `AgentActions` (Calendar, Draw).
+        var undo: (() async throws -> Void)?
     }
 
     private let tools: AgentTaskTools
+    /// Calendar and Draw, as a real run reaches them.
+    private let actions: AgentActions?
+    /// This run's request in `actions`, opened on first use.
+    private var actionsRequest: UUID?
     private let mode: () -> AgentChatMode
     private let now: () -> Date
     private let calendar: Calendar
@@ -51,9 +59,10 @@ final class ScriptedAgentRunner: AgentRunning {
     private var threadUpdated = Date()
     private var past: [(summary: AgentChatSummary, entries: [AgentThreadEntry])] = []
 
-    init(tools: AgentTaskTools, mode: @escaping () -> AgentChatMode = { .askFirst },
+    init(tools: AgentTaskTools, actions: AgentActions? = nil, mode: @escaping () -> AgentChatMode = { .askFirst },
          now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent, pace: Double = 1) {
         self.tools = tools
+        self.actions = actions
         self.mode = mode
         self.now = now
         self.calendar = calendar
@@ -70,6 +79,7 @@ final class ScriptedAgentRunner: AgentRunning {
         inverses = []
         changedPages = []
         changeCount = 0
+        actionsRequest = nil
         return AsyncStream { continuation in
             output = continuation
             run = Task { [weak self] in
@@ -92,7 +102,9 @@ final class ScriptedAgentRunner: AgentRunning {
     func undo(changeSet id: UUID) async throws {
         guard let log = undoLog.removeValue(forKey: id) else { return }
         for inverse in log.reversed() {
-            if let restore = inverse.restore {
+            if let undo = inverse.undo {
+                try await undo()
+            } else if let restore = inverse.restore {
                 guard restore() else { throw AgentActionsError.invalid("The note has changed since, so it was kept.") }
             } else {
                 _ = try tools.call(name: inverse.tool, arguments: inverse.arguments)
@@ -154,10 +166,11 @@ final class ScriptedAgentRunner: AgentRunning {
         output = nil
     }
 
-    /// The design's `pickScript`, less the sketch it has no tool for.
+    /// The design's `pickScript`.
     static func script(for text: String) -> Script {
         func has(_ pattern: String) -> Bool { text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         if has("everything|launch ready|ready for|all pages") { return .all }
+        if has("sketch|draw") { return .sketch }
         if has("note|write|checklist") { return .note }
         if has("calendar|dentist|book|friday") { return .book }
         if has("plan|today") { return .plan }
@@ -176,6 +189,7 @@ final class ScriptedAgentRunner: AgentRunning {
             case .week: try await week()
             case .note: try await note()
             case .book: try await book()
+            case .sketch: try await sketch()
             case .all: try await everything()
             }
         } catch is CancellationError {
@@ -278,10 +292,137 @@ final class ScriptedAgentRunner: AgentRunning {
     private func book() async throws {
         emit(.progress(done: 0, total: 1))
         guard mode() != .readOnly else { return try await write("I can’t add it in **Read only**. Nothing has been changed.") }
+        if actions?.calendarWriter != nil {
+            guard try await bookDentist() else {
+                return try await write("I’ve left your calendar as it was. Nothing has been changed.")
+            }
+            emit(.progress(done: 1, total: 1))
+            try await wait(0.65)
+            return try await write("Dentist is on Friday at **09:30**, well before your 11:00 seminar.")
+        }
         try await addDentist()
         emit(.progress(done: 1, total: 1))
         try await wait(0.65)
         try await write("Dentist is on **Friday**, as a task. I can’t reach your calendar yet.")
+    }
+
+    /// The design's `drawAct`: a press kit step under the launch sketch.
+    private func sketch() async throws {
+        emit(.progress(done: 0, total: 1))
+        guard mode() != .readOnly else { return try await write("I can’t draw in **Read only**. Nothing has been changed.") }
+        guard let actions, actions.draw != nil,
+              let canvases = try await actionsCall("draw_list_canvases", [:]).flatMap({ Self.object($0.text)?["canvases"] as? [[String: Any]] }),
+              let canvas = canvases.first(where: { ($0["name"] as? String) == "Launch plan" }) ?? canvases.first,
+              let canvasID = canvas["id"] as? String else {
+            return try await write("I couldn’t find a sketch to add to. Nothing has been changed.")
+        }
+        let name = canvas["name"] as? String ?? "your sketch"
+        try await step("Sketching on \(name)", done: "Added Press kit to your sketch", kind: .create,
+                       targets: [AgentTarget(page: .draw, title: name)], seconds: 0, finishedTargets: {
+            var targets: [AgentTarget] = []
+            try await self.wait(0.4)
+            // The design's arrow, box and words, in its order, at the panel's scale.
+            let calls: [(String, [String: Any])] = [
+                ("draw_add_strokes", ["canvas_id": canvasID, "colour": "blue",
+                                      "points": Self.curve(from: CGPoint(x: 286, y: 220), control: CGPoint(x: 300, y: 262),
+                                                           to: CGPoint(x: 289, y: 306))]),
+                ("draw_add_strokes", ["canvas_id": canvasID, "colour": "blue",
+                                      "points": [["x": 281.5, "y": 298], ["x": 289, "y": 306], ["x": 299.5, "y": 300.5]]]),
+                ("draw_add_shape", ["canvas_id": canvasID, "shape": "rectangle", "corners": "rounded",
+                                    "x": 245, "y": 312, "width": 90, "height": 44]),
+                ("draw_add_text", ["canvas_id": canvasID, "text": "Press kit", "x": 262, "y": 324, "width": 70, "height": 20]),
+            ]
+            for (tool, arguments) in calls {
+                guard let result = try await self.actionsCall(tool, arguments) else { continue }
+                targets += result.step.targets
+            }
+            self.note(page: .draw)
+            return targets
+        })
+        emit(.progress(done: 1, total: 1))
+        try await wait(0.65)
+        try await write("**Press kit** now follows Launch day. Everything else stayed where it was.")
+    }
+
+    /// The design's `calAct`: Dentist on Friday at 09:30, through the
+    /// Calendar writer. Ask first asks before the step starts.
+    private func bookDentist() async throws -> Bool {
+        guard let actions else { return false }
+        let calendars = try await actionsCall("calendar_list_calendars", [:])
+            .flatMap { Self.object($0.text)?["calendars"] as? [[String: Any]] } ?? []
+        guard let calendarID = calendars.first?["calendar_id"] as? String else { return false }
+        var day = calendar.dateComponents([.year, .month, .day], from: nextFriday())
+        day.hour = 9
+        day.minute = 30
+        guard let start = calendar.date(from: day) else { return false }
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = calendar.timeZone
+        let arguments: [String: Any] = ["title": "Dentist", "calendar_id": calendarID,
+                                        "start": formatter.string(from: start),
+                                        "end": formatter.string(from: start.addingTimeInterval(1800)),
+                                        "time_zone": calendar.timeZone.identifier]
+        let request = openRequest(actions)
+        var pending: AgentApproval?
+        var performed: AgentActionResult?
+        switch try await actions.call(name: "calendar_create", arguments: arguments, watching: isWatching, requestID: request) {
+        case let .performed(result): performed = result
+        case let .approvalNeeded(approval): pending = approval
+        }
+        if let pending {
+            approvalID = pending.id
+            emit(.approvalNeeded(pending))
+            let allowed = await withCheckedContinuation { approvalWaiter = $0 }
+            try Task.checkCancellation()
+            guard allowed else {
+                _ = try? await actions.resolve(approval: pending.id, allow: false)
+                return false
+            }
+        }
+        var made = false
+        try await step("Adding it to your calendar", done: "Added Dentist to Friday", kind: .create,
+                       targets: [AgentTarget(page: .calendar, title: "Dentist")], seconds: 0, finishedTargets: {
+            try await self.wait(0.6)
+            if let pending { performed = try await actions.resolve(approval: pending.id, allow: true) }
+            guard let performed else { return [] }
+            made = true
+            self.note(page: .calendar)
+            return performed.step.targets
+        })
+        return made
+    }
+
+    /// Opens this run's request in `actions`, with its Undo.
+    private func openRequest(_ actions: AgentActions) -> UUID {
+        if let actionsRequest { return actionsRequest }
+        let id = actions.beginRequest(title: "Changes")
+        try? actions.setMode(mode(), for: id)
+        actionsRequest = id
+        inverses.append(Inverse(undo: { [weak actions] in
+            guard let report = await actions?.undo(changeSet: id) else { return }
+            if !report.failures.isEmpty { throw AgentActionsError.invalid(report.failures.joined(separator: "; ")) }
+        }))
+        return id
+    }
+
+    /// One call through `actions`, performed (an approval here is refused).
+    private func actionsCall(_ name: String, _ arguments: [String: Any]) async throws -> AgentActionResult? {
+        guard let actions else { return nil }
+        let request = openRequest(actions)
+        guard case let .performed(result) = try await actions.call(name: name, arguments: arguments,
+                                                                     watching: isWatching, requestID: request) else { return nil }
+        return result
+    }
+
+    private static func object(_ text: String) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+    }
+
+    /// A quadratic curve's points, for a stroke the spark can follow.
+    private static func curve(from a: CGPoint, control c: CGPoint, to b: CGPoint) -> [[String: Any]] {
+        (0...12).map { k in
+            let t = CGFloat(k) / 12, u = 1 - t
+            return ["x": Double(u * u * a.x + 2 * u * t * c.x + t * t * b.x), "y": Double(u * u * a.y + 2 * u * t * c.y + t * t * b.y)]
+        }
     }
 
     private func everything() async throws {
@@ -293,7 +434,7 @@ final class ScriptedAgentRunner: AgentRunning {
         emit(.progress(done: 1, total: 3))
         try await wait(0.75)
         guard mode() != .readOnly else { return try await write("I can’t change anything in **Read only**.") }
-        try await addDentist()
+        if actions?.calendarWriter != nil { _ = try await bookDentist() } else { try await addDentist() }
         emit(.progress(done: 2, total: 3))
         try await wait(0.75)
         let edited = try await addChecklist()
@@ -416,11 +557,13 @@ final class ScriptedAgentRunner: AgentRunning {
     /// One tool row: started, the work, finished. A tool failing fails the
     /// step and the run goes on.
     private func step(_ title: String, done: String, kind: AgentStepKind, targets: [AgentTarget], seconds: TimeInterval,
+                      finishedTargets: (() async throws -> [AgentTarget])? = nil,
                       work: (() async throws -> Void)? = nil) async throws {
         var step = AgentStep(id: UUID(), title: title, kind: kind, targets: targets, state: .running)
         emit(.stepStarted(step))
         do {
             try await work?()
+            if let finishedTargets { step.targets = try await finishedTargets() }
             try await wait(seconds)
             step.title = done
             step.state = .done
@@ -449,6 +592,7 @@ final class ScriptedAgentRunner: AgentRunning {
     }
 
     private func finishChanges() {
+        if let actionsRequest { actions?.sealRequest(actionsRequest) }
         guard changeCount > 0 else { return }
         let set = AgentChangeSet(id: UUID(), title: "Changes", pages: changedPages, count: changeCount)
         undoLog[set.id] = inverses

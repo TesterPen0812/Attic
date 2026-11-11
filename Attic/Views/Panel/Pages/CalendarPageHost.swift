@@ -144,7 +144,8 @@ enum CalendarAgendaCommands {
     static func toggleDone(_ id: UUID, store: TaskStore) {
         guard let task = store.listedTask(withID: id) else { return }
         if let library = store.commandLibrary {
-            _ = task.status == .done ? library.reopenTasks([id], in: history) : library.completeTask(id, in: history)
+            _ = task.status == .done ? AtticSounds.play(.undone, after: library.reopenTasks([id], in: history))
+                : AtticSounds.play(.done, after: library.completeTask(id, in: history))
         } else {
             _ = store.setStatus(task.status == .done ? .todo : .done, for: task)
         }

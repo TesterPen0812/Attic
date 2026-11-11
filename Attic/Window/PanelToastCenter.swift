@@ -184,6 +184,7 @@ final class PanelToastCenter: ObservableObject {
         dismissWork?.cancel()
         dismissWork = nil
         if holds.isEmpty, !toast.isFailure { scheduleDismissal(of: toast) }
+        if toast.isFailure { AtticSounds.play(.failed) }
     }
 
     private func scheduleDismissal(of toast: Toast) {

@@ -62,8 +62,9 @@ final class DrawLatestRenderer<Request: Sendable, Output: Sendable>: @unchecked 
     }
 }
 
-/// Everything a committed raster depends on. An installed raster whose key
-/// differs from the board's current key is stale and never shown.
+/// Everything a committed raster depends on. `viewport` positions the full
+/// drawing's world bounds inside the bitmap; it is independent of the live
+/// on-screen viewport. A pan or pinch only transforms the installed layer.
 struct DrawRasterKey: Equatable, Sendable {
     /// The page's content revision (every applied change advances it).
     var revision = 0
@@ -96,6 +97,19 @@ struct DrawRasterImage: @unchecked Sendable { let image: CGImage }
 enum DrawRasterProbe {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var counts = (all: 0, main: 0)
+    #if DEBUG
+    nonisolated(unsafe) private static var delayedBy: TimeInterval = 0
+
+    /// A held background worker makes viewport-stream regression deterministic.
+    static var testDelay: TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return delayedBy
+    }
+
+    static func setTestDelay(_ seconds: TimeInterval) {
+        lock.lock(); delayedBy = seconds; lock.unlock()
+    }
+    #endif
 
     static var rasters: Int { lock.lock(); defer { lock.unlock() }; return counts.all }
     static var mainThreadRasters: Int { lock.lock(); defer { lock.unlock() }; return counts.main }
@@ -111,13 +125,17 @@ enum DrawRasterProbe {
     static func reset() { lock.lock(); counts = (0, 0); lock.unlock() }
 }
 
-/// The committed board: every object at the request's viewport, on a clear
-/// background (the dots are their own layer). Runs on the renderer's worker.
+/// The committed board: every object in the drawing's world extent, on a
+/// clear background (the dots are their own layer). Runs on the renderer's worker.
 enum DrawRaster {
     private static let imageCache = NSCache<NSString, CGImage>()
 
     static func render(_ request: DrawRasterRequest, cancelled: () -> Bool = { false }) -> DrawRasterImage? {
         DrawRasterProbe.record()
+        #if DEBUG
+        let artificialDelay = DrawRasterProbe.testDelay
+        if artificialDelay > 0 { Thread.sleep(forTimeInterval: artificialDelay) }
+        #endif
         let key = request.key
         let width = Int((key.size.width * key.scale).rounded(.up)), height = Int((key.size.height * key.scale).rounded(.up))
         guard width > 0, height > 0,
@@ -149,6 +167,10 @@ enum DrawRaster {
     static func draw(_ object: DrawObject, in context: CGContext, palette: DrawPalette, fullResolution: Bool = false) {
         let colour = palette.cgColor(object.style.colour)
         switch object.content {
+        case .stroke(let points) where points.contains(where: { $0.pressure != nil }):
+            context.addPath(DrawInk.pressureOutline(points, baseWidth: CGFloat(object.style.size.strokeWidth)))
+            context.setFillColor(colour)
+            context.fillPath()
         case .stroke, .shape:
             guard let path = DrawGeometry.path(object) else { return }
             context.addPath(path)

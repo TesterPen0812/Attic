@@ -51,6 +51,47 @@ struct AgentChatBarButton: View {
     }
 }
 
+/// Shows the alive layer in a window over the panel and the island (the
+/// stage and the layer's state given), or puts it back on the stage (nil).
+/// Answers whether the window took it.
+typealias AgentChatReach = (_ target: (fx: AgentChatFX, stage: NSView)?) -> Bool
+
+/// Hands the alive layer to the reach window and back, and tells the top row
+/// while the chat watches the agent work. A view of its own, so neither
+/// updates the stage's body.
+private struct AgentChatStageRelay: View {
+    @ObservedObject var fx: AgentChatFX
+    let watching: Bool
+    let stage: () -> NSView?
+    let reach: AgentChatReach?
+
+    @Environment(\.panelTopRowState) private var topRow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onAppear { fx.canReachOut = reach != nil }
+            .onChange(of: fx.reachesOut) { _, out in
+                // The window takes the layer, or the stage keeps it after all.
+                if out {
+                    guard let stage = stage(), reach?((fx, stage)) == true else { return fx.endReach() }
+                } else {
+                    _ = reach?(nil)
+                }
+            }
+            .onChange(of: watching, initial: true) { _, now in
+                if topRow?.chatWatching != now { topRow?.chatWatching = now }
+            }
+            .onDisappear {
+                if fx.reachesOut { fx.endReach() }
+                _ = reach?(nil)
+                if topRow?.chatWatching == true { topRow?.chatWatching = false }
+            }
+    }
+}
+
 /// Puts the chat over the panel while it is open or closing, and nothing at
 /// all otherwise: a closed chat is one `if`, however busy its run is.
 struct AgentChatHost: View {
@@ -64,6 +105,8 @@ struct AgentChatHost: View {
     let rows: (Set<UUID>?) -> [(id: UUID, frame: CGRect)]
     let selectPage: (PanelPage) -> Void
     let setTyping: (Bool) -> Void
+    /// Draws the alive layer past the panel's edge while the spark is out.
+    var reach: AgentChatReach? = nil
 
     @Environment(\.panelTopRowState) private var topRow
     @State private var mounted = false
@@ -81,7 +124,7 @@ struct AgentChatHost: View {
         ZStack {
             if mounted {
                 AgentChatStage(model: model, fx: fx, shown: bar.isChatOpen, layout: layout, rows: rows, setTyping: setTyping,
-                               didClose: { if !bar.isChatOpen { mounted = false } })
+                               didClose: { if !bar.isChatOpen { mounted = false } }, reach: reach)
             }
         }
         .onAppear { model.openPage = { [selectPage] in selectPage($0.panelPage) } }
@@ -113,6 +156,7 @@ struct AgentChatStage: View {
     let rows: (Set<UUID>?) -> [(id: UUID, frame: CGRect)]
     let setTyping: (Bool) -> Void
     let didClose: () -> Void
+    var reach: AgentChatReach? = nil
 
     #if DEBUG
     /// Test seams: how often the stage's body ran, whether it is on screen, and
@@ -127,8 +171,10 @@ struct AgentChatStage: View {
     /// The wipe's progress, 0 to 1: the one clock the blur, its colour and
     /// the thread share. It starts at 0 and animates on the wipe's curve.
     @State private var reveal: CGFloat = 0
-    /// The chat has stepped aside while the agent writes in a note: the blur,
-    /// its colour, the thread and the floating controls go; the composer stays.
+    /// The chat has stepped aside while it watches the agent work: the blur,
+    /// its colour and the thread go; the composer and the floating controls
+    /// stay, and the page's own top row shows beside them (the drawing's
+    /// `watch(2)`).
     @State private var aside = false
     /// New chat: the old thread is leaving, upward (or, with Reduce Motion, fading).
     @State private var dispersing = false
@@ -155,10 +201,13 @@ struct AgentChatStage: View {
         let _ = Self.bodyEvaluations += 1
         #endif
         ZStack(alignment: .topTrailing) {
-            AgentChatBackdrop(shown: shown, reveal: reveal, origin: star, tint: tint, fades: !alive, solid: solid,
+            AgentChatBackdrop(shown: shown, reveal: reveal, clearing: model.watch.clearing, origin: star, tint: tint,
+                              fades: !alive, solid: solid,
                               onEscape: { model.escape() },
                               didMake: { view in DispatchQueue.main.async { backdropView = view } })
-                .opacity(aside ? 0 : 1)
+                // The design's `backdrop-filter 420ms`; Reduce Motion's plain fade.
+                .animation(alive ? .timingCurve(0.25, 0.1, 0.25, 1, duration: 0.42) : .linear(duration: Self.fade),
+                           value: model.watch)
                 // Still there to click: a click while watching closes the chat.
                 .overlay { Color.clear.contentShape(Rectangle()).onTapGesture { model.close() } }
                 .accessibilityHidden(true)
@@ -190,15 +239,16 @@ struct AgentChatStage: View {
             }
             if !model.entries.isEmpty {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) { topControls }
-                    .opacity(aside ? 0 : 1)
-                    .allowsHitTesting(!aside)
                     .padding(.top, layout.chromeInsets.top)
                     .padding(.trailing, PanelSharedBottomBar.plusInsets(layout: layout).trailing)
                     .transition(.opacity)
             }
             if alive { AgentChatFXLayer(fx: fx) }
+            AgentChatStageRelay(fx: fx, watching: model.watch == .watching, stage: { backdropView }, reach: alive ? reach : nil)
         }
         .coordinateSpace(.named(Self.space))
+        // Pages report frames in the hosting view's global space.
+        .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { fx.stageOrigin = $0 }
         .onAppear(perform: appeared)
         #if DEBUG
         .onAppear { Self.isMounted = true }
@@ -214,7 +264,7 @@ struct AgentChatStage: View {
             wipe(to: now)
         }
         .onChange(of: dark, initial: true) { _, now in fx.dark = now }
-        .onChange(of: model.writingLabel != nil) { _, now in
+        .onChange(of: model.watch == .watching) { _, now in
             // The design's 280 ms; Reduce Motion's plain fade.
             withAnimation(alive ? .easeOut(duration: 0.28) : .linear(duration: Self.fade)) { aside = now }
         }
@@ -300,8 +350,29 @@ struct AgentChatStage: View {
             if let card = fx.composerFrame { fx.dust(card, count: 130) }
             let at = fx.sparkPoint
             fx.ring(at.x, at.y, radius: 45, duration: 0.5)
-        case .approvalDenied, .wroteInNote:
+        case .approvalDenied, .watchEnded:
             break
+        case let .pointer(point):
+            fx.point(at: point.flatMap(onStage))
+        case let .tap(point):
+            if let at = onStage(point) { fx.tap(at: at) }
+        case let .burst(point, count, speed, ring):
+            guard let at = onStage(point) else { return }
+            if count == 1 {
+                fx.star(at.x, at.y, vy: Double.random(in: -13 ... 2), life: Double.random(in: 0.3 ... 0.6), size: Double.random(in: 1 ... 2.25))
+            } else {
+                fx.burst(at.x, at.y, count: count, speed: speed)
+            }
+            if ring > 0 { fx.ring(at.x, at.y, radius: ring, duration: 0.5) }
+        case let .ping(rect, duration):
+            if let frame = onStage(rect) { fx.ping(frame, duration: duration, holds: true) }
+        case let .pingRows(ids):
+            for row in rowsOnStage(Set(ids)) { fx.ping(row.frame, duration: 0.9, holds: false) }
+        case let .sketch(replay):
+            guard let backdropView else { return }
+            let origin = backdropView.convert(CGPoint.zero, from: nil)
+            let down = backdropView.convert(CGPoint(x: 0, y: 1), from: nil).y - origin.y
+            fx.sketch(replay, transform: CGAffineTransform(a: 1, b: 0, c: 0, d: down, tx: origin.x, ty: origin.y))
         case .changesLanded:
             fx.landOnChanges()
         case let .undoing(changes):
@@ -309,6 +380,21 @@ struct AgentChatStage: View {
         case let .writing(point, star):
             guard let backdropView else { return }
             fx.write(at: backdropView.convert(point, from: nil), star: star)
+        }
+    }
+
+    /// A watched point on this stage: from the window, or the global space.
+    private func onStage(_ point: AgentWatchPoint) -> CGPoint? {
+        switch point.space {
+        case .window: return backdropView?.convert(point.point, from: nil)
+        case .global: return CGPoint(x: point.point.x - fx.stageOrigin.x, y: point.point.y - fx.stageOrigin.y)
+        }
+    }
+
+    private func onStage(_ rect: AgentWatchRect) -> CGRect? {
+        switch rect.space {
+        case .window: return backdropView?.convert(rect.rect, from: nil)
+        case .global: return rect.rect.offsetBy(dx: -fx.stageOrigin.x, dy: -fx.stageOrigin.y)
         }
     }
 
@@ -518,14 +604,17 @@ struct AgentChatComposer: View {
         }
         .offset(x: shake)
         .overlay(alignment: .top) {
-            if let label = model.writingLabel {
+            if let label = model.liveLabel {
+                // The drawing's `bottom: calc(100% + 14px)`: its bottom 7 pt
+                // above the composer's top, whatever the composer holds.
                 AgentChatLiveLabel(text: label, alive: alive)
-                    .alignmentGuide(.top) { $0[.bottom] + 7 }
+                    .frame(height: 0, alignment: .bottom)
+                    .offset(y: -7)
                     .transition(alive ? .opacity.combined(with: .scale(scale: 0.97)).combined(with: .offset(y: 4)) : .opacity)
             }
         }
         .animation(alive ? .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.34) : .linear(duration: AgentChatStage.fade),
-                   value: model.writingLabel)
+                   value: model.liveLabel)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { frame in
             fx.composerFrame = frame
         }
@@ -541,7 +630,7 @@ struct AgentChatComposer: View {
         .onChange(of: model.draft) { old, new in if alive, new.count > old.count { fx.keystroke(count: new.count) } }
         .onReceive(model.effects) { effect in
             if effect == .approvalDenied, alive { deny() }
-            if effect == .wroteInNote { focusSoon() }
+            if effect == .watchEnded { focusSoon() }
         }
     }
 
@@ -635,38 +724,29 @@ struct AgentChatComposer: View {
             }
             HStack(spacing: 1) {
                 addMenu
-                AgentChatPickerMenu(identifier: "agent-chat-agent", label: model.agent.shortTitle) {
-                    ForEach(AgentBackend.allCases, id: \.self) { choice in
-                        let reason = model.agentUnavailable[choice]
-                        Button {
-                            model.agent = choice
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(choice.shortTitle)
-                                    if let reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
-                                }
-                                if model.agent == choice { Image(systemName: "checkmark") }
-                            }
-                        }
-                        .disabled(reason != nil)
+                // The glass menu (Accepted 2026-11-10): the same choices,
+                // the current one ticked, a reason or description as the
+                // row's trailing value.
+                AgentChatPickerMenu(identifier: "agent-chat-agent", label: model.agent.shortTitle,
+                                    commands: AgentBackend.allCases.map { choice in
+                    var command = AtticMenuCommand(verbatim: choice.shortTitle, state: model.agent == choice ? .on : .off) {
+                        model.agent = choice
                     }
-                }
-                AgentChatPickerMenu(identifier: "agent-chat-mode", label: model.mode.title) {
-                    ForEach(AgentChatMode.allCases) { choice in
-                        Button {
-                            model.mode = choice
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(choice.title)
-                                    Text(choice.description).font(.caption).foregroundStyle(.secondary)
-                                }
-                                if model.mode == choice { Image(systemName: "checkmark") }
-                            }
-                        }
+                    if let reason = model.agentUnavailable[choice] {
+                        command.detail = reason
+                        command.isDisabled = true
+                        command.disabledReason = reason
                     }
-                }
+                    return command
+                })
+                AgentChatPickerMenu(identifier: "agent-chat-mode", label: model.mode.title,
+                                    commands: AgentChatMode.allCases.map { choice in
+                    var command = AtticMenuCommand(verbatim: choice.title, state: model.mode == choice ? .on : .off) {
+                        model.mode = choice
+                    }
+                    command.detail = choice.description
+                    return command
+                })
                 Spacer(minLength: 0)
                 Button { busy ? model.stop() : model.send() } label: {
                     Image(systemName: busy ? "stop.fill" : "arrow.up")
@@ -753,15 +833,16 @@ struct AgentChatComposer: View {
     }
 }
 
-/// One of the composer's labelled menus (the agent, the mode): its label and a chevron.
-private struct AgentChatPickerMenu<Content: View>: View {
+/// One of the composer's labelled menus (the agent, the mode): its label
+/// and a chevron, opening Attic's glass menu.
+private struct AgentChatPickerMenu: View {
     let identifier: String
     let label: String
-    @ViewBuilder let content: () -> Content
+    let commands: [AtticMenuCommand]
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        Menu(content: content) {
+        AtticCommandMenu(commands: commands, accessibilityLabel: label) {
             HStack(spacing: 3) {
                 Text(label).font(.system(size: 10, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 6, weight: .bold))
@@ -771,10 +852,6 @@ private struct AgentChatPickerMenu<Content: View>: View {
             .frame(height: 21)
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .accessibilityIdentifier(identifier)
         .agentChatUITestTarget(identifier)
     }

@@ -1630,7 +1630,7 @@ final class NoteFormatControls: NSObject {
                 },
                 AtticMenuCommand("Copy Link", identifier: "notes-link-copy") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url, forType: .string)
+                    AtticSounds.play(.copied, if: NSPasteboard.general.setString(url, forType: .string))
                 },
                 AtticMenuCommand("Remove Link", identifier: "notes-link-remove-menu") { [weak self] in
                     self?.router.run(.removeLink, from: .contextMenu, selection: range)

@@ -498,11 +498,75 @@ enum AtticMotionScale {
         .timingCurve(0.2, 0.8, 0.2, 1, duration: duration)
     }
 
-    /// The exit: F/E, in every feel.
-    static var exit: Animation { easeOut(fast) }
+    /// The exit (Accepted 2026-11-10, "Exits speed up"): F on an ease-in,
+    /// in every feel, so what leaves accelerates away instead of slowing
+    /// at the end.
+    static var exit: Animation { .easeIn(duration: fast) }
 
     /// Reduced's fade: F/E.
     static var reducedFade: Animation { easeOut(fast) }
+
+    // Loam's named springs and helpers (Accepted 2026-11-10).
+
+    /// `pop`: light arrivals (the completion tick, the Undo toast), about
+    /// 4 % overshoot. Subtle keeps its own small bounce (a feel only
+    /// changes the bounce).
+    static let pop = AtticMotionSpring(response: 0.30, bounce: 0.28)
+    /// `lift`: a row picked up grows to `liftScale` on it.
+    static let lift = AtticMotionSpring(response: 0.30, bounce: 0.18)
+    static let liftScale: CGFloat = 1.025
+
+    /// Press: buttons and capsules shrink to 0.97 while held, on a 0.20 s
+    /// spring with no bounce (rows never do). Off when motion is reduced.
+    static let pressScale: CGFloat = 0.97
+    static let press = AtticMotionSpring(response: standard, bounce: 0)
+
+    /// A press's scale and its spring, or 1 and nil when motion is reduced.
+    static func pressedScale(pressed: Bool, reduceMotion: Bool) -> CGFloat {
+        pressed && !reduceMotion ? pressScale : 1
+    }
+
+    static func pressAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(duration: press.response, bounce: press.bounce)
+    }
+
+    /// Stagger: things that unfold one after another (the Draw selection
+    /// bar's buttons) start 30 ms apart, never more than 240 ms in all.
+    /// None when motion is reduced.
+    static let staggerStep: Double = 0.03
+    static let staggerCap: Double = 0.24
+    static func stagger(index: Int, reduceMotion: Bool) -> Double {
+        guard !reduceMotion, index > 0 else { return 0 }
+        return min(Double(index) * staggerStep, staggerCap)
+    }
+
+    /// A cross-fade between two whole views (Settings' sections): 0.16 s
+    /// ease-out.
+    static let crossfadeDuration: Double = 0.16
+    static var crossfade: Animation { .easeOut(duration: crossfadeDuration) }
+
+    /// The chrome fold's curve (bars that fold and unfold, the Notes and
+    /// Calendar chrome): 0.26 s on (.3, .7, .2, 1). Named here, unchanged.
+    static let chromeFold: Double = 0.26
+    static let chromeFoldControlPoints: (Double, Double, Double, Double) = (0.3, 0.7, 0.2, 1)
+    static func chromeFoldCurve(_ duration: Double) -> Animation {
+        let p = chromeFoldControlPoints
+        return .timingCurve(p.0, p.1, p.2, p.3, duration: duration)
+    }
+
+    /// Something removed from a list leaves first (fade and shrink to
+    /// 0.96 on the exit), and the gap closes this much later.
+    static let deleteScale: CGFloat = 0.96
+    static let gapCloseDelay: Double = 0.06
+
+    /// The Undo toast: rises 12 pt on pop, sinks 8 pt as it leaves on the
+    /// exit; a swipe down past `toastSwipe` dismisses it.
+    static let toastRise: CGFloat = 12
+    static let toastSink: CGFloat = 8
+    static let toastSwipe: CGFloat = 24
+
+    /// Calendar event details drop in this far (never a slide from the edge).
+    static let detailsDrop: CGFloat = 4
 
     /// E as a Core Animation timing function (the Find bar, the table's
     /// scroll indicator).
@@ -530,6 +594,110 @@ enum AtticMotionScale {
     static func overlayAnimation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? reducedFade : AtticMotionPreset.popover.animation(reduceMotion: false)
     }
+
+    /// The Undo toast: pops in rising 12 pt (from the feel's appear scale),
+    /// sinks 8 pt as it fades on the exit. Reduced: the F/E fade.
+    static func toastTransition(reduceMotion: Bool) -> AnyTransition {
+        if reduceMotion { return .opacity.animation(reducedFade) }
+        let insertion = AnyTransition.opacity
+            .combined(with: .offset(y: toastRise))
+            .combined(with: .scale(scale: overlayScale, anchor: .bottom))
+        let removal = AnyTransition.opacity.combined(with: .offset(y: toastSink)).animation(exit)
+        return .asymmetric(insertion: insertion, removal: removal)
+    }
+
+    /// A list row: added, it drops into its place on `settle` (round 9);
+    /// leaving, it fades and shrinks to 0.96 on the exit, before the gap
+    /// closes (`gapClose`). Reduced: a fade.
+    static func rowTransition(reduceMotion: Bool) -> AnyTransition {
+        if reduceMotion { return .opacity }
+        let removal = AnyTransition.opacity.combined(with: .scale(scale: deleteScale)).animation(exit)
+        return .asymmetric(insertion: AtticMotionPreset.settle.transition(reduceMotion: false, edge: .top),
+                           removal: removal)
+    }
+
+    /// The list's own move: `travel`, starting `gapCloseDelay` late while
+    /// rows are leaving, so the row goes first and the gap closes after.
+    static func gapClose(_ travel: Animation?, afterRowsLeave leaving: Bool) -> Animation? {
+        guard leaving, let travel else { return travel }
+        return travel.delay(gapCloseDelay)
+    }
+
+    /// Reduced motion's other choice for what is instant today (pages,
+    /// expansions): nil (Instant) or the F/E fade (Fade). Code that writes
+    /// `reduceMotion ? nil : motion` writes `reduceMotion ? reducedChange : motion`.
+    static var reducedChange: Animation? {
+        AtticReducedMotionStyle.current == .fade ? reducedFade : nil
+    }
+
+    /// `motion`, or Reduced's choice (`reducedChange`) when motion is reduced.
+    static func resolved(_ motion: Animation?, reduceMotion: Bool) -> Animation? {
+        reduceMotion ? reducedChange : motion
+    }
+}
+
+/// One of a bar's items arriving in turn (`AtticMotionScale.stagger`): it
+/// fades in and rises 4 pt on the pop-over spring, `index` steps late.
+/// Reduced: there at once.
+struct AtticStaggeredArrival: ViewModifier {
+    let index: Int
+    @Environment(\.atticDesign) private var design
+    @State private var arrived = false
+
+    func body(content: Content) -> some View {
+        let shown = arrived || design.reduceMotion
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : AtticMotionScale.overlayRise)
+            .onAppear {
+                guard !arrived else { return }
+                // A mounted item has already arrived under Reduced. Keep that
+                // state when normal motion is switched on without a remount.
+                if design.reduceMotion { arrived = true; return }
+                guard let spring = AtticMotionPreset.popover.animation(reduceMotion: false) else { return }
+                withAnimation(spring.delay(AtticMotionScale.stagger(index: index, reduceMotion: false))) { arrived = true }
+            }
+    }
+}
+
+/// Settings › General › Animations, Reduced (or macOS Reduce Motion): how
+/// what moves today changes instead (Accepted 2026-11-10, "Reduced motion,
+/// both"). Instant (the default, as decided 2 Nov): page changes and
+/// expansions happen at once and the rest fades. Fade: every movement,
+/// pages and expansions included, becomes the 0.12 s fade (Loam's way).
+enum AtticReducedMotionStyle: String, CaseIterable, Sendable {
+    case instant
+    case fade
+
+    static let `default`: AtticReducedMotionStyle = .instant
+
+    var title: String {
+        switch self {
+        case .instant: String(localized: "Instant")
+        case .fade: String(localized: "Fade")
+        }
+    }
+
+    /// Written only on the main thread, by `AppSettings`; read wherever an
+    /// animation is made, as `AtticMotionTuning.current` is.
+    nonisolated(unsafe) static var current: AtticReducedMotionStyle = .default
+}
+
+/// The chat's motion, Attic's one named exception to the scale (drawn on
+/// purpose, 6 Nov: "the blur opens from the ✦"): the numbers the chat's
+/// own code uses, named here so the token table lists them. Unchanged.
+enum AtticChatMotion {
+    /// The blur opening from the ✦: 0.62 s on the chrome fold's curve.
+    static let opening: Double = 0.62
+    /// The blur closing: 0.40 s, easing in.
+    static let closing: Double = 0.40
+    /// The thread's pieces arriving: 0.42 to 0.56 s, some overshooting
+    /// on (.3, 1.6–1.8, .5, 1).
+    static let threadArrival: ClosedRange<Double> = 0.42...0.56
+    /// Scrolling to the end of the thread.
+    static let scrollToEnd: Double = 0.25
+    /// The ✦ grows on hover.
+    static let sparkHoverScale: CGFloat = 1.14
 }
 
 /// The search takeover, one recipe for Tasks and All notes (A4 M-01; the
@@ -659,11 +827,11 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         return .spring(duration: spring.response, bounce: spring.bounce)
     }
 
-    /// Reduced's fallback, the same in every feel: the F/E fade, or an
-    /// instant change for a page switch and an expansion.
+    /// Reduced's fallback, the same in every feel: the F/E fade, or, for a
+    /// page switch and an expansion, Reduced's choice (instant, or the fade).
     private var reducedAnimation: Animation? {
         switch reducedMotion {
-        case .instant: nil
+        case .instant: AtticMotionScale.reducedChange
         case .fade: AtticMotionScale.reducedFade
         }
     }
@@ -794,21 +962,29 @@ extension AtticMotionTuning {
     /// quick look, the done row's slide, settling and a failed drop's
     /// return take L (280 ms); pop-overs, toasts and completions take M
     /// (200 ms). Feels differ only in bounce and in how much things grow.
-    private static func scaled(bounce: Double, appearScale: Double, leaveScale: Double) -> AtticMotionTuning {
+    /// The toast arrives on `pop` (Accepted 2026-11-10): its 0.30 s, with
+    /// pop's bounce in Lively and the feel's own small bounce in Subtle.
+    private static func scaled(bounce: Double, popBounce: Double, appearScale: Double, leaveScale: Double) -> AtticMotionTuning {
         let spatial = AtticMotionSpring(response: AtticMotionScale.spatial, bounce: bounce)
         let standard = AtticMotionSpring(response: AtticMotionScale.standard, bounce: bounce)
+        let pop = AtticMotionSpring(response: AtticMotionScale.pop.response, bounce: popBounce)
         return AtticMotionTuning(
             slide: spatial, expand: spatial, doneSlide: spatial,
-            popover: standard, toast: standard, complete: standard, settle: spatial, failReturn: spatial,
+            popover: standard, toast: pop, complete: standard, settle: spatial, failReturn: spatial,
             appearScale: appearScale, leaveResponse: AtticMotionScale.fast, leaveScale: leaveScale
         )
     }
 
     /// Bounce 0.04, growing from 0.96 of their size.
-    static let subtle = scaled(bounce: 0.04, appearScale: 0.96, leaveScale: 0.98)
+    static let subtle = scaled(bounce: 0.04, popBounce: 0.04, appearScale: 0.96, leaveScale: 0.98)
 
-    /// The default: bounce 0.12, growing from 0.92 of their size.
-    static let lively = scaled(bounce: 0.12, appearScale: 0.92, leaveScale: 0.96)
+    /// The default: bounce 0.12, growing from 0.92 of their size; light
+    /// arrivals pop (0.28).
+    static let lively = scaled(bounce: 0.12, popBounce: AtticMotionScale.pop.bounce, appearScale: 0.92, leaveScale: 0.96)
+
+    /// The completion tick lands on `pop` in this feel (the sweep keeps
+    /// `complete`).
+    var tick: AtticMotionSpring { toast }
 
 }
 
@@ -900,12 +1076,19 @@ enum AtticMotionPreference {
 // MARK: - Touch
 
 /// The haptic tick: a light tap when a task is completed and when a dragged
-/// item snaps into place. Nothing else plays haptics, and nothing plays sound.
+/// item snaps into place; a level change when a row is picked up
+/// (Accepted 2026-11-10). The Haptics setting covers both.
 enum AtticHaptics {
     @MainActor
     static func tick(enabled: Bool = true) {
         guard enabled else { return }
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    @MainActor
+    static func pickUp(enabled: Bool = true) {
+        guard enabled else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 }
 

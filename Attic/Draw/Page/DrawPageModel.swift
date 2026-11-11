@@ -48,10 +48,32 @@ struct DrawTextEdit: Equatable {
     var pointSize: CGFloat { CGFloat(style.size.textSize) * scale }
 }
 
+/// Mutable live samples: AppKit can deliver thousands of drag events before
+/// mouse-up. Keep one buffer so extending a stroke never copies its prefix.
+final class DrawInkTrace: Equatable {
+    private(set) var samples: [DrawInkSample]
+    private(set) var hasPressure: Bool
+
+    init(_ sample: DrawInkSample) {
+        samples = [sample]
+        hasPressure = sample.pressure != nil
+    }
+
+    func append(_ sample: DrawInkSample) {
+        // AppKit can interleave ordinary mouse-drag/up events with tablet
+        // points. Do not let an unpressured event reset the stylus nib.
+        let pressure = sample.pressure ?? (hasPressure ? samples.last?.pressure : nil)
+        samples.append(DrawInkSample(point: sample.point, pressure: pressure))
+        if pressure != nil { hasPressure = true }
+    }
+
+    static func == (lhs: DrawInkTrace, rhs: DrawInkTrace) -> Bool { lhs.samples == rhs.samples }
+}
+
 /// What the pointer is doing on the board right now (never published: the
 /// board view reads it on each event).
 enum DrawLive: Equatable {
-    case ink([CGPoint])
+    case ink(DrawInkTrace)
     case shape(DrawShape, start: CGPoint, end: CGPoint)
     case erase(gone: Set<UUID>, last: CGPoint)
     case move(from: CGPoint, offset: CGPoint, moved: Bool)
@@ -138,6 +160,8 @@ final class DrawPageModel: ObservableObject {
     private(set) var contentRevision = 0
     var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
+    /// Last drag modifier for callers that finish an input without an event.
+    var lastPointerShift = false
     private(set) var editing: DrawTextEdit?
     private(set) var isShown = false
     var spaceHeld = false
@@ -226,7 +250,10 @@ final class DrawPageModel: ObservableObject {
     /// The page's side of the library seam.
     var libraryActions: DrawLibraryActions {
         DrawLibraryActions(open: { [weak self] in self?.open($0) },
-                           newCanvas: { [weak self] in self?.newCanvas(name: $0) },
+                           newCanvas: { [weak self] in
+                               guard let self else { return }
+                               AtticSounds.play(.created, if: self.newCanvas(name: $0))
+                           },
                            reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
                            close: { [weak self] in self?.closeFilter() },
                            canvasChanged: { [weak self] in self?.syncExternalChanges() },
@@ -493,9 +520,16 @@ final class DrawPageModel: ObservableObject {
 
     func object(_ id: UUID) -> DrawObject? { objects.first { $0.id == id } }
 
+    /// Objects the agent saved but has not drawn in yet: the chat's sketch
+    /// replay draws them over the board, then lets them show (Accepted
+    /// 2026-11-06, "the living spark does the work"). Presentation only.
+    var agentVeil: Set<UUID> = [] {
+        didSet { if agentVeil != oldValue { board?.drawContentChanged() } }
+    }
+
     /// What the next raster leaves out or draws moved.
     var rasterHidden: Set<UUID> {
-        var hidden: Set<UUID> = []
+        var hidden: Set<UUID> = agentVeil
         if let editing { hidden.insert(editing.id) }
         if case .erase(let gone, _) = live { hidden.formUnion(gone) }
         return hidden
@@ -560,15 +594,17 @@ final class DrawPageModel: ObservableObject {
     }
 
     /// "+": a new, empty canvas straight away (a draft until its first content).
-    func newCanvas(name: String? = nil) {
+    @discardableResult
+    func newCanvas(name: String? = nil) -> Bool {
         if library.isRenaming {
             library.commitRename()
-            guard !library.isRenaming else { return }
+            guard !library.isRenaming else { return false }
         }
         let canvas = store.create(name: name)
         viewports[canvas.id] = DrawViewport()
         open(canvas.id)
         setTool(.pen)
+        return canvasID == canvas.id
     }
 
     /// The library's "reveal": open the canvas, bring the text box into view
@@ -776,7 +812,9 @@ final class DrawPageModel: ObservableObject {
     func arrange(toFront: Bool) {
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
-        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count)
+        // Pre-increment below: leave every chosen object's z below the
+        // previous bottom, so UUID tie-breaking cannot leave one in front.
+        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count) - 1
         let moved = chosen.map { object -> DrawObject in
             z += 1
             var copy = object
@@ -961,6 +999,7 @@ final class DrawPageModel: ObservableObject {
             library.commitRename()
             guard !library.isRenaming else { return }
         }
+        endEditing()
         closeFilter()
         isSearching = true
     }
@@ -1010,7 +1049,10 @@ final class DrawPageModel: ObservableObject {
             },
             AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: KeyboardShortcut("a", modifiers: .command),
                              isDisabled: empty, startsSection: true) { [weak self] in self?.selectAll() },
-            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in self?.newCanvas() },
+            AtticMenuCommand(verbatim: String(localized: "New Canvas"), startsSection: true) { [weak self] in
+                guard let self else { return }
+                AtticSounds.play(.created, if: self.newCanvas())
+            },
             AtticMenuCommand(verbatim: String(localized: "Copy as Image"), isDisabled: empty) { [weak self] in
                 guard let self, let canvasID = self.canvasID else { return }
                 self.images.copyCanvas(canvasID)

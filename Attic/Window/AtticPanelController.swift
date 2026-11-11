@@ -190,6 +190,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The Tall island beside the panel (Accepted 2026-10-31): two child
     /// windows the controller places, shows, hides and fades with it.
     private let islandWindows: PanelIslandWindows
+    /// The spark's flight to the island, drawn past the panel's edge.
+    private let agentReachWindow = AgentReachWindow()
     /// Pages pulled off the island into their own panels (Accepted "Tall
     /// island", "Pull a page out, snap it back in").
     let pullOut: PanelPullOutController
@@ -358,6 +360,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 return nil
             }
         }
+        // A reply's underlined phrase lights its row: the Tasks rows on show.
+        uiState.agentChat.rowTitles = { [weak tasksPageState, weak store] in
+            (tasksPageState?.builtModel?.agentRowFrames(nil) ?? []).compactMap { row in
+                store?.task(withID: row.id).map { (row.id, $0.title) }
+            }
+        }
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -393,6 +401,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         configurePanel()
         bindContentSize()
         uiState.island.onClick = { [weak self] in self?.activateFromIsland() }
+        // The agent's spark goes to the island's item and taps it.
+        uiState.agentWatcher?.islandPoint = { [weak self] page in self?.agentIslandPoint(page) }
+        uiState.agentWatcher?.islandTap = { [weak self] page in self?.uiState.island.agentTap(page.panelPage) }
+        // ...and is drawn across the gap and around the island meanwhile.
+        uiState.agentReach = { [weak self] target in self?.agentReach(target) ?? false }
         settings.$islandSpot.removeDuplicates().dropFirst()
             // After the stored value changes (`@Published` sends before).
             .receive(on: RunLoop.main)
@@ -1887,6 +1900,32 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// One click makes the panel active (Owner notes on Attic Wave 2): a
     /// click on the island gives the panel the keyboard, as one on the
     /// panel does.
+    /// An island item's centre in the panel window's coordinates: the item
+    /// awake, or its resting dot.
+    private func agentIslandPoint(_ page: AgentPage) -> CGPoint? {
+        guard islandWindows.isVisible, let index = PanelIslandLayout.pages.firstIndex(of: page.panelPage) else { return nil }
+        let centre: CGPoint
+        if uiState.island.isAwake {
+            let item = PanelIslandLayout.itemFrame(index, in: islandWindows.islandFrame)
+            centre = CGPoint(x: item.midX, y: item.midY)
+        } else {
+            let rest = islandWindows.restFrame
+            let share = (CGFloat(index) + 0.5) / CGFloat(PanelIslandLayout.pages.count)
+            centre = rest.width > rest.height ? CGPoint(x: rest.minX + rest.width * share, y: rest.midY)
+                : CGPoint(x: rest.midX, y: rest.maxY - rest.height * share)
+        }
+        return panel.convertPoint(fromScreen: centre)
+    }
+
+    private func agentReach(_ target: (fx: AgentChatFX, stage: NSView)?) -> Bool {
+        guard let target else {
+            agentReachWindow.hide()
+            return true
+        }
+        return agentReachWindow.show(fx: target.fx, stage: target.stage, over: panel,
+                                     island: islandWindows.isVisible ? islandWindows.island.frame : nil)
+    }
+
     private func activateFromIsland() {
         guard panel.isVisible, panel.canBecomeKey, !panel.isKeyWindow else { return }
         panel.makeKey()

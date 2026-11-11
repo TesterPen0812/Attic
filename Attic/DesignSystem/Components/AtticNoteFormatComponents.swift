@@ -116,6 +116,7 @@ private struct AtticFormatToggleFace<Face: View>: View {
         face(ink)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent).fill(fill.color))
+            .atticPressScale(isPressed && isEnabled)
     }
 }
 

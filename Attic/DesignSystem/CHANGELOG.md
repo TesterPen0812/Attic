@@ -1457,3 +1457,9 @@ pair applies only in Dark, as originally intended.
   card entrance (`AtticDropdownReveal.frame`, V-11); no motion edit needed.
 - Bottom-bar controls begin their normal return as soon as the composer has
   finished folding, with no additional 90 ms wait or controls peeking through.
+
+## 2026-11-10 · Staggered arrival when Reduce Motion changes (E-2)
+
+- Controls first shown with Reduced motion stay visible when normal motion is
+  enabled while they remain mounted. The existing 30 ms stagger still plays
+  for first arrivals under normal motion only; no timing or style tokens change.

@@ -59,7 +59,7 @@ final class AtticGlassMenuTests: XCTestCase {
     }
 
     private func center(of row: Int, in card: AtticGlassMenuCard) -> NSPoint {
-        let frame = card.window.frame
+        let frame = card.frame
         let entry = card.entries[row].frame
         return NSPoint(x: frame.minX + entry.midX, y: frame.maxY - entry.midY)
     }
@@ -70,7 +70,7 @@ final class AtticGlassMenuTests: XCTestCase {
 
     // MARK: Layout
 
-    func testTheLayoutIsDraftCsRowsSeparatorsAndHeadersWithNoShortcutHints() {
+    func testTheLayoutIsLoamsRowsSeparatorsAndTitlesWithShortcutsAtTheEnd() {
         let layout = AtticGlassMenuCard.layout(commands())
         let kinds = layout.entries.map { entry -> String in
             switch entry.kind {
@@ -81,17 +81,20 @@ final class AtticGlassMenuTests: XCTestCase {
         }
         XCTAssertEqual(kinds, ["Complete", "Disabled", "Date", "—", "Tags", "—", "Delete"], "a separator starts each section")
         XCTAssertEqual(layout.entries[0].frame.height, 32, "32 pt rows")
-        XCTAssertEqual(layout.entries[0].frame.minY, 3, "Accepted Shapes: 6 design px padding")
-        XCTAssertEqual(layout.entries[3].frame.height, 8.5, "a 0.5 pt hairline with 4 pt above and below")
-        XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "a command menu is 184 pt")
+        XCTAssertEqual(layout.entries[0].frame.minY, 6, "Loam: 6 pt padding")
+        XCTAssertEqual(layout.entries[3].frame.height, 11, "a hairline on an 11 pt band")
+        XCTAssertEqual(layout.size.width, 216, "at least 216 pt")
         let submenu = AtticGlassMenuCard.layout(commands()[2].children)
         XCTAssertEqual(submenu.entries.first.map { if case .header = $0.kind { true } else { false } }, true, "a titled section's header")
         XCTAssertEqual(submenu.entries.first?.frame.height, 26)
-        // The hint is hidden: a shortcut adds no width.
-        let plain = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title here") {}])
-        let hinted = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title here",
+        // The shortcut sits at the trailing edge (Loam's), and takes room.
+        let plain = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title, longer still") {}])
+        let hinted = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title, longer still",
                                                                  shortcut: KeyboardShortcut("d", modifiers: [.command, .option])) {}])
-        XCTAssertEqual(plain.size, hinted.size, "shortcut hints are not drawn (draft C), so they take no room")
+        XCTAssertGreaterThan(hinted.size.width, plain.size.width, "the shortcut is drawn at the end")
+        XCTAssertEqual(AtticMenuCommand(verbatim: "Info", shortcut: KeyboardShortcut("i", modifiers: [.command, .shift])) {}.glassShortcut, "⇧⌘I")
+        XCTAssertNil(AtticMenuCommand(verbatim: "Edit", shortcut: KeyboardShortcut(.return, modifiers: [])) {}.glassShortcut,
+                     "a bare key is the list's, not drawn")
     }
 
     func testMenuSecondaryInksReadThroughGlass() throws {
@@ -125,21 +128,24 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
-    func testMenuRowsStayClippedToTheSquircleWhenTheCardIsShortened() throws {
+    func testMenuRowsStayClippedToTheCardWhenTheCardIsShortened() throws {
         let menu = open(commands())
         defer { menu.close(animated: false) }
-        let root = try XCTUnwrap(menu.cards.first?.window.contentView)
+        let root = try XCTUnwrap(menu.cards.first?.window.cardView)
         root.layoutSubtreeIfNeeded()
         let mask = try XCTUnwrap(root.layer?.mask as? CAShapeLayer)
         let path = try XCTUnwrap(mask.path)
         XCTAssertFalse(path.contains(.zero))
-        XCTAssertTrue(path.contains(CGPoint(x: 2.3, y: 2.3)), "a squircle at the menu radius, rather than circular corners")
+        XCTAssertEqual(path, AtticGlassMenuShape.card.path(in: root.bounds).cgPath,
+                       "Loam's continuous 18 pt corners (owner, 11 Nov: the squircle read as tight corners)")
+        XCTAssertFalse(path.contains(CGPoint(x: 4, y: 4)), "round enough that the corner's inner 4 pt stays outside")
         XCTAssertEqual(path.boundingBoxOfPath, root.bounds)
         root.setFrameSize(CGSize(width: root.bounds.width, height: 90))
         root.layoutSubtreeIfNeeded()
         XCTAssertEqual(mask.path?.boundingBoxOfPath, root.bounds, "scrolling rows remain within a capped card")
-        XCTAssertEqual(AtticGlassMenuShape.radius, 16, "the owner's 16 pt menus (2026-10-31)")
-        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 13, "concentric: 16 − 3")
+        XCTAssertEqual(AtticGlassMenuShape.radius, 18, "Loam's 18 pt menus (Accepted 2026-11-10)")
+        XCTAssertEqual(AtticGlassMenuShape.inset, 6)
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 12, "concentric: 18 − 6")
     }
 
     // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)
@@ -154,26 +160,27 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
-    /// Rule 1: two widths instead of content-fit. 184 pt for a command
-    /// menu, 224 pt when a row needs more, a menu's own width when it names
-    /// one (Date › 200 pt); a row longer than 224 pt is cut short.
-    func testMenusHaveTwoWidthsNotContentFit() {
-        XCTAssertEqual(AtticMenuMetrics.commandWidth, 184)
-        XCTAssertEqual(AtticMenuMetrics.wideWidth, 224)
-        XCTAssertEqual(AtticMenuMetrics.dateMenuWidth, 200)
-        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 184)
-        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A rather long command title, longer") {}]).size.width, 224)
+    /// Accepted 2026-11-10: as wide as the control and at least 216 pt;
+    /// rows that need more widen it up to 280 pt, past which they are cut
+    /// short; a menu that names its width keeps it, never under 216 pt.
+    func testMenusAreAtLeast216AndAsWideAsTheirControl() {
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 216)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}], minimum: 300).size.width, 300, "as wide as the control")
+        let long = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A rather long command title, longer still and more") {}]).size.width
+        XCTAssertGreaterThan(long, 216)
+        XCTAssertLessThanOrEqual(long, 280)
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: String(repeating: "Very long ", count: 12)) {}]).size.width,
-                       224, "never wider: the row is cut short")
-        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 200).size.width, 200)
-        // A submenu's card takes its command's width.
+                       280, "never wider: the row is cut short")
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 200).size.width, 216)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 224).size.width, 224)
+        // A submenu's card takes its command's width (at least 216 pt).
         let date = AtticMenuCommand.submenu("Date", width: AtticMenuMetrics.dateMenuWidth, [AtticMenuCommand(verbatim: "Today") {}])
         let menu = open([date])
         defer { menu.close(animated: false) }
         menu.handle(key(125))
         menu.handle(key(36, "\r"))
         XCTAssertEqual(menu.cards.count, 2, "Return opens Date ›")
-        XCTAssertEqual(menu.cards[1].size.width, 200)
+        XCTAssertEqual(menu.cards[1].size.width, 216)
     }
 
     /// Rule 2: one icon family. A choice (a row with a tick state) never
@@ -219,6 +226,71 @@ final class AtticGlassMenuTests: XCTestCase {
         let below = AtticGlassMenu.rootFrame(size: size, placement: .below(NSRect(x: 300, y: 600, width: 30, height: 30)), visible: screen)
         XCTAssertEqual(below.maxY, 600 - AtticMenuMetrics.anchorGap)
         XCTAssertEqual(below.minX, 300, "on the button's leading edge")
+    }
+
+    /// Accepted 2026-11-10: out of the control, 8 pt away, on its leading
+    /// edge (trailing on the panel's right half), toward the panel's
+    /// middle, growing from the corner by the control.
+    func testTheMenuComesOutOfItsControlTowardThePanelsMiddle() {
+        let size = CGSize(width: 216, height: 200)
+        let panel = NSRect(x: 900, y: 200, width: 400, height: 600)
+        let topLeft = NSRect(x: 920, y: 760, width: 24, height: 24)
+        let a = AtticGlassMenu.rootPlacement(size: size, placement: .below(topLeft), visible: screen, container: panel)
+        XCTAssertEqual(a.frame.minX, topLeft.minX, "its leading edge on the control's")
+        XCTAssertEqual(a.frame.maxY, topLeft.minY - 8, "8 pt below a control on the upper half")
+        XCTAssertEqual(a.corner, .topLeading)
+        let bottomRight = NSRect(x: 1250, y: 220, width: 24, height: 24)
+        let b = AtticGlassMenu.rootPlacement(size: size, placement: .below(bottomRight), visible: screen, container: panel)
+        XCTAssertEqual(b.frame.maxX, bottomRight.maxX, "its trailing edge on the control's, on the right half")
+        XCTAssertEqual(b.frame.minY, bottomRight.maxY + 8, "up from a control on the lower half")
+        XCTAssertEqual(b.corner, .bottomTrailing)
+        // No room above at the screen's top: it opens down instead.
+        let high = NSRect(x: 920, y: 850, width: 24, height: 24)
+        let tall = AtticGlassMenu.rootPlacement(size: CGSize(width: 216, height: 400), placement: .below(high), visible: screen,
+                                                container: NSRect(x: 900, y: 0, width: 400, height: 2000))
+        XCTAssertEqual(tall.frame.maxY, high.minY - 8)
+        // A menu taller than the screen stays inside it (its rows scroll).
+        let long = AtticGlassMenu.rootPlacement(size: CGSize(width: 216, height: 2000), placement: .below(topLeft), visible: screen, container: panel)
+        XCTAssertGreaterThanOrEqual(long.frame.minY, screen.minY + AtticMenuMetrics.screenMargin)
+        XCTAssertLessThanOrEqual(long.frame.maxY, screen.maxY - AtticMenuMetrics.screenMargin)
+        // A right-click: from the pointer.
+        let point = AtticGlassMenu.rootPlacement(size: size, placement: .point(CGPoint(x: 1400, y: 600)), visible: screen)
+        XCTAssertEqual(point.corner, .topTrailing, "flipped left of the pointer, it grows from its top-right")
+    }
+
+    /// The motion runs on Core Animation: the card grows from its corner
+    /// on the spring, the rows cascade 30 ms apart; Reduce Motion fades
+    /// only, with no growth and no cascade.
+    func testTheCardGrowsAndItsRowsCascadeButReduceMotionOnlyFades() throws {
+        let saved = AtticGlassMenu.design
+        defer { AtticGlassMenu.design = saved }
+        let menu = open(commands())
+        let card = menu.cards[0]
+        let lift = try XCTUnwrap(card.window.lift.layer)
+        let grow = try XCTUnwrap(lift.animation(forKey: "attic.open.grow") as? CASpringAnimation)
+        XCTAssertEqual(grow.perceptualDuration, 0.30, accuracy: 0.01)
+        XCTAssertEqual(grow.bounce, 0.28, accuracy: 0.01)
+        let small = try XCTUnwrap((grow.fromValue as? NSValue)?.caTransform3DValue)
+        XCTAssertEqual(small.m11, 0.86, accuracy: 1e-6, "from 0.86")
+        XCTAssertNotNil(lift.animation(forKey: "attic.open.fade"))
+        let rows = card.view.subviews.first?.subviews.compactMap { $0 as? AtticGlassMenuEntryView }
+            .filter { card.entries[$0.index].isItem } ?? []
+        let begins = rows.compactMap { $0.layer?.animation(forKey: "attic.row.slide")?.beginTime }
+        XCTAssertEqual(begins.count, rows.count, "every row slides in")
+        XCTAssertEqual(begins[1] - begins[0], 0.03, accuracy: 0.005, "30 ms apart")
+        XCTAssertEqual(AtticMenuMetrics.stagger(20), 0.24, "at most 240 ms")
+        menu.close(animated: false)
+
+        var reduced = saved
+        reduced.reduceMotion = true
+        AtticGlassMenu.design = reduced
+        let calm = open(commands())
+        defer { calm.close(animated: false) }
+        let calmLift = try XCTUnwrap(calm.cards[0].window.lift.layer)
+        XCTAssertNil(calmLift.animation(forKey: "attic.open.grow"), "Reduce Motion: no growth")
+        XCTAssertNotNil(calmLift.animation(forKey: "attic.open.fade"), "a fade only")
+        let calmRows = calm.cards[0].view.subviews.first?.subviews.compactMap { $0 as? AtticGlassMenuEntryView } ?? []
+        XCTAssertTrue(calmRows.allSatisfy { $0.layer?.animation(forKey: "attic.row.slide") == nil }, "no cascade")
     }
 
     func testASubmenuOpensBesideItsRowAndFlipsAtTheEdge() {
@@ -328,7 +400,7 @@ final class AtticGlassMenuTests: XCTestCase {
         let child = menu.cards[1]
         XCTAssertEqual(child.screenTop(ofRow: try XCTUnwrap(child.selectableIndices.first)), root.screenTop(ofRow: date), accuracy: 0.5,
                        "the submenu's first item lines up with the row that opened it")
-        XCTAssertEqual(child.window.frame.minX, root.window.frame.maxX + 4, accuracy: 0.5)
+        XCTAssertEqual(child.frame.minX, root.frame.maxX + 4, accuracy: 0.5)
         // Crossing the next row on the way: the submenu stays for the grace.
         let tags = row(titled: "Tags", in: root)
         menu.pointerMoved(to: center(of: tags, in: root))

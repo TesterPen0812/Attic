@@ -6,8 +6,10 @@ import SwiftUI
 /// row, the month grid of keys right under it, and the agenda below. The
 /// grid scrolls with the agenda; the selected day's week pins under the
 /// weekday letters while the other weeks scroll away, so scrolling (or the
-/// month pill) moves between the month and the week. Search folds to the
-/// selected week; Today sits between the arrows, and the footer keeps "+".
+/// month pill) moves between the month and the week. With Week picked the
+/// grid is only the selected week, so no scroll unfolds it (Accepted
+/// 2026-11-10). Search folds to the selected week; Today sits between the
+/// arrows, and the footer keeps "+".
 struct CalendarPage: View {
     @ObservedObject var model: CalendarPageModel
     let layout: PanelPageLayout
@@ -26,7 +28,16 @@ struct CalendarPage: View {
     @Environment(\.panelComposer) private var composer
     @Environment(\.panelResumeDefaults) private var resumeDefaults
     @State private var scrollPosition = ScrollPosition(y: 0)
-    @State private var flags = ScrollFlags()
+    @State private var flags: ScrollFlags
+    /// The grid is only the selected week: Week is picked and the fold to
+    /// it has finished. It trails `model.isWeekPicked` while the fold runs.
+    @State private var weekOnly: Bool
+    /// The scroller's last offset, read without publishing view state, so
+    /// swapping the month for the week keeps everything where it was.
+    @State private var lastOffset = OffsetBox()
+    /// A later view pick invalidates an earlier fold's delayed completion.
+    @State private var foldToken: UInt64 = 0
+    @State private var foldingIntoWeek = false
     @State private var searchOpen = false
     @State private var searchFocused = false
     /// The keyboard's task row in the agenda (Return renames, ⇧⌘I opens).
@@ -38,6 +49,19 @@ struct CalendarPage: View {
     struct ScrollFlags: Equatable {
         var pinned = false
         var weekView = false
+    }
+
+    final class OffsetBox { var y: CGFloat = 0 }
+
+    init(model: CalendarPageModel, layout: PanelPageLayout, taskActions: CalendarTaskRowActions,
+         onNewTask: @escaping (DueDay) -> Void, panelIsVisible: Bool = true) {
+        self.model = model
+        self.layout = layout
+        self.taskActions = taskActions
+        self.onNewTask = onNewTask
+        self.panelIsVisible = panelIsVisible
+        _flags = State(initialValue: ScrollFlags(weekView: model.isWeekPicked))
+        _weekOnly = State(initialValue: model.isWeekPicked)
     }
 
     #if DEBUG
@@ -106,11 +130,17 @@ struct CalendarPage: View {
         .onDisappear { model.setVisible(false) }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
+        // The agent picks a day while you watch (the spark taps its key).
+        .onReceive(AgentWatchBoard.shared.$dayRequest.compactMap { $0 }) { request in
+            AgentWatchBoard.shared.consumeDay(request.id)
+            model.select(request.day)
+        }
         .onChange(of: snapshot.weeks.count) { _, count in
             // The week view stays the week view when the month changes
             // (a month of another length has another offset).
-            if flags.weekView { scrollPosition.scrollTo(y: CalendarMonthMath.weekViewOffset(weekCount: count)) }
+            if flags.weekView, !weekOnly { scrollPosition.scrollTo(y: CalendarMonthMath.weekViewOffset(weekCount: count)) }
         }
+        .onChange(of: model.isWeekPicked) { _, week in foldToPickedView(week: week) }
         // A container, so its id does not replace its controls' own.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("calendar-page")
@@ -119,8 +149,7 @@ struct CalendarPage: View {
     // MARK: Scrolling grid and agenda
 
     private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
-        let weeks = snapshot.weeks
-        let pinnedIndex = snapshot.pinnedWeekIndex.flatMap { weeks.indices.contains($0) ? $0 : nil }
+        let (weeks, pinnedIndex) = gridWeeks(snapshot)
         let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
         return PanelComposerClearance { extra in
             ScrollView(.vertical) {
@@ -163,8 +192,10 @@ struct CalendarPage: View {
             .scrollPosition($scrollPosition)
             .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
                 let offset = geometry.contentOffset.y + geometry.contentInsets.top
+                lastOffset.y = offset
                 return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
-                                   weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
+                                   weekView: weekOnly
+                                       || CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
             } action: { _, new in
                 if flags != new { flags = new }
             }
@@ -173,6 +204,17 @@ struct CalendarPage: View {
             .accessibilityIdentifier("calendar-scroll")
         }
     }
+
+    /// The grid's rows and the selected one's index: the whole month, or
+    /// with Week picked only the selected week.
+    private func gridWeeks(_ snapshot: CalendarPageSnapshot) -> (weeks: [CalendarGridWeek], pinned: Int?) {
+        let pinned = snapshot.pinnedWeekIndex.flatMap { snapshot.weeks.indices.contains($0) ? $0 : nil }
+        if weekOnly, let pinned { return ([snapshot.weeks[pinned]], 0) }
+        return (snapshot.weeks, pinned)
+    }
+
+    /// The grid's row count as drawn: 1 with only the week.
+    private var gridWeekCount: Int { gridWeeks(model.snapshot).weeks.count }
 
     @ViewBuilder
     private func agenda(_ snapshot: CalendarPageSnapshot) -> some View {
@@ -217,7 +259,9 @@ struct CalendarPage: View {
         PanelTopRow(page: .calendar, layout: layout, searchOpen: searchOpen, moreCommands: { moreCommands() }) {
             CalendarMonthTitle(month: snapshot.month, isWeekView: flags.weekView, dayView: showsDay ? snapshot.selected : nil,
                                onToggleWeekView: {
-                                   if showsDay { afterClosingEvent { setView(.week) } }
+                                   // From Day, back to the picked view; in Week, to the month.
+                                   if showsDay { afterClosingEvent { setView(model.isWeekPicked ? .week : .month) } }
+                                   else if model.isWeekPicked { model.pickWeek(false) }
                                    else { toggleWeekView(weekCount: snapshot.weeks.count) }
                                })
         } pageSwitch: {
@@ -242,7 +286,7 @@ struct CalendarPage: View {
         .animation(CalendarDesign.searchAnimation(opening: searchOpen, reduceMotion: design.reduceMotion), value: searchOpen)
         .onChange(of: searchOpen) { _, open in
             withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
-                scrollPosition.scrollTo(y: open ? CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count) : 0)
+                scrollPosition.scrollTo(y: open ? CalendarMonthMath.weekViewOffset(weekCount: gridWeekCount) : 0)
             }
         }
         .onChange(of: searchFocused) { _, focused in
@@ -254,7 +298,9 @@ struct CalendarPage: View {
     /// The Day view, unless a search has the page.
     private var showsDay: Bool { model.isDayView && !searchOpen && !model.snapshot.isSearching }
 
-    private var currentView: CalendarViewMode { showsDay ? .day : flags.weekView ? .week : .month }
+    /// What ••• ticks: the picked view. A Month folded by scrolling is still
+    /// Month (ticking Week there made Week look picked, 2026-11-10).
+    private var currentView: CalendarViewMode { showsDay ? .day : model.isWeekPicked ? .week : .month }
 
     /// ‹ ›: a day in the Day view, otherwise a week or a month.
     private func step(_ n: Int) {
@@ -296,14 +342,18 @@ struct CalendarPage: View {
         }
         let week = view == .week
         guard model.isDayView else {
-            if week != flags.weekView { toggleWeekView(weekCount: model.snapshot.weeks.count) }
+            if week != model.isWeekPicked { model.pickWeek(week) }
+            // Month on a Month folded by scrolling: back to the month, as before.
+            else if !week, flags.weekView { toggleWeekView(weekCount: model.snapshot.weeks.count) }
             return
         }
         // The grid comes back already at the month or the week.
-        let target = week ? CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count) : 0
+        let target = week ? CalendarMonthMath.weekViewOffset(weekCount: 1) : 0
         PanelResumeScrollKeeper.remember(target, key: "calendar", in: resumeDefaults)
+        weekOnly = week
         flags = ScrollFlags(pinned: week, weekView: week)
         scrollPosition.scrollTo(y: target)
+        model.pickWeek(week)
         model.setDayView(false)
     }
 
@@ -315,7 +365,7 @@ struct CalendarPage: View {
         afterClosingEvent {
             // From Day, the agenda comes back folded to the week.
             if model.isDayView {
-                PanelResumeScrollKeeper.remember(CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count),
+                PanelResumeScrollKeeper.remember(CalendarMonthMath.weekViewOffset(weekCount: gridWeekCount),
                                                  key: "calendar", in: resumeDefaults)
             }
             searchOpen = true
@@ -327,6 +377,77 @@ struct CalendarPage: View {
         model.setQuery("")
         searchFocused = false
         searchOpen = false
+    }
+
+    /// Week picked: the month folds to the week as it does on a scroll, and
+    /// then the weeks above and below go, at an offset that draws the same
+    /// frame. Month picked: the weeks come back at that same frame, and the
+    /// grid unfolds to the month. Neither changes the fold's motion.
+    private func foldToPickedView(week: Bool) {
+        foldToken &+= 1
+        let token = foldToken
+        let interruptedWeekFold = foldingIntoWeek
+        foldingIntoWeek = false
+        guard weekOnly != week else {
+            // Week was still animating when Month was picked. The grid is
+            // already a month, but the old scroll target must be reversed.
+            if !week && interruptedWeekFold {
+                withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                    scrollPosition.scrollTo(y: 0)
+                }
+            }
+            return
+        }
+        let count = model.snapshot.weeks.count
+        // Every row but the selected week's: what the swap adds or removes
+        // above the agenda, so the agenda stays put across it.
+        let above = CGFloat(max(0, count - 1)) * CalendarDesign.weekPitch
+        let folded = CalendarMonthMath.weekViewOffset(weekCount: count)
+        guard isReallyVisible, !showsDay else {
+            weekOnly = week
+            flags = ScrollFlags(pinned: week, weekView: week)
+            scrollPosition.scrollTo(y: week ? CalendarMonthMath.weekViewOffset(weekCount: 1) : 0)
+            return
+        }
+        if week {
+            // The agenda keeps its place: at least folded, less the rows that go.
+            let toWeek = {
+                guard token == foldToken, model.isWeekPicked, !weekOnly else { return }
+                foldingIntoWeek = false
+                weekOnly = true
+                flags.weekView = true
+                scrollPosition.scrollTo(y: max(lastOffset.y, folded) - above)
+            }
+            if lastOffset.y >= folded - 2 || design.reduceMotion {
+                toWeek()
+                return
+            }
+            // The fold's own motion first. A scroll animation reports no
+            // completion of its own, so the swap waits until the scroll has
+            // come to rest at the fold (a few still frames, 2 s at most).
+            withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                scrollPosition.scrollTo(y: folded)
+            }
+            foldingIntoWeek = true
+            Task { @MainActor in
+                var still = 0
+                for _ in 0..<120 where still < 3 {
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    guard token == foldToken, model.isWeekPicked, !weekOnly else { return }
+                    still = abs(lastOffset.y - folded) < 0.25 ? still + 1 : 0
+                }
+                toWeek()
+            }
+        } else {
+            weekOnly = false
+            scrollPosition.scrollTo(y: lastOffset.y + above)
+            Task { @MainActor in
+                guard token == foldToken, !model.isWeekPicked, !weekOnly else { return }
+                withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                    scrollPosition.scrollTo(y: 0)
+                }
+            }
+        }
     }
 
     private func toggleWeekView(weekCount: Int) {
