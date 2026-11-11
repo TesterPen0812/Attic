@@ -1606,7 +1606,7 @@ struct NoteLinkSuggestionsView: View {
         }
         .padding(.vertical, 1)
         .background(AtticGlassMenuSurface(style: style))
-        .clipShape(Squircle(cornerRadius: AtticGlassMenuShape.radius))
+        .clipShape(AtticGlassMenuShape.card)
         .padding(AtticNoteFormatMetrics.shadowRoom)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Notes"))
