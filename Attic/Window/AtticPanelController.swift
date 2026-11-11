@@ -177,6 +177,32 @@ enum PanelHideRequestResult: Equatable {
     }
 }
 
+/// Exactly one queued main-thread turn per approach. Leaving invalidates the
+/// queued turn; no timer or retained render object outlives the approach.
+@MainActor
+private final class PanelFirstTouchApproach {
+    private var generation = 0
+    private var inside = false
+    private(set) var runs = 0
+
+    func enter(_ warm: @escaping () -> Bool) {
+        guard !inside else { return }
+        inside = true
+        generation &+= 1
+        let expected = generation
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.inside, self.generation == expected else { return }
+            if warm() { self.runs += 1 }
+        }
+    }
+
+    func leave() {
+        guard inside else { return }
+        inside = false
+        generation &+= 1
+    }
+}
+
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The history ⌘Z reaches with the keyboard nowhere in a page.
@@ -226,6 +252,19 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
     private let hostingView: AtticPanelHostingView
+    private let cornerFirstTouch = PanelFirstTouchApproach()
+    private let islandFirstTouch = PanelFirstTouchApproach()
+    var firstTouchWarmupRunsForTesting: (corner: Int, island: Int) {
+        (cornerFirstTouch.runs, islandFirstTouch.runs)
+    }
+    /// Local preview A/B control: two optimized launches of the same commit.
+    private static let firstTouchWarmupEnabled: Bool = {
+        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY
+        !ProcessInfo.processInfo.arguments.contains("--attic-disable-first-touch-warmup")
+        #else
+        true
+        #endif
+    }()
     private let store: TaskStore
     private let noteStore: NoteStore
     private let canvasSession: CanvasSession
@@ -401,6 +440,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         configurePanel()
         bindContentSize()
         uiState.island.onClick = { [weak self] in self?.activateFromIsland() }
+        uiState.island.approaches.sink { [weak self] item in
+            IdleLatencyTrace.islandHoverEntered()
+            self?.beginIslandFirstTouchWarmup(for: item)
+        }
+            .store(in: &cancellables)
+        uiState.island.leaves.sink { [weak self] in
+            IdleLatencyTrace.islandHoverLeft()
+            self?.islandFirstTouch.leave()
+        }
+            .store(in: &cancellables)
         // The agent's spark goes to the island's item and taps it.
         uiState.agentWatcher?.islandPoint = { [weak self] page in self?.agentIslandPoint(page) }
         uiState.agentWatcher?.islandTap = { [weak self] page in self?.uiState.island.agentTap(page.panelPage) }
@@ -2091,6 +2140,67 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // A snapshot from before a hidden page was restored depicts the
         // released shell, even if its size and surface did not change.
         contentContainer?.noteContentMayChange()
+    }
+
+    /// Recover the selected page's model, hosting tree and first-frame layers
+    /// during the approach. The existing 300 s release owns the lifetime of
+    /// any page built here; we retain no second view, layer or bitmap.
+    @discardableResult
+    private func warmFirstTouchPresentation(targetPage: PanelPage? = nil) -> Bool {
+        guard uiState.canPrepareBuiltPages, !isPanelMotionActive, !isInteractiveDismissal,
+              !panel.isPressing else { return false }
+        IdleLatencyTrace.point("warmup_begin")
+        IdleLatencyTrace.span("warmup_model") {
+            switch targetPage ?? PanelPage(uiState.selectedSection) {
+            case .tasks: _ = store.tasks.count
+            case .notes:
+                _ = noteStore.notes.count
+                _ = noteDraft.pages.active?.engine.textView?.bounds
+            case .calendar: _ = store.tasks.count
+            case .canvas: _ = canvasSession.selectedCanvas.id
+            }
+        }
+        IdleLatencyTrace.span("warmup_layout") {
+            if !uiState.isPageContentLoaded {
+                buildPagesIfNeeded()
+                if !panel.isVisible { schedulePageRelease() }
+            }
+            if let targetPage { uiState.prepareBuiltPage(targetPage) }
+            contentContainer?.layoutSubtreeIfNeeded()
+            hostingView.layoutSubtreeIfNeeded()
+        }
+        IdleLatencyTrace.span("warmup_layers") {
+            hostingView.displayIfNeeded()
+            hostingView.layer?.displayIfNeeded()
+            contentContainer?.layer?.displayIfNeeded()
+            if panel.isVisible {
+                islandWindows.island.contentView?.layoutSubtreeIfNeeded()
+                islandWindows.island.contentView?.layer?.displayIfNeeded()
+            }
+            CATransaction.flush()
+        }
+        IdleLatencyTrace.point("warmup_end")
+        return true
+    }
+
+    func beginCornerFirstTouchWarmup() {
+        guard Self.firstTouchWarmupEnabled, !panel.isVisible else { return }
+        cornerFirstTouch.enter { [weak self] in
+            guard let self, !self.panel.isVisible else { return false }
+            return self.warmFirstTouchPresentation()
+        }
+    }
+
+    func endCornerFirstTouchWarmup() { cornerFirstTouch.leave() }
+
+    private func beginIslandFirstTouchWarmup(for item: PanelIslandItem) {
+        guard Self.firstTouchWarmupEnabled, panel.isVisible else { return }
+        let page: PanelPage?
+        if case .page(let value) = item { page = value } else { page = nil }
+        islandFirstTouch.enter { [weak self] in
+            guard let self, self.panel.isVisible else { return false }
+            return self.warmFirstTouchPresentation(targetPage: page)
+        }
     }
 
     /// After launch, once the main thread is idle: build the Tasks page

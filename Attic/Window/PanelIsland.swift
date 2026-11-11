@@ -478,7 +478,9 @@ final class PanelIslandModel: ObservableObject {
     /// A click asked for this page.
     let requests = PassthroughSubject<PanelPage, Never>()
     /// The pointer came onto the island: the panel can build its pages early.
-    let approaches = PassthroughSubject<Void, Never>()
+    let approaches = PassthroughSubject<PanelIslandItem, Never>()
+    /// The pointer left the last island item: cancel an approach's queued work.
+    let leaves = PassthroughSubject<Void, Never>()
     /// Before a click's request: the panel becomes active (one click).
     var onClick: (() -> Void)?
 
@@ -550,7 +552,8 @@ final class PanelIslandModel: ObservableObject {
 
     /// The pointer is over `item` (nil: over none).
     func point(atItem item: PanelIslandItem?) {
-        if pointedItem == nil, item != nil { approaches.send() }
+        if pointedItem == nil, let item { approaches.send(item) }
+        if pointedItem != nil, item == nil { leaves.send() }
         if pointedItem != item { pointedItem = item }
         labelTurn &+= 1
         guard let item else {

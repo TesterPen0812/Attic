@@ -142,14 +142,21 @@ final class FirstTouchLogWriter: @unchecked Sendable {
                 file = FirstTouchRollingFile(url: support.appendingPathComponent("Attic/Diagnostics/first-touch.jsonl"))
             }
             write(record)
-            if record.event == "input" || record.event == "frame_candidate" {
+            // Attribute page-ins/faults to the approach, the render preflight
+            // and the eventual reveal or click (not just input -> frame).
+            let samplesStage = record.event == "stage" && [
+                "hotspot_entered", "island_hover_entered", "island_hover_left",
+                "warmup_begin", "warmup_end",
+                "reveal_decision", "view_dispatch_done", "page_change_decision"
+            ].contains(record.stage ?? "")
+            if record.event == "input" || record.event == "frame_candidate" || samplesStage {
                 var words = [UInt64](repeating: 0, count: 6)
                 words.withUnsafeMutableBufferPointer { buffer in
                     atticFirstTouchReadMemory(buffer.baseAddress!)
                 }
                 let sampled = DispatchTime.now().uptimeNanoseconds
                 var sample = FirstTouchLogRecord(id: record.id, event: "memory", atNS: sampled)
-                sample.stage = record.event
+                sample.stage = record.stage ?? record.event
                 sample.memory = FirstTouchMemory(words)
                 sample.sampledAfterMS = Double(sampled >= record.atNS ? sampled - record.atNS : 0) / 1_000_000
                 write(sample)
