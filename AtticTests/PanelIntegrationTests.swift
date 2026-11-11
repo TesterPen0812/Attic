@@ -136,6 +136,26 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(unrelatedUIStateCounts, [0, 0, 0], "A composer attachment picker flag should not redraw retained pages")
         #endif
     }
+
+    /// "Brighten glass over dark backgrounds" draws on the shell's surface,
+    /// so switching it must redraw the panel, not only the island (owner,
+    /// 2026-11-11: "only the island seems to change").
+    func testBrightenGlassRedrawsTheShell() throws {
+        #if ATTIC_LOCAL_ONLY
+        var shell = 0
+        PanelInvalidationProbe.shell = { shell += 1 }
+        defer { PanelInvalidationProbe.shell = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        for _ in 0..<2 {
+            let before = shell
+            panel.settings.brightenGlass.toggle()
+            spin(0.25)
+            XCTAssertGreaterThan(shell, before, "Brighten glass must redraw the panel's surface")
+        }
+        #endif
+    }
     private struct Panel {
         let defaults: UserDefaults
         let suite: String
