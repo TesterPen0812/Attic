@@ -837,11 +837,20 @@ struct NotesEditorPage: View {
     }
 
     private func newNote() {
-        guard controller.requestNewNote() else { return }
-        AtticSounds.play(.created)
+        guard Self.requestNewNoteAndPlayCue(controller) else { return }
         library.clearSearch()
         // An untouched draft stays; only the caret moves to its title.
         DispatchQueue.main.async { chrome.focusText() }
+    }
+
+    @discardableResult
+    static func requestNewNoteAndPlayCue(_ controller: NotesPageController) -> Bool {
+        let previousNoteID = controller.active?.noteID
+        guard controller.requestNewNote() else { return false }
+        if let newNoteID = controller.active?.noteID, newNoteID != previousNoteID {
+            AtticSounds.play(.created)
+        }
+        return true
     }
 
     /// "New note “kyoto”" (in #launch) from All notes: the note the search

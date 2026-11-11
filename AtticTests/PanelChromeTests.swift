@@ -279,8 +279,12 @@ final class PanelChromeTests: XCTestCase {
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         panel.contentView = host
+        // The hosted window is ordered front: report its reveal just as the
+        // real controller does, so Calendar navigation is not treated as hidden.
+        state.panelDidReveal()
         panel.orderFront(nil)
         defer {
+            state.panelDidHide()
             host.cancelActiveInteraction(reason: .lostWindow)
             state.releasePageContent()
             spin(0.3)
