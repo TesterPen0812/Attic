@@ -46,6 +46,79 @@ final class Draw3StoreTests: XCTestCase {
         DrawObject(content: .stroke([DrawPoint(x: 1, y: 2), DrawPoint(x: 30, y: 40)]))
     }
 
+    func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
+        let container = try container()
+        let draw = DrawPersistentStore(container: container)
+        let canvas = draw.create(name: "Original")
+        let object = DrawObject(content: .text("Original"))
+        XCTAssertTrue(draw.perform(.put([object]), on: canvas.id).isSaved)
+
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        let originalCanvas = try XCTUnwrap(seeded.fetch(FetchDescriptor<DrawCanvasRecord>())
+            .first { $0.id == canvas.id })
+        let otherCanvas = originalCanvas.copy()
+        otherCanvas.name = "Owner's other canvas"
+        otherCanvas.updatedAt = originalCanvas.updatedAt.addingTimeInterval(-10)
+        seeded.insert(otherCanvas)
+        let originalObject = try XCTUnwrap(seeded.fetch(FetchDescriptor<DrawObjectRecord>())
+            .first { $0.id == object.id })
+        let otherObject = originalObject.copy()
+        otherObject.header = originalObject.header.replacingOccurrences(of: "Original", with: "AAAA")
+        otherObject.textIndex = "AAAA"
+        seeded.insert(otherObject)
+        try seeded.save()
+
+        XCTAssertFalse(draw.perform(.rename("Agent rename"), on: canvas.id).isSaved)
+        let fresh = ModelContext(container)
+        XCTAssertEqual(Set(try fresh.fetch(FetchDescriptor<DrawCanvasRecord>())
+            .filter { $0.id == canvas.id }.map(\.name)), ["Original", "Owner's other canvas"])
+
+        let before = try draw.open(canvas.id)
+        let moved = DrawObject(id: object.id, frame: DrawFrame(x: 4, y: 5, width: 100, height: 50),
+                               content: .text("Original"))
+        let repository = DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(),
+                                                  save: { try $0.save() })
+        let outcome = repository.write(DrawChange(canvasID: canvas.id, before: before.canvas, after: before.canvas,
+            objectsBefore: [object.id: object], objectsAfter: [object.id: moved]))
+        guard case .held = outcome else { return XCTFail("Divergent object replicas must refuse the whole write") }
+        XCTAssertEqual(Set(try ModelContext(container).fetch(FetchDescriptor<DrawObjectRecord>())
+            .filter { $0.id == object.id }.map(\.textIndex)), ["Original", "AAAA"])
+    }
+
+    func testRecoveredDrawUndoRefusesDivergentReplicaAndAgreedReplicasBothMutate() throws {
+        let container = try container()
+        let draw = DrawPersistentStore(container: container)
+        let board = draw.create(name: "Before")
+        XCTAssertTrue(draw.perform(.put([stroke()]), on: board.id).isSaved)
+        XCTAssertTrue(draw.perform(.rename("After"), on: board.id).isSaved)
+        let step = try XCTUnwrap(draw.undoStepID(on: board.id))
+        let proof = try XCTUnwrap(draw.agentUndoProof(on: board.id, stepID: step))
+        let context = ModelContext(container)
+        let copy = try XCTUnwrap(context.fetch(FetchDescriptor<DrawCanvasRecord>())
+            .first { $0.id == board.id }).copy()
+        copy.name = "Owner's revision"
+        copy.updatedAt = copy.updatedAt.addingTimeInterval(-10)
+        context.insert(copy)
+        try context.save()
+
+        let recovered = DrawPersistentStore(container: container)
+        XCTAssertFalse(recovered.undoAgentStep(on: board.id, proof: proof).isSaved)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<DrawCanvasRecord>()).filter { $0.id == board.id }
+        XCTAssertEqual(Set(rows.map(\.name)), ["After", "Owner's revision"])
+
+        let reconcile = ModelContext(container)
+        let original = try XCTUnwrap(rows.first { $0.name == "After" })
+        for row in try reconcile.fetch(FetchDescriptor<DrawCanvasRecord>()) where row.id == board.id {
+            row.name = "After"
+            row.updatedAt = original.updatedAt
+        }
+        try reconcile.save()
+        XCTAssertTrue(DrawPersistentStore(container: container).undoAgentStep(on: board.id, proof: proof).isSaved)
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<DrawCanvasRecord>())
+            .filter { $0.id == board.id }.map(\.name), ["Before", "Before"])
+    }
+
     // MARK: Thumbnails
 
     func testThumbnailWriteSkipsUndoKeepsTheDateAndTheOrder() throws {

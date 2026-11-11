@@ -383,21 +383,42 @@ final class DrawSwiftDataRepository: DrawRepository {
 
     private func matchesBefore(_ change: DrawChange, scope: Scope) throws -> Bool {
         if let expected = change.before {
-            guard !scope.canvases.isEmpty else { return false }
+            guard !scope.canvases.isEmpty, try Self.agree(scope.canvases) else { return false }
             var metadata = expected; metadata.thumbnail = nil
             guard try DrawCodec.encode(canvasWinner(scope.canvases).value()) == DrawCodec.encode(metadata) else { return false }
         } else if !scope.canvases.isEmpty { return false }
         for id in change.objectIDs {
             let rows = scope.objects.filter { $0.id == id }
             if let expected = change.objectsBefore[id] {
-                guard let row = objectWinner(rows), row.formatVersion == 1,
+                guard Self.agree(rows, parent: change.canvasID), let row = objectWinner(rows), row.formatVersion == 1,
                       row.zIndex == expected.zIndex, row.deletedAt == expected.deletedAt,
                       row.textIndex.utf8.elementsEqual(expected.text.utf8),
                       row.header.utf8.elementsEqual(try DrawCodec.header(expected).utf8),
                       row.payloadDigest == DrawCodec.payload(expected).map(DrawCodec.digest) ?? "" else { return false }
             } else if !rows.isEmpty { return false }
         }
+        for id in binaryIDs(change) {
+            let rows = scope.payloads.filter { $0.id == id }
+            let expected = change.objectsBefore[id].flatMap(DrawCodec.payload)
+            if let expected {
+                guard !rows.isEmpty, Self.agree(rows, parent: change.canvasID),
+                      rows.allSatisfy({ $0.formatVersion == 1 && $0.digest == DrawCodec.digest(expected)
+                          && $0.bytes == expected }) else { return false }
+            } else if !rows.isEmpty { return false }
+        }
+        if change.before?.thumbnail != change.after?.thumbnail {
+            if let bytes = change.before?.thumbnail {
+                guard !scope.thumbnails.isEmpty, Self.agree(scope.thumbnails, parent: change.canvasID),
+                      scope.thumbnails.allSatisfy({ $0.formatVersion == 1 && $0.digest == DrawCodec.digest(bytes)
+                          && $0.bytes == bytes }) else { return false }
+            } else if !scope.thumbnails.isEmpty { return false }
+        }
         return true
+    }
+
+    func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool {
+        do { return try matchesBefore(change, scope: scope(change, in: context(), countRows: false)) }
+        catch { return false }
     }
 
     private func apply(_ change: DrawChange, scope: Scope, in context: ModelContext) throws {

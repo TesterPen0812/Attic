@@ -405,6 +405,9 @@ class DrawStore: DrawStoreProtocol {
               persisted.canvas == seal.saved.canvas,
               persisted.objects.filter({ $0.deletedAt == nil }).sorted(by: Self.objectOrder) == seal.saved.objects
         else { return .held("Draw has changed or refused Undo") }
+        guard repository.matchesAgentUndoPrestate(seal.step.change.reversed) else {
+            return .held("Draw has divergent physical replicas; reconcile them before Undo")
+        }
         do { try reload(id) }
         catch { return .held("Draw has changed or refused Undo") }
         guard (try? open(id)) == seal.saved else { return .held("Draw has changed or refused Undo") }
