@@ -1532,13 +1532,22 @@ final class TaskNoteComposedHostTests: XCTestCase {
     /// Tasks). Return and ⇧Return step, ⌘G steps, Esc and a click on empty
     /// page space give the row back, and the note never moves.
     func testFindOnATasksPageTakesItsOwnTopRow() async throws {
+        try await assertFindOnATasksPageTakesItsOwnTopRow(reduceMotion: false)
+    }
+
+    func testFindOnATasksPageTakesItsOwnTopRowWithReduceMotion() async throws {
+        try await assertFindOnATasksPageTakesItsOwnTopRow(reduceMotion: true)
+    }
+
+    private func assertFindOnATasksPageTakesItsOwnTopRow(reduceMotion: Bool) async throws {
         let id = try seed(.long), hosting = sectionHosting()
         let topRow = PanelTopRowState()
         let layout = PanelPageLayout(cornerSize: 52, panelSize: panel)
         hosting.rootView = AnyView(TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
             layout: layout, onClose: {})
             .environment(\.panelTopRowState, topRow)
-            .environment(\.panelTopRowPage, .tasks))
+            .environment(\.panelTopRowPage, .tasks)
+            .atticDesign(AtticDesignContext(mode: .light, reduceMotion: reduceMotion)))
         hosting.view.layoutSubtreeIfNeeded()
         var mounted: TaskNotePresenter?
         for _ in 0..<50 where mounted == nil {
@@ -1567,10 +1576,21 @@ final class TaskNoteComposedHostTests: XCTestCase {
         spin(0.3)
         let find = presenter.host.engine.find
         let insets = presenter.host.scrollView.contentInsets.top
+        let originDuringMount = presenter.host.scrollView.contentView.bounds.origin
+        // The clip view may normalize its origin on a later layout turn,
+        // independently of Find. Measure Find against the mounted, idle page.
+        spin(0.6)
+        presenter.host.scrollView.layoutSubtreeIfNeeded()
         let scrolled = presenter.host.scrollView.contentView.bounds.origin
 
         XCTAssertTrue(find.handleKey(key(3, "f", .command)))
         spin(0.4)
+        let originAt400ms = presenter.host.scrollView.contentView.bounds.origin
+        // AppKit may finish the clip's initial inset normalization after
+        // SwiftUI has mounted the new top row. Keep the stable position as
+        // the invariant (and report both samples to diagnose CI).
+        spin(0.6)
+        print("TASKNOTE-FIND-SCROLL reduced=\(reduceMotion) mounting=\(originDuringMount) idle=\(scrolled) at400ms=\(originAt400ms) settled=\(presenter.host.scrollView.contentView.bounds.origin)")
         XCTAssertTrue(find.isShown)
         XCTAssertTrue(find.shownInTopRow, "Find takes the page's top row, not the two-row card")
         XCTAssertEqual(find.clearance, 0)
