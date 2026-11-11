@@ -1006,6 +1006,57 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(try restoredDraw.open(canvas.id).objects.first, object)
     }
 
+    func testInterruptedStoreSaveSurfacesTheExactUnfinishedMutationAfterRelaunch() async throws {
+        enum SimulatedExit: Error { case afterSave }
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentActionCrash").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Create during crash")
+        actions.testInterruptAfterStoreSave = { throw SimulatedExit.afterSave }
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "Survived crash"],
+                                       watching: false, requestID: request)
+            XCTFail("The injected exit should interrupt receipt publication")
+        } catch SimulatedExit.afterSave { }
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.title == "Survived crash" }.count, 1)
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let recovered = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), journalURL: journal)
+        XCTAssertFalse(recovered.canRecoverUndo(request), "The incomplete request cannot claim full Undo")
+        let result = await recovered.undo(changeSet: request)
+        XCTAssertTrue(result.failures.contains(where: { $0.contains("create_task") }),
+                      "The owner needs the exact unfinished action: \(result.failures)")
+    }
+
+    func testInterruptedTwoStepUndoResumesAfterFirstInverseOnRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let id = try XCTUnwrap(AtticLibrary(tasks: tasks).createTasks([TaskDraft(title: "Before")])?.first?.id)
+        let journal = ownedTemporaryDirectory(prefix: "AgentInverseCrash").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Edit twice")
+        for title in ["Middle", "After"] {
+            _ = try performed(await actions.call(name: "update_task", arguments: [
+                "id": id.uuidString, "title": title
+            ], watching: false, requestID: request))
+        }
+        actions.testInterruptAfterInverseSave = { true }
+        _ = await actions.undo(changeSet: request)
+        XCTAssertEqual(TaskStore(container: tasks.container).task(withID: id)?.title, "Middle")
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let recovered = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), journalURL: journal)
+        XCTAssertTrue(recovered.canRecoverUndo(request), "A committed inverse must be reconciled on launch")
+        let result = await recovered.undo(changeSet: request)
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(freshTasks.task(withID: id)?.title, "Before")
+        XCTAssertNil(recovered.changeSet(for: request))
+    }
+
     func testDrawReadAndMoveObjectRespectReadOnlyAndUndo() async throws {
         let f = try fixture()
         let canvas = f.draw.create(name: "Plan")
