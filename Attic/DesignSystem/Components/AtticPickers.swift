@@ -941,7 +941,7 @@ struct AtticTagPicker: View {
                                    systemName: "magnifyingglass", focus: focus, label: String(localized: "Find or add a tag"),
                                    onSubmit: onFieldSubmit ?? {}, onEscape: onFieldEscape, onMove: onFieldMove)
             }
-            AtticDropdownSectionHeader(title: String(localized: "Tags"))
+            AtticDropdownSectionHeader(title: String(localized: "Tags"), ink: AtticDropdownSmallText.ink)
             VStack(alignment: .leading, spacing: 0) {
                 Group {
                     if shown <= room && listHeight == normalHeight {
@@ -972,6 +972,7 @@ struct AtticTagPicker: View {
                 // ink; rows in the panel stay coloured), its tick after the
                 // item (N-4's card).
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: colouring.hue(for: tag.name).ink, detail: tag.detail,
+                                 detailInk: AtticDropdownSmallText.ink,
                                  isHighlighted: highlighted == index,
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
@@ -979,7 +980,7 @@ struct AtticTagPicker: View {
                 .id(index)
             }
             if tags.isEmpty {
-                AtticText(verbatim: create == nil ? String(localized: "No tags yet") : String(localized: "No tag matches"), style: .dropdownRow, ink: .helper)
+                AtticText(verbatim: create == nil ? String(localized: "No tags yet") : String(localized: "No tag matches"), style: .dropdownRow, ink: AtticDropdownSmallText.ink)
                     .padding(.horizontal, AtticDropdownMetrics.rowPadding)
                     .frame(height: AtticDropdownMetrics.rowHeight)
             }

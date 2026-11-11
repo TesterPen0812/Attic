@@ -453,6 +453,7 @@ struct AtticTagSuggestionList: View {
                                 dot: suggestion.isNew ? nil : colouring.hue(for: suggestion.name).ink,
                                 checkGlyph: suggestion.isNew ? "plus" : nil,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
+                                detailInk: AtticDropdownSmallText.ink,
                                 detailColour: Self.countColour(in: design),
                                 isHighlighted: index == highlighted,
                                 // O14-07: only the dot takes the tag's colour.

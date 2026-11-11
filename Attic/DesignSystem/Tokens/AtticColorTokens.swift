@@ -8,6 +8,10 @@ enum AtticInk: String, CaseIterable, Sendable {
     // the secondary grey (dates, counts, hints, done rows); `muted` the
     // quietest (inactive status tabs), as in the approved v4 mockup.
     case heading, body, label, helper, muted, placeholder
+    /// Compact dropdown headings, details and empty states.
+    case dropdownSmallText
+    /// Settings' italic connection hint, independent of disabled chrome labels.
+    case sidebarConnectionHint
     // Text on the Settings chrome (sidebar).
     case chromeHeading, chromeBody, chromeHint
     // Icons are lighter than text; glyphs inside controls are the primary colour.
@@ -68,6 +72,7 @@ enum AtticInk: String, CaseIterable, Sendable {
     var floor: Floor {
         switch self {
         case .heading, .body, .label, .helper, .muted, .placeholder,
+             .dropdownSmallText, .sidebarConnectionHint,
              .chromeHeading, .chromeBody, .chromeHint,
              .accentText, .dueText, .warningText, .onInverse, .disabledText, .priorityMark,
              .tagYellow, .tagGreen, .tagBlue, .tagPink, .tagPurple, .tagGrey, .linkText:
@@ -991,6 +996,26 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[.onDone] = inks[.onDone]!.tuned(toContrast: ic ? textTarget : nonTextTarget, against: [inks[.doneFill]!], lighten: !dark)
         }
 
+        // Compact dropdown text is tuned after the normal ladder and surfaces,
+        // keeping the helper ladder and coverage recipe unchanged.
+        let dropdownHighlight = dark ? AtticRGBA.white(ic ? 0.18 : 0.10) : AtticRGBA.black(ic ? 0.12 : 0.05)
+        inks[.dropdownSmallText] = inks[.helper]!.tuned(
+            toContrast: textTarget,
+            against: [popoverFill, dropdownHighlight.over(popoverFill)],
+            lighten: dark
+        )
+        // The sidebar hint has its own ink: its chrome surface can appear
+        // above any desktop, with hover and selection fills over it.
+        let sidebarFaces = AtticSurfaceModel.Desktop.allCases.flatMap { desktop in
+            [AtticSurfaceModel.contentTop, 1.0].flatMap { location in
+                let base = chrome.composite(desktop, at: location)
+                return [base, hover.over(base), selected.over(base)]
+            }
+        }
+        inks[.sidebarConnectionHint] = inks[.chromeHint]!.tuned(
+            toContrast: textTarget, against: sidebarFaces, lighten: dark
+        )
+
         return AtticColorTokens(
             context: key,
             panel: panel,
@@ -1025,7 +1050,7 @@ struct AtticColorTokens: Equatable, Sendable {
             popoverInnerRim: dark ? .white(ic ? 0.24 : 0.10) : .white(0.9),
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
             popoverShadow: .black(dark ? 0.40 : 0.11),
-            dropdownHighlight: dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.12 : 0.05),
+            dropdownHighlight: dropdownHighlight,
             dropdownShadow: .black(dark ? 0.28 : 0.12),
             dropdownContactShadow: .black(dark ? 0.30 : 0.05),
             dropdownRim: .white(dark ? (ic ? 0.35 : 0.15) : 0.5),
