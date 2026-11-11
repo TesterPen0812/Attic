@@ -160,6 +160,9 @@ final class DrawPageModel: ObservableObject {
     private(set) var contentRevision = 0
     var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
+    /// A middle-button pan keeps ownership until that button is released,
+    /// even if the original left button finishes first.
+    var liveStartedWithMiddleButton = false
     /// Last drag modifier for callers that finish an input without an event.
     var lastPointerShift = false
     private(set) var editing: DrawTextEdit?

@@ -810,4 +810,52 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(result.canvas.id, model.canvasID)
         XCTAssertEqual(result.textBoxIDs, stored.map(\.id))
     }
+    // Red-first Draw integration audit, 11 Nov. These intentionally assert the intended safety contract.
+    func testDA1SecondaryPanDuringInkMustKeepTheUnfinishedStroke() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        model.pointerDragged(to: CGPoint(x: 90, y: 120))
+        // The middle button can be pressed before the pen's mouse-up.
+        model.pointerDown(at: CGPoint(x: 90, y: 120), panButton: true)
+        model.pointerDragged(to: CGPoint(x: 110, y: 130))
+        model.pointerUp()
+        XCTAssertEqual(try store.open(id).objects.filter { if case .stroke = $0.content { true } else { false } }.count,
+                       1, "The secondary pan must not discard ink that was already drawn")
+    }
+
+    func testDA1SecondaryPanSettlesShapeAndEraseAndWaitsForItsOwnButtonUp() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        model.setTool(.shape)
+        model.pointerDown(at: CGPoint(x: 70, y: 170))
+        model.pointerDragged(to: CGPoint(x: 125, y: 215))
+        model.pointerDown(at: CGPoint(x: 140, y: 230), panButton: true)
+        XCTAssertEqual(try store.open(id).objects.filter { if case .shape = $0.content { true } else { false } }.count, 1)
+        guard case .pan = model.live else { return XCTFail("Secondary pan must own the pointer") }
+        model.pointerUp(panButton: false)
+        XCTAssertNotNil(model.live, "The first button release must not end the second button's pan")
+        let startViewport = model.viewport
+        model.pointerDragged(to: CGPoint(x: 160, y: 250), panButton: false)
+        XCTAssertEqual(model.viewport, startViewport, "Primary drag must not move a middle-button pan")
+        model.pointerDragged(to: CGPoint(x: 160, y: 250), panButton: true)
+        XCTAssertNotEqual(model.viewport, startViewport)
+        model.pointerUp(panButton: true)
+        XCTAssertNil(model.live)
+
+        model.setViewport(DrawViewport(), byUser: true)
+        let samples = [DrawPoint(x: 80, y: 320), DrawPoint(x: 140, y: 320)]
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(samples), content: .stroke(samples))
+        XCTAssertTrue(model.perform(.put([stroke])).isSaved)
+        model.setTool(.eraser)
+        model.pointerDown(at: CGPoint(x: 95, y: 320))
+        model.pointerDragged(to: CGPoint(x: 120, y: 320))
+        model.pointerDown(at: CGPoint(x: 150, y: 330), panButton: true)
+        XCTAssertFalse(try store.open(id).objects.contains(where: { $0.id == stroke.id }),
+                       "The interrupted eraser must save the removal")
+        model.pointerUp(panButton: false)
+        XCTAssertNotNil(model.live)
+        model.pointerUp(panButton: true)
+        XCTAssertNil(model.live)
+    }
+
 }

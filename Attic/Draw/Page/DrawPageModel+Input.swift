@@ -67,6 +67,13 @@ extension DrawPageModel {
 
     func pointerDown(at screen: CGPoint, shift: Bool = false, panButton: Bool = false, pressure: CGFloat? = nil) {
         guard canvasID != nil else { return }
+        if let live {
+            if case .pan = live { return }
+            // A second button must settle the first gesture's work before
+            // taking over. Its later button-up must not discard that work.
+            guard panButton else { return }
+            finishLiveInput()
+        }
         lastPointerShift = shift
         if isFiltering { closeFilter(); return }
         if editing != nil { endEditing(); return }
@@ -79,6 +86,7 @@ extension DrawPageModel {
         }
         let world = viewport.world(screen)
         if panButton || spaceHeld {
+            liveStartedWithMiddleButton = panButton
             begin(.pan(start: screen, viewport: viewport))
             return
         }
@@ -116,8 +124,9 @@ extension DrawPageModel {
         }
     }
 
-    func pointerDragged(to screen: CGPoint, shift: Bool = false, pressure: CGFloat? = nil) {
+    func pointerDragged(to screen: CGPoint, shift: Bool = false, pressure: CGFloat? = nil, panButton: Bool? = nil) {
         guard let live else { return }
+        if let panButton, panButton != liveStartedWithMiddleButton { return }
         lastPointerShift = shift
         let world = viewport.world(screen)
         switch live {
@@ -157,7 +166,8 @@ extension DrawPageModel {
         }
     }
 
-    func pointerUp(at screen: CGPoint? = nil, shift: Bool? = nil, pressure: CGFloat? = nil) {
+    func pointerUp(at screen: CGPoint? = nil, shift: Bool? = nil, pressure: CGFloat? = nil, panButton: Bool? = nil) {
+        guard live != nil, panButton == nil || panButton == liveStartedWithMiddleButton else { return }
         if let screen { pointerDragged(to: screen, shift: shift ?? lastPointerShift, pressure: pressure) }
         finishLiveInput()
     }
@@ -177,6 +187,7 @@ extension DrawPageModel {
     func finishLiveInput() {
         guard let finished = live else { return }
         live = nil
+        liveStartedWithMiddleButton = false
         switch finished {
         case .pan:
             break
