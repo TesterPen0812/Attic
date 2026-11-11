@@ -1487,6 +1487,10 @@ struct PanelGenieLiveMaterial: Equatable {
     var kind: Kind
     var colorScheme: ColorScheme
     var cornerRadius: CGFloat
+    /// The panel surface's glass lift ("Brighten glass over dark
+    /// backgrounds", `AtticSurfaceModel.glassLift`), so the flight matches
+    /// the panel at rest. 0 draws none.
+    var lift: Double = 0
 }
 
 private struct PanelGenieMaterialView: View {
@@ -1498,7 +1502,7 @@ private struct PanelGenieMaterialView: View {
 
     var body: some View {
         let shape = PanelGenieOutlineShape(outline: outline, rest: rest, cornerRadius: material.cornerRadius)
-        Group {
+        ZStack {
             switch material.kind {
             case .glass:
                 // As `AtticPanelSurface`'s native glass, in the bent shape:
@@ -1507,6 +1511,7 @@ private struct PanelGenieMaterialView: View {
             case .frosted:
                 shape.fill(.ultraThinMaterial)
             }
+            AtticGlassLift(shape: shape, strength: material.lift)
         }
         .environment(\.colorScheme, material.colorScheme)
         // Each frame's shape is the mesh's, not a morph toward it.
