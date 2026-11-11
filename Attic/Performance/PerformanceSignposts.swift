@@ -328,6 +328,7 @@ enum IdleLatencyTrace {
     private static var isPrimed = false
     private static var lastPanelPressNS: UInt64?
     private static var recordedMouseUpID: Int?
+    private static var nativeMenuTraceID: Int?
     static private(set) var lastClassificationForTesting: (first: Bool, idleMS: Double)?
     private static var frameWatch: IdleLatencyFirstFrameWatch?
     private static let controlSignposter = OSSignposter(subsystem: "com.taha.Attic", category: "FirstTouch")
@@ -481,6 +482,29 @@ enum IdleLatencyTrace {
         }
     }
 
+    /// A native NSMenu item consumes its mouse event in AppKit's tracking
+    /// loop, outside AtticPanel.sendEvent. Start the same trace from the
+    /// selected command and finish it after the commanded view changes.
+    static func nativeMenuSelected(on page: PanelSection) {
+        guard let panel = NSApp.windows.first(where: {
+            ($0 as? AtticPanel)?.onIdleTraceContext?()?.page == page && $0.isVisible
+        }) as? AtticPanel, let context = panel.onIdleTraceContext?() else { return }
+        let event = NSApp.currentEvent
+        begin("panel_control", original: event?.timestamp, context: context)
+        nativeMenuTraceID = current?.id
+        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            mouseUp(original: event.timestamp)
+        }
+    }
+
+    static func nativeMenuViewChanged() {
+        guard let trace = current, trace.id == nativeMenuTraceID else { return }
+        nativeMenuTraceID = nil
+        point("view_dispatch_done")
+        let panel = NSApp.windows.first(where: { $0 is AtticPanel && $0.isVisible })
+        firstFrameOpportunity(in: panel?.contentView)
+    }
+
     /// Timestamp the physical release separately from the mouse-down trace.
     /// AppKit can consume mouse-up in a native tracking loop, so both the
     /// window's sendEvent and nextEvent paths report it (once per touch).
@@ -589,6 +613,8 @@ enum IdleLatencyTrace {
                       receivedNS: UInt64? = nil) {}
     static func point(_ phase: String) {}
     static func controlDispatched(_ control: FirstTouchControl) {}
+    static func nativeMenuSelected(on page: PanelSection) {}
+    static func nativeMenuViewChanged() {}
     static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T { try body() }
     static func count(_ name: String, _ value: Int) {}
     static func followUpScheduled(at deadline: TimeInterval) {}

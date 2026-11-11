@@ -314,6 +314,7 @@ struct CalendarPage: View {
         let snapshot = model.snapshot
         return Self.moreCommands(view: currentView, isOnToday: snapshot.selected == snapshot.today,
                                  setView: { view in
+                                     IdleLatencyTrace.nativeMenuSelected(on: .calendar)
                                      // Leaving or entering Day replaces what an open event sits in.
                                      if view == .day || model.isDayView { afterClosingEvent { setView(view) } }
                                      else { setView(view) }
@@ -337,6 +338,7 @@ struct CalendarPage: View {
 
     private func setView(_ view: CalendarViewMode) {
         IdleLatencyTrace.controlDispatched(.calendarView)
+        defer { IdleLatencyTrace.nativeMenuViewChanged() }
         if view == .day {
             model.setDayView(true)
             return
