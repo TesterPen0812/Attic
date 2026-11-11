@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// The runner and the run-scoped MCP adapter share one action layer.
 enum AgentActionCall {
@@ -33,7 +34,7 @@ enum AgentActionApprovalPolicy {
     static let names: Set<String> = [
         "delete_task", "delete_note", "delete_item", "make_note_checkbox",
         "remove_from_tasks", "calendar_create", "calendar_update", "calendar_delete",
-        "draw_delete_canvas"
+        "draw_delete_canvas", "draw_delete_object"
     ]
 
     static func requiresApproval(_ name: String, arguments: [String: Any]) -> Bool {
@@ -70,6 +71,7 @@ enum AgentApprovalWords {
         case "calendar_update": return "Change \(subject ?? "this event") in Calendar?"
         case "calendar_delete": return "Delete \(subject ?? "this event") from Calendar?"
         case "draw_delete_canvas": return phrase("Delete", "canvas")
+        case "draw_delete_object": return "Delete an object from \(subject ?? "this canvas")?"
         case "update_note_table":
             let deletions = (arguments["operations"] as? [[String: Any]] ?? [])
                 .compactMap { $0["op"] as? String }.filter { $0.hasPrefix("delete_") }
@@ -94,17 +96,25 @@ final class AgentActions {
     enum UndoEntry {
         case history(UndoHistoryID, UUID, String)
         case draw(UUID, DrawSnapshot, UUID, String)
-        case createdNote(UUID, revision: String, name: String)
+        case durableDraw(UUID, DrawSnapshot, UUID, Data, String)
+        case taskEdit(before: TaskEditableState, after: TaskEditableState,
+                      proof: WorkspaceModelToken, name: String)
+        case createdTask(UUID, TaskEditableState, WorkspaceModelToken, String)
+        case calendar(UUID, before: CalendarEventDraft?, after: CalendarEventDraft?, name: String)
+        case createdNote(UUID, revision: String, metadata: String, name: String)
         case updatedNote(UUID, document: NoteDocument?, title: String, body: String,
-                         revision: String, name: String)
+                         revision: String, metadata: String, name: String)
         case proposal(noteID: UUID, editID: UUID, name: String)
         case unavailable(String)
 
         var title: String {
             switch self {
-            case let .history(_, _, name), let .draw(_, _, _, name), let .createdNote(_, _, name),
+            case let .history(_, _, name), let .draw(_, _, _, name), let .durableDraw(_, _, _, _, name),
+                 let .createdNote(_, _, _, name),
+                 let .taskEdit(_, _, _, name), let .calendar(_, _, _, name),
+                 let .createdTask(_, _, _, name),
                  let .proposal(_, _, name),
-                 let .updatedNote(_, _, _, _, _, name), let .unavailable(name): name
+                 let .updatedNote(_, _, _, _, _, _, name), let .unavailable(name): name
             }
         }
     }
@@ -112,6 +122,28 @@ final class AgentActions {
     struct Journal {
         var changeSet: AgentChangeSet
         var entries: [UndoEntry] = []
+    }
+
+    /// Only inverses whose complete proof can be reconstructed are offered
+    /// after relaunch. Closure-only history steps are recorded as unavailable.
+    private enum StoredInverse: Codable {
+        case draw(id: UUID, saved: DrawSnapshot, step: UUID, proof: Data, name: String)
+        case taskEdit(before: TaskEditableState, after: TaskEditableState,
+                      proof: WorkspaceModelToken, name: String)
+        case createdTask(id: UUID, state: TaskEditableState, proof: WorkspaceModelToken, name: String)
+        case calendar(id: UUID, before: CalendarEventDraft?, after: CalendarEventDraft?, name: String)
+        case createdNote(id: UUID, revision: String, metadata: String, name: String)
+        case updatedNote(id: UUID, document: Data?, title: String, body: String, revision: String, metadata: String, name: String)
+        case proposal(id: UUID, edit: UUID, name: String)
+        case unavailable(String)
+    }
+    private struct StoredRequest: Codable {
+        let changeSet: AgentChangeSet
+        let entries: [StoredInverse]
+    }
+    private struct StoredUndo: Codable {
+        let version: Int
+        let requests: [StoredRequest]
     }
 
     struct AwaitingApproval {
@@ -128,16 +160,116 @@ final class AgentActions {
     private var activeCalls: [UUID: Int] = [:]
     private var closedRequests = Set<UUID>()
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    private let journalURL: URL?
+    private var journalWritable = true
 
     init(tasks: AgentTaskTools, calendarSource: (any CalendarEventSource)? = nil,
          calendarWriter: (any CalendarEventWriter)? = nil,
          draw: (any DrawStoreProtocol)? = nil,
-         openPage: ((AgentPage) -> Bool)? = nil) {
+         openPage: ((AgentPage) -> Bool)? = nil,
+         journalURL: URL? = nil) {
         self.tasks = tasks
         self.calendarSource = calendarSource
         self.calendarWriter = calendarWriter
         self.draw = draw
         self.openPage = openPage
+        self.journalURL = journalURL
+        if let journalURL, FileManager.default.fileExists(atPath: journalURL.path) {
+            guard let data = try? Data(contentsOf: journalURL),
+                  let saved = try? JSONDecoder().decode(StoredUndo.self, from: data), saved.version == 1 else {
+                journalWritable = false
+                return
+            }
+            for request in saved.requests {
+                let entries = request.entries.map(Self.restoreInverse)
+                journals[request.changeSet.id] = Journal(changeSet: request.changeSet, entries: entries)
+                order.append(request.changeSet.id)
+                closedRequests.insert(request.changeSet.id)
+            }
+        }
+    }
+
+    private static func restoreInverse(_ stored: StoredInverse) -> UndoEntry {
+        switch stored {
+        case let .draw(id, saved, step, proof, name):
+            return .durableDraw(id, saved, step, proof, name)
+        case let .taskEdit(before, after, proof, name):
+            return .taskEdit(before: before, after: after, proof: proof, name: name)
+        case let .createdTask(id, state, proof, name):
+            return .createdTask(id, state, proof, name)
+        case let .calendar(id, before, after, name):
+            return .calendar(id, before: before, after: after, name: name)
+        case let .createdNote(id, revision, metadata, name):
+            return .createdNote(id, revision: revision, metadata: metadata, name: name)
+        case let .updatedNote(id, bytes, title, body, revision, metadata, name):
+            let document: NoteDocument?
+            if let bytes {
+                guard case let .editable(decoded) = NoteContentCodec.decode(bytes) else {
+                    return .unavailable("\(name): the previous document cannot be restored")
+                }
+                document = decoded
+            } else {
+                // Legacy plain-text notes have no structured document yet.
+                // Their guarded title/body inverse is still durable.
+                document = nil
+            }
+            return .updatedNote(id, document: document, title: title, body: body, revision: revision,
+                                metadata: metadata, name: name)
+        case let .proposal(id, edit, name): return .proposal(noteID: id, editID: edit, name: name)
+        case let .unavailable(reason): return .unavailable(reason)
+        }
+    }
+
+    private static func storeInverse(_ entry: UndoEntry) -> StoredInverse {
+        switch entry {
+        case let .durableDraw(id, saved, step, proof, name):
+            return .draw(id: id, saved: saved, step: step, proof: proof, name: name)
+        case let .taskEdit(before, after, proof, name):
+            return .taskEdit(before: before, after: after, proof: proof, name: name)
+        case let .createdTask(id, state, proof, name):
+            return .createdTask(id: id, state: state, proof: proof, name: name)
+        case let .calendar(id, before, after, name):
+            return .calendar(id: id, before: before, after: after, name: name)
+        case let .createdNote(id, revision, metadata, name):
+            return .createdNote(id: id, revision: revision, metadata: metadata, name: name)
+        case let .updatedNote(id, document, title, body, revision, metadata, name):
+            let bytes: Data?
+            if let document {
+                guard let encoded = try? NoteContentCodec.encode(document) else {
+                    return .unavailable("\(name): previous document could not be saved")
+                }
+                bytes = encoded
+            } else {
+                bytes = nil
+            }
+            return .updatedNote(id: id, document: bytes, title: title, body: body, revision: revision,
+                                metadata: metadata, name: name)
+        case let .proposal(id, edit, name): return .proposal(id: id, edit: edit, name: name)
+        default: return .unavailable("\(entry.title): Undo requires the original session history")
+        }
+    }
+
+    private func saveJournal() {
+        guard journalWritable, let journalURL else { return }
+        let requests = order.compactMap { id -> StoredRequest? in
+            guard let journal = journals[id], !journal.entries.isEmpty else { return nil }
+            return StoredRequest(changeSet: journal.changeSet,
+                                 entries: journal.entries.map(Self.storeInverse))
+        }
+        do {
+            try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(StoredUndo(version: 1, requests: Array(requests.suffix(100))))
+                .write(to: journalURL, options: .atomic)
+        } catch { journalWritable = false }
+    }
+
+    func canRecoverUndo(_ id: UUID) -> Bool {
+        guard order.last(where: { (journals[$0]?.changeSet.count ?? 0) > 0 }) == id,
+              let journal = journals[id], !journal.entries.isEmpty, journalWritable else { return false }
+        return journal.entries.allSatisfy { entry in
+            if case .unavailable = Self.storeInverse(entry) { return false }
+            return true
+        }
     }
 
     var definitions: [[String: Any]] {
@@ -276,6 +408,18 @@ final class AgentActions {
         let priorTargets = targetsForArguments(name, arguments)
         let noteBefore = ["update_note", "update_note_table"].contains(name)
             ? noteSnapshot(for: arguments) : nil
+        let taskBefore = name == "update_task"
+            ? (arguments["id"] as? String).flatMap(UUID.init(uuidString:)).flatMap(taskSnapshot)
+            : nil
+        var batchTaskBefore: [UUID: (state: TaskEditableState, proof: WorkspaceModelToken)] = [:]
+        if name == "update_tasks", let operations = arguments["updates"] as? [[String: Any]] {
+            for operation in operations {
+                guard let prepared = try? preparedArguments(name: "update_task", arguments: operation),
+                      let raw = prepared["id"] as? String, let id = UUID(uuidString: raw),
+                      let snapshot = taskSnapshot(id) else { continue }
+                batchTaskBefore[id] = snapshot
+            }
+        }
         var step: AgentStep
         let text: String
         var extraEntries: [UndoEntry] = []
@@ -294,12 +438,28 @@ final class AgentActions {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
             (text, step) = try await calendarAction(name, arguments, requestID: requestID)
+            if ["calendar_create", "calendar_update", "calendar_delete"].contains(name),
+               let id = step.targets.first?.itemID {
+                let old = (arguments["_expected_draft"] as? String)
+                    .flatMap { Data(base64Encoded: $0) }
+                    .flatMap { try? JSONDecoder().decode(CalendarEventDraft.self, from: $0) }
+                let after = name == "calendar_delete" ? nil : try await calendarWriter?.ownedEvent(id: id)?.draft
+                if name == "calendar_create" || old != nil {
+                    if name == "calendar_delete" || after != nil {
+                        extraEntries.append(.calendar(id, before: old, after: after, name: step.title))
+                    }
+                }
+            }
         } else if name.hasPrefix("draw_") {
             let result = try drawAction(name, arguments)
             text = result.0; step = result.1
             if let snapshot = result.2 {
                 if let undoID = draw?.undoStepID(on: snapshot.canvas.id) {
-                    extraEntries.append(.draw(snapshot.canvas.id, snapshot, undoID, step.title))
+                    if let proof = draw?.agentUndoProof(on: snapshot.canvas.id, stepID: undoID) {
+                        extraEntries.append(.durableDraw(snapshot.canvas.id, snapshot, undoID, proof, step.title))
+                    } else {
+                        extraEntries.append(.draw(snapshot.canvas.id, snapshot, undoID, step.title))
+                    }
                 } else {
                     extraEntries.append(.unavailable("\(step.title): Draw's Undo step is unavailable"))
                 }
@@ -314,8 +474,9 @@ final class AgentActions {
             step = AgentStep(id: UUID(), title: Self.stepTitle(name, arguments),
                              kind: Self.stepKind(name, arguments), targets: targets, state: .done)
             if name == "create_note", let id = targets.first?.itemID {
-                if let revision = tasks.noteStore?.note(withID: id)?.revisionToken {
-                    extraEntries.append(.createdNote(id, revision: revision, name: step.title))
+                if let revision = tasks.noteStore?.note(withID: id)?.revisionToken,
+                   let metadata = tasks.noteStore?.agentCreatedNoteMetadata(id) {
+                    extraEntries.append(.createdNote(id, revision: revision, metadata: metadata, name: step.title))
                 } else {
                     extraEntries.append(.unavailable("\(step.title): the created note could not be read back"))
                 }
@@ -324,10 +485,11 @@ final class AgentActions {
                let response = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
                response["status"] as? String == "applied",
                let note = response["note"] as? [String: Any],
-               let revision = note["revision"] as? String {
+               let revision = note["revision"] as? String,
+               let metadata = tasks.noteStore?.agentCreatedNoteMetadata(before.id) {
                 extraEntries.append(.updatedNote(before.id, document: before.document,
                                                  title: before.title, body: before.body,
-                                                 revision: revision, name: step.title))
+                                                 revision: revision, metadata: metadata, name: step.title))
             }
             if let response = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
                response["status"] as? String == "pending",
@@ -361,6 +523,46 @@ final class AgentActions {
                 entries.append(.unavailable("\(step.title): history changed during the action"))
             }
         }
+        // An editable task transition can be replayed after the session's
+        // closure-only UndoRoute is gone. Seal the full physical replica set
+        // and use the same TaskStore transition that normal Undo uses.
+        if name == "update_task", entries.count == 1, let taskBefore,
+           let taskAfter = taskSnapshot(taskBefore.state.id),
+           case .history = entries[0] {
+            entries = [.taskEdit(before: taskBefore.state, after: taskAfter.state,
+                                 proof: taskAfter.proof, name: step.title)]
+        }
+        if name == "update_tasks" {
+            let ids = step.targets.compactMap(\.itemID)
+            if !ids.isEmpty, Set(ids).count == ids.count, entries.count == ids.count,
+               entries.allSatisfy({ if case .history = $0 { return true }; return false }) {
+                let updated = ids.compactMap { id -> UndoEntry? in
+                    guard let prior = batchTaskBefore[id], let current = taskSnapshot(id),
+                          prior.state != current.state else { return nil }
+                    return .taskEdit(before: prior.state, after: current.state,
+                                     proof: current.proof, name: step.title)
+                }
+                if updated.count == ids.count { entries = updated }
+            }
+        }
+        if ["create_task", "create_tasks"].contains(name) {
+            let ids = step.targets.compactMap(\.itemID)
+            if !ids.isEmpty, entries.count == ids.count,
+               entries.allSatisfy({ if case .history = $0 { return true }; return false }) {
+                let created = ids.compactMap { id -> UndoEntry? in
+                    guard let snapshot = taskSnapshot(id) else { return nil }
+                    return .createdTask(id, snapshot.state, snapshot.proof, step.title)
+                }
+                if created.count == ids.count { entries = created }
+            }
+        }
+        if ["calendar_create", "calendar_update", "calendar_delete"].contains(name),
+           entries.count == 1, extraEntries.count == 1, case .history = entries[0] {
+            entries = extraEntries
+            // The executable Calendar inverse replaces its session history
+            // entry; recording both would replay the same write twice.
+            extraEntries.removeAll()
+        }
         // A note created through NoteStore has no ordinary undo step.
         if !entries.contains(where: { if case .history = $0 { return true }; return false }) {
             entries.append(contentsOf: extraEntries)
@@ -379,6 +581,7 @@ final class AgentActions {
             journal.changeSet.count += entries.count
             journal.changeSet.pages.formUnion(step.targets.map(\.page))
             journals[requestID] = journal
+            saveJournal()
         }
         return AgentActionResult(text: text, step: step, changeSet: changeSet(for: requestID))
     }
@@ -401,10 +604,47 @@ final class AgentActions {
         // Reverting a second edit creates a fresh revision token, so the
         // first edit in the same request must use that restored revision.
         var noteRevisions: [UUID: String] = [:]
+        // Reversing an agent edit may itself refresh note metadata (including
+        // version bookkeeping). That new state is a confirmed result of our
+        // own Undo, so earlier entries must compare against it. An owner edit
+        // still fails the before-write guard for the newest entry.
+        var noteMetadata: [UUID: String] = [:]
+        var taskProofs: [UUID: WorkspaceModelToken] = [:]
         let route = tasks.library.undo
         for entry in journal.entries.reversed() {
             var success = false
             switch entry {
+            case let .createdTask(id, expected, proof, _):
+                // A task created in a previous process is still ours only if
+                // every physical replica matches the exact post-create seal.
+                // New child tasks or task notes are also owner changes: do
+                // not allow their cascade deletion through a stale receipt.
+                let context = ModelContext(tasks.store.container)
+                let linkedNotes = (try? context.fetch(FetchDescriptor<NoteItem>()))?
+                    .contains(where: { $0.taskID == id && $0.deletedAt == nil }) ?? true
+                if !linkedNotes, let current = taskSnapshot(id), current.state == expected,
+                   current.proof == proof,
+                   (try? tasks.store.liveSubtaskIDs(of: id).isEmpty) == true {
+                    success = tasks.store.delete(taskIDs: [id])
+                }
+                if !success { failures.append("\(entry.title): a newer edit or missing undo step prevents reversal") }
+            case let .taskEdit(before, after, proof, _):
+                if let current = taskSnapshot(after.id), current.state == after,
+                   current.proof == (taskProofs[after.id] ?? proof),
+                   tasks.store.applyEditableTransition(from: [after], to: [before]) == .applied {
+                    success = true
+                    if let updated = taskSnapshot(after.id) { taskProofs[after.id] = updated.proof }
+                }
+                if !success { failures.append("\(entry.title): a newer edit or missing undo step prevents reversal") }
+            case let .calendar(id, before, after, _):
+                if let writer = calendarWriter {
+                    do {
+                        try await writer.undoAgentChange(id, expected: after, restore: before)
+                        success = true
+                    } catch {
+                        failures.append("\(entry.title): event changed or refused restoration")
+                    }
+                } else { failures.append("\(entry.title): Calendar writer unavailable") }
             case let .history(history, expectedID, _):
                 if route.undoStepID(in: history) != expectedID {
                     failures.append("\(entry.title): a newer edit or missing undo step prevents reversal")
@@ -420,15 +660,27 @@ final class AgentActions {
                     success = draw.undo(on: canvasID).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
-            case let .createdNote(noteID, revision, _):
-                if tasks.noteStore?.agentCreatedNoteIsUnchanged(
-                    noteID, revision: noteRevisions[noteID] ?? revision
-                ) == true {
-                    success = tasks.library.delete(AtticItemRef(.note, noteID))
+            case let .durableDraw(canvasID, snapshot, expectedStepID, proof, _):
+                if let draw, let current = try? draw.open(canvasID), current == snapshot {
+                    if draw.undoStepID(on: canvasID) == expectedStepID {
+                        success = draw.undo(on: canvasID).isSaved
+                    } else {
+                        // A previous durable reversal may have left a new
+                        // in-memory Draw head. The store validates that head
+                        // and the exact physical snapshot before replaying.
+                        success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved
+                    }
                 }
+                if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
+            case let .createdNote(noteID, revision, metadata, _):
+                success = tasks.noteStore?.undoAgentCreatedNote(
+                    noteID, revision: noteRevisions[noteID] ?? revision,
+                    metadata: noteMetadata[noteID] ?? metadata
+                ) == true
                 if !success { failures.append("\(entry.title): the note changed or could not be removed") }
-            case let .updatedNote(noteID, document, title, body, revision, _):
-                if let noteStore = tasks.noteStore, let document {
+            case let .updatedNote(noteID, document, title, body, revision, metadata, _):
+                if let noteStore = tasks.noteStore, let document,
+                   noteStore.agentCreatedNoteMetadata(noteID) == (noteMetadata[noteID] ?? metadata) {
                     // A note the chat wrote in while watched is on screen: a
                     // clean editor there is put back too, and reloads.
                     success = noteStore.agentRestore(noteID: noteID, document: document,
@@ -436,6 +688,7 @@ final class AgentActions {
                     if success { noteRevisions[noteID] = noteStore.note(withID: noteID)?.revisionToken }
                 } else if let noteStore = tasks.noteStore, let current = noteStore.note(withID: noteID),
                    current.revisionToken == (noteRevisions[noteID] ?? revision),
+                   noteStore.agentCreatedNoteMetadata(noteID) == (noteMetadata[noteID] ?? metadata),
                    noteStore.agentWriteDisposition(noteID) == .direct {
                     if let result = try? tasks.call(name: "update_note", arguments: [
                         "id": noteID.uuidString, "base_revision": current.revisionToken,
@@ -445,7 +698,8 @@ final class AgentActions {
                     }
                     if success { noteRevisions[noteID] = noteStore.note(withID: noteID)?.revisionToken }
                 }
-                if !success { failures.append("\(entry.title): note changed or refused restoration") }
+                if success { noteMetadata[noteID] = tasks.noteStore?.agentCreatedNoteMetadata(noteID) }
+                else { failures.append("\(entry.title): note changed or refused restoration") }
             case let .proposal(noteID, editID, _):
                 success = tasks.noteStore?.discardProposal(editID, noteID: noteID) == true
                 if !success { failures.append("\(entry.title): proposal already applied, changed or unavailable") }
@@ -455,10 +709,10 @@ final class AgentActions {
             if success { undone += 1 } else { remaining.insert(entry, at: 0) }
         }
         journal.entries = remaining.map { entry in
-            if case let .updatedNote(id, document, title, body, revision, name) = entry,
+            if case let .updatedNote(id, document, title, body, revision, metadata, name) = entry,
                let restoredRevision = noteRevisions[id] {
                 return .updatedNote(id, document: document, title: title, body: body,
-                                    revision: restoredRevision, name: name)
+                                    revision: restoredRevision, metadata: metadata, name: name)
             }
             return entry
         }
@@ -467,7 +721,21 @@ final class AgentActions {
             journals[id] = nil
             order.removeAll { $0 == id }
         } else { journals[id] = journal }
+        saveJournal()
         return AgentUndoReport(undone: undone, failures: failures, remaining: changeSet(for: id))
+    }
+
+    /// Read the entire physical UUID family. If its editable values already
+    /// diverge, a single logical inverse cannot safely restore every copy.
+    private func taskSnapshot(_ id: UUID) -> (state: TaskEditableState, proof: WorkspaceModelToken)? {
+        let context = ModelContext(tasks.store.container)
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })),
+              let first = rows.first, first.deletedAt == nil else { return nil }
+        let state = TaskEditableState(first)
+        guard rows.allSatisfy({ $0.deletedAt == nil && TaskEditableState($0) == state }),
+              let proof = try? WorkspaceModelToken.read(WorkspaceOwner(entity: .task, id: id), in: context)
+        else { return nil }
+        return (state, proof)
     }
 
     private func validate(_ name: String, _ arguments: [String: Any]) throws {
@@ -509,7 +777,9 @@ final class AgentActions {
         name.hasPrefix("create_") || name.hasPrefix("update_") || name.hasPrefix("delete_") ||
         name.hasPrefix("duplicate_") || name.hasPrefix("move_") || name.hasPrefix("restore_") ||
         name == "link" || AgentTaskTools.asyncToolNames.contains(name) ||
-        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas"].contains(name)
+        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas",
+                                         "draw_create_canvas", "draw_duplicate_canvas", "draw_delete_object",
+                                         "draw_restyle_object", "draw_resize_object"].contains(name)
     }
 
     private func noteSnapshot(for arguments: [String: Any]) -> (

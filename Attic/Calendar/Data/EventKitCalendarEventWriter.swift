@@ -45,6 +45,16 @@ private struct CalendarEventCommandPlan<Value: Sendable>: Sendable {
 }
 
 private enum CalendarEventCommands {
+    static func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                                restore: CalendarEventDraft?, in core: CalendarEventTransactions) throws {
+        switch (expected, restore) {
+        case (let after?, nil): try core.remove(id, expecting: after)
+        case (let after?, let before?): _ = try core.update(id, draft: before, expecting: after)
+        case (nil, let before?): _ = try core.insert(id, draft: before)
+        case (nil, nil): throw CalendarEventWriteError.undoUnavailable
+        }
+    }
+
     static func create(_ draft: CalendarEventDraft, id: UUID,
                        in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<CalendarOwnedEvent> {
         let made = try core.insert(id, draft: draft)
@@ -148,6 +158,14 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
         let route = try history()
         let plan = try await reporting { try CalendarEventCommands.delete(id, in: $0) }
         record(plan, route: route)
+    }
+
+    func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                         restore: CalendarEventDraft?) async throws {
+        await CalendarEventCommandGate.shared.enter()
+        defer { CalendarEventCommandGate.shared.leave() }
+        try await reporting { try CalendarEventCommands.undoAgentChange(id, expected: expected,
+                                                                       restore: restore, in: $0) }
     }
 
     func openInCalendar(_ occurrenceID: String) async throws {
@@ -267,6 +285,12 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             let plan = try CalendarEventCommands.delete(id, in: core)
             record(plan, route: undoRoute)
         }
+    }
+
+    func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                         restore: CalendarEventDraft?) throws {
+        try reporting { try CalendarEventCommands.undoAgentChange(id, expected: expected,
+                                                                  restore: restore, in: core) }
     }
 
     func openInCalendar(_ occurrenceID: String) throws {

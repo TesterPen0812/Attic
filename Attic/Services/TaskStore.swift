@@ -225,7 +225,7 @@ struct TaskContentSnapshot: Equatable {
 
 /// The fields an undo step puts back on a task: everything a person can
 /// edit in the list, plus the ordering and completion time they imply.
-struct TaskEditableState: Equatable {
+struct TaskEditableState: Codable, Equatable {
     let id: UUID
     let title: String
     let statusRaw: String

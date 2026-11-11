@@ -18,6 +18,9 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private var recoveredCanvasIDs = Set<UUID>()
     @ObservationIgnored private var states: [UUID: State] = [:]
     @ObservationIgnored private var histories: [UUID: History] = [:]
+    /// The current in-memory head left by our own recovered inverse. A newer
+    /// owner edit replaces that head and must still block earlier agent Undo.
+    @ObservationIgnored private var agentReplayHeads: [UUID: UUID] = [:]
     @ObservationIgnored private var activeCanvasID: UUID?
     @ObservationIgnored private var stateAccess: [UUID: UInt64] = [:]
     @ObservationIgnored private var accessSequence: UInt64 = 0
@@ -267,6 +270,7 @@ class DrawStore: DrawStoreProtocol {
         var after = before.canvas
         var objects: [UUID: DrawObject] = [:]
         switch command {
+        case .saveCanvas: break
         case .put(let values):
             guard Set(values.map(\.id)).count == values.count else { throw DrawStoreError.invalidObject }
             for object in values { try Self.validate(object); objects[object.id] = object }
@@ -288,7 +292,10 @@ class DrawStore: DrawStoreProtocol {
         case .restoreCanvas: after.deletedAt = nil
         }
         objects = objects.filter { before.objects[$0.key] != $0.value }
-        guard !objects.isEmpty || before.canvas != after else { return nil }
+        let savingDraft: Bool
+        if case .saveCanvas = command { savingDraft = !before.persisted }
+        else { savingDraft = false }
+        guard savingDraft || !objects.isEmpty || before.canvas != after else { return nil }
         var originals: [UUID: DrawObject] = [:]
         for id in objects.keys { originals[id] = before.objects[id] }
         if objects.keys.contains(where: { !(originals[$0]?.text ?? "").isEmpty || !(objects[$0]?.text ?? "").isEmpty }) {
@@ -297,7 +304,7 @@ class DrawStore: DrawStoreProtocol {
             after.textIndex = (unchangedText + changedText).sorted(by: Self.objectOrder).map(\.text).joined(separator: "\n")
         }
         after.updatedAt = now()
-        let persisted = before.persisted || !objects.isEmpty
+        let persisted = before.persisted || !objects.isEmpty || savingDraft
         let change = DrawChange(canvasID: id, before: before.persisted ? before.canvas : nil,
                                 after: persisted ? after : nil, objectsBefore: originals, objectsAfter: objects)
         return Step(change: change, before: before.canvas, after: after,
@@ -368,6 +375,45 @@ class DrawStore: DrawStoreProtocol {
 
     func undoStepID(on id: UUID) -> UUID? { histories[id]?.undo.last?.id }
     func redoStepID(on id: UUID) -> UUID? { histories[id]?.redo.last?.id }
+
+    private struct AgentUndoSeal: Codable {
+        let step: Step
+        let saved: DrawSnapshot
+    }
+
+    func agentUndoProof(on id: UUID, stepID: UUID) -> Data? {
+        guard pending[id] == nil, recoveryIssue == nil,
+              let step = histories[id]?.undo.last, step.id == stepID,
+              let saved = try? open(id) else { return nil }
+        return try? JSONEncoder().encode(AgentUndoSeal(step: step, saved: saved))
+    }
+
+    func undoAgentStep(on id: UUID, proof: Data) -> DrawSaveResult {
+        guard let seal = try? JSONDecoder().decode(AgentUndoSeal.self, from: proof),
+              seal.step.change.canvasID == id, pending[id] == nil, recoveryIssue == nil else {
+            return .held("Draw has changed or refused Undo")
+        }
+        // If an owner made a newer edit in this same session, never consume
+        // that history step even if the visible object list looks unchanged.
+        if let currentHead = undoStepID(on: id), currentHead != seal.step.id,
+           currentHead != agentReplayHeads[id] {
+            return .held("Draw has changed or refused Undo")
+        }
+        // A new DrawStore has no in-memory history. Load from the persistent
+        // repository, including all replicas, before accepting its old step.
+        guard let persisted = try? repository.load(id),
+              persisted.canvas == seal.saved.canvas,
+              persisted.objects.filter({ $0.deletedAt == nil }).sorted(by: Self.objectOrder) == seal.saved.objects
+        else { return .held("Draw has changed or refused Undo") }
+        do { try reload(id) }
+        catch { return .held("Draw has changed or refused Undo") }
+        guard (try? open(id)) == seal.saved else { return .held("Draw has changed or refused Undo") }
+        // The inverse is the original sparse physical transition reversed;
+        // repository.write again guards its expected physical before values.
+        let result = execute(seal.step.reversed, action: .edit)
+        if result.isSaved { agentReplayHeads[id] = undoStepID(on: id) }
+        return result
+    }
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }

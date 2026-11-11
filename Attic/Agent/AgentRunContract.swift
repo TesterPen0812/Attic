@@ -116,6 +116,9 @@ protocol AgentRunning: AnyObject {
     func setMode(_ mode: AgentChatMode)
     func resolve(approval id: UUID, allow: Bool)
     func undo(changeSet id: UUID) async throws
+    /// Recovered receipts can offer the existing Undo control only if the
+    /// action layer persisted a complete, conflict-guarded inverse.
+    func canUndoRecovered(_ id: UUID) -> Bool
     func cancel()
     /// Reattach to a running agent without starting a new request.
     func observe() -> AsyncStream<AgentEvent>
@@ -131,6 +134,7 @@ protocol AgentRunning: AnyObject {
 }
 
 extension AgentRunning {
+    func canUndoRecovered(_ id: UUID) -> Bool { false }
     func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent> {
         send(text, watching: watching)
     }

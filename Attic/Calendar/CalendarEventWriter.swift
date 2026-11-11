@@ -96,12 +96,20 @@ protocol CalendarEventWriter: AnyObject {
     func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
     func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
     func delete(_ id: UUID) async throws
+    /// Reapply an agent's sealed inverse after relaunch. The writer verifies
+    /// owned identity and the exact last saved draft before touching EventKit.
+    func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                         restore: CalendarEventDraft?) async throws
     func openInCalendar(_ occurrenceID: String) async throws
 }
 
 extension CalendarEventWriter {
     // Existing injected writers may only support occurrence lookup.
     func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent? { nil }
+    func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                         restore: CalendarEventDraft?) async throws {
+        throw CalendarEventWriteError.undoUnavailable
+    }
 }
 
 /// Local proof: EventKit identity and the captured user-visible values. Attic
