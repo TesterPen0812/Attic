@@ -262,6 +262,18 @@ class DrawStore: DrawStoreProtocol {
         } catch { return .held("Could not prepare the edit: \(error)") }
     }
 
+    func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
+        if let recoveryIssue { return .held(recoveryIssue) }
+        guard pending[id] == nil else { return .held("Draw has an unsettled edit; resolve it before an agent change") }
+        do {
+            guard let step = try prepare(command, on: id) else { return .unchanged }
+            guard repository.matchesAgentUndoPrestate(step.change) else {
+                return .held("Draw has divergent physical replicas; reconcile them before an agent change")
+            }
+            return perform(command, on: id)
+        } catch { return .held("Could not prepare the agent edit: \(error)") }
+    }
+
     /// Read a sparse patch without copying the whole object dictionary into
     /// history. This read scope ends before settle mutates the cached state.
     private func prepare(_ command: DrawCommand, on id: UUID) throws -> Step? {
@@ -405,6 +417,13 @@ class DrawStore: DrawStoreProtocol {
               persisted.canvas == seal.saved.canvas,
               persisted.objects.filter({ $0.deletedAt == nil }).sorted(by: Self.objectOrder) == seal.saved.objects
         else { return .held("Draw has changed or refused Undo") }
+        guard repository.matchesAgentUndoPrestate(seal.step.change.reversed) else {
+            return .held("Draw has divergent physical replicas; reconcile them before Undo")
+        }
+        if undoStepID(on: id) == seal.step.id {
+            // Keep the in-session history move identical to ordinary Undo.
+            return undo(on: id)
+        }
         do { try reload(id) }
         catch { return .held("Draw has changed or refused Undo") }
         guard (try? open(id)) == seal.saved else { return .held("Draw has changed or refused Undo") }

@@ -698,6 +698,42 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertNotNil(notes.note(withID: id))
     }
 
+    func testCreatedNoteUndoRefusesChangedContentWithUnchangedRevision() async throws {
+        let tasks = try makeTestStore()
+        let attachments = makeTestAttachmentFileStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentNoteSeal").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+            library: AtticLibrary(tasks: tasks, notes: notes)), journalURL: journalURL)
+        let request = actions.beginRequest(title: "Draft a note")
+        let result = try performed(await actions.call(name: "create_note", arguments: [
+            "title": "Agent title", "body": "Agent body"
+        ], watching: false, requestID: request))
+        let id = try XCTUnwrap(result.step.targets.first?.itemID)
+        let context = ModelContext(tasks.container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let revision = row.revisionID
+        row.title = "Owner's title"
+        row.body = "Owner's imported content"
+        row.content = try NoteContentCodec.encode(NoteDocument(blocks: [
+            .text("Owner's title"), .text("Owner's imported content")
+        ]))
+        try context.save()
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+            .first { $0.id == id }?.revisionID, revision)
+        let reopenedTasks = TaskStore(container: tasks.container)
+        let reopenedNotes = NoteStore(container: tasks.container, attachmentFileStore: attachments)
+        let reopened = AgentActions(tasks: AgentTaskTools(store: reopenedTasks, noteStore: reopenedNotes,
+            library: AtticLibrary(tasks: reopenedTasks, notes: reopenedNotes)), journalURL: journalURL)
+        let undo = await reopened.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 0, "Imported content must prevent a destructive Undo")
+        XCTAssertFalse(undo.failures.isEmpty)
+        let preserved = try XCTUnwrap(ModelContext(tasks.container).fetch(FetchDescriptor<NoteItem>())
+            .first { $0.id == id })
+        XCTAssertNil(preserved.deletedAt)
+        XCTAssertEqual(preserved.body, "Owner's imported content")
+    }
+
     func testAgentCreatedNoteUndoSurvivesNewStoreAndModelAndRefusesEditedReplica() async throws {
         let tasks = try makeTestStore()
         let root = ownedTemporaryDirectory(prefix: "AgentDurableUndo")
@@ -968,6 +1004,57 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(undone.undone, 2)
         XCTAssertTrue(undone.failures.isEmpty, "\(undone.failures)")
         XCTAssertEqual(try restoredDraw.open(canvas.id).objects.first, object)
+    }
+
+    func testInterruptedStoreSaveSurfacesTheExactUnfinishedMutationAfterRelaunch() async throws {
+        enum SimulatedExit: Error { case afterSave }
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentActionCrash").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Create during crash")
+        actions.testInterruptAfterStoreSave = { throw SimulatedExit.afterSave }
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "Survived crash"],
+                                       watching: false, requestID: request)
+            XCTFail("The injected exit should interrupt receipt publication")
+        } catch SimulatedExit.afterSave { }
+        XCTAssertEqual(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.title == "Survived crash" }.count, 1)
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let recovered = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), journalURL: journal)
+        XCTAssertFalse(recovered.canRecoverUndo(request), "The incomplete request cannot claim full Undo")
+        let result = await recovered.undo(changeSet: request)
+        XCTAssertTrue(result.failures.contains(where: { $0.contains("create_task") }),
+                      "The owner needs the exact unfinished action: \(result.failures)")
+    }
+
+    func testInterruptedTwoStepUndoResumesAfterFirstInverseOnRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let id = try XCTUnwrap(AtticLibrary(tasks: tasks).createTasks([TaskDraft(title: "Before")])?.first?.id)
+        let journal = ownedTemporaryDirectory(prefix: "AgentInverseCrash").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Edit twice")
+        for title in ["Middle", "After"] {
+            _ = try performed(await actions.call(name: "update_task", arguments: [
+                "id": id.uuidString, "title": title
+            ], watching: false, requestID: request))
+        }
+        actions.testInterruptAfterInverseSave = { true }
+        _ = await actions.undo(changeSet: request)
+        XCTAssertEqual(TaskStore(container: tasks.container).task(withID: id)?.title, "Middle")
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let recovered = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), journalURL: journal)
+        XCTAssertTrue(recovered.canRecoverUndo(request), "A committed inverse must be reconciled on launch")
+        let result = await recovered.undo(changeSet: request)
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(freshTasks.task(withID: id)?.title, "Before")
+        XCTAssertNil(recovered.changeSet(for: request))
     }
 
     func testDrawReadAndMoveObjectRespectReadOnlyAndUndo() async throws {
@@ -1706,4 +1793,48 @@ final class AgentActionsTests: XCTestCase {
         print("AGENT_REALISTIC_REQUEST_MCP_TOOL_CALLS=\(callCount)")
         XCTAssertEqual(callCount, 5)
     }
+    func testMalformedUndoJournalRefusesMutationsWithoutReplacingBadFile() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentBrokenUndo").appendingPathComponent("undo.json")
+        let original = Data("{wrong-format-keep-me}".utf8)
+        try FileManager.default.createDirectory(at: journal.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try original.write(to: journal)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Must refuse")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "Untracked"],
+                                       watching: false, requestID: request)
+            XCTFail("A corrupted journal must refuse the store mutation")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("can't save Undo"), "\(error)")
+        }
+        XCTAssertEqual(try Data(contentsOf: journal), original)
+        XCTAssertFalse(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .contains(where: { $0.title == "Untracked" }))
+    }
+
+    func testUnwritableUndoJournalRefusesMutationBeforeStoreCommit() async throws {
+        let tasks = try makeTestStore()
+        let root = ownedTemporaryDirectory(prefix: "AgentUnwritableUndo")
+        let blockingFile = root.appendingPathComponent("file-instead-of-directory")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("block".utf8).write(to: blockingFile)
+        let journal = blockingFile.appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks,
+            library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        let request = actions.beginRequest(title: "Must refuse")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "No receipt"],
+                                       watching: false, requestID: request)
+            XCTFail("An unwritable journal must refuse before touching the store")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("can't save Undo"), "\(error)")
+        }
+        XCTAssertFalse(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
+            .contains(where: { $0.title == "No receipt" }))
+    }
+
+
 }

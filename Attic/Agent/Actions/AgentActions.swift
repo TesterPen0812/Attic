@@ -140,6 +140,23 @@ final class AgentActions {
     private struct StoredRequest: Codable {
         let changeSet: AgentChangeSet
         let entries: [StoredInverse]
+        /// Saved before an agent store call. Nil means every known call has
+        /// either completed its receipt or was explicitly refused.
+        var pendingAction: PendingAction?
+        /// Saved before an inverse begins, and cleared only after its new
+        /// physical proof and the shortened receipt reach disk.
+        var undoInFlight: UndoInFlight?
+    }
+    private struct PendingAction: Codable {
+        let name: String
+        let targetID: String?
+        var description: String {
+            "\(name)\(targetID.map { " (\($0))" } ?? "")"
+        }
+    }
+    private struct UndoInFlight: Codable {
+        let entryIndex: Int
+        let name: String
     }
     private struct StoredUndo: Codable {
         let version: Int
@@ -162,6 +179,10 @@ final class AgentActions {
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private let journalURL: URL?
     private var journalWritable = true
+    private var journalIssue: String?
+    private var pendingActions: [UUID: PendingAction] = [:]
+    private var undoInFlight: [UUID: UndoInFlight] = [:]
+    private var reconciliationIssues: [UUID: String] = [:]
 
     init(tasks: AgentTaskTools, calendarSource: (any CalendarEventSource)? = nil,
          calendarWriter: (any CalendarEventWriter)? = nil,
@@ -178,6 +199,7 @@ final class AgentActions {
             guard let data = try? Data(contentsOf: journalURL),
                   let saved = try? JSONDecoder().decode(StoredUndo.self, from: data), saved.version == 1 else {
                 journalWritable = false
+                journalIssue = "the saved Undo journal is damaged or incompatible; it has been kept for diagnosis"
                 return
             }
             for request in saved.requests {
@@ -185,7 +207,10 @@ final class AgentActions {
                 journals[request.changeSet.id] = Journal(changeSet: request.changeSet, entries: entries)
                 order.append(request.changeSet.id)
                 closedRequests.insert(request.changeSet.id)
+                if let pending = request.pendingAction { pendingActions[request.changeSet.id] = pending }
+                if let checkpoint = request.undoInFlight { undoInFlight[request.changeSet.id] = checkpoint }
             }
+            reconcileInterruptedUndo()
         }
     }
 
@@ -249,28 +274,150 @@ final class AgentActions {
         }
     }
 
-    private func saveJournal() {
-        guard journalWritable, let journalURL else { return }
+    private func saveJournal() throws {
+        guard let journalURL else { return }
+        guard journalWritable else { throw AgentActionsError.refused(journalIssue ?? "the Undo journal is unavailable") }
         let requests = order.compactMap { id -> StoredRequest? in
-            guard let journal = journals[id], !journal.entries.isEmpty else { return nil }
+            guard let journal = journals[id],
+                  !journal.entries.isEmpty || pendingActions[id] != nil || undoInFlight[id] != nil else { return nil }
             return StoredRequest(changeSet: journal.changeSet,
-                                 entries: journal.entries.map(Self.storeInverse))
+                                 entries: journal.entries.map(Self.storeInverse),
+                                 pendingAction: pendingActions[id], undoInFlight: undoInFlight[id])
         }
         do {
             try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(StoredUndo(version: 1, requests: Array(requests.suffix(100))))
                 .write(to: journalURL, options: .atomic)
-        } catch { journalWritable = false }
+        } catch {
+            journalWritable = false
+            journalIssue = error.localizedDescription
+            throw AgentActionsError.refused("Attic couldn't finish saving Undo: \(error.localizedDescription)")
+        }
+    }
+
+    private func requireDurableUndoBeforeMutation() throws {
+        guard journalURL != nil else { return }
+        guard journalWritable else {
+            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? "journal unavailable")")
+        }
+        if let pending = pendingActions.values.first {
+            throw AgentActionsError.refused("Attic can't safely record another change while \(pending.description) has an unfinished Undo receipt. Review that step first.")
+        }
+        if let checkpoint = undoInFlight.values.first {
+            throw AgentActionsError.refused("Attic can't safely record another change while Undo of \(checkpoint.name) is unfinished. Review that step first.")
+        }
+        do { try saveJournal() } catch {
+            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
+        }
+    }
+
+    private func recordMutationIntent(_ name: String, arguments: [String: Any], requestID: UUID) throws {
+        guard journalURL != nil else { return }
+        let target = (arguments["id"] as? String) ?? (arguments["canvas_id"] as? String)
+        pendingActions[requestID] = PendingAction(name: name, targetID: target)
+        do { try saveJournal() } catch {
+            pendingActions[requestID] = nil
+            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
+        }
+    }
+
+    private func pendingExplanation(_ id: UUID) -> String? {
+        if let pending = pendingActions[id] {
+            return "Attic was interrupted during \(pending.description). Its store result is uncertain and its Undo receipt is unfinished; review that exact step before reversing this request."
+        }
+        return reconciliationIssues[id]
+    }
+
+    private func latestUnfinishedRequest() -> UUID? {
+        order.last { (journals[$0]?.changeSet.count ?? 0) > 0 || pendingActions[$0] != nil || undoInFlight[$0] != nil }
+    }
+
+    /// After an inverse changes the store, the preceding step's expected
+    /// physical token may be new (SwiftData updates its revision on save).
+    /// Persist those new proofs with the completed-step checkpoint.
+    private func refreshRemainingProofs(_ journal: inout Journal,
+                                        taskProofs: [UUID: WorkspaceModelToken] = [:],
+                                        noteRevisions: [UUID: String] = [:],
+                                        noteMetadata: [UUID: String] = [:]) {
+        journal.entries = journal.entries.map { entry in
+            switch entry {
+            case let .taskEdit(before, after, proof, name):
+                return .taskEdit(before: before, after: after,
+                                 proof: taskProofs[after.id] ?? proof, name: name)
+            case let .createdTask(id, state, proof, name):
+                return .createdTask(id, state, taskProofs[id] ?? proof, name)
+            case let .createdNote(id, revision, metadata, name):
+                return .createdNote(id, revision: noteRevisions[id] ?? revision,
+                                    metadata: noteMetadata[id] ?? metadata, name: name)
+            case let .updatedNote(id, document, title, body, revision, metadata, name):
+                return .updatedNote(id, document: document, title: title, body: body,
+                                    revision: noteRevisions[id] ?? revision,
+                                    metadata: noteMetadata[id] ?? metadata, name: name)
+            default: return entry
+            }
+        }
+    }
+
+    /// A checkpoint may describe either an inverse whose save never happened,
+    /// or one whose store save finished before the receipt rewrite. Never
+    /// guess from the presentation winner. If the full family cannot prove a
+    /// task transition, retain the checkpoint and identify the blocked step.
+    private func reconcileInterruptedUndo() {
+        for (id, checkpoint) in undoInFlight {
+            guard var journal = journals[id], checkpoint.entryIndex == journal.entries.count - 1,
+                  let entry = journal.entries.last else {
+                reconciliationIssues[id] = "Undo of \(checkpoint.name) stopped with an inconsistent receipt; review this step."
+                continue
+            }
+            switch entry {
+            case let .taskEdit(before, after, proof, _):
+                guard let current = taskSnapshot(after.id) else {
+                    reconciliationIssues[id] = "Undo of \(checkpoint.name) stopped: the task family is missing or divergent."
+                    continue
+                }
+                if current.state == after && current.proof == proof {
+                    // No inverse was committed: retry against the original seal.
+                    undoInFlight[id] = nil
+                } else if current.state == before &&
+                          current.proof.replicas.map(\.physicalID) == proof.replicas.map(\.physicalID) {
+                    journal.entries.removeLast()
+                    refreshRemainingProofs(&journal, taskProofs: [after.id: current.proof])
+                    journal.changeSet.count = journal.entries.count
+                    if journal.entries.isEmpty {
+                        journals[id] = nil
+                        order.removeAll { $0 == id }
+                    } else { journals[id] = journal }
+                    undoInFlight[id] = nil
+                } else {
+                    reconciliationIssues[id] = "Undo of \(checkpoint.name) stopped at a changed physical task family."
+                    continue
+                }
+            default:
+                // External Calendar saves, Draw, and note history do not
+                // expose an unambiguous post-crash commit proof here.
+                reconciliationIssues[id] = "Undo of \(checkpoint.name) was interrupted. Its completion cannot be confirmed; review this exact step."
+                continue
+            }
+            do { try saveJournal() }
+            catch { reconciliationIssues[id] = "Undo of \(checkpoint.name): \(error.localizedDescription)" }
+        }
     }
 
     func canRecoverUndo(_ id: UUID) -> Bool {
-        guard order.last(where: { (journals[$0]?.changeSet.count ?? 0) > 0 }) == id,
+        guard latestUnfinishedRequest() == id, pendingActions[id] == nil, undoInFlight[id] == nil,
+              reconciliationIssues[id] == nil,
               let journal = journals[id], !journal.entries.isEmpty, journalWritable else { return false }
         return journal.entries.allSatisfy { entry in
             if case .unavailable = Self.storeInverse(entry) { return false }
             return true
         }
     }
+
+    #if DEBUG && ATTIC_LOCAL_ONLY
+    /// Simulate the exact crash windows without killing the hosted test runner.
+    var testInterruptAfterStoreSave: (() throws -> Void)?
+    var testInterruptAfterInverseSave: (() -> Bool)?
+    #endif
 
     var definitions: [[String: Any]] {
         (tasks.definitions + Self.extraDefinitions).filter { def in
@@ -401,6 +548,7 @@ final class AgentActions {
                          requestID: UUID) async throws -> AgentActionResult {
         try checkOpen(requestID)
         try guardMode(name, requestID: requestID)
+        if Self.isMutation(name) { try requireDurableUndoBeforeMutation() }
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
@@ -419,6 +567,9 @@ final class AgentActions {
                       let snapshot = taskSnapshot(id) else { continue }
                 batchTaskBefore[id] = snapshot
             }
+        }
+        if Self.isMutation(name) {
+            try recordMutationIntent(name, arguments: arguments, requestID: requestID)
         }
         var step: AgentStep
         let text: String
@@ -500,6 +651,9 @@ final class AgentActions {
                 extraEntries.append(.proposal(noteID: noteID, editID: editID, name: step.title))
             }
         }
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        if Self.isMutation(name) { try testInterruptAfterStoreSave?() }
+        #endif
         step.targets = step.targets.map { target in
             guard target.title == nil else { return target }
             var enriched = target
@@ -581,8 +735,9 @@ final class AgentActions {
             journal.changeSet.count += entries.count
             journal.changeSet.pages.formUnion(step.targets.map(\.page))
             journals[requestID] = journal
-            saveJournal()
         }
+        if Self.isMutation(name) { pendingActions[requestID] = nil }
+        if !entries.isEmpty || (Self.isMutation(name) && journalURL != nil) { try saveJournal() }
         return AgentActionResult(text: text, step: step, changeSet: changeSet(for: requestID))
     }
 
@@ -594,7 +749,18 @@ final class AgentActions {
                                    failures: ["Finish or refuse the request's active action and approvals before Undo."],
                                    remaining: changeSet(for: id))
         }
-        guard order.last(where: { journals[$0]?.changeSet.count ?? 0 > 0 }) == id,
+        if let reason = pendingExplanation(id) {
+            return AgentUndoReport(undone: 0, failures: [reason], remaining: changeSet(for: id))
+        }
+        if let checkpoint = undoInFlight[id] {
+            return AgentUndoReport(undone: 0, failures: ["Undo was interrupted at \(checkpoint.name); review that exact step before retrying."],
+                                   remaining: changeSet(for: id))
+        }
+        if !journalWritable {
+            return AgentUndoReport(undone: 0, failures: ["Attic can't read or save Undo: \(journalIssue ?? "journal unavailable")"],
+                                   remaining: changeSet(for: id))
+        }
+        guard latestUnfinishedRequest() == id,
               var journal = journals[id], journal.changeSet.count > 0 else {
             return AgentUndoReport(undone: 0, failures: ["Only the newest nonempty change set can be undone."], remaining: changeSet(for: id))
         }
@@ -612,6 +778,14 @@ final class AgentActions {
         var taskProofs: [UUID: WorkspaceModelToken] = [:]
         let route = tasks.library.undo
         for entry in journal.entries.reversed() {
+            if journalURL != nil {
+                undoInFlight[id] = UndoInFlight(entryIndex: journal.entries.count - 1, name: entry.title)
+                do { try saveJournal() }
+                catch {
+                    failures.append("Couldn't checkpoint Undo before \(entry.title): \(error.localizedDescription)")
+                    break
+                }
+            }
             var success = false
             switch entry {
             case let .createdTask(id, expected, proof, _):
@@ -660,16 +834,9 @@ final class AgentActions {
                     success = draw.undo(on: canvasID).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
-            case let .durableDraw(canvasID, snapshot, expectedStepID, proof, _):
+            case let .durableDraw(canvasID, snapshot, _, proof, _):
                 if let draw, let current = try? draw.open(canvasID), current == snapshot {
-                    if draw.undoStepID(on: canvasID) == expectedStepID {
-                        success = draw.undo(on: canvasID).isSaved
-                    } else {
-                        // A previous durable reversal may have left a new
-                        // in-memory Draw head. The store validates that head
-                        // and the exact physical snapshot before replaying.
-                        success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved
-                    }
+                    success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
             case let .createdNote(noteID, revision, metadata, _):
@@ -706,7 +873,36 @@ final class AgentActions {
             case let .unavailable(reason):
                 failures.append(reason)
             }
+            #if DEBUG && ATTIC_LOCAL_ONLY
+            if success && testInterruptAfterInverseSave?() == true {
+                return AgentUndoReport(undone: undone, failures: ["Injected interruption after inverse save"],
+                                       remaining: changeSet(for: id))
+            }
+            #endif
+            if journalURL != nil {
+                if success {
+                    undone += 1
+                    journal.entries.removeLast()
+                    refreshRemainingProofs(&journal, taskProofs: taskProofs,
+                                           noteRevisions: noteRevisions, noteMetadata: noteMetadata)
+                    journal.changeSet.count = journal.entries.count
+                    if journal.entries.isEmpty {
+                        journals[id] = nil
+                        order.removeAll { $0 == id }
+                    } else { journals[id] = journal }
+                }
+                undoInFlight[id] = nil
+                do { try saveJournal() }
+                catch { failures.append("Undo reached \(entry.title), but its completion checkpoint could not be saved: \(error.localizedDescription)") }
+                // An earlier inverse is never tried while the newest one is
+                // unresolved, or while a checkpoint cannot reach disk.
+                if !success || !journalWritable { break }
+                continue
+            }
             if success { undone += 1 } else { remaining.insert(entry, at: 0) }
+        }
+        if journalURL != nil {
+            return AgentUndoReport(undone: undone, failures: failures, remaining: changeSet(for: id))
         }
         journal.entries = remaining.map { entry in
             if case let .updatedNote(id, document, title, body, revision, metadata, name) = entry,
@@ -721,7 +917,8 @@ final class AgentActions {
             journals[id] = nil
             order.removeAll { $0 == id }
         } else { journals[id] = journal }
-        saveJournal()
+        do { try saveJournal() }
+        catch { failures.append("Undo was applied, but its journal checkpoint failed: \(error.localizedDescription)") }
         return AgentUndoReport(undone: undone, failures: failures, remaining: changeSet(for: id))
     }
 

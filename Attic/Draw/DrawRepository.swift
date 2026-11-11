@@ -44,6 +44,9 @@ protocol DrawRepository: AnyObject {
     /// Exact physical before/after proof of the attempted save, serialized
     /// for a recovery checkpoint outside the model transaction.
     func recoveryProof(for id: UUID) -> Data?
+    /// Check the entire physical family before a recovered agent Undo reloads
+    /// presentation winners into a new DrawStore.
+    func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool
     /// Forgets a failed attempt that nothing will retry (a thumbnail).
     func discardAttempt(for id: UUID)
     /// Images deleted from live canvases, from metadata only.
@@ -55,6 +58,7 @@ protocol DrawRepository: AnyObject {
 
 extension DrawRepository {
     func recoveryProof(for id: UUID) -> Data? { nil }
+    func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool { true }
 }
 
 @MainActor

@@ -329,7 +329,7 @@ extension AgentActions {
         }
         if name == "draw_create_canvas" {
             let canvas = draw.create(name: args["name"] as? String)
-            let save = draw.perform(.saveCanvas, on: canvas.id)
+            let save = draw.performAgent(.saveCanvas, on: canvas.id)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw canvas did not save: \(save)") }
             let saved = try draw.open(canvas.id)
             return (try Self.json(["canvas_id": canvas.id.uuidString, "canvas_name": saved.canvas.name]),
@@ -343,7 +343,7 @@ extension AgentActions {
                 throw AgentActionsError.invalid("Could not duplicate this Draw canvas.")
             }
             if snapshot.objects.isEmpty {
-                let save = draw.perform(.saveCanvas, on: copy.id)
+                let save = draw.performAgent(.saveCanvas, on: copy.id)
                 guard save.isSaved else { throw AgentActionsError.invalid("Draw duplicate did not save: \(save)") }
             }
             guard try draw.library().contains(where: { $0.id == copy.id }) else {
@@ -396,7 +396,7 @@ extension AgentActions {
             }
             guard newText != currentText else { throw AgentActionsError.invalid("That text is already up to date.") }
             existing.content = .text(newText)
-            let save = draw.perform(.put([existing]), on: canvasID)
+            let save = draw.performAgent(.put([existing]), on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw text did not save: \(save)") }
             let after = try draw.open(canvasID)
             let step = AgentStep(id: UUID(), title: "Edit Draw text", kind: .update,
@@ -420,7 +420,7 @@ extension AgentActions {
                 throw AgentActionsError.invalid("The object is already at that position.")
             }
             let moved = existing.translated(by: DrawPoint(x: x - expectedX, y: y - expectedY), id: objectID)
-            let save = draw.perform(.put([moved]), on: canvasID)
+            let save = draw.performAgent(.put([moved]), on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw move did not save: \(save)") }
             let after = try draw.open(canvasID)
             let step = AgentStep(id: UUID(), title: "Move Draw object", kind: .move(toDay: nil),
@@ -464,7 +464,7 @@ extension AgentActions {
                 }
                 command = .put([updated]); kind = .update
             }
-            let save = draw.perform(command, on: canvasID)
+            let save = draw.performAgent(command, on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
             let after = try draw.open(canvasID)
             let step = AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
@@ -492,7 +492,7 @@ extension AgentActions {
                 command = .deleteCanvas
                 kind = .delete
             }
-            let save = draw.perform(command, on: canvasID)
+            let save = draw.performAgent(command, on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
             let after = try draw.open(canvasID)
             let step = AgentStep(id: UUID(), title: name == "draw_rename_canvas" ? "Rename Draw canvas" : "Delete Draw canvas",
@@ -541,7 +541,7 @@ extension AgentActions {
         }
         let object = DrawObject(frame: frame, zIndex: (snapshot.objects.map(\.zIndex).max() ?? 0) + 1,
                                 style: style, content: content)
-        let save = draw.perform(.put([object]), on: canvasID)
+        let save = draw.performAgent(.put([object]), on: canvasID)
         guard save.isSaved else {
             throw AgentActionsError.invalid("Draw edit did not save: \(String(describing: save))")
         }

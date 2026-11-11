@@ -400,6 +400,41 @@ final class DrawSwiftDataRepository: DrawRepository {
         return true
     }
 
+    /// Agent writes must prove every physical replica before any row is
+    /// replaced. The ordinary Draw command path retains its existing
+    /// winner-based handling for the owner's own edits.
+    private func matchesAgentBefore(_ change: DrawChange, scope: Scope) throws -> Bool {
+        guard try matchesBefore(change, scope: scope) else { return false }
+        if change.before != nil {
+            guard try Self.agree(scope.canvases) else { return false }
+        }
+        for id in change.objectsBefore.keys {
+            guard Self.agree(scope.objects.filter { $0.id == id }, parent: change.canvasID) else { return false }
+        }
+        for id in binaryIDs(change) {
+            let rows = scope.payloads.filter { $0.id == id }
+            let expected = change.objectsBefore[id].flatMap(DrawCodec.payload)
+            if let expected {
+                guard !rows.isEmpty, Self.agree(rows, parent: change.canvasID),
+                      rows.allSatisfy({ $0.formatVersion == 1 && $0.digest == DrawCodec.digest(expected)
+                          && $0.bytes == expected }) else { return false }
+            } else if !rows.isEmpty { return false }
+        }
+        if change.before?.thumbnail != change.after?.thumbnail {
+            if let bytes = change.before?.thumbnail {
+                guard !scope.thumbnails.isEmpty, Self.agree(scope.thumbnails, parent: change.canvasID),
+                      scope.thumbnails.allSatisfy({ $0.formatVersion == 1 && $0.digest == DrawCodec.digest(bytes)
+                          && $0.bytes == bytes }) else { return false }
+            } else if !scope.thumbnails.isEmpty { return false }
+        }
+        return true
+    }
+
+    func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool {
+        do { return try matchesAgentBefore(change, scope: scope(change, in: context(), countRows: false)) }
+        catch { return false }
+    }
+
     private func apply(_ change: DrawChange, scope: Scope, in context: ModelContext) throws {
         if let canvas = change.after {
             let rows = scope.canvases.isEmpty ? [DrawCanvasRecord()] : scope.canvases
