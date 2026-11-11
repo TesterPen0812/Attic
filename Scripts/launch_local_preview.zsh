@@ -33,6 +33,7 @@ Options:
                                entitlements, but build optimized (-O, whole
                                module, no debug dylib, no testability), to
                                judge feel and speed as a release would.
+  --first-touch-log            Include the preview-only first-touch diagnostics.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
                                launchd-owned process runs this preview and
@@ -72,6 +73,7 @@ configuration="Local"
 appearance=""
 build_only=false
 optimized=false
+first_touch_log=false
 verify_only=false
 dry_run=false
 allow_applications_install=false
@@ -143,6 +145,10 @@ while (( $# > 0 )); do
             ;;
         --optimized)
             optimized=true
+            shift
+            ;;
+        --first-touch-log)
+            first_touch_log=true
             shift
             ;;
         --verify)
@@ -297,6 +303,10 @@ verify_preview_process() {
 }
 
 typeset -a build_arguments
+other_swift_flags='$(inherited) -DATTIC_LOCAL_ONLY'
+if $first_touch_log; then
+    other_swift_flags+=' -DATTIC_FIRST_TOUCH_LOG'
+fi
 build_arguments=(
     -quiet
     -project "$project_path"
@@ -309,7 +319,7 @@ build_arguments=(
     "ATTIC_MACOS_PRODUCT_NAME=$executable_name"
     "ATTIC_MACOS_EXECUTABLE_NAME=$executable_name"
     "INFOPLIST_FILE=$preview_info_plist"
-    "OTHER_SWIFT_FLAGS=\$(inherited) -DATTIC_LOCAL_ONLY"
+    "OTHER_SWIFT_FLAGS=$other_swift_flags"
     CODE_SIGNING_ALLOWED=YES
     CODE_SIGNING_REQUIRED=YES
     CODE_SIGN_STYLE=Manual
@@ -340,6 +350,7 @@ print_resolved_configuration() {
     print -- "signing_identity=$signing_identity"
     print -- "appearance=${appearance:-unchanged}"
     print -- "optimized=$optimized"
+    print -- "first_touch_log=$first_touch_log"
 }
 
 if $verify_only; then

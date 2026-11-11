@@ -6,6 +6,26 @@ import XCTest
 @MainActor
 final class PerformanceSeedTests: XCTestCase {
     #if ATTIC_GENERATED_TESTS
+    func testClickLag4ProfileSeedsCurrentDrawBoardAndTaggedTaskAndNotes() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticClickLag4Seed")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: false, profile: .clickLag4)
+
+        let context = ModelContext(container)
+        let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(tasks.count, 300)
+        XCTAssertTrue(tasks.contains { !$0.tags.isEmpty })
+        XCTAssertTrue(tasks.contains { $0.parentID != nil })
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<NoteItem>()), 80)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DrawCanvasRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DrawObjectRecord>()), 2_000)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DrawPayloadRecord>()), 200)
+        let draw = DrawPersistentStore(container: container)
+        guard let board = try draw.library().first else { return XCTFail("Missing Draw board") }
+        XCTAssertEqual(try draw.open(board.id).objects.count, 2_000)
+    }
+
     func testDoneHistorySeedLivesOnlyInDoneLog() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let root = ownedTemporaryDirectory(prefix: "AtticPerformanceSeedTests")
