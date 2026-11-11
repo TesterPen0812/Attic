@@ -283,7 +283,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var localOutsidePressMonitor: Any?
     private var globalOutsidePressMonitor: Any?
     /// The corner controller owns the auto-hide decision and its existing locks.
-    var onOutsidePress: ((CGPoint) -> Void)?
+    var onOutsidePress: ((CGPoint, NSWindow?) -> Void)?
     private var isDisplayingResizeCursor = false
     private var visibilityTransition = PanelVisibilityTransitionState()
     private var isSavingCalendarForHide = false
@@ -2456,14 +2456,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         localOutsidePressMonitor = NSEvent.addLocalMonitorForEvents(matching: Self.outsidePressEvents) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.onOutsidePress?(self.pointerLocation())
+                self.onOutsidePress?(self.pointerLocation(), event.window)
             }
             return event
         }
         globalOutsidePressMonitor = NSEvent.addGlobalMonitorForEvents(matching: Self.outsidePressEvents) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.onOutsidePress?(self.pointerLocation())
+                self.onOutsidePress?(self.pointerLocation(), nil)
             }
         }
     }
@@ -2481,7 +2481,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         localOutsidePressMonitor != nil && globalOutsidePressMonitor != nil
     }
 
-    func handlePressForTesting(at point: CGPoint) { onOutsidePress?(point) }
+    func handlePressForTesting(at point: CGPoint, in window: NSWindow? = nil) { onOutsidePress?(point, window) }
     #endif
 }
 

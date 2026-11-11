@@ -183,6 +183,18 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(menu.cards[1].size.width, 216)
     }
 
+    func testDeclaredWideMenuStillGrowsToFitLongTagsUpTo280() {
+        let tag = AtticMenuCommand(verbatim: String(repeating: "Long tag ", count: 12)) {}
+        let natural = AtticGlassMenuCard.layout([tag]).size.width
+        XCTAssertEqual(natural, 280, "content growth remains capped")
+        XCTAssertEqual(AtticGlassMenuCard.layout([tag], width: AtticMenuMetrics.wideWidth).size.width, 280,
+                       "a named 224 pt width must not override the measured label")
+        XCTAssertEqual(AtticGlassMenuCard.layout([tag], width: 224, minimum: 265).size.width, 280,
+                       "minimum, named, control and content widths all participate")
+        XCTAssertEqual(AtticGlassMenuCard.layout([tag], width: 300).size.width, 300,
+                       "280 pt limits content growth, not a caller's explicit wider width")
+    }
+
     /// Rule 2: one icon family. A choice (a row with a tick state) never
     /// takes a command's icon from the table, so View Options' "Priority"
     /// sort has no flag while Priority › keeps it; a priority's mark sits

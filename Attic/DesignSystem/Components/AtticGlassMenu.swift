@@ -906,7 +906,7 @@ final class AtticGlassMenuCard {
         var y = AtticGlassMenuShape.inset
         var entries: [Entry] = []
         let fit = min(m.maxWidth, ceil(widest + AtticGlassMenuShape.inset * 2))
-        let width = max(m.minWidth, minimum.rounded(.up), declared ?? fit)
+        let width = max(m.minWidth, minimum.rounded(.up), declared ?? 0, fit)
         for kind in kinds {
             let height: CGFloat
             switch kind {

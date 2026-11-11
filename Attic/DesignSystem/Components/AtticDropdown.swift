@@ -1427,6 +1427,11 @@ enum AtticDropdownReveal {
     /// Reduced: a short fade (F/E), both ways.
     static var fadeAnimation: Animation { AtticMotionScale.reducedFade }
 
+    /// Fade is opacity-only; Instant keeps the current immediate change.
+    static func reducedOpacityAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion && AtticReducedMotionStyle.current == .fade ? fadeAnimation : nil
+    }
+
     /// One moment of the motion. `travel` is towards the anchor (up for a
     /// card below it).
     struct Frame: Equatable {
@@ -1493,18 +1498,20 @@ struct AtticUnfoldPresence<Value: Equatable, Content: View>: View {
 
     var body: some View {
         let reduced = design.reduceMotion
+        let reducedFade = AtticDropdownReveal.reducedOpacityAnimation(reduceMotion: reduced)
         ZStack {
             if let value {
                 AtticUnfolding(fromTop: fromTop, reduced: reduced) { content(value) }
-                    // Reduce Motion: there and gone at once (draft C).
-                    .transition(reduced ? .identity : AtticDropdownReveal.presence(fromTop: fromTop))
+                    .transition(reduced ? (reducedFade == nil ? .identity : .opacity)
+                                        : AtticDropdownReveal.presence(fromTop: fromTop))
             }
         }
         // The insertion and removal run in an animated transaction, as
         // N-4's did: on macOS 26 a transition's own animation alone left the
         // insertion unanimated there, so the inserting turn drew the whole
         // card (CI: the / list's open at 0.95-1.18 of the replaced list's).
-        .animation(value != nil ? AtticDropdownReveal.openOpacityAnimation : AtticDropdownReveal.closeAnimation, value: value != nil)
+        .animation(reduced ? reducedFade : (value != nil ? AtticDropdownReveal.openOpacityAnimation : AtticDropdownReveal.closeAnimation),
+                   value: value != nil)
     }
 }
 
@@ -1790,8 +1797,8 @@ struct AtticDropdownStage: View {
                 $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop,
                                               fromLeading: !model.trailing, appliesOpacity: !model.opaque))
             }
-            // Reduced: no motion at all, opening or closing (draft C).
-            .animation(nil) {
+            // Reduced Fade changes only opacity over 0.12 s; Instant changes immediately.
+            .animation(AtticDropdownReveal.reducedOpacityAnimation(reduceMotion: reduce)) {
                 $0.opacity(!reduce || model.shown ? 1 : 0)
             }
             .environment(\.atticDropdownFocusRequest, model.focusRequest)

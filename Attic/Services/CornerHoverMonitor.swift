@@ -132,7 +132,7 @@ final class CornerHoverMonitor {
             stateMachine.forceHidden(untilHotspotExit: true)
             refreshSamplingCadence(at: NSEvent.mouseLocation)
         }
-        panelController.onOutsidePress = { [weak self] location in self?.outsidePress(at: location) }
+        panelController.onOutsidePress = { [weak self] location, window in self?.outsidePress(at: location, in: window) }
     }
 
     func start() {
@@ -438,9 +438,9 @@ final class CornerHoverMonitor {
         }
     }
 
-    private func outsidePress(at location: CGPoint) {
+    private func outsidePress(at location: CGPoint, in window: NSWindow?) {
         guard isRunning else { return }
-        let isInside = panelController.containsScreenPoint(location)
+        let isInside = panelController.containsScreenPoint(location) || Self.isAtticOwnedWindow(window)
         let locked = MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: uiState.interactionLockReasons.union(panelController.floatingInteractionLockReasons),
             pointerInside: isInside,
@@ -465,6 +465,18 @@ final class CornerHoverMonitor {
             self.refreshSamplingCadence(at: NSEvent.mouseLocation)
         }
         if !result.isAccepted { stateMachine.resolveHideCompletion(didOrderOut: false) }
+    }
+
+    /// Local mouse-down events carry their AppKit window; the pointer can be
+    /// far outside the panel while the click is in Settings, a sheet, alert,
+    /// popover or another Attic-owned card. Global clicks carry no window.
+    private static func isAtticOwnedWindow(_ window: NSWindow?) -> Bool {
+        var candidate = window
+        while let current = candidate {
+            if NSApp.windows.contains(where: { $0 === current }) { return true }
+            candidate = current.parent
+        }
+        return false
     }
 
     private func pointerActivityObserved(at location: CGPoint, eventTimestamp: TimeInterval? = nil) {
