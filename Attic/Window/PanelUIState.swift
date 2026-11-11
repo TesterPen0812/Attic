@@ -361,6 +361,7 @@ final class PanelUIState: ObservableObject {
     func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
         IdleLatencyTrace.point("page_change_decision")
         guard selectedSection != section, !routeElsewhere(section) else { return }
+        IdleLatencyTrace.controlDispatched(.pageSwitch)
         PerformanceSignposts.noteInput("page-handler-begin from=\(PanelPage(selectedSection).rawValue) to=\(PanelPage(section).rawValue) built=\(builtPages.map(\.rawValue).sorted().joined(separator: ","))")
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         pageSlideGeneration &+= 1

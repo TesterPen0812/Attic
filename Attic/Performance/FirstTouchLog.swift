@@ -22,6 +22,7 @@ struct FirstTouchLogRecord: Codable, Sendable {
     var originNS: UInt64? = nil
     var kind: String? = nil
     var stage: String? = nil
+    var control: String? = nil
     var spanStartNS: UInt64? = nil
     var dueNS: UInt64? = nil
     var revealDelayMS: Double? = nil

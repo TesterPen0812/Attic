@@ -99,6 +99,87 @@ class FirstTouchSummaryTests(unittest.TestCase):
         self.assertEqual(touch["stages"]["hotspot_sample_to_followup_due"], 220)
         self.assertEqual(touch["stages"]["hotspot_sample_to_reveal_decision"], 223)
 
+    def test_labeled_control_measures_release_dispatch_handoff_and_frame(self):
+        touch = one_touch([
+            {"event": "input", "id": 6, "atNS": 1_000_000_000,
+             "originNS": 990_000_000, "kind": "panel_control", "page": "tasks"},
+            {"event": "mouse_up", "id": 6, "atNS": 1_105_000_000,
+             "originNS": 1_100_000_000},
+            {"event": "stage", "id": 6, "stage": "control_dispatched",
+             "control": "row_tick", "atNS": 1_109_000_000},
+            {"event": "stage", "id": 6, "stage": "view_dispatch_done", "atNS": 1_130_000_000},
+            {"event": "stage", "id": 6, "stage": "commit_handoff", "atNS": 1_215_000_000},
+            {"event": "frame_candidate", "id": 6, "atNS": 1_230_000_000},
+        ])
+        self.assertEqual(touch["control"], "row_tick")
+        self.assertEqual(touch["stages"]["mouse_up_to_action_dispatch"], 9)
+        self.assertEqual(touch["stages"]["action_dispatch_to_handoff"], 106)
+        self.assertEqual(touch["stages"]["handoff_to_frame_candidate"], 15)
+
+    def test_legacy_page_switch_is_only_known_identity(self):
+        base = [
+            {"event": "input", "id": 4, "atNS": 2_000_000_000,
+             "kind": "island_action"},
+            {"event": "mouse_up", "id": 4, "atNS": 2_105_000_000,
+             "originNS": 2_100_000_000},
+            {"event": "stage", "id": 4, "stage": "page_change_decision",
+             "atNS": 2_112_000_000},
+            {"event": "stage", "id": 4, "stage": "commit_handoff", "atNS": 2_170_000_000},
+            {"event": "frame_candidate", "id": 4, "atNS": 2_185_000_000},
+        ]
+        switch = one_touch(base)
+        self.assertEqual(switch["control"], "page_switch")
+        self.assertEqual(switch["stages"]["mouse_up_to_action_dispatch"], 12)
+        self.assertEqual(switch["stages"]["action_dispatch_to_handoff"], 58)
+        unknown = one_touch([r for r in base if r.get("stage") != "page_change_decision"])
+        self.assertEqual(unknown["control"], "island")
+        self.assertNotIn("action_dispatch_to_handoff", unknown["stages"])
+
+    def test_invalid_control_and_missing_boundaries_do_not_invent_stages(self):
+        touch = one_touch([
+            {"event": "input", "id": 9, "atNS": 1_000_000_000, "kind": "panel_control"},
+            {"event": "stage", "id": 9, "stage": "control_dispatched",
+             "control": "arbitrary_text", "atNS": 1_030_000_000},
+            {"event": "frame_candidate", "id": 9, "atNS": 1_050_000_000},
+            {"event": "stage", "id": 9, "stage": "control_dispatched",
+             "control": "chat", "atNS": 1_060_000_000},
+        ])
+        self.assertIsNone(touch["control"])
+        self.assertNotIn("mouse_up_to_action_dispatch", touch["stages"])
+        self.assertNotIn("action_dispatch_to_handoff", touch["stages"])
+
+    def test_first_action_marker_wins_when_trace_contains_multiple(self):
+        trace = [
+            {"event": "input", "id": 12, "atNS": 1_000_000_000,
+             "kind": "panel_control"},
+            {"event": "mouse_up", "id": 12, "atNS": 1_100_000_000,
+             "originNS": 1_095_000_000},
+            {"event": "stage", "id": 12, "stage": "control_dispatched",
+             "control": "add_bar", "atNS": 1_110_000_000},
+            {"event": "stage", "id": 12, "stage": "control_dispatched",
+             "control": "settings", "atNS": 1_120_000_000},
+            {"event": "stage", "id": 12, "stage": "commit_handoff", "atNS": 1_135_000_000},
+            {"event": "frame_candidate", "id": 12, "atNS": 1_150_000_000},
+        ]
+        touch = one_touch(trace)
+        self.assertEqual(touch["control"], "add_bar")
+        self.assertEqual(touch["stages"]["action_dispatch_to_handoff"], 25)
+
+    def test_small_control_cohorts_use_nearest_rank_p90(self):
+        def touch(number, handoff_ms):
+            start = 1_000_000_000
+            return one_touch([
+                {"event": "input", "id": number, "kind": "island_action", "atNS": start},
+                {"event": "stage", "id": number, "stage": "commit_handoff",
+                 "atNS": start + 100_000_000},
+                {"event": "frame_candidate", "id": number,
+                 "atNS": start + (100 + handoff_ms) * 1_000_000},
+            ])
+        output = StringIO()
+        with redirect_stdout(output):
+            report([touch(1, 7), touch(2, 25)])
+        self.assertIn("p90=25.00 worst=25.00", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

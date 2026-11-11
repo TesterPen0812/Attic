@@ -2029,6 +2029,7 @@ struct TasksPage: View {
                 // The same scope rule as live rows: the circle acts on its
                 // row, Space and the menu on the selection it is part of.
                 toggleDone: {
+                    IdleLatencyTrace.controlDispatched(.rowTick)
                     let targets = commandTargets(for: id)
                     model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
                 },
@@ -2059,6 +2060,7 @@ struct TasksPage: View {
             // of a multi-selection acts on the selection, as the menu does
             // (review 5). A failure shows under the row (review 6).
             toggleDone: {
+                IdleLatencyTrace.controlDispatched(.rowTick)
                 let targets = commandTargets(for: id)
                 let outcome = targets.count > 1
                     ? model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
@@ -3265,6 +3267,7 @@ struct TasksPage: View {
             TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
                            tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
                            onSelectTag: { model.chooseTagChip($0) }, onPlus: {
+                               IdleLatencyTrace.controlDispatched(.addBar)
                                if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
                            }, selectionBar: selectionBarShown ? AnyView(selectionBar) : nil) {
                 addBar

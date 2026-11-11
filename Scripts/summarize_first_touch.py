@@ -7,6 +7,7 @@ candidate, not proven scan-out, and CA/WindowServer times require a system trace
 import argparse
 import collections
 import json
+import math
 import statistics
 from pathlib import Path
 
@@ -39,16 +40,29 @@ def one_touch(records):
     # the FIRST occurrence of each boundary, and never read beyond the frame.
     stages = {}
     spans = {}
+    control_events = []
     for r in sorted(records, key=lambda r: r["atNS"]):
         if candidate is not None and r["atNS"] > candidate:
             continue
         if r["event"] == "stage":
             stages.setdefault(r.get("stage"), r["atNS"])
+            if r.get("stage") == "control_dispatched" and r.get("control") in (
+                    "row_tick", "add_bar", "page_switch", "chat", "settings"):
+                control_events.append(r)
         elif r["event"] == "span":
             spans.setdefault(r["stage"], ms_between(r.get("spanStartNS"), r["atNS"]))
     ups = sorted((r for r in records if r["event"] == "mouse_up"
                   and (candidate is None or r["atNS"] <= candidate)), key=lambda r: r["atNS"])
     mouse_up = ups[0] if ups else None
+    # A page-switch decision is the only action-start marker in the owner's
+    # older log. Other panel controls cannot be identified from that log.
+    # The first accepted action owns this touch; a later nested action
+    # must not reclassify it or shorten dispatch -> handoff.
+    control = (control_events[0]["control"] if control_events else
+               "page_switch" if "page_change_decision" in stages else
+               "island" if first.get("kind") == "island_action" else None)
+    action_dispatch = (control_events[0]["atNS"] if control_events else
+                       stages.get("page_change_decision") if control == "page_switch" else None)
     scheduled = next((r for r in sorted(records, key=lambda r: r["atNS"])
                       if r.get("stage") == "followup_scheduled"
                       and (candidate is None or r["atNS"] <= candidate)), None)
@@ -76,6 +90,7 @@ def one_touch(records):
         ("handler_to_down_return", stages.get("handler_entered"), stages.get("mouse_down_returned")),
         ("down_to_view_dispatch", stages.get("mouse_down_returned"), stages.get("view_dispatch_done")),
         ("view_to_commit_handoff", stages.get("view_dispatch_done"), stages.get("commit_handoff") or stages.get("transaction_flushed")),
+        ("action_dispatch_to_handoff", action_dispatch, stages.get("commit_handoff") or stages.get("transaction_flushed")),
         ("view_to_transaction_flush", stages.get("view_dispatch_done"), stages.get("transaction_flushed")),
         ("handoff_to_frame_candidate", stages.get("commit_handoff") or stages.get("transaction_flushed"), candidate),
     ]
@@ -94,6 +109,7 @@ def one_touch(records):
             ("press_duration", origin, up_origin),
             ("mouse_up_delivery", up_origin, mouse_up["atNS"] if mouse_up else None),
             ("mouse_up_to_action_return", up_origin, action_return),
+            ("mouse_up_to_action_dispatch", up_origin, action_dispatch),
             ("action_return_to_frame_candidate", action_return, candidate),
             ("mouse_up_to_frame_candidate", up_origin, candidate),
         ])
@@ -124,6 +140,8 @@ def one_touch(records):
         pageins = max(0, memory[-1]["memory"]["pageins"] - memory[0]["memory"]["pageins"])
     return {
         "kind": first.get("kind", "unknown"),
+        "control": control,
+        "page": first.get("page"),
         "first": bool(first.get("firstAfterIdle")),
         "idle_ms": first.get("idleMS"),
         "hidden_ms": first.get("hiddenMS"),
@@ -143,6 +161,7 @@ def one_touch(records):
 
 def report(touches):
     print(f"Touches: {len(touches)} (frame = next display-link callback; presentation/scan-out unverified)")
+    report_controls(touches)
     cohorts = collections.defaultdict(list)
     for item in touches:
         cohorts[(item["kind"], "first" if item["first"] else "repeat")].append(item)
@@ -192,6 +211,34 @@ def report(touches):
     print("Notes: overlapping spans are not additive; resident and compressed are not subtracted from footprint.")
     print("Mouse-up -> action return bounds synchronous event delivery, not an async action's completion.")
     print("CA commit and WindowServer/render-server time are unmeasured by this in-process log.")
+
+
+def report_controls(touches):
+    """Action dispatch is separate from the end of synchronous event delivery."""
+    valid = ("row_tick", "add_bar", "page_switch", "chat", "settings", "island")
+    entries = collections.defaultdict(list)
+    for touch in touches:
+        if touch["kind"] not in ("panel_control", "island_action"):
+            continue
+        key = touch["control"] or "unclassified_panel"
+        entries[key].append(touch)
+    print("\nControl stages (ms; n=measured; p90 is observed, not extrapolated):")
+    for key in (*valid, "unclassified_panel"):
+        group = entries[key]
+        print(f"  {key}: touches={len(group)} mouse_up={sum(t['mouse_up_recorded'] for t in group)}")
+        for phase in ("mouse_up_to_action_dispatch", "mouse_up_to_action_return",
+                      "action_dispatch_to_handoff", "view_to_commit_handoff",
+                      "handoff_to_frame_candidate"):
+            values = sorted(t["stages"][phase] for t in group if phase in t["stages"])
+            if values:
+                print(f"    {phase}: n={len(values)} median={statistics.median(values):.2f} "
+                      f"p90={values[math.ceil(len(values) * .9) - 1]:.2f} "
+                      f"worst={values[-1]:.2f} >100ms={sum(v > 100 for v in values)}")
+        if key == "unclassified_panel":
+            pages = collections.Counter(t["page"] for t in group)
+            print("    pages: " + ", ".join(f"{page}={count}" for page, count in sorted(pages.items())))
+    print("  Original panel-control records have no button identity: row tick, add bar, chat, "
+          "and Settings cannot be separated without new control-dispatch markers.")
 
 
 GRAPHICS_GUIDE = """Render-server investigation on the owner's Pro (only when wanted; not always-on):
