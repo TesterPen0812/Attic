@@ -551,7 +551,7 @@ enum TasksFold {
     /// another group ends where it was going first. Under Reduce Motion
     /// (no animation) the group flips at once.
     static func turn(_ key: String, on tab: TasksTab, folded: Bool, animation: Animation?, generation: Int,
-                     state: Binding<TasksFoldTurn?>, toggle: @escaping (String) -> Void) {
+                     state: Binding<TasksFoldTurn?>, toggle: @escaping @MainActor @Sendable (String) -> Void) {
         var quiet = Transaction()
         quiet.disablesAnimations = true
         if let old = state.wrappedValue, !old.matches(tab, key) {
