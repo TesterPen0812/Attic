@@ -34,6 +34,31 @@ final class PhaseXColourTokenTests: XCTestCase {
             : [AtticSurfaceModel.contentTop, 1].map { tokens.panel.composite(.midGrey, at: $0) }
     }
 
+    /// The compact dropdown text role over its opaque popover face.
+    /// The ink binding is shared with the drawing components.
+    func testSA3CompactDropdownTextReaches45AcrossNormalLooks() {
+        var lowest = Double.infinity
+        var worst = ""
+        for mode in Self.modes {
+            for palette in AtticPanelTheme.allCases {
+                for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
+                    for tint in PanelTintLevel.allCases {
+                        let context = AtticDesignContext(mode: mode, palette: palette, surface: surface, tint: tint)
+                        let tokens = context.tokens
+                        let text = tokens.ink(AtticDropdownSmallText.ink)
+                        let face = tokens.popoverFill
+                        for background in [face, tokens.dropdownHighlight.over(face)] {
+                            let ratio = text.contrast(on: background)
+                            if ratio < lowest { lowest = ratio; worst = "\(context.caption) \(background.hexString)" }
+                        }
+                    }
+                }
+            }
+        }
+        print("SA3_MIN \(lowest) \(worst)")
+        XCTAssertGreaterThanOrEqual(lowest, 4.5, "SA-3: \(worst)")
+    }
+
     // MARK: Tags
 
     /// The tags use the highlighter's clear hues (N-2, owner 2026-10-11):
