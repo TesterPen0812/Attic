@@ -11,6 +11,9 @@ final class AtticUITests: XCTestCase {
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
             app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
+            // These tests hover away and expect the idle hide, which is the
+            // Move cursor away dismiss; Click away is the default since 11 Nov.
+            app.launchArguments += ["-panelDismissMode", "moveCursorAway"]
         }
         if name.contains("RecentlyDeleted") {
             // A deleted task (with a subtask) and a deleted note in the
