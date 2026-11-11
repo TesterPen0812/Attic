@@ -605,6 +605,7 @@ struct NotesEditorPage: View {
             AtticRaisedButton(systemName: "chevron.left", label: "All notes", size: NotesBarMetrics.size,
                               help: String(localized: "All notes (⇧⌘L)"),
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
+                IdleLatencyTrace.controlDispatched(.noteLibrary)
                 if sharedChrome?.plusHandedOver != true { toggleLibrary() }
             }
             .noteFormatRowLeaving(.allNotes)
@@ -674,6 +675,7 @@ struct NotesEditorPage: View {
         AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", size: NotesBarMetrics.size,
                           help: String(localized: "Format (⌘T)"), emphasisedGlyph: darkGlyphs,
                           cornerRadius: NotesBarMetrics.radius) {
+            IdleLatencyTrace.controlDispatched(.noteFormat)
             chrome.openFormatBar(keyboard: false)
         }
         .noteFormatRowSource()
@@ -854,6 +856,7 @@ struct NotesEditorPage: View {
     }
 
     private func openFromLibrary(_ id: UUID) {
+        IdleLatencyTrace.controlDispatched(.noteOpen)
         // A task's own note opens as its task's page (§ 5.3), over Notes.
         let query = library.query
         if TaskNoteWindows.shared.bringForward(noteID: id, searchQuery: query) {

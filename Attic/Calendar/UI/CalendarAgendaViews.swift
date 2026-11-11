@@ -322,7 +322,10 @@ struct CalendarEventRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func toggleRow() { Task { await rows.toggle(event, on: day) } }
+    private func toggleRow() {
+        IdleLatencyTrace.controlDispatched(.calendarEvent)
+        Task { await rows.toggle(event, on: day) }
+    }
 
     private var isPast: Bool {
         if case let .dayBlock(_, isOver, _) = style { return isOver }

@@ -767,7 +767,14 @@ struct TasksPage: View {
             // the tag bar at the bottom filters.
             PanelTopRow(page: .tasks, layout: layout, searchOpen: shown,
                         moreCommands: { model.tab == .done ? model.doneCommands() : viewCommands(for: model.tab) }) {
-                TasksTopTabs(selection: Binding(get: { model.tab }, set: { model.select(tab: $0) }))
+                TasksTopTabs(selection: Binding(get: { model.tab }, set: {
+                    switch $0 {
+                    case .now: IdleLatencyTrace.controlDispatched(.taskNow)
+                    case .backlog: IdleLatencyTrace.controlDispatched(.taskLater)
+                    case .done: IdleLatencyTrace.controlDispatched(.taskDone)
+                    }
+                    model.select(tab: $0)
+                }))
             } search: {
                 if shown {
                     Group {
@@ -1998,6 +2005,7 @@ struct TasksPage: View {
     }
 
     private func rowClicked(_ id: UUID, tab: TasksTab) {
+        IdleLatencyTrace.controlDispatched(.rowSelect)
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
         if AtticTaskRow.currentClickCount >= 2 {
             model.selectOnly(id)
@@ -3269,8 +3277,11 @@ struct TasksPage: View {
             // the tag bar's place instead of stacking over it.
             TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
                            tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
-                           onSelectTag: { model.chooseTagChip($0) }, onPlus: {
-                               IdleLatencyTrace.controlDispatched(.addBar)
+                           onSelectTag: {
+                               IdleLatencyTrace.controlDispatched(.tagFilter)
+                               model.chooseTagChip($0)
+                           }, onPlus: {
+                               IdleLatencyTrace.controlDispatched(.addBarFocus)
                                if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
                            }, selectionBar: selectionBarShown ? AnyView(selectionBar) : nil) {
                 addBar
@@ -3749,7 +3760,10 @@ private struct TasksAddBar: View {
     }
 
     private func submit(openingPage: Bool) {
-        if let id = model.submitAddBar(openingPage: openingPage) { added(id) }
+        IdleLatencyTrace.controlDispatched(.addBar)
+        if let id = IdleLatencyTrace.span("task_add_submit", {
+            model.submitAddBar(openingPage: openingPage)
+        }) { added(id) }
     }
 
     /// The suggestion list's keys (review 15): ↑ ↓ move, Tab or Return take

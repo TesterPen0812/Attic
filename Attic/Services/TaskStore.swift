@@ -3949,11 +3949,16 @@ final class TaskStore: ObservableObject {
             #endif
             let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
                 .compactMap { ($0 as? TaskItem)?.id })
+            IdleLatencyTrace.count("task_save_changed_ids", changedIDs.count)
             let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
+            try IdleLatencyTrace.span("task_save_durable") {
+                try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
+            }
             #else
-            try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
+            try IdleLatencyTrace.span("task_save_durable") {
+                try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
+            }
             #endif
             taskImageFiles.files.finishCandidates(candidateIDs)
             #if ATTIC_OPERATION_CRASH_TESTS
@@ -3965,7 +3970,9 @@ final class TaskStore: ObservableObject {
             var publishedWinners: [TaskItem]?
             if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                 do {
-                    publishedWinners = try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    publishedWinners = try IdleLatencyTrace.span("task_save_publish") {
+                        try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    }
                     presentationReloaded = publishedWinners == nil
                     errorNotice = nil
                 } catch {
@@ -4080,6 +4087,13 @@ final class TaskStore: ObservableObject {
     }
 
     private func reloadTasks(using initialContext: ModelContext? = nil) throws {
+        try IdleLatencyTrace.span("task_reload") {
+            try reloadTasksMeasured(using: initialContext)
+        }
+    }
+
+    private func reloadTasksMeasured(using initialContext: ModelContext?) throws {
+        IdleLatencyTrace.count("task_reload_count", 1)
         defer { tagInventoryDidRefresh() }
         #if DEBUG
         if listRefreshFailures > 0 {

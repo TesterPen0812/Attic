@@ -379,6 +379,12 @@ final class AtticPanel: NSPanel {
             }
         } else if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
             IdleLatencyTrace.mouseUp(original: event.timestamp)
+        } else if event.type == .keyDown, event.keyCode == 36,
+                  let context = onIdleTraceContext?(), context.page == .tasks {
+            // Return can submit the add bar without any mouse-up. Its own
+            // dispatch/frame boundaries make keyboard submissions measurable.
+            IdleLatencyTrace.begin("keyboard_control", original: event.timestamp, context: context)
+            tracingIdlePress = true
         } else if [.keyDown, .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
             IdleLatencyTrace.untracedInput()
         }
@@ -391,6 +397,11 @@ final class AtticPanel: NSPanel {
             }
             if tracingIdlePress, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
                 IdleLatencyTrace.point("sendEvent_dispatched")
+                IdleLatencyTrace.point("view_dispatch_done")
+                IdleLatencyTrace.firstFrameOpportunity(in: contentView)
+                tracingIdlePress = false
+            }
+            if tracingIdlePress, event.type == .keyDown {
                 IdleLatencyTrace.point("view_dispatch_done")
                 IdleLatencyTrace.firstFrameOpportunity(in: contentView)
                 tracingIdlePress = false

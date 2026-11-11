@@ -290,6 +290,21 @@ enum PerformanceSignposts {
 enum FirstTouchControl: String {
     case rowTick = "row_tick"
     case addBar = "add_bar"
+    case addBarFocus = "add_bar_focus"
+    case rowSelect = "row_select"
+    case taskNow = "task_now"
+    case taskLater = "task_later"
+    case taskDone = "task_done"
+    case tagFilter = "tag_filter"
+    case noteOpen = "note_open"
+    case noteFormat = "note_format"
+    case noteLibrary = "note_library"
+    case calendarDay = "calendar_day"
+    case calendarEvent = "calendar_event"
+    case calendarView = "calendar_view"
+    case drawTool = "draw_tool"
+    case drawLibrary = "draw_library"
+    case drawUndo = "draw_undo"
     case pageSwitch = "page_switch"
     case chat
     case settings
@@ -329,7 +344,22 @@ enum IdleLatencyTrace {
     private static func validSpan(_ phase: String) -> Bool {
         switch phase {
         case "show_build_layout", "page_build", "page_layout", "snapshot_capture",
-             "snapshot_prepare", "transaction_flush": return true
+             "snapshot_prepare", "transaction_flush",
+             "task_toggle", "task_add_submit", "task_finish_editing", "task_done_load",
+             "task_rows_build", "task_save_durable", "task_save_publish", "task_reload",
+             "note_leave", "note_session_open", "note_groups_metadata", "note_groups_rows",
+             "calendar_rebuild", "calendar_day_offset",
+             "draw_undo_apply", "draw_board_open", "draw_store_undo",
+             "draw_store_write", "draw_store_recovery": return true
+        default: return false
+        }
+    }
+    private static func validCounter(_ name: String) -> Bool {
+        switch name {
+        case "task_rows", "task_rows_cache_miss", "task_rows_cache_hit", "task_save_changed_ids",
+             "task_reload_count", "task_done_reads", "note_groups_rows_count",
+             "note_session_warm_hit", "calendar_rebuild_pass", "draw_objects_opened",
+             "draw_undo_objects", "draw_repo_rows_read": return true
         default: return false
         }
     }
@@ -373,7 +403,7 @@ enum IdleLatencyTrace {
                       receivedNS: UInt64? = nil) {
         // Never use data from an event's payload. Only a small fixed kind set
         // can enter a persistent log, including through this internal API.
-        guard ["corner_approach", "island_action", "island_wake", "panel_control",
+        guard ["corner_approach", "island_action", "island_wake", "panel_control", "keyboard_control",
                "explicit_reveal"].contains(kind) else { return }
         let entered = timestamp
         let received = min(receivedNS ?? entered, entered)
@@ -418,7 +448,7 @@ enum IdleLatencyTrace {
     /// Mark the actual control action, which can begin after mouse-up and
     /// before sendEvent returns. Only this closed vocabulary enters the log.
     static func controlDispatched(_ control: FirstTouchControl) {
-        guard let trace = current, ["panel_control", "island_action"].contains(trace.kind) else { return }
+        guard let trace = current, ["panel_control", "island_action", "keyboard_control"].contains(trace.kind) else { return }
         let at = timestamp
         guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
         var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
@@ -429,6 +459,21 @@ enum IdleLatencyTrace {
             switch control {
             case .rowTick: controlSignposter.emitEvent("ClickAction", "row_tick")
             case .addBar: controlSignposter.emitEvent("ClickAction", "add_bar")
+            case .addBarFocus: controlSignposter.emitEvent("ClickAction", "add_bar_focus")
+            case .rowSelect: controlSignposter.emitEvent("ClickAction", "row_select")
+            case .taskNow: controlSignposter.emitEvent("ClickAction", "task_now")
+            case .taskLater: controlSignposter.emitEvent("ClickAction", "task_later")
+            case .taskDone: controlSignposter.emitEvent("ClickAction", "task_done")
+            case .tagFilter: controlSignposter.emitEvent("ClickAction", "tag_filter")
+            case .noteOpen: controlSignposter.emitEvent("ClickAction", "note_open")
+            case .noteFormat: controlSignposter.emitEvent("ClickAction", "note_format")
+            case .noteLibrary: controlSignposter.emitEvent("ClickAction", "note_library")
+            case .calendarDay: controlSignposter.emitEvent("ClickAction", "calendar_day")
+            case .calendarEvent: controlSignposter.emitEvent("ClickAction", "calendar_event")
+            case .calendarView: controlSignposter.emitEvent("ClickAction", "calendar_view")
+            case .drawTool: controlSignposter.emitEvent("ClickAction", "draw_tool")
+            case .drawLibrary: controlSignposter.emitEvent("ClickAction", "draw_library")
+            case .drawUndo: controlSignposter.emitEvent("ClickAction", "draw_undo")
             case .pageSwitch: controlSignposter.emitEvent("ClickAction", "page_switch")
             case .chat: controlSignposter.emitEvent("ClickAction", "chat")
             case .settings: controlSignposter.emitEvent("ClickAction", "settings")
@@ -476,6 +521,18 @@ enum IdleLatencyTrace {
             }
         }
         return try body()
+    }
+
+    /// Counts an already-materialized collection or a cache hit without
+    /// scanning, formatting or allocating on the input path.
+    static func count(_ name: String, _ value: Int) {
+        guard validCounter(name), let trace = current else { return }
+        let at = timestamp
+        guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
+        var record = FirstTouchLogRecord(id: trace.id, event: "counter", atNS: at)
+        record.stage = name
+        record.count = value
+        emit(record)
     }
 
     static func followUpScheduled(at deadline: TimeInterval) {
@@ -533,6 +590,7 @@ enum IdleLatencyTrace {
     static func point(_ phase: String) {}
     static func controlDispatched(_ control: FirstTouchControl) {}
     static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T { try body() }
+    static func count(_ name: String, _ value: Int) {}
     static func followUpScheduled(at deadline: TimeInterval) {}
     static func followUpFired(scheduled: TimeInterval) {}
     static func firstFrameOpportunity(in view: NSView?) {}

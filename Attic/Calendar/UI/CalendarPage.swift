@@ -336,6 +336,7 @@ struct CalendarPage: View {
     }
 
     private func setView(_ view: CalendarViewMode) {
+        IdleLatencyTrace.controlDispatched(.calendarView)
         if view == .day {
             model.setDayView(true)
             return

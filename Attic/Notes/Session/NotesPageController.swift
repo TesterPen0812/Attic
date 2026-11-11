@@ -1538,8 +1538,13 @@ final class NotesPageController: ObservableObject {
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
-        guard prepareToLeave(.openNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
-        guard let session = session(for: note, preparedLoad: preparedLoad).flatMap({ presentSession($0) }) else { return false }
+        guard IdleLatencyTrace.span("note_leave", {
+            prepareToLeave(.openNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly)
+        }) else { return false }
+        IdleLatencyTrace.count("note_session_warm_hit", cache[noteID] == nil ? 0 : 1)
+        guard let session = IdleLatencyTrace.span("note_session_open", {
+            session(for: note, preparedLoad: preparedLoad).flatMap({ presentSession($0) })
+        }) else { return false }
         activate(session)
         return true
     }
@@ -2188,7 +2193,7 @@ final class NotesPageController: ObservableObject {
 
     func showLibrary() -> Bool {
         openRequestGeneration &+= 1
-        guard prepareToLeave(.library) else { return false }
+        guard IdleLatencyTrace.span("note_leave", { prepareToLeave(.library) }) else { return false }
         isLibraryPresented = true
         return true
     }

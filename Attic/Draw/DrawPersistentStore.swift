@@ -175,6 +175,7 @@ final class DrawSwiftDataRepository: DrawRepository {
         let board = try canvasWinner(rows)
         let canvas = try board.value(thumbnail: thumbnail(for: board, in: context))
         let objects = try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate: #Predicate { $0.canvasID == id }))
+        IdleLatencyTrace.count("draw_repo_rows_read", objects.count)
         metrics.objectRowsRead += objects.count
         let values = try Dictionary(grouping: objects, by: \.id).values.compactMap { replicas -> DrawObject? in
             guard let row = objectWinner(replicas) else { return nil }

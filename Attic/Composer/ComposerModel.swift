@@ -438,6 +438,9 @@ final class ComposerModel: ObservableObject {
     /// Only Calendar needs to suspend. Native Return keeps its existing
     /// immediate task/note behavior and schedules an event's durable save.
     func submit(openingPage: Bool = false) {
+        // The panel's shared '+' card handles task Return; TasksAddBar.submit
+        // handles only detached Tasks views. Record the actual shared path.
+        if kind == .task { IdleLatencyTrace.controlDispatched(.addBar) }
         if kind == .event {
             let generation = draftGeneration
             let input = tasks.addBar, notes = writing, length = eventLength, calendar = calendarID
@@ -453,7 +456,9 @@ final class ComposerModel: ObservableObject {
 
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
-        let made = kind == .task ? createTask(openingPage: openingPage) : createNote(openingPage: openingPage)
+        let made = kind == .task
+            ? IdleLatencyTrace.span("task_add_submit") { createTask(openingPage: openingPage) }
+            : createNote(openingPage: openingPage)
         return finishCreation(made, openingPage: openingPage)
     }
 

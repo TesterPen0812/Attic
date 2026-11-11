@@ -271,6 +271,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         guard row.isEnabled else { return }
         switch row.kind {
         case let .canvas(canvas):
+            IdleLatencyTrace.controlDispatched(.drawLibrary)
             finish()
             actions.open(canvas.id)
         case .noMatch:

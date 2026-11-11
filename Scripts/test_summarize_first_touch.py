@@ -180,6 +180,84 @@ class FirstTouchSummaryTests(unittest.TestCase):
             report([touch(1, 7), touch(2, 25)])
         self.assertIn("p90=25.00 worst=25.00", output.getvalue())
 
+    def test_keyboard_return_is_labelled_and_has_dispatch_and_stage_times(self):
+        touch = one_touch([
+            {"event": "input", "id": 17, "kind": "keyboard_control", "atNS": 1_000_000_000,
+             "originNS": 990_000_000},
+            {"event": "stage", "id": 17, "stage": "control_dispatched",
+             "control": "add_bar", "atNS": 1_019_000_000},
+            {"event": "span", "id": 17, "stage": "task_add_submit",
+             "spanStartNS": 1_020_000_000, "atNS": 1_056_000_000},
+            {"event": "counter", "id": 17, "stage": "task_save_changed_ids",
+             "count": 1, "atNS": 1_043_000_000},
+            {"event": "stage", "id": 17, "stage": "view_dispatch_done", "atNS": 1_060_000_000},
+            {"event": "stage", "id": 17, "stage": "commit_handoff", "atNS": 1_085_000_000},
+            {"event": "frame_candidate", "id": 17, "atNS": 1_101_000_000},
+        ])
+        self.assertEqual(touch["control"], "add_bar")
+        self.assertEqual(touch["stages"]["key_to_action_dispatch"], 29)
+        self.assertEqual(touch["stages"]["action_dispatch_to_handoff"], 66)
+        self.assertEqual(touch["stages"]["span:task_add_submit"], 36)
+        self.assertEqual(touch["counts"]["task_save_changed_ids"], 1)
+        self.assertFalse(touch["mouse_up_recorded"])
+
+    def test_new_controls_and_repeated_stage_counts_are_summarized(self):
+        touch = one_touch([
+            {"event": "input", "id": 18, "kind": "panel_control", "atNS": 1_000_000_000},
+            {"event": "mouse_up", "id": 18, "atNS": 1_009_000_000,
+             "originNS": 1_008_000_000},
+            {"event": "stage", "id": 18, "stage": "control_dispatched",
+             "control": "tag_filter", "atNS": 1_010_000_000},
+            {"event": "span", "id": 18, "stage": "task_rows_build",
+             "spanStartNS": 1_012_000_000, "atNS": 1_018_000_000},
+            {"event": "span", "id": 18, "stage": "task_rows_build",
+             "spanStartNS": 1_020_000_000, "atNS": 1_029_000_000},
+            {"event": "counter", "id": 18, "stage": "task_rows_cache_miss",
+             "count": 1, "atNS": 1_030_000_000},
+            {"event": "counter", "id": 18, "stage": "task_rows_cache_miss",
+             "count": 1, "atNS": 1_031_000_000},
+            {"event": "counter", "id": 18, "stage": "task_rows", "count": 180,
+             "atNS": 1_032_000_000},
+            {"event": "stage", "id": 18, "stage": "commit_handoff", "atNS": 1_040_000_000},
+            {"event": "frame_candidate", "id": 18, "atNS": 1_051_000_000},
+        ])
+        self.assertEqual(touch["control"], "tag_filter")
+        self.assertEqual(touch["stages"]["span:task_rows_build"], 15)
+        self.assertEqual(touch["counts"]["task_rows_cache_miss"], 2)
+        self.assertEqual(touch["counts"]["task_rows"], 180)
+        out = StringIO()
+        with redirect_stdout(out):
+            report([touch])
+        self.assertIn("tag_filter: touches=1", out.getvalue())
+        self.assertIn("span:task_rows_build: n=1 median=15.00", out.getvalue())
+        self.assertIn("count:task_rows: n=1 median=180.00", out.getvalue())
+
+    def test_every_named_control_is_in_report_even_when_not_measured(self):
+        out = StringIO()
+        with redirect_stdout(out):
+            report([])
+        for control in ("row_tick", "row_select", "add_bar", "add_bar_focus", "task_tab",
+                        "task_now", "task_later", "task_done",
+                        "tag_filter", "note_open", "note_format", "note_library", "calendar_day",
+                        "calendar_event", "calendar_view", "draw_tool", "draw_library", "draw_undo"):
+            self.assertIn(f"{control}: touches=0", out.getvalue())
+
+    def test_task_tabs_are_reported_as_three_distinct_click_targets(self):
+        samples = []
+        for index, name in enumerate(("task_now", "task_later", "task_done"), start=1):
+            samples.append(one_touch([
+                {"event": "input", "id": index, "kind": "panel_control", "atNS": 1_000_000_000},
+                {"event": "stage", "id": index, "stage": "control_dispatched", "control": name,
+                 "atNS": 1_004_000_000},
+                {"event": "stage", "id": index, "stage": "commit_handoff", "atNS": 1_018_000_000},
+                {"event": "frame_candidate", "id": index, "atNS": 1_029_000_000},
+            ]))
+        out = StringIO()
+        with redirect_stdout(out):
+            report(samples)
+        for name in ("task_now", "task_later", "task_done"):
+            self.assertIn(f"{name}: touches=1", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

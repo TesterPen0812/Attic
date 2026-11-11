@@ -379,7 +379,7 @@ final class NotesLibraryModel: ObservableObject {
         let attention = Set(drafts.map(\.noteID))
         var unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching
-        taskMetadata = readTaskMetadata(store)
+        taskMetadata = IdleLatencyTrace.span("note_groups_metadata") { readTaskMetadata(store) }
         let key = RowsKey(taskMetadata: taskMetadata, revision: store.revision, matches: searching ? matches : nil,
                           matchedQuery: searching ? matchedQuery : "", attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
@@ -388,7 +388,10 @@ final class NotesLibraryModel: ObservableObject {
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
         navigationGeneration &+= 1
 
-        var notes = oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
+        var notes = IdleLatencyTrace.span("note_groups_rows") {
+            oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
+        }
+        IdleLatencyTrace.count("note_groups_rows_count", notes.count)
         // The controller keeps decoded summaries across library remounts.
         // Prune by identity, independent of count or the active search/filter.
         let liveIDs = Set(store.notes.lazy.filter { $0.deletedAt == nil }.map(\.id))

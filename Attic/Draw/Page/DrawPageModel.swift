@@ -564,7 +564,8 @@ final class DrawPageModel: ObservableObject {
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
         flushViewportMemory()
-        guard let snapshot = try? store.open(id) else { return }
+        guard let snapshot = try? IdleLatencyTrace.span("draw_board_open", { try store.open(id) }) else { return }
+        IdleLatencyTrace.count("draw_objects_opened", snapshot.objects.count)
         store.activate(id)
         canvasID = id
         resumeDefaults?.set(id.uuidString, forKey: "AtticDraw.lastCanvas")
@@ -898,7 +899,10 @@ final class DrawPageModel: ObservableObject {
         syncExternalChanges()
         guard self.canvasID == canvasID else { return }
         if editing == nil { select([]) }
-        apply(store.undo(on: canvasID), replacingEditorText: true)
+        IdleLatencyTrace.count("draw_undo_objects", objects.count)
+        IdleLatencyTrace.span("draw_undo_apply") {
+            apply(store.undo(on: canvasID), replacingEditorText: true)
+        }
     }
 
     func redo() {
