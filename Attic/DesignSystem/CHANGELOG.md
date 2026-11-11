@@ -1,3 +1,10 @@
+## 2026-11-11 · Tag suggestion count under Increase Contrast
+
+Only the trailing count in the tag suggestions dropdown uses maximum-contrast
+black or white ink while Increase Contrast is enabled, including on the
+highlighted row over a dark desktop. Normal helper ink and the other tag rows
+are unchanged.
+
 ## 2026-11-11 · Edge light on remaining raised panel controls
 
 Draw's tool and title capsules, the Tasks selection-action capsule and add

@@ -436,6 +436,15 @@ struct AtticTagSuggestionList: View {
     let onPick: (Int) -> Void
 
     @Environment(\.atticTagColouring) private var colouring
+    @Environment(\.atticDesign) private var design
+
+    /// The trailing count is secondary text, but Increase Contrast raises
+    /// its floor to 4.5:1. The menu can sit over a black desktop, where the
+    /// ordinary near-black helper misses that floor on the highlighted row.
+    static func countColour(in design: AtticDesignContext) -> AtticRGBA? {
+        guard design.increaseContrast else { return nil }
+        return design.mode == .dark ? .white(1) : .black(1)
+    }
 
     var body: some View {
         AtticDropdownCard() {
@@ -444,6 +453,7 @@ struct AtticTagSuggestionList: View {
                                 dot: suggestion.isNew ? nil : colouring.hue(for: suggestion.name).ink,
                                 checkGlyph: suggestion.isNew ? "plus" : nil,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
+                                detailColour: Self.countColour(in: design),
                                 isHighlighted: index == highlighted,
                                 // O14-07: only the dot takes the tag's colour.
                                 position: index + 1, itemCount: suggestions.count) { onPick(index) }
