@@ -526,6 +526,9 @@ extension NoteStore {
 
     func loadDocument(noteID: UUID) -> NoteDocumentLoad? {
         guard let note = note(withID: noteID), note.usesDocumentFormat, let data = note.content else { return nil }
+        #if DEBUG
+        documentDecodeCountByIDForTesting[noteID, default: 0] += 1
+        #endif
         return NoteDocumentLoad(noteID: noteID, content: NoteContentCodec.decode(data), revisionID: note.revisionID)
     }
 
