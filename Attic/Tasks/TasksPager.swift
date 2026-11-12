@@ -637,8 +637,8 @@ struct TasksPagerPages<Page: View>: View {
     /// A page, and whether it is drawn (the one shown, or one a move
     /// passes); a page kept built but not drawn hides its list.
     let page: (Int, Bool) -> Page
-    /// What a page kept built but not drawn shows: it redraws only when
-    /// this changes (round 11).
+    /// The hidden page's snapshot; changes are applied on the next reveal
+    /// instead of invalidating a warm offscreen list.
     let token: (Int) -> TasksPageModel.PageToken
 
     var body: some View {
@@ -693,7 +693,9 @@ private struct TasksPagerOutgoingDraw<Content: View>: View {
 }
 
 /// A page of the pager (round 11): drawn, it redraws with the page; kept
-/// built but not drawn, only when what it shows changes (`frozen`).
+/// built but not drawn, it defers changed rows until it is shown again.
+/// Hidden native scroll views retain their current hosts without paying for
+/// new list layout on an unrelated store or model change.
 struct TasksKeptPage<Content: View>: View, Equatable {
     let frozen: TasksPageModel.PageToken?
     @ViewBuilder let content: () -> Content
@@ -701,7 +703,7 @@ struct TasksKeptPage<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.frozen != nil && lhs.frozen == rhs.frozen
+        lhs.frozen != nil && rhs.frozen != nil
     }
 }
 

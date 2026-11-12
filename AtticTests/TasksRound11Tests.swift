@@ -129,6 +129,39 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertEqual(pageLists(hosted).filter { !$0.isHidden }.count, 1, "only Now draws")
     }
 
+    /// A hidden warm page is never drawn or accessible. Changes to its rows
+    /// can be applied when it becomes visible, without rebuilding its whole
+    /// SwiftUI list during an unrelated click on the currently shown page.
+    func testHiddenWarmPageDefersItsRowInvalidationUntilShown() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2)
+        let originalLists = Set(pageLists(hosted).map(ObjectIdentifier.init))
+
+        let old = hosted.model.pageToken(.backlog)
+        let newTask = try XCTUnwrap(hosted.store.create(title: "A new Later task", status: .backlog))
+        let changed = hosted.model.pageToken(.backlog)
+        XCTAssertNotEqual(old, changed, "the hidden page's data did change")
+        hosted.spin(0.2)
+        XCTAssertNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: newTask.id)),
+                     "the hidden page must defer laying out its newly added row")
+
+        let hiddenOld = TasksKeptPage(frozen: old) { Text("old") }
+        let hiddenNew = TasksKeptPage(frozen: changed) { Text("new") }
+        XCTAssertEqual(hiddenOld, hiddenNew, "a hidden tab must not pay to lay out new rows")
+        let revealed = TasksKeptPage(frozen: nil) { Text("shown") }
+        XCTAssertNotEqual(hiddenNew, revealed, "showing it must rebuild its current contents")
+
+        hosted.go(to: .backlog)
+        XCTAssertTrue(hosted.model.rows(for: .backlog).contains { $0.model.title == "A new Later task" },
+                      "the revealed page must see the new task")
+        XCTAssertNotNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: newTask.id)),
+                        "the new Later row must actually be laid out when the hidden page is revealed")
+        XCTAssertEqual(Set(pageLists(hosted).map(ObjectIdentifier.init)), originalLists,
+                       "revealing a changed hidden page must preserve its native scroll hosts")
+    }
+
     func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsAcrossHide() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
