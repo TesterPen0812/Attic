@@ -427,19 +427,22 @@ extension NoteStore {
     /// says which happened so history records the actual result.
     @discardableResult
     func setPinnedOutcome(_ pinned: Bool, noteID: UUID) -> PinResult {
+        let retainedEdits = RetainedNoteEdits()
         do {
             let replicas = try liveReplicas(of: noteID)
             guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
             guard replicas.contains(where: { $0.isPinned != pinned }) else { return .unchanged }
             let timestamp = pinned ? currentDate : nil
+            retainedEdits.capture(replicas)
+            if let visible = note(withID: noteID) { retainedEdits.capture([visible]) }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.pinnedAt = timestamp }
         } catch {
-            modelContext.rollback()
+            rollback(retaining: retainedEdits)
             recordError(error.localizedDescription)
             return .failed
         }
-        return commitStagedChanges() ? .changed : .failed
+        return commitStagedChanges(retaining: retainedEdits) ? .changed : .failed
     }
 
     // MARK: Search
@@ -1150,6 +1153,11 @@ extension NoteStore {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
         let replicas = preflight.replicas
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(replicas, includingDocument: true)
+        if let visible = note(withID: noteID) {
+            retainedEdits.capture([visible], includingDocument: true)
+        }
         if let expectedRevisionID, preflight.canonical.revisionID != expectedRevisionID {
             return .failure(.staleRevision(expected: expectedRevisionID.uuidString, current: preflight.canonical.revisionToken))
         }
@@ -1178,7 +1186,10 @@ extension NoteStore {
                 let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: modelContext)
                 restoredContent = normalized == document ? bytes : try NoteContentCodec.encode(normalized)
             } else { restoredContent = version.content }
-        } catch { return .failure(.saveFailed(error.localizedDescription)) }
+        } catch {
+            rollback(retaining: retainedEdits)
+            return .failure(.saveFailed(error.localizedDescription))
+        }
         let timestamp = currentDate
         let context = modelContext
         do {
@@ -1189,7 +1200,10 @@ extension NoteStore {
         } else {
             try stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
         }
-        } catch { return .failure(.saveFailed(error.localizedDescription)) }
+        } catch {
+            rollback(retaining: retainedEdits)
+            return .failure(.saveFailed(error.localizedDescription))
+        }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
@@ -1214,10 +1228,11 @@ extension NoteStore {
         if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do {
                 let rows = try attachmentRows(forNoteID: noteID)
+                retainedEdits.capture(rows)
                 try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp, rows: rows)
             }
             catch {
-                context.rollback()
+                rollback(retaining: retainedEdits)
                 return .failure(.saveFailed(error.localizedDescription))
             }
         }
@@ -1227,11 +1242,11 @@ extension NoteStore {
            ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
            PreviewIdentity.isPreview(Bundle.main.bundleIdentifier) {
             s7FailNextRestoreForUITesting = false
-            context.rollback()
+            rollback(retaining: retainedEdits)
             return .failure(.saveFailed("The version could not be saved. The current note is kept. Try again."))
         }
         #endif
-        guard commitStagedChanges() else {
+        guard commitStagedChanges(retaining: retainedEdits) else {
             return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
         }
         refreshAfterDocumentSave(insertedAttachments: true)
@@ -1364,22 +1379,27 @@ extension NoteStore {
             }
             return .success(.pending(editID: edit.id))
         }
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(replicas, includingDocument: true)
+        if let visible = note(withID: noteID) {
+            retainedEdits.capture([visible], includingDocument: true)
+        }
         do {
             try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0)
             attributeExternalEdit(replicas, name: agentName, at: timestamp)
-            guard commitStagedChanges() else {
+            guard commitStagedChanges(retaining: retainedEdits) else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
             // Saved first; this only lets a watched run show what it added.
             if let baseDocument { agentWriteBases[noteID] = baseDocument } else { agentWriteBases[noteID] = nil }
             return .success(.applied(revisionToken: revisionID.uuidString))
         } catch let error as NoteDocumentStoreError {
-            modelContext.rollback()
+            rollback(retaining: retainedEdits)
             return .failure(error)
         } catch {
-            modelContext.rollback()
+            rollback(retaining: retainedEdits)
             return .failure(.encodingFailed(error.localizedDescription))
         }
     }
@@ -1452,22 +1472,29 @@ extension NoteStore {
                   case let .editable(base) = NoteContentCodec.decode(baseData),
                   (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
                 if editRows.contains(where: { !$0.needsReview }) {
+                    let retainedEdits = RetainedNoteEdits()
+                    retainedEdits.capture(editRows)
                     editRows.forEach { WorkspaceLegacyBridge.prepareMutation($0, in: modelContext); $0.needsReview = true }
-                    _ = commitStagedChanges()
+                    _ = commitStagedChanges(retaining: retainedEdits)
                 }
                 continue
             }
             let timestamp = currentDate
+            let retainedEdits = RetainedNoteEdits()
+            retainedEdits.capture(replicas, includingDocument: true)
+            if let visible = note(withID: noteID) {
+                retainedEdits.capture([visible], includingDocument: true)
+            }
             do {
                 try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
                 try stage(document, on: replicas, timestamp: timestamp, revision: replicas.map(\.revision).max() ?? 0)
             } catch {
-                modelContext.rollback()
+                rollback(retaining: retainedEdits)
                 continue
             }
             attributeExternalEdit(replicas, name: edit.agentName, at: timestamp)
             editRows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
-            if commitStagedChanges() { applied += 1 }
+            if commitStagedChanges(retaining: retainedEdits) { applied += 1 }
         }
         return applied
     }
@@ -1483,6 +1510,7 @@ extension NoteStore {
     func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
                      disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        let retainedEdits = RetainedNoteEdits()
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)
             let note = preflight.canonical
@@ -1513,12 +1541,16 @@ extension NoteStore {
                 guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion could not be kept.") }
                 return .success(.pending(editID: edit.id))
             }
+            retainedEdits.capture(preflight.replicas, includingDocument: true)
+            if let visible = self.note(withID: noteID) {
+                retainedEdits.capture([visible], includingDocument: true)
+            }
             try stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             attributeExternalEdit(preflight.replicas, name: agentName, at: timestamp)
             guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
             return .success(.applied(revisionToken: baseRevisionToken))
         } catch {
-            modelContext.rollback()
+            rollback(retaining: retainedEdits)
             return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
         }
     }
@@ -1534,9 +1566,12 @@ extension NoteStore {
     @discardableResult
     func acknowledgeExternalEdit(noteID: UUID) -> Bool {
         guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(rows)
+        if let visible = note(withID: noteID) { retainedEdits.capture([visible]) }
         WorkspaceLegacyBridge.prepareMutations(rows, in: modelContext)
         rows.forEach { $0.externalEditorName = nil; $0.externalEditedAt = nil }
-        return commitStagedChanges()
+        return commitStagedChanges(retaining: retainedEdits)
     }
 
     /// Resolves precisely one complete proposal UUID family, never its siblings.
@@ -1557,6 +1592,7 @@ extension NoteStore {
                              preserving current: NoteDocument, merged: NoteDocument? = nil,
                              preservationID: UUID = UUID()) -> Result<String, NoteDocumentStoreError> {
         guard expectedProposal.workspaceOperation == nil else { return .failure(.saveFailed("Review and apply the whole workspace operation.")) }
+        let retainedEdits = RetainedNoteEdits()
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)
             let note = preflight.canonical
@@ -1567,6 +1603,10 @@ extension NoteStore {
             guard NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]),
                   let edit = rows.first, NoteProposalSignature(edit) == expectedProposal else {
                 throw NoteDocumentStoreError.saveFailed("The proposal changed. Review it again.")
+            }
+            retainedEdits.capture(preflight.replicas, includingDocument: true)
+            if let visible = self.note(withID: noteID) {
+                retainedEdits.capture([visible], includingDocument: true)
             }
             let timestamp = currentDate
             try stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
@@ -1597,10 +1637,10 @@ extension NoteStore {
                                   revision: preflight.replicas.map(\.revision).max() ?? 0)
             attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
             rows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
-            guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Replacement failed.") }
+            guard commitStagedChanges(retaining: retainedEdits) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Replacement failed.") }
             return .success(token.uuidString)
         } catch {
-            modelContext.rollback()
+            rollback(retaining: retainedEdits)
             return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
         }
     }

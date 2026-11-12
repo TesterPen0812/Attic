@@ -714,17 +714,20 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
         lastRestoreWasSeparate = false
+        let retainedEdits = RetainedNoteEdits()
+        var separated = false
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
+            retainedEdits.capture(replicas, includingDocument: true)
             let groups = Set(replicas.compactMap(\.deletionGroupID))
             if !groups.isEmpty {
                 guard groups.count == 1, let group = groups.first else { throw WorkspaceFoundationError.conflict }
                 try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
                 try staging?(context)
-                guard save() else { return false }
+                guard save(retaining: retainedEdits) else { return false }
                 refresh()
                 WorkspaceItemLifecycle.didCommit(in: container)
                 return true
@@ -732,7 +735,7 @@ final class NoteStore: ObservableObject {
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
             // note returns as an ordinary note, materialized, in this save.
-            let separated = try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas)
+            separated = try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas)
             for replica in replicas where !separated {
                 guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                     if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
@@ -755,13 +758,13 @@ final class NoteStore: ObservableObject {
                 replica.deletedAttachmentIDsRaw = nil
             }
             try staging?(context)
-            lastRestoreWasSeparate = separated
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
             return false
         }
-        guard save() else { return false }
+        guard save(retaining: retainedEdits) else { return false }
+        lastRestoreWasSeparate = separated
 #if os(macOS)
         // Reconcile the returning attachments' files in full on the reload.
         reconciledAttachmentSignature = nil
@@ -983,9 +986,15 @@ final class NoteStore: ObservableObject {
            loadDocument(noteID: noteID)?.content.document?.attachmentIDs.contains(attachment.id) == true {
             return removeDocumentAttachment(attachment.id, noteID: noteID)
         }
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(replicas)
         let timestamp = now()
         do {
             let notes = try storedNotesIfPresent(matching: noteID)
+            retainedEdits.capture(notes, includingTimestamp: true)
+            if let visible = note(withID: noteID) {
+                retainedEdits.capture([visible], includingTimestamp: true)
+            }
             WorkspaceLegacyBridge.prepareMutations(notes, in: context)
             let preferred = Self.canonicalReplicas(from: notes).first
             for note in notes { note.updatedAt = timestamp }
@@ -1000,7 +1009,7 @@ final class NoteStore: ObservableObject {
                 }
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
             return false
         }
@@ -1026,7 +1035,7 @@ final class NoteStore: ObservableObject {
         for noteID in attachmentsByNoteID.keys {
             attachmentsByNoteID[noteID]?.removeAll { $0.id == attachment.id }
         }
-        guard save() else { return false }
+        guard save(retaining: retainedEdits) else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
         // Visibility changed in place; reconcile the retained file inventory.
@@ -1625,15 +1634,44 @@ final class NoteStore: ObservableObject {
 
         private var restorations: [ObjectIdentifier: () -> Bool] = [:]
 
-        func capture(_ notes: [NoteItem], includingDocument: Bool = false) {
+        func capture(_ notes: [NoteItem], includingDocument: Bool = false,
+                     includingTimestamp: Bool = false) {
             for note in notes {
                 let key = ObjectIdentifier(note)
                 guard restorations[key] == nil else { continue }
-                let fields = (Self.metadataFields + (includingDocument ? Self.documentFields : []))
+                let fields = (Self.metadataFields + (includingDocument ? Self.documentFields
+                    : includingTimestamp ? [Field(\.updatedAt)] : []))
                     .map { $0.capture(note) }
                 restorations[key] = {
                     guard fields.contains(where: { $0.changed() }) else { return false }
                     fields.forEach { $0.restore() }
+                    return true
+                }
+            }
+        }
+
+        func capture(_ attachments: [NoteAttachment]) {
+            for row in attachments {
+                let key = ObjectIdentifier(row)
+                guard restorations[key] == nil else { continue }
+                let previousUpdatedAt = row.updatedAt, previousDeletedAt = row.deletedAt
+                restorations[key] = {
+                    guard row.updatedAt != previousUpdatedAt || row.deletedAt != previousDeletedAt else { return false }
+                    row.updatedAt = previousUpdatedAt
+                    row.deletedAt = previousDeletedAt
+                    return true
+                }
+            }
+        }
+
+        func capture(_ proposals: [NotePendingEdit]) {
+            for row in proposals {
+                let key = ObjectIdentifier(row)
+                guard restorations[key] == nil else { continue }
+                let needsReview = row.needsReview
+                restorations[key] = {
+                    guard row.needsReview != needsReview else { return false }
+                    row.needsReview = needsReview
                     return true
                 }
             }
