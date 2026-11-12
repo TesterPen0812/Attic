@@ -11,6 +11,16 @@ import math
 import statistics
 from pathlib import Path
 
+KNOWN_CONTROLS = (
+    "row_tick", "row_select", "add_bar", "add_bar_focus", "task_tab", "task_now",
+    "task_later", "task_done", "tag_filter",
+    "note_open", "note_format", "note_library", "calendar_day", "calendar_event",
+    "calendar_view", "draw_tool", "draw_library", "draw_undo", "page_switch",
+    "chat", "settings", "island",
+)
+INCREMENT_COUNTERS = {"task_reload_count", "task_rows_cache_miss", "task_rows_cache_hit",
+                      "calendar_rebuild_pass"}
+
 
 def load(path):
     groups = {}
@@ -39,18 +49,28 @@ def one_touch(records):
     # downs wrote extra handler_entered records against the old touch. Keep
     # the FIRST occurrence of each boundary, and never read beyond the frame.
     stages = {}
-    spans = {}
+    spans = collections.defaultdict(float)
+    counts = {}
     control_events = []
     for r in sorted(records, key=lambda r: r["atNS"]):
         if candidate is not None and r["atNS"] > candidate:
             continue
         if r["event"] == "stage":
             stages.setdefault(r.get("stage"), r["atNS"])
-            if r.get("stage") == "control_dispatched" and r.get("control") in (
-                    "row_tick", "add_bar", "page_switch", "chat", "settings"):
+            if r.get("stage") == "control_dispatched" and r.get("control") in KNOWN_CONTROLS:
                 control_events.append(r)
         elif r["event"] == "span":
-            spans.setdefault(r["stage"], ms_between(r.get("spanStartNS"), r["atNS"]))
+            elapsed = ms_between(r.get("spanStartNS"), r["atNS"])
+            if elapsed is not None:
+                spans[r["stage"]] += elapsed
+        elif r["event"] == "counter" and isinstance(r.get("count"), int):
+            # Event counters accumulate; snapshot counters report the last
+            # observed size/state without double counting repeated reads.
+            name = r.get("stage")
+            if name in INCREMENT_COUNTERS:
+                counts[name] = counts.get(name, 0) + r["count"]
+            else:
+                counts[name] = r["count"]
     ups = sorted((r for r in records if r["event"] == "mouse_up"
                   and (candidate is None or r["atNS"] <= candidate)), key=lambda r: r["atNS"])
     mouse_up = ups[0] if ups else None
@@ -113,6 +133,8 @@ def one_touch(records):
             ("action_return_to_frame_candidate", action_return, candidate),
             ("mouse_up_to_frame_candidate", up_origin, candidate),
         ])
+    if first.get("kind") == "keyboard_control":
+        boundaries.append(("key_to_action_dispatch", origin, action_dispatch))
     if first.get("kind") == "island_wake":
         boundaries.append(("handler_to_view_dispatch", stages.get("handler_entered"), stages.get("view_dispatch_done")))
     for name, begin, end in boundaries:
@@ -148,6 +170,7 @@ def one_touch(records):
         "total": ms_between(origin, candidate),
         "observed_ms": observed_ms,
         "stages": parts,
+        "counts": counts,
         "released": first.get("released"),
         "nap_activity": first.get("napActivity"),
         "configured_reveal_delay_ms": hotspot.get("revealDelayMS") if hotspot else None,
@@ -215,10 +238,10 @@ def report(touches):
 
 def report_controls(touches):
     """Action dispatch is separate from the end of synchronous event delivery."""
-    valid = ("row_tick", "add_bar", "page_switch", "chat", "settings", "island")
+    valid = KNOWN_CONTROLS
     entries = collections.defaultdict(list)
     for touch in touches:
-        if touch["kind"] not in ("panel_control", "island_action"):
+        if touch["kind"] not in ("panel_control", "island_action", "keyboard_control"):
             continue
         key = touch["control"] or "unclassified_panel"
         entries[key].append(touch)
@@ -226,10 +249,17 @@ def report_controls(touches):
     for key in (*valid, "unclassified_panel"):
         group = entries[key]
         print(f"  {key}: touches={len(group)} mouse_up={sum(t['mouse_up_recorded'] for t in group)}")
-        for phase in ("mouse_up_to_action_dispatch", "mouse_up_to_action_return",
-                      "action_dispatch_to_handoff", "view_to_commit_handoff",
-                      "handoff_to_frame_candidate"):
-            values = sorted(t["stages"][phase] for t in group if phase in t["stages"])
+        phases = ("key_to_action_dispatch", "mouse_up_to_action_dispatch",
+                  "mouse_up_to_action_return", "action_dispatch_to_handoff",
+                  "view_to_commit_handoff", "handoff_to_frame_candidate",
+                  "mouse_up_to_frame_candidate")
+        discovered = sorted({name for t in group for name in t["stages"] if name.startswith("span:")})
+        counters = sorted({name for t in group for name in t["counts"]})
+        for phase in (*phases, *discovered, *(f"count:{name}" for name in counters)):
+            values = sorted(t["counts"][phase[6:]] if phase.startswith("count:")
+                            else t["stages"][phase]
+                            for t in group if (phase[6:] in t["counts"] if phase.startswith("count:")
+                                               else phase in t["stages"]))
             if values:
                 print(f"    {phase}: n={len(values)} median={statistics.median(values):.2f} "
                       f"p90={values[math.ceil(len(values) * .9) - 1]:.2f} "
@@ -237,8 +267,9 @@ def report_controls(touches):
         if key == "unclassified_panel":
             pages = collections.Counter(t["page"] for t in group)
             print("    pages: " + ", ".join(f"{page}={count}" for page, count in sorted(pages.items())))
-    print("  Original panel-control records have no button identity: row tick, add bar, chat, "
-          "and Settings cannot be separated without new control-dispatch markers.")
+    if entries["unclassified_panel"]:
+        print("  Original panel-control records have no button identity: unlabeled events "
+              "cannot be retroactively assigned to a button.")
 
 
 GRAPHICS_GUIDE = """Render-server investigation on the owner's Pro (only when wanted; not always-on):

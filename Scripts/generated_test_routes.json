@@ -50,6 +50,7 @@
     "testTablesRenderAtRestEditingAndScrolled"
   ],
   "PerformanceSeedTests.swift": [
+    "testClickLag4ProfileSeedsCurrentDrawBoardAndTaggedTaskAndNotes",
     "testDoneHistorySeedLivesOnlyInDoneLog"
   ],
   "PhaseXHunt15Tests.swift": [

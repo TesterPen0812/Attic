@@ -794,8 +794,13 @@ final class TasksPageModel: ObservableObject {
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
                           folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
-        if let cached = rowsCache[tab], cached.key == key { return cached }
-        let all = buildRows(for: tab)
+        if let cached = rowsCache[tab], cached.key == key {
+            IdleLatencyTrace.count("task_rows_cache_hit", 1)
+            return cached
+        }
+        IdleLatencyTrace.count("task_rows_cache_miss", 1)
+        let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
+        IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
         var open: [TasksListRow] = []
         for row in all {
@@ -1015,7 +1020,10 @@ final class TasksPageModel: ObservableObject {
         let same = doneLogQuery == query && doneLogTag == tag
         guard !same || doneLogRevision != store.revision else { return }
         let limit = same ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
-        let page = store.indexedDoneLogPage(limit: limit, matching: query, tag: tag)
+        let page = IdleLatencyTrace.span("task_done_load") {
+            store.indexedDoneLogPage(limit: limit, matching: query, tag: tag)
+        }
+        IdleLatencyTrace.count("task_done_reads", page.tasks.count)
         if let failure = page.failure {
             // Keep what the page showed for this search; a new search shows
             // what was read. Not marked as loaded, so Retry reads again.
@@ -1339,7 +1347,7 @@ final class TasksPageModel: ObservableObject {
     func select(tab: TasksTab, bySwipe: Bool = false) {
         if !bySwipe { pagerSwipe.cancel() }
         guard tab != self.tab else { return }
-        guard finishEditing() else { return }
+        guard IdleLatencyTrace.span("task_finish_editing", { finishEditing() }) else { return }
         revealTab = nil
         // The person went elsewhere: a `show` still waiting for its Done log
         // page is dropped, never finished later by a scroll (round 5, F3).
@@ -1647,34 +1655,38 @@ final class TasksPageModel: ObservableObject {
     /// back to what it was.
     @discardableResult
     func toggleDone(_ id: UUID) -> CommandOutcome {
-        settlePendingCompletionAcknowledgements()
-        guard let task = store.listedTask(withID: id) else { return .failed(.taskGone) }
-        return task.status == .done ? reopen(id) : complete(id)
+        IdleLatencyTrace.span("task_toggle") {
+            settlePendingCompletionAcknowledgements()
+            guard let task = store.listedTask(withID: id) else { return .failed(.taskGone) }
+            return task.status == .done ? reopen(id) : complete(id)
+        }
     }
 
     /// The right-click menu on several tasks: all done, or (when all are
     /// done already) all back, each as one step.
     @discardableResult
     func toggleDone(_ ids: [UUID]) -> CommandOutcome {
-        settlePendingCompletionAcknowledgements()
-        let tasks = ids.compactMap { store.listedTask(withID: $0) }
-        let reopeningAll = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
-        let outcome: CommandOutcome
-        if reopeningAll {
-            outcome = tasks.count == 1 ? reopen(tasks[0].id) : AtticSounds.play(.undone, after: library.reopenTasks(tasks.map(\.id)))
-        } else if ids.count == 1 {
-            outcome = complete(ids[0])
-        } else {
-            outcome = AtticSounds.play(.done, after: library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done))
-        }
-        if outcome.isApplied {
-            if reopeningAll && tasks.count > 1 {
-                for task in tasks { cancelHold(task.id) }
-                reloadDoneLogAfterChange()
+        IdleLatencyTrace.span("task_toggle") {
+            settlePendingCompletionAcknowledgements()
+            let tasks = ids.compactMap { store.listedTask(withID: $0) }
+            let reopeningAll = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
+            let outcome: CommandOutcome
+            if reopeningAll {
+                outcome = tasks.count == 1 ? reopen(tasks[0].id) : AtticSounds.play(.undone, after: library.reopenTasks(tasks.map(\.id)))
+            } else if ids.count == 1 {
+                outcome = complete(ids[0])
+            } else {
+                outcome = AtticSounds.play(.done, after: library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done))
             }
-            pruneInvisibleSelection(on: tab)
+            if outcome.isApplied {
+                if reopeningAll && tasks.count > 1 {
+                    for task in tasks { cancelHold(task.id) }
+                    reloadDoneLogAfterChange()
+                }
+                pruneInvisibleSelection(on: tab)
+            }
+            return outcome
         }
-        return outcome
     }
 
     /// ⇧Space and the right-click menu: start working on the tasks (the

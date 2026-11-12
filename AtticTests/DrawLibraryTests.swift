@@ -168,6 +168,22 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(log, ["close", "new zebra"], "with no match, Return makes the typed canvas")
     }
 
+    func testChoosingAlreadyOpenCanvasClosesMenuWithoutReloadingBoard() throws {
+        let seed = seed()
+        let model = menu(seed, open: seed.kitchen)
+        model.filter = "Kitchen"
+        let current = try XCTUnwrap(model.rows.first { $0.canvas?.id == seed.kitchen })
+        model.choose(current)
+        XCTAssertEqual(log, ["close"], "the current board does not need another store read or full redraw")
+        XCTAssertEqual(model.filter, "")
+        XCTAssertEqual(model.currentCanvasID, seed.kitchen)
+
+        let other = try XCTUnwrap(model.rows.first { $0.canvas?.id == seed.logo })
+        model.choose(other)
+        XCTAssertEqual(log, ["close", "close", "open \(seed.logo)"],
+                       "choosing a different board still opens its contents")
+    }
+
     func testNewCanvasUsesTheTypedName() {
         let seed = seed()
         let model = menu(seed)

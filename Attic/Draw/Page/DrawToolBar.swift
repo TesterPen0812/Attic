@@ -225,7 +225,10 @@ struct DrawToolBar: View {
                 .transition(.opacity)
             }
             if model.isUndoShown {
-                DrawCell(help: String(localized: "Undo"), identifier: "draw-undo", action: model.undo) {
+                DrawCell(help: String(localized: "Undo"), identifier: "draw-undo", action: {
+                    IdleLatencyTrace.controlDispatched(.drawUndo)
+                    model.undo()
+                }) {
                     icon("arrow.uturn.backward")
                 }
                 .opacity(model.canUndo ? 1 : m.dimmed)
@@ -248,7 +251,10 @@ struct DrawToolBar: View {
         let name = tool == .shape ? model.shape.systemName : tool.systemName
         let help = tool == .shape ? model.shape.title : tool.title
         return DrawCell(selected: model.tool == tool, help: help, identifier: "draw-tool-\(tool.rawValue)",
-                        action: { model.clickTool(tool) }) {
+                        action: {
+                            IdleLatencyTrace.controlDispatched(.drawTool)
+                            model.clickTool(tool)
+                        }) {
             icon(name)
                 .overlay(alignment: .bottomTrailing) {
                     // Tools with variants carry Shape's small corner mark (D2).

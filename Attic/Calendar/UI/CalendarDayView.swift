@@ -163,11 +163,13 @@ struct CalendarDayView: View {
     }
 
     private func openingOffset(viewport: CGFloat) -> CGFloat {
-        let now = model.currentTime
-        let opening = CalendarDayLayout.openingOffset(day: day, today: snapshot.today, now: now, events: events,
-                                                      calendar: model.calendar)
-        let layout = CalendarDayLayout(day: day, today: snapshot.today, now: now, events: events, calendar: model.calendar)
-        return CalendarDayLayout.clampedOffset(opening, contentHeight: layout.height + CalendarDesign.agendaBottom, viewport: viewport)
+        IdleLatencyTrace.span("calendar_day_offset") {
+            let now = model.currentTime
+            let opening = CalendarDayLayout.openingOffset(day: day, today: snapshot.today, now: now, events: events,
+                                                          calendar: model.calendar)
+            let layout = CalendarDayLayout(day: day, today: snapshot.today, now: now, events: events, calendar: model.calendar)
+            return CalendarDayLayout.clampedOffset(opening, contentHeight: layout.height + CalendarDesign.agendaBottom, viewport: viewport)
+        }
     }
 
     /// Only today's now line needs the clock, and only on screen.

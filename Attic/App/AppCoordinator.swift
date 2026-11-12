@@ -488,7 +488,8 @@ final class AppCoordinator: ObservableObject {
                     PerformanceProbe.writePhase("seeding", root: performanceRoot)
                     try PerformanceSeed.generate(
                         in: container, root: performanceRoot,
-                        includeDoneHistory: environment["ATTIC_PERF_DONE_HISTORY"] == "1"
+                        includeDoneHistory: environment["ATTIC_PERF_DONE_HISTORY"] == "1",
+                        profile: environment["ATTIC_PERF_PROFILE"] == "clicklag4" ? .clickLag4 : .standard
                     )
                     PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
                 }

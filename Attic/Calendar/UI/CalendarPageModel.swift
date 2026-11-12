@@ -199,6 +199,7 @@ final class CalendarPageModel: ObservableObject {
 
     func select(_ day: DueDay) {
         guard day != snapshot.selected else { return }
+        IdleLatencyTrace.controlDispatched(.calendarDay)
         rebuild(selected: day)
         if let data = try? JSONEncoder().encode(day) { resumeDefaults?.set(data, forKey: "AtticCalendar.selectedDay") }
     }
@@ -317,6 +318,13 @@ final class CalendarPageModel: ObservableObject {
     }
 
     func rebuild(selected: DueDay? = nil, query: String? = nil) {
+        IdleLatencyTrace.span("calendar_rebuild") {
+            rebuildMeasured(selected: selected, query: query)
+        }
+    }
+
+    private func rebuildMeasured(selected: DueDay?, query: String?) {
+        IdleLatencyTrace.count("calendar_rebuild_pass", 1)
         #if DEBUG
         rebuildCount += 1
         #endif

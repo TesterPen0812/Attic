@@ -14,6 +14,7 @@ enum PerformanceSeed {
     static let canvasCount = 20
     static let objectsPerCanvas = 2_000
     static let doneHistoryCount = 5_000
+    enum Profile { case standard, clickLag4 }
 
     private struct Random {
         var state: UInt64 = 0x4154_5449_4350_4552
@@ -37,6 +38,7 @@ enum PerformanceSeed {
         in container: ModelContainer,
         root: URL,
         includeDoneHistory: Bool,
+        profile: Profile = .standard,
         now: Date = Date()
     ) throws {
         let context = ModelContext(container)
@@ -50,7 +52,11 @@ enum PerformanceSeed {
         let priorities: [TaskPriority] = [.none, .none, .none, .low, .medium, .high]
         var parents: [UUID] = []
 
-        for index in 0..<taskCount {
+        let clickLag4 = profile == .clickLag4
+        let tasksToSeed = clickLag4 ? 300 : taskCount
+        let notesToSeed = clickLag4 ? 80 : noteCount
+        let canvasesToSeed = clickLag4 ? 1 : canvasCount
+        for index in 0..<tasksToSeed {
             let id = random.identifier()
             let parentID = index % 5 == 4 ? parents[random.number(parents.count)] : nil
             if parentID == nil { parents.append(id) }
@@ -66,6 +72,14 @@ enum PerformanceSeed {
                 manualOrder: Int64(index * 1_024),
                 parentID: parentID
             )
+            if clickLag4 {
+                item.tags = ["work", "home", "design", "urgent", "admin"].enumerated()
+                    .compactMap { offset, label in (index + offset) % 3 == 0 ? label : nil }
+                if index % 3 == 0 {
+                    item.dueDay = DueDay(date: today.addingTimeInterval(TimeInterval((index % 7) * 86_400)),
+                                         calendar: calendar)
+                }
+            }
             if index % 23 == 0 {
                 let attachmentID = random.identifier()
                 let name = "task-image-\(index).png"
@@ -108,7 +122,7 @@ enum PerformanceSeed {
             try context.save()
         }
 
-        for index in 0..<noteCount {
+        for index in 0..<notesToSeed {
             let id = random.identifier()
             let length = [80, 400, 2_000, 8_000][random.number(4)]
             let sentence = "Notes for project \(index). Follow up with the team and record decisions. "
@@ -133,7 +147,7 @@ enum PerformanceSeed {
         try context.save()
 
         let encoder = JSONEncoder()
-        for boardIndex in 0..<canvasCount {
+        for boardIndex in 0..<canvasesToSeed {
             let boardID = random.identifier()
             context.insert(CanvasBoardItem(id: boardID, name: "Performance canvas \(boardIndex)",
                                            sortIndex: Int64(boardIndex)))
@@ -178,13 +192,52 @@ enum PerformanceSeed {
             }
             try context.save()
         }
-        guard try context.fetchCount(FetchDescriptor<TaskItem>()) == taskCount
+        if clickLag4 {
+            // Draw superseded the old Canvas page. Seed its actual repository
+            // records as well so open/undo/layout timings use a populated board.
+            let boardID = random.identifier()
+            let board = DrawCanvasRecord()
+            try board.apply(DrawCanvas(id: boardID, name: "Click lag 4 workload", tags: ["work", "design"]))
+            context.insert(board)
+            for index in 0..<objectsPerCanvas {
+                let x = Double(index % 50) * 96 + Double(random.number(9))
+                let y = Double(index / 50) * 76 + Double(random.number(9))
+                let content: DrawContent
+                switch index % 10 {
+                case 0:
+                    content = .stroke((0..<6).map { point in
+                        DrawPoint(x: x + Double(point * 7), y: y + Double(point * 3))
+                    })
+                case 1, 2:
+                    content = .text("Board note \(index)")
+                default:
+                    content = .shape(index % 2 == 0 ? .ellipse : .rectangle)
+                }
+                let object = DrawObject(
+                    id: random.identifier(), frame: DrawFrame(x: x, y: y, width: 78, height: 35),
+                    zIndex: Int64(index), content: content
+                )
+                let row = DrawObjectRecord()
+                try row.apply(object, canvasID: boardID)
+                context.insert(row)
+                if let data = DrawCodec.payload(object) {
+                    let payload = DrawPayloadRecord()
+                    payload.apply(data, id: object.id, canvasID: boardID, role: "object")
+                    context.insert(payload)
+                }
+                if index % 400 == 399 { try context.save() }
+            }
+            try context.save()
+        }
+        guard try context.fetchCount(FetchDescriptor<TaskItem>()) == tasksToSeed
                     + (includeDoneHistory ? doneHistoryCount : 0),
-              try context.fetchCount(FetchDescriptor<NoteItem>()) == noteCount,
-              try context.fetchCount(FetchDescriptor<CanvasBoardItem>()) == canvasCount,
-              try context.fetchCount(FetchDescriptor<CanvasStrokeItem>()) == canvasCount * 1_700,
-              try context.fetchCount(FetchDescriptor<CanvasSemanticObjectItem>()) == canvasCount * 200,
-              try context.fetchCount(FetchDescriptor<CanvasImageItem>()) == canvasCount * 100 else {
+              try context.fetchCount(FetchDescriptor<NoteItem>()) == notesToSeed,
+              try context.fetchCount(FetchDescriptor<CanvasBoardItem>()) == canvasesToSeed,
+              try context.fetchCount(FetchDescriptor<CanvasStrokeItem>()) == canvasesToSeed * 1_700,
+              try context.fetchCount(FetchDescriptor<CanvasSemanticObjectItem>()) == canvasesToSeed * 200,
+              try context.fetchCount(FetchDescriptor<CanvasImageItem>()) == canvasesToSeed * 100,
+              try context.fetchCount(FetchDescriptor<DrawCanvasRecord>()) == (clickLag4 ? 1 : 0),
+              try context.fetchCount(FetchDescriptor<DrawObjectRecord>()) == (clickLag4 ? objectsPerCanvas : 0) else {
             throw CocoaError(.fileReadCorruptFile)
         }
     }

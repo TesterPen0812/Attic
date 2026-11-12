@@ -514,7 +514,7 @@ class DrawStore: DrawStoreProtocol {
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }
-        return execute(step.reversed, action: .undo)
+        return IdleLatencyTrace.span("draw_store_undo") { execute(step.reversed, action: .undo) }
     }
     func redo(on id: UUID) -> DrawSaveResult {
         guard canRedo(on: id), let step = histories[id]?.redo.last else { return .unchanged }
@@ -638,8 +638,10 @@ class DrawStore: DrawStoreProtocol {
         let step = stamped(step)
         if let recovery, step.change.before != nil || step.change.after != nil {
             do {
-                try recovery.update(step.change.canvasID, edits: [Pending(step: step, action: action)],
-                                    proof: nil, unattempted: true)
+                try IdleLatencyTrace.span("draw_store_recovery") {
+                    try recovery.update(step.change.canvasID, edits: [Pending(step: step, action: action)],
+                                        proof: nil, unattempted: true)
+                }
             } catch {
                 show(step)
                 pending[step.change.canvasID] = [Pending(step: step, action: action)]
@@ -648,7 +650,7 @@ class DrawStore: DrawStoreProtocol {
                 ))
             }
         }
-        let outcome = write(step)
+        let outcome = IdleLatencyTrace.span("draw_store_write") { write(step) }
         show(step)
         switch outcome {
         case .committed:
