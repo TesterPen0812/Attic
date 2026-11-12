@@ -430,8 +430,10 @@ struct NotesLibraryView: View {
                         preamble(groups)
                         board(groups, selected: selected)
                     }
-                    .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
-                               value: model.orderedIDs(groups))
+                    .modifier(AtticDeleteGapMotion(
+                        ids: model.orderedIDs(groups),
+                        travel: AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
+                        isDeleted: { store.note(withID: $0) == nil }))
                 } else {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         preamble(groups)
@@ -559,7 +561,9 @@ struct NotesLibraryView: View {
                             .id(row.id)
                             .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                             .atticContextMenu { rowCommands(row.id) }
-                            .transition(.opacity)
+                            .transition(.asymmetric(
+                                insertion: .opacity,
+                                removal: AtticMotionScale.deleteExit(reduceMotion: design.reduceMotion)))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
