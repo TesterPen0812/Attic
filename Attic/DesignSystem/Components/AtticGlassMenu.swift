@@ -1162,7 +1162,7 @@ protocol AtticMenuBackdropHost: AnyObject {
 }
 
 /// The cut under one card, in its host view's layer mask: the card's shape,
-/// 1 pt in, so no desktop shows at the card's edge. It grows from the card's
+/// 3 pt in, so no desktop shows at the card's edge. It grows from the card's
 /// corner on the card's own spring and the page under it fades as the card
 /// fades in (back as it fades out), so it follows the card's live frame and
 /// nothing pops. Several cards (a submenu over the panel) chain their masks,
@@ -1172,7 +1172,11 @@ protocol AtticMenuBackdropHost: AnyObject {
 final class AtticMenuBackdropHole {
     /// Every host's open cuts, in mask order.
     private static var chains: [ObjectIdentifier: [AtticMenuBackdropHole]] = [:]
-    private static let edgeInset: CGFloat = 1
+    /// The cut stays this far inside the card. 1 pt let a 1 px sliver of
+    /// the desktop show at the card's moving edge as it grew (the panel's
+    /// window draws the cut a few ms ahead of the card's window); 3 pt keeps
+    /// the cut under the card at every frame on the Air.
+    private static let edgeInset: CGFloat = 3
 
     private weak var host: NSView?
     /// The whole host (the mask), holding `cut`.
@@ -1199,7 +1203,11 @@ final class AtticMenuBackdropHole {
         outside.fillRule = .evenOdd
         outside.fillColor = NSColor.black.cgColor
         outside.frame = cut.bounds
-        page.path = card
+        // 1 pt past the hole's edge: two shapes meeting edge to edge left a
+        // faint antialiased outline of the cut while the page was whole
+        // (the open's first frames, the close's last).
+        page.path = AtticGlassMenuShape.card.path(in: CGRect(origin: .zero, size: frame.size)
+            .insetBy(dx: Self.edgeInset - 1, dy: Self.edgeInset - 1)).cgPath
         page.fillColor = NSColor.black.cgColor
         page.frame = cut.bounds
         page.opacity = 0

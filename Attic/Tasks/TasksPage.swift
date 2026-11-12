@@ -351,18 +351,39 @@ struct TasksPage: View {
         // `@<seconds>`, 3 by default; `ATTIC_UI_TESTING=1` in a preview
         // identity only): the view options menu, or the first row's
         // right-click menu, opens by itself, for hands-off captures of a
-        // menu card over the panel.
+        // menu card over the panel. `ATTIC_UI_TEST_MENU_CYCLE=<opens>:<hold>:<gap>`
+        // instead opens and closes it that many times (open for `hold`
+        // seconds, `gap` apart), then once more closed 0.1 s into its
+        // opening, for motion recordings.
         if environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
            let seam = environment["ATTIC_UI_TEST_MENU"] {
             let parts = seam.split(separator: "@", maxSplits: 1).map(String.init)
             let delay = parts.count > 1 ? Double(parts[1]) ?? 3 : 3
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            let open: @MainActor () -> Void = {
                 if parts.first == "row" {
                     guard let row = model.rows(for: model.tab).first else { return }
                     showActions(for: row.id, anchor: nil, tab: model.tab)
                 } else {
                     openViewOptions()
                 }
+            }
+            // The menu tracks in its own run loop mode: timers in the common
+            // modes still fire while it is open.
+            func at(_ seconds: Double, _ action: @escaping @MainActor () -> Void) {
+                RunLoop.main.add(Timer(timeInterval: seconds, repeats: false) { _ in
+                    MainActor.assumeIsolated { action() }
+                }, forMode: .common)
+            }
+            let cycle = (environment["ATTIC_UI_TEST_MENU_CYCLE"] ?? "").split(separator: ":").compactMap { Double($0) }
+            if cycle.count == 3 {
+                let (count, hold, gap) = (Int(cycle[0]), cycle[1], cycle[2])
+                for index in 0...count {
+                    let start = delay + Double(index) * (hold + gap)
+                    at(start) { open() }
+                    at(start + (index == count ? 0.1 : hold)) { AtticGlassMenu.current?.close() }
+                }
+            } else {
+                at(delay) { open() }
             }
         }
         #endif
