@@ -727,12 +727,13 @@ struct AtticGlassMenuStyle {
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
     var detail: NSColor { secondary(.meta) }
-    var header: NSColor { AtticMenuLook.systemText ? title.withAlphaComponent(0.45) : secondary(.groupHeader) }
+    /// Lighter headers, as the system menu draws them (owner, 12 Nov:
+    /// version 3 of menu-versions-drafts.html); Increase Contrast keeps the token.
+    var header: NSColor { design.increaseContrast ? secondary(.groupHeader) : title.withAlphaComponent(0.45) }
     var disabled: NSColor { secondary(.meta) }
     var destructive: NSColor { colourInk(tokens.ink(.dueText)).nsColor }
     /// The highlight: 8 % ink (16 % under Increase Contrast).
     var highlight: NSColor {
-        if AtticMenuLook.systemText { return .controlAccentColor }
         return title.withAlphaComponent(design.increaseContrast ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha)
     }
     var separator: NSColor { tokens.dropdownRule.nsColor }
@@ -754,7 +755,8 @@ struct AtticGlassMenuStyle {
         AtticSurfaceInk.vivid(colour, tokens: tokens)
     }
 
-    static var titleFont: NSFont { NSFont.systemFont(ofSize: AtticMenuMetrics.titleSize, weight: AtticMenuLook.systemText ? .regular : .medium) }
+    /// Regular weight, as the system menu (owner, 12 Nov: version 3, with Attic's grey hover).
+    static let titleFont = NSFont.systemFont(ofSize: AtticMenuMetrics.titleSize, weight: .regular)
     static let detailFont = NSFont.systemFont(ofSize: AtticMenuMetrics.detailSize)
     static let headerFont = NSFont.systemFont(ofSize: AtticMenuMetrics.headerSize, weight: .semibold)
 
@@ -1035,7 +1037,6 @@ final class AtticGlassMenuCard {
 
     func refreshHighlight(animated: Bool) {
         view.moveHighlight(to: litRow.map { entries[$0].frame }, animated: animated && !menu.style.reduceMotion)
-        if AtticMenuLook.systemText { view.redrawEntries() }
     }
 
     func closeSubmenu(of menu: AtticGlassMenu) {
@@ -1347,25 +1348,8 @@ enum AtticMenuLook {
     static let gap: CGFloat = 4
 
     /// No drawn outline (owner, 12 Nov: the system menu has none; its edge
-    /// is the glass's own light rim). `ATTIC_MENU_VARIANT=outline` brings
-    /// back the old dark hairline for the comparison sheet.
-    static func outline(dark: Bool) -> AtticRGBA { variant == "outline" ? .black(dark ? 0.85 : 0.30) : .black(0) }
-
-    /// Comparison-sheet seam (DEBUG, a preview identity with
-    /// `ATTIC_UI_TESTING=1` only): `ATTIC_MENU_VARIANT=outline` (the old
-    /// dark hairline) or `system` (the system menu's text: regular weight,
-    /// lighter headers, and its accent hover with white text).
-    static let variant: String = {
-        #if DEBUG
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["ATTIC_UI_TESTING"] == "1",
-              AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier) else { return "" }
-        return environment["ATTIC_MENU_VARIANT"] ?? ""
-        #else
-        return ""
-        #endif
-    }()
-    static var systemText: Bool { variant == "system" }
+    /// is the glass's own light rim).
+    static func outline(dark: Bool) -> AtticRGBA { .black(0) }
 
     /// Liquid Glass: `NSGlassEffectView`, regular, untinted, nothing over
     /// it. Over bold stripes on macOS 27 this is the one that lets colour
@@ -1747,9 +1731,6 @@ final class AtticGlassMenuView: NSView {
         }
     }
 
-    /// The system-text variant's lit row draws white: redraw on a move.
-    func redrawEntries() { entryViews.forEach { $0.needsDisplay = true } }
-
     /// Draws entry `index` in its own view's coordinates.
     func drawEntry(_ index: Int) {
         guard let card, card.entries.indices.contains(index) else { return }
@@ -1768,15 +1749,15 @@ final class AtticGlassMenuView: NSView {
             drawText(title, in: NSRect(x: frame.minX + m.rowPadding, y: y, width: frame.width - m.rowPadding * 2,
                                        height: font.ascender - font.descender), font: font, color: style.header)
         case let .item(command):
-            drawItem(command, in: frame, card: card, style: style, lit: AtticMenuLook.systemText && card.litRow == index)
+            drawItem(command, in: frame, card: card, style: style)
         }
     }
 
-    private func drawItem(_ command: AtticMenuCommand, in frame: NSRect, card: AtticGlassMenuCard, style: AtticGlassMenuStyle, lit: Bool = false) {
+    private func drawItem(_ command: AtticMenuCommand, in frame: NSRect, card: AtticGlassMenuCard, style: AtticGlassMenuStyle) {
         let m = AtticMenuMetrics.self
         let d = AtticDropdownMetrics.self
-        let ink: NSColor = lit ? .white : command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.title)
-        let iconInk: NSColor = lit ? .white : command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.icon)
+        let ink: NSColor = command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.title)
+        let iconInk: NSColor = command.isDisabled ? style.disabled : (command.isDestructive ? style.destructive : style.icon)
         var x = frame.minX + m.rowPadding
         if card.hasIcons {
             let slot = NSRect(x: x, y: frame.midY - m.iconSlot / 2, width: m.iconSlot, height: m.iconSlot)
