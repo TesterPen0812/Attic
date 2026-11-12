@@ -103,6 +103,39 @@ class RequiredChecksTests(unittest.TestCase):
             'testStatusToggleAtSixThousandTasksStaysBounded',
         ))
 
+    def test_ui_shards_cover_appearance_matrix_once_and_preserve_focused_selection(self):
+        import os
+        import subprocess
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        job = workflow.split('  ui:', 1)[1].split('\n  costs:', 1)[0]
+        self.assertIn("inputs.ui_tests && '[1]' || '[1, 2, 3]'", job)
+        self.assertIn('name: macOS UI tests (${{ matrix.shard }} of 3)', job)
+        flags_block = '          shard_flags=()' + job.split('          shard_flags=()', 1)[1].split('          # Hosted identifiers', 1)[0]
+
+        def flags(shard, focused=''):
+            script = flags_block.replace('${{ matrix.shard }}', str(shard))
+            script += '\nprintf "%s\\n" "${shard_flags[@]}"'
+            result = subprocess.run(['bash', '-c', script],
+                                    env=dict(os.environ, UI_TESTS=focused),
+                                    capture_output=True, text=True, check=True)
+            return result.stdout.splitlines()
+
+        appearance = 'AtticUITests/AtticUITests/testAppearanceControlsCoverEveryPaletteSurfaceAndTint'
+        self.assertEqual(flags(1), [
+            '-only-testing:AtticUITests/AtticUITests',
+            '-only-testing:AtticUITests/CanvasUITests',
+            '-only-testing:AtticUITests/NotesFormatUITests',
+            f'-skip-testing:{appearance}',
+        ])
+        self.assertEqual(flags(2), [
+            '-skip-testing:AtticUITests/AtticUITests',
+            '-skip-testing:AtticUITests/CanvasUITests',
+            '-skip-testing:AtticUITests/NotesFormatUITests',
+            '-only-testing:AtticUITests',
+        ])
+        self.assertEqual(flags(3), [f'-only-testing:{appearance}'])
+        self.assertEqual(flags(1, appearance), [f'-only-testing:{appearance}'])
+
     def test_workflow_passes_actual_step_outcomes(self):
         import re
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()

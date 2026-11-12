@@ -618,14 +618,14 @@ jobs:
   ui:
     needs: validate-inputs
     if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
-    name: macOS UI tests (${{ matrix.shard }} of 2)
+    name: macOS UI tests (${{ matrix.shard }} of 3)
     runs-on: macos-26
     timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
         # A focused run (ui_tests set) needs one runner.
-        shard: ${{ fromJSON(inputs.ui_tests && '[1]' || '[1, 2]') }}
+        shard: ${{ fromJSON(inputs.ui_tests && '[1]' || '[1, 2, 3]') }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -634,10 +634,10 @@ jobs:
 
       - name: Run macOS UI tests
         id: ui_tests
-        # Run 37234266502: 2,295 s tests + bundle writing exceeded 40 min.
-        # Classes below split the completed attempt's 2,132 s into 1,214/918 s.
-        # 35 min allows ~1,307 s at the slower runtime + 180 s build + 600 s
-        # bundle/runner headroom. Separate runners shorten the critical path.
+        # Run 43230872081: the exhaustive Appearance controls test passed in
+        # 1,499.6 s alone (42 surface choices and evidence screenshots), then
+        # shard 1 timed out with other tests still pending. Give that test its
+        # own runner; retain every test and the 35-minute per-step limit.
         timeout-minutes: 35
         env:
           UI_TESTS: ${{ inputs.ui_tests }}
@@ -649,12 +649,17 @@ jobs:
           for suite in AtticUITests CanvasUITests NotesFormatUITests; do
             if [ "${{ matrix.shard }}" = 1 ]; then
               shard_flags+=("-only-testing:AtticUITests/$suite")
-            else
+            elif [ "${{ matrix.shard }}" = 2 ]; then
               shard_flags+=("-skip-testing:AtticUITests/$suite")
             fi
           done
-          if [ "${{ matrix.shard }}" = 2 ]; then
+          appearance_test=AtticUITests/AtticUITests/testAppearanceControlsCoverEveryPaletteSurfaceAndTint
+          if [ "${{ matrix.shard }}" = 1 ]; then
+            shard_flags+=("-skip-testing:$appearance_test")
+          elif [ "${{ matrix.shard }}" = 2 ]; then
             shard_flags+=(-only-testing:AtticUITests)
+          else
+            shard_flags+=("-only-testing:$appearance_test")
           fi
           if [ -n "$UI_TESTS" ]; then
             shard_flags=()
