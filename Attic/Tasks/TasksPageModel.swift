@@ -417,12 +417,33 @@ final class TasksPageModel: ObservableObject {
         var set = foldedGroups[tab] ?? []
         if folded { set.formUnion(keys) } else { set.subtract(keys) }
         foldedGroups[tab] = set
+        if folded { pruneInvisibleSelection(on: tab) }
     }
 
     func toggleGroup(_ key: String, on tab: TasksTab) {
         var set = foldedGroups[tab] ?? []
         if set.contains(key) { set.remove(key) } else { set.insert(key) }
         foldedGroups[tab] = set
+        if set.contains(key) { pruneInvisibleSelection(on: tab) }
+    }
+
+    /// A fold, filter, completion, or edit can remove a row from the current
+    /// page. Don't leave a hidden row selected or holding keyboard shortcuts.
+    func pruneInvisibleSelection(on tab: TasksTab) {
+        guard self.tab == tab else { return }
+        guard !selection.isEmpty || keyboardFocus?.page == tab.rawValue else { return }
+        let visible = Set(tab == .done
+            ? doneDays().flatMap { $0.rows.map(\.id) }
+            : rows(for: tab).map(\.id))
+        if !selection.isSubset(of: visible) {
+            selection.formIntersection(visible)
+            if let anchor = selectionAnchor, !selection.contains(anchor) {
+                selectionAnchor = selection.first
+            }
+        }
+        if let focus = keyboardFocus, focus.page == tab.rawValue, !visible.contains(focus.id) {
+            receiveKeyboardFocus(nil, keyboardDriving: false)
+        }
     }
     /// Search (the menu-bar item) asked for the Done page's search field;
     /// the page puts the keyboard there and clears it.
@@ -1629,13 +1650,23 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func toggleDone(_ ids: [UUID]) -> CommandOutcome {
         let tasks = ids.compactMap { store.listedTask(withID: $0) }
-        if !tasks.isEmpty, tasks.allSatisfy({ $0.status == .done }) {
-            return tasks.count == 1 ? reopen(tasks[0].id) : AtticSounds.play(.undone, after: library.reopenTasks(tasks.map(\.id)))
+        let reopeningAll = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
+        let outcome: CommandOutcome
+        if reopeningAll {
+            outcome = tasks.count == 1 ? reopen(tasks[0].id) : AtticSounds.play(.undone, after: library.reopenTasks(tasks.map(\.id)))
         } else if ids.count == 1 {
-            return complete(ids[0])
+            outcome = complete(ids[0])
         } else {
-            return AtticSounds.play(.done, after: library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done))
+            outcome = AtticSounds.play(.done, after: library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done))
         }
+        if outcome.isApplied {
+            if reopeningAll && tasks.count > 1 {
+                for task in tasks { cancelHold(task.id) }
+                reloadDoneLogAfterChange()
+            }
+            pruneInvisibleSelection(on: tab)
+        }
+        return outcome
     }
 
     /// ⇧Space and the right-click menu: start working on the tasks (the
@@ -1673,6 +1704,7 @@ final class TasksPageModel: ObservableObject {
         if outcome.isApplied {
             cancelHold(id)
             reloadDoneLogAfterChange()
+            pruneInvisibleSelection(on: tab)
         }
         return outcome
     }
@@ -1714,28 +1746,35 @@ final class TasksPageModel: ObservableObject {
 
     func releaseHold(_ id: UUID) {
         holdTasks[id] = nil
-        guard held[id] != nil else { return }
+        guard let place = held[id] else { return }
         // Reduce Motion: no travel at all (review 22); a shorter slide is
         // still a slide.
         let reduceMotion = AtticMotionPreference.reducesMotion
         withAnimation(reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
             _ = held.removeValue(forKey: id)
         }
+        pruneInvisibleSelection(on: place.tab)
     }
 
     @discardableResult
     func setStatus(_ status: TaskStatus, for ids: [UUID]) -> CommandOutcome {
         if status == .done {
-            return ids.count == 1 ? complete(ids[0]) : AtticSounds.play(.done, after: library.updateTasks(ids, status: .done))
+            let outcome = ids.count == 1 ? complete(ids[0]) : AtticSounds.play(.done, after: library.updateTasks(ids, status: .done))
+            if outcome.isApplied { pruneInvisibleSelection(on: tab) }
+            return outcome
         }
         let loggedOrDone = ids.filter { store.task(withID: $0)?.status == .done || store.task(withID: $0) == nil }
         if loggedOrDone == ids, status == .todo {
             return restoreToNow(ids)
         }
         if ids.count == 1 {
-            return library.updateTask(ids[0], status: status, allowingUnfinishedSubtasks: true)
+            let outcome = library.updateTask(ids[0], status: status, allowingUnfinishedSubtasks: true)
+            if outcome.isApplied { pruneInvisibleSelection(on: tab) }
+            return outcome
         }
-        return library.updateTasks(ids, status: status)
+        let outcome = library.updateTasks(ids, status: status)
+        if outcome.isApplied { pruneInvisibleSelection(on: tab) }
+        return outcome
     }
 
     /// Priority from the menu or the selection bar: one step, and an Undo
@@ -1752,6 +1791,7 @@ final class TasksPageModel: ObservableObject {
                 : library.updateTasks(changing, priority: priority)
         if reachesDoneLogAfterEdit(changing) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
+        pruneInvisibleSelection(on: tab)
         let name = priority.spokenTitle
         showToast(changing.count == 1 ? name : String(localized: "\(changing.count) tasks: \(name)"))
         return outcome
@@ -1767,6 +1807,7 @@ final class TasksPageModel: ObservableObject {
             : library.updateTasks(movable, status: .backlog)
         guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
+        pruneInvisibleSelection(on: tab)
         showToast(movable.count == 1 ? String(localized: "Moved to Backlog") : String(localized: "Moved \(movable.count) tasks to Backlog"))
         return succeeded
     }
@@ -1781,6 +1822,7 @@ final class TasksPageModel: ObservableObject {
             : library.updateTasks(movable, status: .todo)
         guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
+        pruneInvisibleSelection(on: tab)
         showToast(movable.count == 1 ? String(localized: "Moved to Now") : String(localized: "Moved \(movable.count) tasks to Now"))
         return succeeded
     }
@@ -1805,6 +1847,7 @@ final class TasksPageModel: ObservableObject {
         }
         doneLogRevision = nil
         loadDoneLogIfNeeded()
+        pruneInvisibleSelection(on: tab)
         return outcome
     }
 
@@ -1827,6 +1870,7 @@ final class TasksPageModel: ObservableObject {
         selection.subtract(live)
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
+        pruneInvisibleSelection(on: tab)
         // Orchestrator decision 2026-10-23: deletion includes each task's writing.
         let withWriting = live.filter(noteOwners.contains).count
         if let title {
@@ -1907,6 +1951,7 @@ final class TasksPageModel: ObservableObject {
         editingTitleID = nil
         clearFailure(.title(id))
         if patch.dueDay != nil { followDatedOutOfLater([id]) }
+        pruneInvisibleSelection(on: tab)
         return true
     }
 
@@ -2201,6 +2246,8 @@ final class TasksPageModel: ObservableObject {
         let outcome = library.undo(in: .tasks)
         if outcome.isApplied {
             dismissToast()
+            reloadDoneLogAfterChange()
+            pruneInvisibleSelection(on: tab)
             // The step is undone: the next ⌘Z is the field's typing again,
             // and ⇧⌘Z brings the step back.
             stepAtLastTextEdit = library.undo.undoStepID(in: .tasks)
@@ -2212,7 +2259,11 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func redo() -> CommandOutcome {
         let outcome = library.redo(in: .tasks)
-        if outcome.isApplied { stepAtLastTextEdit = library.undo.undoStepID(in: .tasks) }
+        if outcome.isApplied {
+            reloadDoneLogAfterChange()
+            pruneInvisibleSelection(on: tab)
+            stepAtLastTextEdit = library.undo.undoStepID(in: .tasks)
+        }
         return outcome
     }
 

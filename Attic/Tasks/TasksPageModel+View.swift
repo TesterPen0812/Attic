@@ -142,11 +142,7 @@ extension TasksPageModel {
         guard tab != .done, options != viewOptions(for: tab) else { return }
         viewOptionsByTab[tab] = options.isDefault ? nil : options
         memory?.saveViewOptions(viewOptionsByTab)
-        if tab == self.tab {
-            let shown = Set(rows(for: tab).map(\.id))
-            let kept = selection.intersection(shown)
-            if kept != selection { selectCopies(orderedSelection().filter(kept.contains)) }
-        }
+        pruneInvisibleSelection(on: tab)
         AccessibilityNotification.Announcement(options.filters || options.sort != .manual
             ? String(localized: "Showing \(options.spokenValue)")
             : String(localized: "Showing all tasks")).post()
@@ -210,10 +206,7 @@ extension TasksPageModel {
         let next = TasksPanelDesign.tagFilter(choosing: tag, current: tagFilter)
         guard next != tagFilter else { return }
         tagFilter = next
-        guard tab != .done else { return }
-        let shown = Set(rows(for: tab).map(\.id))
-        let kept = selection.intersection(shown)
-        if kept != selection { selectCopies(orderedSelection().filter(kept.contains)) }
+        pruneInvisibleSelection(on: tab)
     }
 
     /// The chosen tag left every task (deleted, removed, or renamed and then

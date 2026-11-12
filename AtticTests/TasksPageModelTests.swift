@@ -153,6 +153,250 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertTrue(model.hasDoneToday)
     }
 
+    func testH12CompletionHoldReleaseClearsInvisibleSelectionAndKeyboardFocus() throws {
+        let id = try XCTUnwrap(add("Finish the selected row"))
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: true)
+
+        XCTAssertTrue(model.toggleDone(id).isApplied)
+        XCTAssertEqual(model.selection, [id], "the row remains selectable during its completion hold")
+        model.releaseHold(id)
+
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == id })
+        XCTAssertTrue(model.selection.isEmpty, "a finished row must not remain selected after it leaves Now")
+        XCTAssertNil(model.keyboardFocus, "keyboard focus must not refer to the departed row")
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).contains { $0.id == id })
+    }
+
+    func testH12FoldingSelectedDateGroupClearsInvisibleSelectionAndFocus() throws {
+        let id = try XCTUnwrap(add("Dated selected row"))
+        let day = try XCTUnwrap(DueDay(year: 2026, month: 9, day: 24))
+        XCTAssertTrue(model.setDueDay(day, for: [id]).isApplied)
+        let key = try XCTUnwrap(model.groupKey(of: id, on: .now))
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: true)
+
+        model.foldAllGroups([key], folded: true, on: .now)
+
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == id })
+        XCTAssertTrue(model.selection.isEmpty, "folding a date group must not leave invisible selection")
+        XCTAssertNil(model.keyboardFocus, "folded rows must no longer hold keyboard focus")
+        model.foldAllGroups([key], folded: false, on: .now)
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == id })
+    }
+
+    func testH12UndoingCompletionFromDoneReleasesDepartedSelectionAndFocus() throws {
+        let id = try XCTUnwrap(add("Restore me through Undo"))
+        XCTAssertTrue(model.toggleDone(id).isApplied)
+        model.releaseHold(id)
+        model.select(tab: .done)
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).contains { $0.id == id })
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.done.rawValue, id: id), keyboardDriving: true)
+
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == id })
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).allSatisfy { $0.id != id })
+        XCTAssertTrue(model.selection.isEmpty, "Undo must not leave selection on a departed Done row")
+        XCTAssertNil(model.keyboardFocus, "Undo must release focus on a row now shown on another tab")
+    }
+
+    func testH12ViewFilterEvictsFocusWithTheHiddenRow() throws {
+        let id = try XCTUnwrap(add("No due date"))
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: true)
+
+        model.setViewOptions(TasksViewOptions(show: .dueOrOverdue), for: .now)
+
+        XCTAssertTrue(model.rows(for: .now).isEmpty)
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.keyboardFocus, "filtering the row out must not leave keyboard focus on it")
+    }
+
+    func testH12TagFilterEvictsFocusWithTheHiddenRow() throws {
+        let id = try XCTUnwrap(add("Untagged row"))
+        let taggedID = try XCTUnwrap(add("Tagged row"))
+        XCTAssertTrue(model.toggleTag("h12-filter", for: [taggedID]).isApplied)
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: true)
+
+        model.chooseTagChip("h12-filter")
+
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [taggedID])
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.keyboardFocus, "tagging away the focused row must release its keyboard focus")
+    }
+
+    func testH12RemovingSelectedTasksTagWhileFilteringReleasesItsFocus() throws {
+        let departing = try XCTUnwrap(add("Remove tag"))
+        let staying = try XCTUnwrap(add("Keep tag"))
+        XCTAssertTrue(model.toggleTag("h12-tag-mutate", for: [departing, staying]).isApplied)
+        model.chooseTagChip("h12-tag-mutate")
+        model.selectOnly(departing)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: departing), keyboardDriving: true)
+
+        XCTAssertTrue(model.toggleTag("h12-tag-mutate", for: [departing]).isApplied)
+
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [staying])
+        XCTAssertTrue(model.selection.isEmpty, "tag editing removed the row from the active filter")
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12ChangingPriorityOfSelectedRowOutsideViewFilterReleasesFocus() throws {
+        let departing = try XCTUnwrap(add("Lower priority"))
+        let staying = try XCTUnwrap(add("High priority"))
+        XCTAssertTrue(model.setPriority(.high, for: [departing, staying]).isApplied)
+        model.setViewOptions(TasksViewOptions(priority: .highOnly), for: .now)
+        model.selectOnly(departing)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: departing), keyboardDriving: true)
+
+        XCTAssertTrue(model.setPriority(.none, for: [departing]).isApplied)
+
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [staying])
+        XCTAssertTrue(model.selection.isEmpty, "editing priority removed the row from the active view")
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12ChangingSelectedTasksDateIntoFoldedGroupReleasesFocus() throws {
+        let departing = try XCTUnwrap(add("Move into closed day"))
+        let staying = try XCTUnwrap(add("Closed day owner"))
+        let destination = DueDay(year: 2026, month: 9, day: 23)
+        XCTAssertTrue(model.setDueDay(DueDay(year: 2026, month: 9, day: 22), for: [departing]).isApplied)
+        XCTAssertTrue(model.setDueDay(destination, for: [staying]).isApplied)
+        let key = try XCTUnwrap(model.groupKey(of: staying, on: .now))
+        model.foldAllGroups([key], folded: true, on: .now)
+        model.selectOnly(departing)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: departing), keyboardDriving: true)
+
+        XCTAssertTrue(model.setDueDay(destination, for: [departing]).isApplied)
+
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == departing })
+        XCTAssertTrue(model.selection.isEmpty, "date card moved the selected task into a closed group")
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12DroppingSelectedTaskIntoFoldedDateReleasesFocus() throws {
+        let departing = try XCTUnwrap(add("Drop into closed day"))
+        let staying = try XCTUnwrap(add("Existing closed day"))
+        let destination = try XCTUnwrap(DueDay(year: 2026, month: 9, day: 24))
+        XCTAssertTrue(model.setDueDay(destination, for: [staying]).isApplied)
+        let key = try XCTUnwrap(model.groupKey(of: staying, on: .now))
+        model.foldAllGroups([key], folded: true, on: .now)
+        model.selectOnly(departing)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: departing), keyboardDriving: true)
+
+        let drop = TasksDayDrop(key: key, change: .day(destination), index: 0,
+                                before: nil, after: nil, lineY: 0)
+        XCTAssertTrue(model.moveToDay(departing, drop).isApplied)
+
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == departing })
+        XCTAssertTrue(model.selection.isEmpty, "cross-day drag left the focused row in a folded group")
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12BatchCompletionMovesAllSelectedRowsToDoneWithoutHiddenFocus() throws {
+        let first = try XCTUnwrap(add("Batch one"))
+        let second = try XCTUnwrap(add("Batch two"))
+        model.selectCopies([first, second])
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: first), keyboardDriving: true)
+
+        XCTAssertTrue(model.toggleDone([first, second]).isApplied)
+
+        XCTAssertEqual(model.rows(for: .now).count, 0)
+        XCTAssertEqual(Set(model.doneDays().flatMap { $0.rows.map(\.id) }), [first, second])
+        XCTAssertTrue(model.selection.isEmpty, "multi-select completion has no hold and rows leave Now at once")
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12StatusMenuBatchCompletionEvictsHiddenFocus() throws {
+        let first = try XCTUnwrap(add("Status one"))
+        let second = try XCTUnwrap(add("Status two"))
+        model.selectCopies([first, second])
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: first), keyboardDriving: true)
+
+        XCTAssertTrue(model.setStatus(.done, for: [first, second]).isApplied)
+
+        XCTAssertTrue(model.rows(for: .now).isEmpty)
+        XCTAssertEqual(Set(model.doneDays().flatMap { $0.rows.map(\.id) }), [first, second])
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.keyboardFocus)
+    }
+
+    func testH12BatchReopeningArchivedDoneTasksRemovesStaleDoneRowsAndFocus() throws {
+        let first = try XCTUnwrap(add("Archived one"))
+        let second = try XCTUnwrap(add("Archived two"))
+        XCTAssertTrue(model.complete(first).isApplied)
+        XCTAssertTrue(model.complete(second).isApplied)
+        model.releaseHold(first)
+        model.releaseHold(second)
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value)), 2)
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(Set(model.doneDays().flatMap { $0.rows.map(\.id) }), [first, second])
+        model.selectCopies([first, second])
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.done.rawValue, id: first), keyboardDriving: true)
+
+        XCTAssertTrue(model.toggleDone([first, second]).isApplied)
+
+        XCTAssertEqual(Set(model.rows(for: .now).map(\.id)), [first, second])
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).isEmpty, "restored rows must leave the loaded Done log immediately")
+        XCTAssertTrue(model.selection.isEmpty, "both restored rows left the Done page")
+        XCTAssertNil(model.keyboardFocus)
+        XCTAssertTrue([first, second].allSatisfy { store.task(withID: $0)?.status == .todo })
+    }
+
+    func testH12UndoRedoOfArchivedReopenRefreshesLoadedDoneDays() throws {
+        let id = try XCTUnwrap(add("Archived undo round trip"))
+        XCTAssertTrue(model.complete(id).isApplied)
+        model.releaseHold(id)
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value)), 1)
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneDays().flatMap { $0.rows.map(\.id) }, [id])
+
+        XCTAssertTrue(model.reopen(id).isApplied)
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).isEmpty)
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertNil(store.task(withID: id), "Undo restored the archived physical state")
+        XCTAssertEqual(model.doneDays().flatMap { $0.rows.map(\.id) }, [id],
+                       "the loaded Done page must reflect Undo without reopening the page")
+
+        XCTAssertTrue(model.redo().isApplied)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [id])
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).isEmpty)
+    }
+
+    func testH12RestoreToNowReleasesDepartedDoneKeyboardFocus() throws {
+        let id = try XCTUnwrap(add("Restore focused Done row"))
+        XCTAssertTrue(model.complete(id).isApplied)
+        model.releaseHold(id)
+        model.select(tab: .done)
+        model.selectOnly(id)
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.done.rawValue, id: id), keyboardDriving: true)
+
+        XCTAssertTrue(model.restoreToNow([id]).isApplied)
+
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [id])
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).isEmpty)
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.keyboardFocus, "the restored row is no longer on the focused Done page")
+    }
+
+    func testH12RenamingSelectedTaskOutOfFindResultsPrunesSelection() throws {
+        let id = try XCTUnwrap(add("Needle in list"))
+        model.setSearchQuery("needle", for: .now)
+        model.selectOnly(id)
+        model.beginEditingTitle(id)
+        model.editingTitle = "Unmatched title"
+
+        XCTAssertTrue(model.commitTitle())
+
+        XCTAssertTrue(model.rows(for: .now).isEmpty)
+        XCTAssertTrue(model.selection.isEmpty, "committing the title removed the selected row from Find")
+    }
+
     /// The model's side of the circle (Direction A: one click completes,
     /// another puts the task back as it was; ⇧Space starts and stops).
     func testTheCircleCompletesInOneClickAndRestoresThePreviousState() throws {
@@ -551,5 +795,243 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection, [parent])
         XCTAssertTrue(model.expanded.contains(parent))
         XCTAssertEqual(model.show(UUID()), .missing)
+    }
+
+    /// Generated, reproducible sessions use the same model commands as row
+    /// clicks, the date and tag cards, the pager, the quick look and Undo.
+    /// Fresh SwiftData reads after *every* action catch a transient list
+    /// projection that disagrees with the committed store.
+    func testH12SeededTaskSessionsRoundTripEveryStepAndUndoToCheckpoint() throws {
+        struct Generator {
+            var state: UInt64
+            mutating func choose(_ bound: Int) -> Int {
+                state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                return Int((state >> 32) % UInt64(max(1, bound)))
+            }
+        }
+        struct LiveTask: Equatable {
+            let id: UUID
+            let content: TaskContentSnapshot
+        }
+        func liveState() -> [LiveTask] {
+            store.tasks.map { LiveTask(id: $0.id, content: TaskContentSnapshot($0)) }
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+
+        for seed in [UInt64(2026111201), 2026111202, 2026111203] {
+            store = try makeTestStore(now: { [clock] in clock.value })
+            library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
+            let calendar = self.calendar
+            model = TasksPageModel(library: library, services: TasksPageServices(
+                now: { [clock] in clock.value }, calendar: { calendar },
+                locale: Locale(identifier: "en_GB"), doneHold: .seconds(3_600)
+            ))
+            model.toasts.holdDuration = 3_600
+            XCTAssertEqual(library.createTasks((0..<12).map { TaskDraft(title: "Seed root \($0)") })?.count, 12)
+            var rng = Generator(state: seed)
+            let steps = 360
+            // UndoRoute deliberately retains at most 100 steps. Exercise six
+            // continuous 60-action epochs, checking a complete Undo/Redo
+            // round-trip at each checkpoint instead of falsely demanding
+            // that 360 actions fit in a 100-step history.
+            let epochSize = 60
+            var epochStart = liveState()
+            // The actual TasksPage releases its @FocusState whenever the
+            // selected tab changes. Model-only generated sessions must
+            // deliver that view callback; otherwise a row from the old
+            // tab can appear to receive keys after switching away and back.
+            func selectTab(_ destination: TasksTab) {
+                let previous = model.tab
+                model.select(tab: destination)
+                if model.tab != previous { model.receiveKeyboardFocus(nil, keyboardDriving: false) }
+            }
+
+            for step in 0..<steps {
+                if step.isMultiple(of: epochSize) {
+                    library.undo.clear(.tasks)
+                    epochStart = liveState()
+                }
+                let roots = store.tasks.filter { $0.parentID == nil }
+                let id = roots.isEmpty ? nil : roots[rng.choose(roots.count)].id
+                let action = rng.choose(16)
+                let label = "seed=\(seed) step=\(step) action=\(action)"
+                switch action {
+                case 0: // Create in Now or Backlog.
+                    if roots.count < 65 {
+                        selectTab(rng.choose(2) == 0 ? .now : .backlog)
+                        model.addBar.text = "Seed \(seed) item \(step)"
+                        XCTAssertNotNil(model.submitAddBar(), label)
+                    }
+                case 1: // Rename through the row title editor.
+                    if let id, let task = store.task(withID: id) {
+                        selectTab(task.status == .backlog ? .backlog : task.status == .done ? .done : .now)
+                        model.beginEditingTitle(id)
+                        if model.editingTitleID == id {
+                            model.editingTitle = task.title + " edit \(step)"
+                            XCTAssertTrue(model.commitTitle(), label)
+                        }
+                    }
+                case 2: // Tick or untick (including restoring Backlog state).
+                    if let id { XCTAssertTrue(model.toggleDone(id).isApplied, label) }
+                case 3: // Move between Now and Backlog.
+                    if let id, let task = store.task(withID: id), task.status != .done {
+                        let outcome = task.status == .backlog ? model.moveToNow([id]) : model.moveToBacklog([id])
+                        XCTAssertTrue(outcome.isApplied, label)
+                    }
+                case 4: // Drag/keyboard reorder in the state group.
+                    if let id, let task = store.task(withID: id), task.status != .done {
+                        XCTAssertTrue(model.moveBy(id, offset: rng.choose(2) == 0 ? -1 : 1).isApplied, label)
+                    }
+                case 5: // Priority card.
+                    if let id {
+                        let priorities: [TaskPriority] = [.none, .low, .medium, .high]
+                        XCTAssertTrue(model.setPriority(priorities[rng.choose(priorities.count)], for: [id]).isApplied, label)
+                    }
+                case 6: // Date card, including clearing a date.
+                    if let id {
+                        let day = rng.choose(4) == 0 ? nil : DueDay(year: 2026, month: 9, day: 22 + rng.choose(4))
+                        XCTAssertTrue(model.setDueDay(day, for: [id]).isApplied, label)
+                    }
+                case 7: // Tags card.
+                    if let id { XCTAssertTrue(model.toggleTag("h12", for: [id]).isApplied, label) }
+                case 8: // Create a child in its parent's quick look.
+                    if let id, let task = store.task(withID: id), task.status != .done,
+                       store.subtasks(of: id).count < 5 {
+                        selectTab(task.status == .backlog ? .backlog : .now)
+                        model.beginAddingSubtask(to: id)
+                        if model.newSubtaskParentID == id {
+                            model.newSubtaskTitle = "Child \(step)"
+                            XCTAssertTrue(model.commitNewSubtask(), label)
+                            model.cancelEditing()
+                        }
+                    }
+                case 9: // Tick an existing subtask.
+                    if let id, let task = store.task(withID: id), task.status != .done,
+                       let child = store.subtasks(of: id).first {
+                        XCTAssertTrue(model.toggleSubtask(child.id).isApplied, label)
+                    }
+                case 10: // Pager and keyboard Tab focus.
+                    let tabs: [TasksTab] = [.now, .backlog, .done]
+                    selectTab(tabs[rng.choose(tabs.count)])
+                    model.receiveKeyboardFocus(nil, keyboardDriving: false)
+                    if model.tab != .done, let first = model.rows(for: model.tab).first?.id {
+                        model.selectOnly(first)
+                        model.receiveKeyboardFocus(AtticRowFocusID(page: model.tab.rawValue, id: first), keyboardDriving: true)
+                    }
+                case 11: // Fold and reopen a date group while a row is selected.
+                    let tab: TasksTab = rng.choose(2) == 0 ? .now : .backlog
+                    selectTab(tab)
+                    if let row = model.rows(for: tab).first,
+                       let key = model.groupKey(of: row.id, on: tab) {
+                        model.selectOnly(row.id)
+                        model.receiveKeyboardFocus(AtticRowFocusID(page: tab.rawValue, id: row.id), keyboardDriving: true)
+                        model.foldAllGroups([key], folded: true, on: tab)
+                        XCTAssertTrue(model.selection.isEmpty, label + " folded selection")
+                        model.foldAllGroups([key], folded: false, on: tab)
+                    }
+                case 12: // Find, then clear the query.
+                    let tab: TasksTab = rng.choose(2) == 0 ? .now : .backlog
+                    selectTab(tab)
+                    model.clearSelection() // Search taking focus does this in the real view.
+                    model.receiveKeyboardFocus(nil, keyboardDriving: false)
+                    model.setSearchQuery("no-match-H12", for: tab)
+                    XCTAssertTrue(model.rows(for: tab).isEmpty, label + " search")
+                    model.setSearchQuery("", for: tab)
+                case 13: // Panel hides and returns while a title edit is unsaved.
+                    if let id, let task = store.task(withID: id) {
+                        selectTab(task.status == .backlog ? .backlog : task.status == .done ? .done : .now)
+                        model.beginEditingTitle(id)
+                        if model.editingTitleID == id {
+                            model.editingTitle = task.title + " hidden \(step)"
+                            model.pageDidHide()
+                            model.pageDidReturn()
+                            XCTAssertEqual(model.editingTitleID, id, label + " pending edit")
+                            XCTAssertTrue(model.finishEditing(), label + " save on return")
+                        }
+                    }
+                case 14: // Undo/Redo interleaved with later edits.
+                    if rng.choose(3) == 0, library.undo.canRedo(in: .tasks) {
+                        XCTAssertTrue(model.redo().isApplied, label)
+                    } else if library.undo.canUndo(in: .tasks) {
+                        XCTAssertTrue(model.undo().isApplied, label)
+                    }
+                default: // Delete moves a full family to Recently Deleted.
+                    if let id { XCTAssertTrue(model.delete([id]).isApplied, label) }
+                }
+
+                // Release completion holds explicitly, as after their one
+                // second animation. No test has to sleep or render an app.
+                for held in Array(model.held.keys) { model.releaseHold(held) }
+                let shownNow = model.rows(for: .now).map(\.id)
+                let shownBacklog = model.rows(for: .backlog).map(\.id)
+                let shownDone = model.doneDays().flatMap { $0.rows.map(\.id) }
+                let openIDs = store.snapshot(for: .tasks).sections
+                    .filter { $0.status != .done }.flatMap { $0.tasks.map(\.id) }
+                let backlogIDs = store.snapshot(for: .backlog).sections.flatMap { $0.tasks.map(\.id) }
+                let doneIDs = store.doneTodayTasks().map(\.id)
+                XCTAssertEqual(Set(shownNow), Set(openIDs), label + " Now membership")
+                XCTAssertEqual(Set(shownBacklog), Set(backlogIDs), label + " Backlog membership")
+                XCTAssertEqual(Set(shownDone), Set(doneIDs), label + " Done membership")
+                let allShown = shownNow + shownBacklog + shownDone
+                XCTAssertEqual(Set(allShown).count, allShown.count, label + " no double rows")
+                XCTAssertEqual(Set(allShown), Set(store.tasks.filter { $0.parentID == nil }.map(\.id)), label + " no lost roots")
+
+                let focusIDs = Set(model.tab == .done ? shownDone : model.tab == .now ? shownNow : shownBacklog)
+                XCTAssertTrue(model.selection.isSubset(of: focusIDs), label + " selected rows must be visible")
+                if let focus = model.keyboardFocus, focus.page == model.tab.rawValue {
+                    XCTAssertTrue(focusIDs.contains(focus.id), label + " focused row must be visible")
+                }
+
+                // Independently rehydrate from the durable store *every step*.
+                let physical = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                let physicalCurrent = physical.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
+                let idsBeforeReload = store.tasks.map(\.id)
+                XCTAssertEqual(Set(physicalCurrent.map(\.id)), Set(idsBeforeReload), label + " physical ids")
+                for row in physicalCurrent {
+                    let inMemory = try XCTUnwrap(store.task(withID: row.id), label)
+                    XCTAssertEqual(inMemory.title, row.title, label + " persisted title")
+                    XCTAssertEqual(inMemory.statusRaw, row.statusRaw, label + " persisted status")
+                    XCTAssertEqual(inMemory.parentID, row.parentID, label + " persisted parent")
+                    XCTAssertEqual(inMemory.dueDayRaw, row.dueDayRaw, label + " persisted day")
+                    XCTAssertEqual(inMemory.tagsRaw, row.tagsRaw, label + " persisted tags")
+                    XCTAssertEqual(inMemory.manualOrder, row.manualOrder, label + " persisted order")
+                }
+                store.refresh()
+                XCTAssertEqual(Set(store.tasks.map(\.id)), Set(idsBeforeReload), label + " reload ids")
+                XCTAssertEqual(model.rows(for: .now).map(\.id), shownNow, label + " reload Now order")
+                XCTAssertEqual(model.rows(for: .backlog).map(\.id), shownBacklog, label + " reload Backlog order")
+
+                if (step + 1).isMultiple(of: epochSize) {
+                    let epochEnd = liveState()
+                    var undos = 0
+                    while library.undo.canUndo(in: .tasks), undos < epochSize + 1 {
+                        let result = model.undo()
+                        guard result.isApplied else {
+                            XCTFail(label + " Undo step \(undos) was not applied")
+                            break
+                        }
+                        undos += 1
+                    }
+                    XCTAssertFalse(library.undo.canUndo(in: .tasks), label + " Undo exhausted")
+                    store.refresh()
+                    XCTAssertEqual(liveState(), epochStart, label + " exact Undo checkpoint")
+
+                    // Only redo the steps we just reversed: an interleaved
+                    // user Undo may have left an older redo branch at the
+                    // checkpoint, and replaying that is a different action.
+                    for index in 0..<undos {
+                        guard model.redo().isApplied else {
+                            XCTFail(label + " Redo step \(index) was not applied")
+                            break
+                        }
+                    }
+                    store.refresh()
+                    XCTAssertEqual(liveState(), epochEnd, label + " exact Redo checkpoint")
+                    print("TASKS_HUNT12_EPOCH seed=\(seed) end=\(step) undo=\(undos)")
+                }
+            }
+
+            print("TASKS_HUNT12_SEED seed=\(seed) steps=\(steps) checkpoints=\(steps / epochSize)")
+        }
     }
 }
