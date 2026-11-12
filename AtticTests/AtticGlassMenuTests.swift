@@ -48,6 +48,18 @@ final class AtticGlassMenuTests: XCTestCase {
         return menu
     }
 
+    /// Keep the card's logical screen coordinates aligned with its window's
+    /// coordinates in the invisible test host. The host moves onscreen
+    /// windows a million points away without changing the menu's card frame.
+    /// A fully offscreen virtual screen avoids that remapping in either host.
+    private func openForAccessibilityGeometry(_ commands: [AtticMenuCommand]) -> AtticGlassMenu {
+        let testScreen = screen.offsetBy(dx: -2_000_000, dy: 0)
+        let point = CGPoint(x: testScreen.minX + 400, y: testScreen.minY + 600)
+        let menu = AtticGlassMenu(commands, appearance: NSAppearance(named: .aqua), opener: nil)
+        menu.open(.point(point), visible: testScreen, source: nil)
+        return menu
+    }
+
     private func key(_ keyCode: UInt16, _ characters: String = "", flags: NSEvent.ModifierFlags = [], time: TimeInterval = 1) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: time, windowNumber: 0, context: nil,
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
@@ -66,6 +78,47 @@ final class AtticGlassMenuTests: XCTestCase {
 
     private func row(titled title: String, in card: AtticGlassMenuCard) -> Int {
         card.entries.firstIndex { if case let .item(command) = $0.kind { return command.title == title } else { return false } }!
+    }
+
+    func testCommandMenuOpenersExposeExactAccessibleNames() throws {
+        let labels = ["Add a task, note or file", "Alignment, Left", "Chats"]
+        let command = [AtticMenuCommand(verbatim: "Example") {}]
+        let root = VStack(spacing: 10) {
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[0]) { Image(systemName: "plus") }
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[1]) { Text("Left") }
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[2]) { Image(systemName: "clock") }
+        }
+        .frame(width: 320, height: 140)
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: -6000, width: 320, height: 140),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: root)
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        var seen = Set<ObjectIdentifier>()
+        var named = [String]()
+        func walk(_ node: AnyObject) {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return }
+            if node.accessibilityRole?() == .menuButton {
+                let label = node.accessibilityLabel?() ?? ""
+                XCTAssertFalse(label.isEmpty, "Every AXMenuButton needs a label")
+                named.append(label)
+            }
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+        }
+        walk(try XCTUnwrap(window.contentView))
+        XCTAssertEqual(named.count, labels.count, "Every command menu has one accessible opener")
+        XCTAssertEqual(Set(named), Set(labels), "icon-only, text and history menu openers are named")
     }
 
     // MARK: Layout
@@ -586,7 +639,7 @@ final class AtticGlassMenuTests: XCTestCase {
     /// "hittable" check) lands on the item, not on the card's window. The
     /// rows' view takes no AppKit hits (the menu tracks the pointer itself).
     func testThePointOverARowHitsItsMenuItem() throws {
-        let menu = open(commands())
+        let menu = openForAccessibilityGeometry(commands())
         let card = menu.cards[0]
         for title in ["Complete", "Date", "Delete"] {
             let point = center(of: row(titled: title, in: card), in: card)
@@ -609,7 +662,7 @@ final class AtticGlassMenuTests: XCTestCase {
     /// (the first row) landed on "Delete" (the last) and chose it (w4 trace,
     /// run 41196043594).
     func testEveryItemsFrameIsItsOwnRowOnScreen() throws {
-        let menu = open(commands())
+        let menu = openForAccessibilityGeometry(commands())
         for card in [menu.cards[0]] {
             for row in card.entries.indices {
                 guard let element = card.view.element(for: row) else { continue }

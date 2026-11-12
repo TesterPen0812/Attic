@@ -1896,11 +1896,13 @@ struct AtticCommandMenu<Label: View>: View {
             }
             .buttonStyle(.plain)
             .fixedSize()
+            .accessibilityLabel(accessibilityLabel)
             .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
             // A menu button for VoiceOver and Full Keyboard Access, as the
             // native menu's opener was: Press and Show Menu open it.
             .accessibilityRepresentation {
                 AtticMenuButtonAccessibility(label: accessibilityLabel) { view in AtticNativeMenu.popUp(commands, in: view) }
+                    .accessibilityLabel(accessibilityLabel)
             }
         }
     }
@@ -1929,6 +1931,7 @@ struct AtticMenuButtonAccessibility: NSViewRepresentable {
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.menuButton)
         view.setAccessibilityLabel(label)
+        view.setAccessibilityTitle(label)
         view.setAccessibilityHelp(String(localized: "Opens a menu"))
         view.open = open
     }
