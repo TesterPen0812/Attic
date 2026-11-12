@@ -341,17 +341,18 @@ enum IdleLatencyTrace {
              "sendEvent_dispatched", "island_sendEvent_dispatched", "handler_entered",
              "view_dispatch_done", "commit_handoff", "transaction_flushed",
              "cleanup_begin", "cleanup_end", "followup_scheduled", "followup_fired",
-             "warmup_begin", "warmup_end", "island_hover_entered", "island_hover_left": return true
+             "warmup_begin", "warmup_end", "island_hover_entered", "island_hover_left",
+             "task_tab_selected", "task_tab_observed", "task_row_selected": return true
         default: return false
         }
     }
 
     private static func validSpan(_ phase: String) -> Bool {
         switch phase {
-        case "show_build_layout", "page_build", "page_layout", "snapshot_capture",
+        case "show_build_layout", "page_build", "page_layout", "panel_host_layout", "snapshot_capture",
              "snapshot_prepare", "transaction_flush", "warmup_model", "warmup_layout",
              "warmup_layers",
-             "task_toggle", "task_add_submit", "task_finish_editing", "task_done_load",
+             "task_toggle", "task_add_submit", "task_finish_editing", "task_tab_showPagerPage", "task_done_load",
              "task_rows_build", "task_save_durable", "task_save_publish", "task_reload",
              "note_leave", "note_session_open", "note_groups_metadata", "note_groups_rows",
              "calendar_rebuild", "calendar_day_offset",

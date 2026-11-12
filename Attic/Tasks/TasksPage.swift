@@ -534,6 +534,7 @@ struct TasksPage: View {
             pointer.menuBegan(with: (note.userInfo?[AtticGlassMenu.openerKey] as? NSEvent) ?? NSApp.currentEvent)
         }
         .onChange(of: model.tab) { _, _ in
+            IdleLatencyTrace.point("task_tab_observed")
             cancelTransientState()
             // Each page keeps its own query; the field lets the keyboard go
             // with the page it searched (read when the change lands: a
@@ -543,7 +544,9 @@ struct TasksPage: View {
             focusedRow = nil
             // A tab, a key, ⌘1–3, `show` or Search: the page goes straight
             // there. A swipe's own live tab leaves the page with the fingers.
-            if !swipe.isTracking { model.showPagerPage() }
+            if !swipe.isTracking {
+                IdleLatencyTrace.span("task_tab_showPagerPage") { model.showPagerPage() }
+            }
         }
         // What the scroll monitor reads that lives in the view.
         .onChange(of: design.reduceMotion, initial: true) { _, reduced in swipe.reduced = reduced }
@@ -2053,6 +2056,7 @@ struct TasksPage: View {
         }
         model.click(id, modifiers: modifiers, visible: visibleIDs())
         setFocus(id)
+        IdleLatencyTrace.point("task_row_selected")
     }
 
     /// What a row offers, decided once for the keys, the circle, VoiceOver
