@@ -426,7 +426,7 @@ enum AtticDropdownMetrics {
     static let inset: CGFloat = AtticRadius.menuPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// Shapes: concentric with the 16 pt card (13 pt).
+    /// The picker rows retain their 13 pt radius inside the 18 pt Loam card.
     static let highlightRadius: CGFloat = AtticRadius.menuRow
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 14
