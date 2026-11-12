@@ -3301,16 +3301,17 @@ final class TaskStore: ObservableObject {
         guard let task = task(withID: taskID) else { return false }
         guard task.status != .done else { return true }
         let owner = familyOwner(of: task)
+        let retainedEdits = RetainedTaskEdits()
         let changed: Bool
         do {
-            changed = try stageCompleteFamily(task)
+            changed = try stageCompleteFamily(task, retaining: retainedEdits)
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             try? reloadTasks()
             report(error, owner: owner)
             return false
         }
-        return changed ? save(owner: owner) : true
+        return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
     /// Stages `completeFamily` without saving. The subtasks are resolved
@@ -3495,12 +3496,14 @@ final class TaskStore: ObservableObject {
         siblings.remove(at: index)
         siblings.insert(task, at: destination)
         let timestamp = now()
+        let retainedEdits = RetainedTaskEdits()
         do {
             if let order = sparseManualOrder(at: destination, in: siblings) {
                 let shown = TaskContentSnapshot(task)
                 // Every physical replica is captured for the write gate
                 // before it changes, as `assignSpacedManualOrders` does.
                 let replicas = try storedTasks(matching: taskID)
+                retainedEdits.capture([task] + replicas)
                 WorkspaceLegacyBridge.captureBeforeMutations([task] + replicas, in: context)
                 WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
                 for replica in replicas {
@@ -3510,15 +3513,15 @@ final class TaskStore: ObservableObject {
                     if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             } else {
-                try assignSpacedManualOrders(to: siblings, updatedAt: timestamp)
+                try assignSpacedManualOrders(to: siblings, updatedAt: timestamp, retaining: retainedEdits)
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             refresh()
             report(error.localizedDescription, owner: owner)
             return false
         }
-        return save(owner: owner)
+        return save(owner: owner, retaining: retainedEdits)
     }
 
     // MARK: - Control audit item 5: Move to Task… and Make Standalone Task
@@ -3849,17 +3852,20 @@ final class TaskStore: ObservableObject {
         group.insert(movedTask, at: destinationIndex)
 
         let timestamp = now()
+        let retainedEdits = RetainedTaskEdits()
+        retainedEdits.capture(task)
         do {
-            try stageOrder(of: task, at: destinationIndex, in: group, updatedAt: timestamp)
+            try stageOrder(of: task, at: destinationIndex, in: group, updatedAt: timestamp,
+                           retaining: retainedEdits)
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             // refresh() clears the notice on success, so the reorder failure
             // is reported after it, with the surface the row belongs to.
             refresh()
             report(error.localizedDescription, owner: owner)
             return false
         }
-        return save(owner: owner)
+        return save(owner: owner, retaining: retainedEdits)
     }
 
     /// Writes `task`'s new place, `index` in `group` (already in its new
