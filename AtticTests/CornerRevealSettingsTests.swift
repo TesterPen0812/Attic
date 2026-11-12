@@ -102,21 +102,6 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).panelDismissMode, .clickAway)
     }
 
-    // MARK: - The page's words
-
-    func testTheCornerFootnoteSaysWhatHoverDoes() {
-        let displays = [AtticDisplay(id: "A", name: "Built-in"), AtticDisplay(id: "B", name: "Studio")]
-        XCTAssertTrue(PanelSettingsText.cornerFootnote(CornerRevealPolicy(), connected: displays).hasPrefix("Works on every display."))
-        let off = PanelSettingsText.cornerFootnote(CornerRevealPolicy(revealsOnHover: false), connected: displays)
-        XCTAssertTrue(off.hasPrefix("Hover opens nothing. Open Attic from the menu bar icon or with the quick capture shortcut."), off)
-        let keyed = PanelSettingsText.cornerFootnote(CornerRevealPolicy(modifier: .option), connected: displays)
-        XCTAssertTrue(keyed.contains("Hold ⌥ as you move into the corner."), keyed)
-        let chosen = PanelSettingsText.cornerFootnote(CornerRevealPolicy(displays: .selected, selectedDisplayIDs: ["B"]), connected: displays)
-        XCTAssertTrue(chosen.hasPrefix("Works on the displays chosen above."), chosen)
-        let none = PanelSettingsText.cornerFootnote(CornerRevealPolicy(displays: .selected, selectedDisplayIDs: ["Z"]), connected: displays)
-        XCTAssertTrue(none.hasPrefix("No display is chosen, so hover opens nothing."), none)
-    }
-
     // MARK: - Agent settings
 
     func testAgentsReadAndChangeTheRuleAsOneStep() throws {

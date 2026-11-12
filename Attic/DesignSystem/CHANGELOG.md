@@ -1,3 +1,10 @@
+## 2026-11-12 · Retired unused Notes line and chat motion tokens
+
+Removed the test-only `AtticNoteLibraryLine` and `AtticChatMotion` table.
+The live Notes library and agent chat use their own views and motion values;
+their appearance and motion are unchanged. Older entries below record the
+original introductions.
+
 ## 2026-11-11 · SA-4 Settings connection hint contrast
 
 Only the italic connection hint in the Settings sidebar uses its own text ink,

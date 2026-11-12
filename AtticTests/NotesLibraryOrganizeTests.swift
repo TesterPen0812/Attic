@@ -247,14 +247,6 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertNil(NoteStore.searchedDay("meet on 1 October 2026"), "words around a date stay a text search")
     }
 
-    /// Review S4-R3: a long active tag is shortened, never pushing More
-    /// tags… and the magnifier out of the panel.
-    func testALongTagIsShortenedOnTheTopLine() {
-        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("launch"), "#launch")
-        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("abcdefghijklmnop"), "#abcdefghijklmnop", "16 fit")
-        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("abcdefghijklmnopq"), "#abcdefghijklmno…")
-    }
-
     func testARowsTagsMenuFiltersToATagAndTicksTheActiveOne() {
         var chosen: [String?] = []
         let menu = NotesLibraryView.tagsSubmenu(tags: ["launch", "work"], activeTag: "work") { chosen.append($0) }

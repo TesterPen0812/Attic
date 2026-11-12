@@ -45,8 +45,6 @@ struct AtticApp: App {
         if startup.failureMessage != nil { return "Attic — local data unavailable" }
         #if ATTIC_DAILY
         return "Attic Daily"
-        #elseif ATTIC_GLASSMORPHISM_PREVIEW
-        return "Attic Glassmorphism"
         #elseif ATTIC_LOCAL_ONLY
         return "Attic Notes Local"
         #else
@@ -56,9 +54,7 @@ struct AtticApp: App {
 
     private var menuBarSystemImage: String {
         if startup.failureMessage != nil { return "exclamationmark.triangle" }
-        #if ATTIC_GLASSMORPHISM_PREVIEW
-        return "circle.lefthalf.filled"
-        #elseif ATTIC_LOCAL_ONLY
+        #if ATTIC_LOCAL_ONLY
         return "note.text"
         #else
         return "eye"

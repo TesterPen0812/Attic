@@ -683,23 +683,6 @@ enum AtticReducedMotionStyle: String, CaseIterable, Sendable {
     nonisolated(unsafe) static var current: AtticReducedMotionStyle = .default
 }
 
-/// The chat's motion, Attic's one named exception to the scale (drawn on
-/// purpose, 6 Nov: "the blur opens from the ✦"): the numbers the chat's
-/// own code uses, named here so the token table lists them. Unchanged.
-enum AtticChatMotion {
-    /// The blur opening from the ✦: 0.62 s on the chrome fold's curve.
-    static let opening: Double = 0.62
-    /// The blur closing: 0.40 s, easing in.
-    static let closing: Double = 0.40
-    /// The thread's pieces arriving: 0.42 to 0.56 s, some overshooting
-    /// on (.3, 1.6–1.8, .5, 1).
-    static let threadArrival: ClosedRange<Double> = 0.42...0.56
-    /// Scrolling to the end of the thread.
-    static let scrollToEnd: Double = 0.25
-    /// The ✦ grows on hover.
-    static let sparkHoverScale: CGFloat = 1.14
-}
-
 /// The search takeover, one recipe for Tasks and All notes (A4 M-01; the
 /// owner: Notes' search must move exactly as Tasks' does): the field comes
 /// in from the magnifier's end, 12 pt, growing from the feel's appear scale

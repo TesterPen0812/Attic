@@ -2,32 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct TaskImageThumbnail: View {
-    let reference: TaskImageReference
-    let files: TaskImageFiles
-    var pixels = 96
-    @State private var image: NSImage?
-
-    var body: some View {
-        ZStack {
-            Color.primary.opacity(0.06)
-            if let image {
-                Image(nsImage: image).resizable().scaledToFill()
-            } else {
-                Image(systemName: "photo").font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-        }
-        .clipped()
-        .task(id: reference.digest) {
-            let data = try? await files.thumbnail(reference, pixels: pixels)
-            guard !Task.isCancelled else { return }
-            image = data.flatMap(NSImage.init(data:))
-            if let image { TaskThumbnailMemory.remember(image, for: reference.digest) }
-        }
-        .accessibilityLabel(reference.filename)
-    }
-}
-
 /// Thumbnails already drawn, by file digest, for what has to be drawn at
 /// once (a file's drag picture, O17-16). Bounded; the system may empty it.
 @MainActor
