@@ -95,6 +95,11 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         super.init(frame: CGRect(origin: .zero, size: model.boardSize))
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        // The committed raster and the live overlays span the whole drawing,
+        // well past the board. A page switch carries the board a panel width
+        // aside while it stays opaque, so unclipped they were drawn over the
+        // page coming in (owner, 12 Nov). Nothing belongs outside the board.
+        clipsToBounds = true
         for sublayer in [dotsLayer, committedLayer, detailLayer, worldLayer] {
             sublayer.anchorPoint = .zero
             sublayer.position = .zero
