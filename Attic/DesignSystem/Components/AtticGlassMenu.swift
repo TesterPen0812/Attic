@@ -1346,28 +1346,21 @@ enum AtticMenuLook {
 
     static func outline(dark: Bool) -> AtticRGBA { .black(dark ? 0.85 : 0.30) }
 
-    /// The system menu's glass: `NSGlassEffectView`, regular, with the
-    /// "menu" sub-variant `NSMenu` sets (private; skipped if a future macOS
-    /// drops it, leaving plain regular glass). Measured over one window on
-    /// macOS 27: plain regular 230 Light / 69 Dark, "menu" 243 / 43, the
-    /// real menu 254 / 59; `lift` closes the rest.
+    /// Liquid Glass: `NSGlassEffectView`, regular, untinted, nothing over
+    /// it. Over bold stripes on macOS 27 this is the one that lets colour
+    /// through like the real `NSMenu` does (12 Nov). NSMenu's private "menu"
+    /// sub-variant, used outside a real menu window, frosts to a pale fog,
+    /// and the white wash used to match the menu's brightness over light
+    /// backgrounds hid the glass (owner: "but are they glass?").
     static func glass(frame: NSRect, cornerRadius: CGFloat) -> NSGlassEffectView {
         let glass = NSGlassEffectView(frame: frame)
         glass.style = .regular
         glass.cornerRadius = cornerRadius
-        if glass.responds(to: NSSelectorFromString("set_subvariant:")) {
-            glass.setValue("menu", forKey: "_subvariant")
-        }
-        if glass.responds(to: NSSelectorFromString("set_variant:")) { glass.setValue(0, forKey: "_variant") }
-        if glass.responds(to: NSSelectorFromString("set_adaptiveAppearance:")) { glass.setValue(1, forKey: "_adaptiveAppearance") }
         return glass
     }
 
-    /// White over the glass, up to the real menu's brightness. Light: the
-    /// menu is near-white over anything (254); 80 % white takes the "menu"
-    /// glass from 243 to 253. Dark: the menu reads 45 over the Attic panel
-    /// (where these cards open) against the glass's 41; 2 % white.
-    static func lift(dark: Bool) -> AtticRGBA { .white(dark ? 0.02 : 0.80) }
+    /// Nothing over the glass.
+    static func lift(dark: Bool) -> AtticRGBA { .white(0) }
 }
 
 /// The system menu's glass in SwiftUI (the picker cards).

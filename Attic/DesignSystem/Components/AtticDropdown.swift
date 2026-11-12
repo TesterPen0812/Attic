@@ -66,7 +66,7 @@ struct AtticDropdownSurface: View {
 
 /// The card's face (owner, 12 Nov: the system menu's Liquid Glass on
 /// Attic's card): the menu's own glass (`AtticMenuLook.glass`), with the
-/// lift to the system menu's brightness; the outline and shadow are the surface's.
+/// nothing over it; the outline and shadow are the surface's.
 /// Solid and Reduce Transparency keep the opaque `popoverFill`.
 struct AtticGlassCardFace<S: Shape>: View {
     let shape: S
