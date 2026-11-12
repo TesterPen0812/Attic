@@ -1328,7 +1328,9 @@ enum AtticMenuSurfaceSeam {
     nonisolated static let flags: Set<String> = []
     #endif
     nonisolated static var interiorShadow: Bool { flags.contains("inshadow") }
-    nonisolated static var cutsPanel: Bool { !flags.contains("nocut") }
+    /// Off with Craft's frosted face (12 Nov quick look): the card blurs
+    /// what lies under it, the panel included, as Craft's does.
+    nonisolated static var cutsPanel: Bool { flags.contains("cut") }
     nonisolated static var cardSizedGlass: Bool { flags.contains("cardsize") }
 }
 
@@ -1518,21 +1520,14 @@ private final class AtticGlassMenuRootView: NSView {
     }
 }
 
-/// The card's face: the panel's own surface (owner, 12 Nov: "the same
-/// material as the panel"), drawn by the panel's path
-/// (`AtticSurfaceBackground` on `tokens.panel`, as the island wears it):
-/// the native material on Glass and Frosted at the panel's footprint, its
-/// foundation, and the Tint; the flat base on Solid and under Reduce
-/// Transparency. Its own window keeps it separate from the panel's
-/// container; the shape, rim and rows stay the menus' own.
+/// The card's face: Craft's frosted glass (`AtticCraftCardFace`, owner's
+/// 12 Nov quick look), with the menus' own shape, rim and rows.
 struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
-    @Environment(\.atticPanelSurfaceSize) private var panelSize
 
     var body: some View {
         let shape = AtticGlassMenuShape.card
-        AtticSurfaceBackground(model: style.tokens.panel, shape: shape,
-                               nativeGlassSize: AtticMenuSurfaceSeam.cardSizedGlass ? nil : panelSize)
+        AtticCraftCardFace(shape: shape, tokens: style.tokens, dark: style.dark)
             .environment(\.atticDesign, style.design)
             .overlay {
                 shape.inset(by: style.rimWidth / 2)

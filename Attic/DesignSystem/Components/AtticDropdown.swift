@@ -29,20 +29,15 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: the panel's own material (owner, 12 Nov: "the same
-/// material as the panel"; the picker cards keep the glass menu's shell,
-/// Accepted 2026-11-10), drawn by the panel's path (`AtticSurfaceBackground`
-/// on `tokens.panel` at the panel's native footprint, as the command menus'
-/// `AtticGlassMenuSurface` and the island draw it), with its rim (1 pt under Increase Contrast) and soft shadow, in the
-/// menus' 18 pt squircle. The command menus' glass is `AtticGlassMenu`'s
-/// own.
+/// The card's face: Craft's frosted glass (`AtticCraftCardFace`, owner's
+/// 12 Nov quick look), with its rim (1 pt under Increase Contrast) and soft
+/// shadow, in the menus' 18 pt squircle.
 ///
 /// While the card fades in or out (`AtticDropdownReveal`) the face goes
 /// with it, as one piece.
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticUnfold) private var unfold
-    @Environment(\.atticPanelSurfaceSize) private var panelSize
 
     var body: some View {
         let tokens = design.tokens
@@ -55,7 +50,7 @@ struct AtticDropdownSurface: View {
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            AtticSurfaceBackground(model: tokens.panel, shape: shape, nativeGlassSize: panelSize)
+            AtticCraftCardFace(shape: shape, tokens: tokens, dark: design.mode == .dark)
             if AtticSurfaceInk.seeThrough(tokens) {
                 shape.inset(by: edge / 2).stroke((design.increaseContrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark)
                                                   : tokens.dropdownRim).color, lineWidth: edge)
@@ -66,6 +61,33 @@ struct AtticDropdownSurface: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Craft's card face (owner, 12 Nov, a quick look to judge: "we already
+/// had the craft ones, can we have that again"): regular Liquid Glass
+/// under a near-opaque neutral frost, so whatever lies behind shows only
+/// as faint blurred smudges. Craft's card reads 248 over its white page
+/// with ghost text at 235–239; 86 % of 248 over the glass lands there.
+/// Solid and Reduce Transparency keep the opaque `popoverFill`.
+struct AtticCraftCardFace<S: Shape>: View {
+    let shape: S
+    let tokens: AtticColorTokens
+    let dark: Bool
+
+    static func frost(dark: Bool) -> AtticRGBA {
+        (dark ? AtticRGBA(0x2C2C2E) : AtticRGBA(0xF8F8F8)).withAlpha(0.86)
+    }
+
+    var body: some View {
+        if AtticSurfaceInk.seeThrough(tokens) {
+            ZStack {
+                Color.clear.glassEffect(.regular, in: shape)
+                shape.fill(Self.frost(dark: dark).color)
+            }
+        } else {
+            shape.fill(tokens.popoverFill.color)
+        }
     }
 }
 
