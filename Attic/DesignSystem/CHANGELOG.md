@@ -1,3 +1,9 @@
+## 2026-11-12 · Unified row deletion exit
+
+Notes library rows, Notes board cards and the dormant Completed today rows
+share Tasks' 0.12 s ease-in, 0.96 shrink and 60 ms delayed gap close. Their
+previous entrance motions remain in place, as do the reduced-motion fades.
+
 ## 2026-11-12 · Retired unused Notes line and chat motion tokens
 
 Removed the test-only `AtticNoteLibraryLine` and `AtticChatMotion` table.

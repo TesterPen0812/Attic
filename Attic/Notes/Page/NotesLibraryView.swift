@@ -463,16 +463,20 @@ struct NotesLibraryView: View {
                                         .id(row.id)
                                         .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                                         .atticContextMenu { rowCommands(row.id) }
-                                        // Delete and restore: the row folds away or springs back.
-                                        .transition(design.reduceMotion ? .opacity
-                                            : .opacity.combined(with: .move(edge: .leading)))
+                                        // Keep this row's original entrance; deletion shares Tasks' exit.
+                                        .transition(.asymmetric(
+                                            insertion: design.reduceMotion ? .opacity
+                                                : .opacity.combined(with: .move(edge: .leading)),
+                                            removal: AtticMotionScale.deleteExit(reduceMotion: design.reduceMotion)))
                                         .accessibilityIdentifier("notes-library-row")
                                 }
                             }
                         }
                     }
-                    .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
-                               value: model.orderedIDs(model.unfolded(groups)))
+                    .modifier(AtticDeleteGapMotion(
+                        ids: model.orderedIDs(model.unfolded(groups)),
+                        travel: AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
+                        isDeleted: { store.note(withID: $0) == nil }))
                 }
             }
             .contentMargins(.top, restTop, for: .scrollContent)
