@@ -80,6 +80,47 @@ final class AtticGlassMenuTests: XCTestCase {
         card.entries.firstIndex { if case let .item(command) = $0.kind { return command.title == title } else { return false } }!
     }
 
+    func testCommandMenuOpenersExposeExactAccessibleNames() throws {
+        let labels = ["Add a task, note or file", "Alignment, Left", "Chats"]
+        let command = [AtticMenuCommand(verbatim: "Example") {}]
+        let root = VStack(spacing: 10) {
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[0]) { Image(systemName: "plus") }
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[1]) { Text("Left") }
+            AtticCommandMenu(commands: command, accessibilityLabel: labels[2]) { Image(systemName: "clock") }
+        }
+        .frame(width: 320, height: 140)
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: -6000, width: 320, height: 140),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: root)
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        var seen = Set<ObjectIdentifier>()
+        var named = [String]()
+        func walk(_ node: AnyObject) {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return }
+            if node.accessibilityRole?() == .menuButton {
+                let label = node.accessibilityLabel?() ?? ""
+                XCTAssertFalse(label.isEmpty, "Every AXMenuButton needs a label")
+                named.append(label)
+            }
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+        }
+        walk(try XCTUnwrap(window.contentView))
+        XCTAssertEqual(named.count, labels.count, "Every command menu has one accessible opener")
+        XCTAssertEqual(Set(named), Set(labels), "icon-only, text and history menu openers are named")
+    }
+
     // MARK: Layout
 
     func testTheLayoutIsLoamsRowsSeparatorsAndTitlesWithShortcutsAtTheEnd() {
