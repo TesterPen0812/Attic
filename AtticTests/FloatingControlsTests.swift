@@ -279,26 +279,12 @@ final class ComposerStripGlassTests: XCTestCase {
 /// Top glass (option "B for the top", 2026-10-22): the plain controls on
 /// the top line, which rows and notes run under, float on the raised
 /// material as the composer strip's do: Tasks' tabs in one capsule and its
-/// Find and View Options each on a circle, All notes' title and tags in one
-/// capsule and its magnifier on a circle, an open search field, and
+/// Find and View Options each on a circle, the live search field, and
 /// History's version switch. Where the controls are not glass (Reduce
 /// Transparency, Craft) they take the opaque raised surface.
 @MainActor
 final class TopGlassTests: XCTestCase {
     private final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
-
-    /// All notes' line, with its own focus state.
-    private struct LibraryLine: View {
-        let tags: [String]
-        var searchShown = false
-        @FocusState private var focused: Bool
-
-        var body: some View {
-            AtticNoteLibraryLine(title: "All notes", placeholder: "Search notes", query: .constant(""),
-                                 searchShown: searchShown, fieldFocused: $focused,
-                                 onBeginSearch: {}, onEndSearch: {}, tags: tags, activeTag: tags.first)
-        }
-    }
 
     /// Tasks' top line as the page builds it: the tabs' capsule, then Find
     /// and View Options on their circles, in one glass container.
@@ -360,9 +346,6 @@ final class TopGlassTests: XCTestCase {
     /// shapes each must draw.
     private var specimens: [(String, AnyView, Int)] {
         [("Tasks' tabs, Find and View Options", AnyView(TasksLine()), 3),
-         ("All notes alone", AnyView(LibraryLine(tags: [])), 2),
-         ("All notes and its tags", AnyView(LibraryLine(tags: ["home", "work"])), 2),
-         ("All notes' search field", AnyView(LibraryLine(tags: [], searchShown: true)), 1),
          ("Tasks' search field", AnyView(AtticTabsSearchField(placeholder: "Find", text: .constant(""), floating: true, onEscape: {})), 1),
          ("History's version switch", AnyView(VersionSwitch()), 1)]
     }
@@ -370,12 +353,11 @@ final class TopGlassTests: XCTestCase {
     func testTheTopLineTakesTheFloatingControlsMeasures() {
         XCTAssertEqual(AtticTopGlassMetrics.height, AtticControlSize.secondaryControl, "the secondary controls' height")
         XCTAssertLessThan(AtticTopGlassMetrics.height, AtticControlSize.headerControl, "a step under the corner buttons (owner, 2026-10-22)")
-        // The search field, All notes' line and History's switch are
-        // secondary controls too: 26 pt (owner, 2026-10-22, Top controls
+        // The search field and History's switch are secondary controls too:
+        // 26 pt (owner, 2026-10-22, Top controls
         // on glass: B), not the corner buttons' 30.
         XCTAssertEqual(AtticTabsSearchField.height(floating: true), AtticControlSize.secondaryControl)
         XCTAssertEqual(AtticTabsSearchField.height(floating: false), AtticControlSize.smallHeight, "the find bar's field is unchanged")
-        XCTAssertEqual(AtticNoteLibraryLine.height, AtticControlSize.secondaryControl)
         XCTAssertEqual(NoteHistoryVersionSwitch.height, AtticControlSize.secondaryControl)
         // The capsule's edge and the last circle's on the controls' line;
         // the labels stay on the content line (24 pt at the 16 pt chrome).

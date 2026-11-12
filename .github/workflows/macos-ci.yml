@@ -409,7 +409,10 @@ jobs:
         id: dropdown_tests
         if: always() && steps.strict_build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 10
+        # The xcodebuild lock can queue for ~6.5 min (11 Nov) before the
+        # timing tests even start. Allow 10 min for the tests plus a bounded
+        # 10 min lock wait; otherwise a healthy test is reported as timed out.
+        timeout-minutes: 20
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         run: |

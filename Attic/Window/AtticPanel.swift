@@ -594,7 +594,12 @@ final class AtticPanel: NSPanel {
         guard let contentView else { return false }
         var view = contentView.hitTest(contentView.convert(windowPoint, from: nil))
         while let candidate = view {
-            if candidate is CanvasNSView || candidate is NSControl { return true }
+            if candidate is CanvasNSView { return true }
+            // Buttons and static labels do not own horizontal scrolling. A
+            // broad NSControl check swallowed panel swipes that began above
+            // the header after the first reveal.
+            if let field = candidate as? NSTextField, field.isEditable { return true }
+            if candidate is NSSlider { return true }
             if let owner = candidate as? AtticHorizontalScrollOwner, owner.ownsHorizontalScroll(beginningAt: windowPoint) { return true }
             if let scroll = candidate as? NSScrollView,
                let document = scroll.documentView,

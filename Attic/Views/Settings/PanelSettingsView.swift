@@ -151,31 +151,6 @@ struct PanelSettingsView: View {
     }
 }
 
-/// The Corner group's words, pure so they are unit-tested.
-enum PanelSettingsText {
-    static func cornerFootnote(_ policy: CornerRevealPolicy, connected: [AtticDisplay]) -> String {
-        let gestures = String(localized: "Drag the panel's top edge to another corner, or swipe two fingers toward the screen edge to hide it.")
-        guard policy.revealsOnHover else {
-            return String(localized: "Hover opens nothing. Open Attic from the menu bar icon or with the quick capture shortcut.") + " " + gestures
-        }
-        var sentences: [String] = []
-        switch policy.displays {
-        case .all:
-            sentences.append(String(localized: "Works on every display."))
-        case .selected:
-            let chosen = connected.filter { policy.selectedDisplayIDs.contains($0.id) }.count
-            sentences.append(chosen == 0
-                ? String(localized: "No display is chosen, so hover opens nothing. The menu bar icon still does.")
-                : String(localized: "Works on the displays chosen above."))
-        }
-        if let symbol = policy.modifier.symbol {
-            sentences.append(String(localized: "Hold \(symbol) as you move into the corner."))
-        }
-        sentences.append(gestures)
-        return sentences.joined(separator: " ")
-    }
-}
-
 enum PanelSettingsRanges {
     static let revealDelay: ClosedRange<Double> = 0.2...2.0
     static let hideDelay: ClosedRange<Double> = 0.1...2.0
