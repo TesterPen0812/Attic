@@ -556,6 +556,12 @@ final class AgentActions {
         let priorTargets = targetsForArguments(name, arguments)
         let noteBefore = ["update_note", "update_note_table"].contains(name)
             ? noteSnapshot(for: arguments) : nil
+        let noteBeforeSeal = noteBefore.flatMap { before -> (id: UUID, revision: String, metadata: String)? in
+            guard let store = tasks.noteStore,
+                  let revision = store.note(withID: before.id)?.revisionToken,
+                  let metadata = store.agentCreatedNoteMetadata(before.id) else { return nil }
+            return (before.id, revision, metadata)
+        }
         let taskBefore = name == "update_task"
             ? (arguments["id"] as? String).flatMap(UUID.init(uuidString:)).flatMap(taskSnapshot)
             : nil
@@ -568,7 +574,7 @@ final class AgentActions {
                 batchTaskBefore[id] = snapshot
             }
         }
-        if Self.isMutation(name) {
+        if Self.isMutation(name) && !name.hasPrefix("draw_") {
             try recordMutationIntent(name, arguments: arguments, requestID: requestID)
         }
         var step: AgentStep
@@ -602,7 +608,9 @@ final class AgentActions {
                 }
             }
         } else if name.hasPrefix("draw_") {
-            let result = try drawAction(name, arguments)
+            let result = try drawAction(name, arguments) {
+                try recordMutationIntent(name, arguments: arguments, requestID: requestID)
+            }
             text = result.0; step = result.1
             if let snapshot = result.2 {
                 if let undoID = draw?.undoStepID(on: snapshot.canvas.id) {
@@ -616,10 +624,34 @@ final class AgentActions {
                 }
             }
         } else {
-            text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
-                try await tasks.callAsync(name: name, arguments: arguments)
-            } else {
-                try tasks.call(name: name, arguments: arguments)
+            do {
+                text = if AgentTaskTools.asyncToolNames.contains(name), tasks.notesController != nil {
+                    try await tasks.callAsync(name: name, arguments: arguments)
+                } else {
+                    try tasks.call(name: name, arguments: arguments)
+                }
+            } catch {
+                // A rejected edit may be safely unblocked only when the full
+                // persisted item family and every owner Undo head are unchanged.
+                // Otherwise retain the intent: a store write could have landed.
+                let historiesUnchanged = route.retainedHistories.count == before.count &&
+                    route.retainedHistories.allSatisfy {
+                        route.steps(in: $0, redo: false).map(\.id) == before[$0]
+                    }
+                let taskUnchanged = taskBefore.map { original in
+                    guard let current = taskSnapshot(original.state.id) else { return false }
+                    return current.state == original.state && current.proof == original.proof
+                } ?? false
+                let noteUnchanged = noteBeforeSeal.map { original in
+                    tasks.noteStore?.agentCreatedNoteIsUnchanged(original.id,
+                        revision: original.revision, metadata: original.metadata) == true
+                } ?? false
+                if historiesUnchanged && (name == "update_task" && taskUnchanged ||
+                     ["update_note", "update_note_table"].contains(name) && noteUnchanged) {
+                    pendingActions[requestID] = nil
+                    try saveJournal()
+                }
+                throw error
             }
             let targets = Self.targetsFromResponse(text, name: name, arguments: arguments)
             step = AgentStep(id: UUID(), title: Self.stepTitle(name, arguments),

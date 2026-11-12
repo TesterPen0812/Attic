@@ -1815,6 +1815,92 @@ final class AgentActionsTests: XCTestCase {
             .contains(where: { $0.title == "Untracked" }))
     }
 
+    func testRejectedDrawEditDoesNotStrandDurableUndoOrBlockLaterChanges() async throws {
+        let tasks = try makeTestStore()
+        let draw = DrawInMemoryStore()
+        let canvas = draw.create(name: "Owner canvas")
+        let journalURL = ownedTemporaryDirectory(prefix: "AgentRejectedDraw").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   draw: draw, journalURL: journalURL)
+        let request = actions.beginRequest(title: "Continue after rejected Draw edit")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "First"],
+                                             watching: false, requestID: request))
+        do {
+            _ = try await actions.call(name: "draw_rename_canvas", arguments: [
+                "canvas_id": canvas.id.uuidString, "expected_name": "Stale canvas name", "name": "Agent rename"
+            ], watching: false, requestID: request)
+            XCTFail("A stale Draw edit must be refused")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("changed"), "\(error)")
+        }
+        XCTAssertEqual(try draw.open(canvas.id).canvas.name, "Owner canvas")
+        do {
+            _ = try await actions.call(name: "draw_rename_canvas", arguments: [
+                "canvas_id": canvas.id.uuidString, "expected_name": "Owner canvas", "name": " Owner canvas "
+            ], watching: false, requestID: request)
+            XCTFail("A no-op Draw rename must be rejected without leaving a pending mutation")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("already"), "\(error)")
+        }
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Second"],
+                                             watching: false, requestID: request))
+        XCTAssertEqual(actions.changeSet(for: request)?.count, 2)
+
+        let freshTasks = TaskStore(container: tasks.container)
+        let recovered = AgentActions(tasks: AgentTaskTools(store: freshTasks,
+            library: AtticLibrary(tasks: freshTasks)), draw: draw, journalURL: journalURL)
+        XCTAssertTrue(recovered.canRecoverUndo(request))
+        let undo = await recovered.undo(changeSet: request)
+        XCTAssertEqual(undo.undone, 2)
+        XCTAssertTrue(undo.failures.isEmpty, "\(undo.failures)")
+        XCTAssertTrue(freshTasks.tasks.isEmpty)
+    }
+
+    func testRejectedTaskEditDoesNotStrandOtherAgentChanges() async throws {
+        let tasks = try makeTestStore()
+        let library = AtticLibrary(tasks: tasks)
+        let taskID = try XCTUnwrap(library.createTasks([TaskDraft(title: "Owner task")])?.first?.id)
+        let journal = ownedTemporaryDirectory(prefix: "AgentRejectedTask").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: library), journalURL: journal)
+        let request = actions.beginRequest(title: "Invalid task edit")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Agent first"],
+                                             watching: false, requestID: request))
+        do {
+            _ = try await actions.call(name: "update_task", arguments: [
+                "id": taskID.uuidString, "title": "   "
+            ], watching: false, requestID: request)
+            XCTFail("A blank title must be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("non-empty"), "\(error)")
+        }
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, "Owner task")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Agent second"],
+                                             watching: false, requestID: request))
+        XCTAssertEqual(actions.changeSet(for: request)?.count, 2)
+    }
+
+    func testRejectedStaleNoteEditDoesNotStrandOtherAgentChanges() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let noteID = try XCTUnwrap(notes.create(title: "Owner note", body: "Owner body")?.id)
+        let journal = ownedTemporaryDirectory(prefix: "AgentRejectedNote").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes,
+            library: AtticLibrary(tasks: tasks, notes: notes)), journalURL: journal)
+        let request = actions.beginRequest(title: "Stale note edit")
+        do {
+            _ = try await actions.call(name: "update_note", arguments: [
+                "id": noteID.uuidString, "base_revision": "outdated-revision", "body": "Agent body"
+            ], watching: false, requestID: request)
+            XCTFail("A stale note revision must be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("changed"), "\(error)")
+        }
+        XCTAssertEqual(notes.note(withID: noteID)?.body, "Owner body")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Following task"],
+                                             watching: false, requestID: request))
+        XCTAssertEqual(actions.changeSet(for: request)?.count, 1)
+    }
+
     func testUnwritableUndoJournalRefusesMutationBeforeStoreCommit() async throws {
         let tasks = try makeTestStore()
         let root = ownedTemporaryDirectory(prefix: "AgentUnwritableUndo")
@@ -1834,6 +1920,189 @@ final class AgentActionsTests: XCTestCase {
         }
         XCTAssertFalse(try ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>())
             .contains(where: { $0.title == "No receipt" }))
+    }
+
+    /// Reproducible action sequences against real in-memory task/note/Draw stores,
+    /// including external owner writes, independent Undo stacks and new model
+    /// instances. A single bad seed prints its value and failing step.
+    func testSeededOwnerAndAgentInterleavingsAcrossEveryDomain() async throws {
+        struct Generator {
+            var state: UInt64
+            mutating func choose(_ count: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 32) % UInt64(count))
+            }
+        }
+        let seeds: [UInt64] = [0xA63E_1201, 0xD19F_7753]
+        for seed in seeds {
+            var generator = Generator(state: seed)
+            let initialTasks = try makeTestStore()
+            let container = initialTasks.container
+            let files = makeTestAttachmentFileStore()
+            let repository = DrawMemoryRepository()
+            let source = CalendarEventSourceStub()
+            let journal = ownedTemporaryDirectory(prefix: "AgentSequence-\(seed)")
+                .appendingPathComponent("undo.json")
+            var tasks = initialTasks
+            var notes = NoteStore(container: container, attachmentFileStore: files)
+            var library = AtticLibrary(tasks: tasks, notes: notes)
+            var draw = DrawStore(repository: repository)
+            let canvas = draw.create(name: "Seed \(seed) board")
+            XCTAssertTrue(draw.performAgent(.saveCanvas, on: canvas.id).isSaved)
+            let taskID = try XCTUnwrap(library.createTasks([TaskDraft(title: "Seed task")])?.first?.id)
+            let noteID = try XCTUnwrap(notes.create(title: "Seed note", body: "Initial body")?.id)
+            var actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes, library: library),
+                                       calendarSource: source, draw: draw, journalURL: journal)
+            var request = actions.beginRequest(title: "Seed \(seed) part 0")
+            var requests = [request]
+            var protectedTaskTitle: String?
+            var protectedNoteBody: String?
+            var protectedDrawObjects = Set<UUID>()
+            var ownerTaskUndoHead: UUID?
+            var ownerDrawUndoHead: UUID?
+            var lastOwnerDrawObjectID: UUID?
+            var agentUndoCount = 0
+            var ownerTaskUndoCount = 0
+            var ownerDrawUndoCount = 0
+            var reloadCount = 0
+            var counts = Array(repeating: 0, count: 12)
+
+            for step in 0..<240 {
+                let operation = generator.choose(12)
+                counts[operation] += 1
+                let previousCount = actions.changeSet(for: request)?.count ?? 0
+                switch operation {
+                case 0: // Agent task mutation
+                    let title = "Agent \(seed)-\(step)"
+                    _ = try performed(await actions.call(name: "update_task", arguments: [
+                        "id": taskID.uuidString, "title": title
+                    ], watching: false, requestID: request))
+                    protectedTaskTitle = nil
+                    ownerTaskUndoHead = nil
+                    XCTAssertEqual(tasks.task(withID: taskID)?.title, title, "seed \(seed) step \(step)")
+                    XCTAssertEqual(actions.changeSet(for: request)?.count, previousCount + 1)
+                case 1: // Owner changes the same task, without yielding ownership to agent Undo
+                    let title = "Owner \(seed)-\(step)"
+                    XCTAssertTrue(library.updateTask(taskID, title: title).isApplied, "seed \(seed) step \(step)")
+                    protectedTaskTitle = title
+                    ownerTaskUndoHead = library.undo.undoStepID(in: .tasks)
+                case 2: // Agent creates another physical task, one receipt per creation
+                    let title = "Extra \(seed)-\(step)"
+                    let created = try performed(await actions.call(name: "create_task", arguments: [
+                        "title": title
+                    ], watching: false, requestID: request))
+                    let id = try XCTUnwrap(created.step.targets.first?.itemID)
+                    XCTAssertEqual(tasks.task(withID: id)?.title, title)
+                    XCTAssertEqual(actions.changeSet(for: request)?.count, previousCount + 1)
+                case 3: // Agent edits a real note
+                    let body = "Agent note \(seed)-\(step)"
+                    _ = try performed(await actions.call(name: "update_note", arguments: [
+                        "id": noteID.uuidString, "body": body
+                    ], watching: false, requestID: request))
+                    protectedNoteBody = nil
+                    XCTAssertEqual(notes.note(withID: noteID)?.body, body)
+                    XCTAssertEqual(actions.changeSet(for: request)?.count, previousCount + 1)
+                case 4: // Owner edits the same note after the agent
+                    let body = "Owner note \(seed)-\(step)"
+                    XCTAssertTrue(notes.update(try XCTUnwrap(notes.note(withID: noteID)), body: body))
+                    protectedNoteBody = body
+                case 5: // Agent writes to Draw
+                    let before = try draw.open(canvas.id).objects.count
+                    _ = try performed(await actions.call(name: "draw_add_text", arguments: [
+                        "canvas_id": canvas.id.uuidString, "text": "Agent stroke \(step)",
+                        "x": Double(step), "y": Double(generator.choose(100))
+                    ], watching: false, requestID: request))
+                    ownerDrawUndoHead = nil
+                    XCTAssertEqual(try draw.open(canvas.id).objects.count, before + 1)
+                    XCTAssertEqual(actions.changeSet(for: request)?.count, previousCount + 1)
+                case 6: // Owner inserts a distinct Draw object; agent Undo must retain it
+                    let object = DrawObject(content: .text("Owner mark \(seed)-\(step)"))
+                    XCTAssertTrue(draw.perform(.put([object]), on: canvas.id).isSaved)
+                    protectedDrawObjects.insert(object.id)
+                    ownerDrawUndoHead = draw.undoStepID(on: canvas.id)
+                    lastOwnerDrawObjectID = object.id
+                case 7: // Read-only Calendar action never changes the receipt
+                    let result = try performed(await actions.call(name: "calendar_search", arguments: [
+                        "query": "Meeting"
+                    ], watching: false, requestID: request))
+                    XCTAssertEqual(try payload(result.text)["count"] as? Int, 0)
+                    XCTAssertEqual(actions.changeSet(for: request)?.count ?? 0, previousCount)
+                case 8: // Reverse the newest nonempty agent request, with owner's edits intact
+                    if let last = requests.reversed().first(where: { actions.changeSet(for: $0) != nil }),
+                       let before = actions.changeSet(for: last) {
+                        let result = await actions.undo(changeSet: last)
+                        agentUndoCount += result.undone
+                        XCTAssertEqual(before.count - result.undone, result.remaining?.count ?? 0,
+                                       "seed \(seed) step \(step): \(result.failures)")
+                    }
+                    request = actions.beginRequest(title: "Seed \(seed) after Undo \(step)")
+                    requests.append(request)
+                case 9: // Quit and reopen every store; action inverses are read from disk
+                    reloadCount += 1
+                    actions.sealRequest(request)
+                    tasks = TaskStore(container: container)
+                    notes = NoteStore(container: container, attachmentFileStore: files)
+                    library = AtticLibrary(tasks: tasks, notes: notes)
+                    draw = DrawStore(repository: repository)
+                    ownerTaskUndoHead = nil
+                    ownerDrawUndoHead = nil
+                    actions = AgentActions(tasks: AgentTaskTools(store: tasks, noteStore: notes, library: library),
+                                           calendarSource: source, draw: draw, journalURL: journal)
+                    request = actions.beginRequest(title: "Seed \(seed) after reload \(step)")
+                    requests.append(request)
+                case 10: // Owner Undo only its own newest history entry
+                    if let ownerTaskUndoHead,
+                       library.undo.undoStepID(in: .tasks) == ownerTaskUndoHead,
+                       library.undo.undo(in: .tasks) {
+                        ownerTaskUndoCount += 1
+                        protectedTaskTitle = nil
+                    }
+                    ownerTaskUndoHead = nil
+                    if generator.choose(2) == 0, let ownerDrawUndoHead,
+                       draw.undoStepID(on: canvas.id) == ownerDrawUndoHead,
+                       draw.undo(on: canvas.id).isSaved {
+                        ownerDrawUndoCount += 1
+                        if let lastOwnerDrawObjectID { protectedDrawObjects.remove(lastOwnerDrawObjectID) }
+                        lastOwnerDrawObjectID = nil
+                    }
+                    ownerDrawUndoHead = nil
+                default: // Multiple read domains must not create receipts
+                    let result = try performed(await actions.call(name: "draw_read_canvas", arguments: [
+                        "canvas_id": canvas.id.uuidString
+                    ], watching: false, requestID: request))
+                    XCTAssertNotNil(try payload(result.text)["objects"])
+                    XCTAssertEqual(actions.changeSet(for: request)?.count ?? 0, previousCount)
+                }
+
+                XCTAssertEqual(actions.journals[request]?.entries.count,
+                               actions.journals[request]?.changeSet.count,
+                               "seed \(seed) step \(step): mismatched receipt")
+                if let title = protectedTaskTitle {
+                    XCTAssertEqual(tasks.task(withID: taskID)?.title, title,
+                                   "seed \(seed) step \(step): agent Undo erased owner task edit")
+                }
+                if let body = protectedNoteBody {
+                    XCTAssertEqual(notes.note(withID: noteID)?.body, body,
+                                   "seed \(seed) step \(step): agent Undo erased owner note edit")
+                }
+                let currentDraw = try draw.open(canvas.id)
+                for ownerID in protectedDrawObjects {
+                    XCTAssertTrue(currentDraw.objects.contains(where: { $0.id == ownerID }),
+                                  "seed \(seed) step \(step): agent Undo erased owner Draw object")
+                }
+                XCTAssertNotNil(notes.note(withID: noteID), "seed \(seed) step \(step)")
+                if FileManager.default.fileExists(atPath: journal.path) {
+                    let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: journal))
+                    XCTAssertNotNil(stored as? [String: Any], "seed \(seed) step \(step): partial journal")
+                }
+            }
+            XCTAssertTrue(counts.allSatisfy { $0 > 0 }, "All action kinds must be exercised: \(counts)")
+            XCTAssertGreaterThan(agentUndoCount, 0, "seed \(seed): agent Undo never succeeded")
+            XCTAssertGreaterThan(ownerTaskUndoCount, 0, "seed \(seed): owner task Undo never ran")
+            XCTAssertGreaterThan(ownerDrawUndoCount, 0, "seed \(seed): owner Draw Undo never ran")
+            XCTAssertGreaterThan(reloadCount, 0, "seed \(seed): no quit/reload")
+            print("AGENT_HUNT_SEED=\(seed) STEPS=240 DISTRIBUTION=\(counts) AGENT_UNDO=\(agentUndoCount) OWNER_TASK_UNDO=\(ownerTaskUndoCount) OWNER_DRAW_UNDO=\(ownerDrawUndoCount) RELOADS=\(reloadCount)")
+        }
     }
 
 

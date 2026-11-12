@@ -278,6 +278,7 @@ final class AgentRunEngine: AgentRunning {
     private let describeContext: @MainActor (AgentRequestContext) -> String
     private let journalURL: URL
     private let history: AgentChatHistoryStore
+    private let journalIssue: String?
 
     private var archive: AgentRunArchive
     /// New chat while a run was still ending: it is kept and cleared once it ends.
@@ -323,9 +324,14 @@ final class AgentRunEngine: AgentRunning {
         let resolvedJournalURL = journalURL ?? Self.defaultJournalURL
         self.journalURL = resolvedJournalURL
         history = AgentChatHistoryStore(directory: Self.historyDirectory(beside: resolvedJournalURL))
-        archive = (try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: resolvedJournalURL)))
-            ?? AgentRunArchive()
-        if archive.activeRun != nil {
+        let loaded = try? JSONDecoder().decode(AgentRunArchive.self, from: Data(contentsOf: resolvedJournalURL))
+        journalIssue = FileManager.default.fileExists(atPath: resolvedJournalURL.path) && loaded == nil
+            ? "The saved agent chat journal is damaged or incompatible. Attic kept it for diagnosis; no new chat can overwrite it."
+            : nil
+        archive = loaded ?? AgentRunArchive()
+        if let journalIssue {
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: journalIssue))
+        } else if archive.activeRun != nil {
             archive.activeRun = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error",
                 text: "An agent run was interrupted. Review its changes before continuing."))
@@ -339,6 +345,7 @@ final class AgentRunEngine: AgentRunning {
 
     /// The thread keeps the text; the CLI gets the context before it.
     func send(_ text: String, context: AgentRequestContext, watching: Bool) -> AsyncStream<AgentEvent> {
+        if let journalIssue { return singleEvent(.failed(journalIssue)) }
         guard !isRunning else { return singleEvent(.failed("The agent is already answering.")) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return singleEvent(.failed("Write a message first."))
@@ -423,6 +430,7 @@ final class AgentRunEngine: AgentRunning {
     /// The current chat goes to history (once it has a message) and a new one
     /// starts. A run still ending is kept until its receipt is saved.
     func forgetThread() {
+        guard journalIssue == nil else { return }
         guard !isRunning else {
             forgetWhenEnded = true
             return
@@ -444,6 +452,7 @@ final class AgentRunEngine: AgentRunning {
     /// The chosen chat becomes the current one; the current one goes to history.
     /// Its sessions come with it, so the next message continues it.
     func reopen(chat id: UUID) -> Bool {
+        guard journalIssue == nil else { return false }
         guard !isRunning else { return false }
         if id == archive.id { return true }
         guard var chosen = history.load(id), keepCurrentInHistory() else { return false }
@@ -706,6 +715,7 @@ final class AgentRunEngine: AgentRunning {
 
     @discardableResult
     private func persist() -> Bool {
+        guard journalIssue == nil else { return false }
         do {
             let directory = journalURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
