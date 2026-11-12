@@ -27,6 +27,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     private var liveInk: DrawLiveInk?
     private var liveShape: CAShapeLayer?
     private var liveStartRevision = 0
+    private var liveStartCanvasID: UUID?
     /// Committed overlays waiting for a raster that includes their revision.
     private(set) var pendingOverlays: [(revision: Int, layer: CALayer)] = []
     private var requestedKey: DrawRasterKey?
@@ -400,6 +401,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
             if liveInk == nil || (trace.hasPressure && liveInk?.usesPressure == false) {
                 liveInk?.container.removeFromSuperlayer()
                 liveStartRevision = model.contentRevision
+                liveStartCanvasID = model.canvasID
                 let ink = DrawLiveInk(colour: DrawPalette(dark: isDark).cgColor(model.colour),
                                       width: CGFloat(model.strokeSize.strokeWidth), usesPressure: trace.hasPressure)
                 worldLayer.addSublayer(ink.container)
@@ -409,6 +411,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         case .shape(let kind, let start, let end):
             if liveShape == nil {
                 liveStartRevision = model.contentRevision
+                liveStartCanvasID = model.canvasID
                 let shapeLayer = CAShapeLayer()
                 shapeLayer.actions = Self.noActions
                 shapeLayer.fillColor = nil
@@ -433,12 +436,13 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         case nil:
             // Finished: a committed stroke or shape stays drawn live until
             // the raster with its revision is installed.
-            let committed = model.contentRevision > liveStartRevision
+            let committed = liveStartCanvasID == model.canvasID && model.contentRevision > liveStartRevision
             for finished in [liveInk?.container, liveShape].compactMap({ $0 }) {
                 if committed { pendingOverlays.append((model.contentRevision, finished)) } else { finished.removeFromSuperlayer() }
             }
             liveInk = nil
             liveShape = nil
+            liveStartCanvasID = nil
             updateSelection()
         }
     }

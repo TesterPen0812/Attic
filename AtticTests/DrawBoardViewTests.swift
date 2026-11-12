@@ -476,6 +476,22 @@ final class DrawBoardViewTests: XCTestCase {
         }
     }
 
+    func testHunt16DeletedCanvasNeverLeavesItsLiveInkOverlayOnNextBoard() throws {
+        let deletedID = try XCTUnwrap(model.canvasID)
+        let survivor = store.create(name: "Other drawing")
+        let object = DrawObject(frame: DrawFrame(x: 40, y: 130, width: 60, height: 30),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([object]), on: survivor.id).isSaved)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 110, y: 180))
+        model.pointerDragged(to: CGPoint(x: 145, y: 205))
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: deletedID).isSaved)
+        model.pointerUp(at: CGPoint(x: 160, y: 215))
+        XCTAssertEqual(model.canvasID, survivor.id)
+        XCTAssertTrue(board.pendingOverlays.isEmpty,
+                      "Live ink from a deleted canvas must never become an overlay on the surviving board")
+    }
+
     func testPressAfterAPanIsHandledAtOnce() {
         model.setTool(.pen)
         board.keyDown(with: key(.keyDown, " ", code: 49))
