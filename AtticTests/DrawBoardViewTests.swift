@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import XCTest
+import SwiftUI
 @testable import Attic
 
 /// The board's engine rules (Planning.md, Draw › Engine): input never rasters
@@ -750,5 +751,128 @@ final class DrawBoardViewTests: XCTestCase {
         board.keyDown(with: key(.keyDown, "r", code: 15))
         XCTAssertEqual(model.tool, .shape)
         XCTAssertEqual(model.shape, .rectangle)
+    }
+}
+
+/// Owner, 12 Nov: leaving Draw for another page showed Draw's strokes and
+/// shapes over that page for about a second. The page going out stays
+/// opaque while the switch's spring carries it a panel width aside
+/// (`PanelPageMotion.pageOpacityAnimation`), so anything the board draws
+/// outside its own frame lands on the page coming in. Hosted through
+/// SwiftUI as the panel hosts it, frame by frame along the real spring.
+@MainActor
+final class DrawPageSwitchBleedTests: XCTestCase {
+    private final class Travel: ObservableObject { @Published var x: CGFloat = 0 }
+
+    override func setUp() {
+        super.setUp()
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+    }
+
+    override func tearDown() {
+        AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
+        super.tearDown()
+    }
+
+    func testLeavingDrawNeverDrawsItsContentOverTheDestinationPage() throws {
+        let store = DrawInMemoryStore()
+        let model = DrawPageModel(store: store)
+        model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw-bleed-\(UUID().uuidString)"))
+        defer { model.setShown(false); model.pasteboard.releaseGlobally() }
+        let size = CGSize(width: 320, height: 460)
+        let travel = Travel()
+        struct Host: View {
+            let model: DrawPageModel
+            @ObservedObject var travel: Travel
+            var body: some View {
+                ZStack {
+                    Color.clear
+                    DrawBoardRepresentable(model: model, clearInsets: NSEdgeInsets())
+                        .modifier(PanelPageVisibility(isCurrent: true, restingOffset: 0, disablesWhenHidden: true))
+                        .offset(x: travel.x)
+                }
+            }
+        }
+        let hosting = NSHostingView(rootView: Host(model: model, travel: travel).frame(width: size.width, height: size.height))
+        hosting.frame = CGRect(origin: .zero, size: size)
+        hosting.wantsLayer = true
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.close() }
+        hosting.layoutSubtreeIfNeeded()
+        model.start()
+        model.setShown(true)
+        let board = try XCTUnwrap(model.board as? DrawBoardView)
+
+        // Ink, a rectangle and a large drawn shape, zoomed so the drawing
+        // runs past both sides of the board (as the owner's did).
+        let id = try XCTUnwrap(model.canvasID)
+        let points = (0..<40).map { n in DrawPoint(x: Double(n) * 8, y: 200 + sin(Double(n) / 4) * 30) }
+        let objects = [
+            DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: 1, content: .stroke(points)),
+            DrawObject(frame: DrawFrame(x: 10, y: 60, width: 300, height: 120), zIndex: 2, content: .shape(.rectangle)),
+            DrawObject(frame: DrawFrame(x: 0, y: 260, width: 320, height: 180), zIndex: 3, content: .shape(.ellipse))
+        ]
+        XCTAssertTrue(store.perform(.put(objects), on: id).isSaved)
+        let installs = board.rasterInstalls
+        model.open(id)
+        model.setViewport(DrawViewport(x: -320, y: -200, zoom: 3), byUser: true)
+        let deadline = Date().addingTimeInterval(5)
+        while board.rasterInstalls <= installs, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertGreaterThan(board.rasterInstalls, installs, "the drawing must be on the board before the switch")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        let spring = try XCTUnwrap(motion.spring)
+        let curve = Spring(duration: spring.response, bounce: spring.bounce)
+        XCTAssertNotNil(motion.pageOpacityAnimation(incoming: false), "the page going out stays drawn while it travels")
+        for destination in [PanelPage.notes, .tasks, .calendar] {
+            travel.x = 0
+            model.setShown(true)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            // The switch begins: Draw is no longer current (DrawPageHost).
+            model.setShown(false)
+            let side = PanelPage.canvas.side(from: destination)
+            XCTAssertNotEqual(side, 0)
+            var frame = 0
+            var time: TimeInterval = 0
+            while time <= motion.settleDuration {
+                let x = side * CGFloat(curve.value(target: Double(size.width), time: time))
+                travel.x = x
+                RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+                hosting.layoutSubtreeIfNeeded()
+                let leaked = Self.paintedPixels(hosting, size: size, outside: board.convert(board.bounds, to: hosting))
+                XCTAssertEqual(leaked, 0, "Draw → \(destination.rawValue), frame \(frame) (x \(Int(x))): Draw drew \(leaked) px over the destination page")
+                if leaked > 0 { break }
+                frame += 1
+                time += 1.0 / 60
+            }
+            XCTAssertGreaterThan(frame, 10, "Draw → \(destination.rawValue): the switch must be sampled across its frames")
+        }
+    }
+
+    /// Non-transparent pixels the hosting view renders inside the panel but
+    /// outside `pageFrame` (the area the page coming in occupies).
+    private static func paintedPixels(_ view: NSView, size: CGSize, outside pageFrame: CGRect) -> Int {
+        guard let layer = view.layer else { return -1 }
+        let width = Int(size.width), height = Int(size.height)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data else { return -1 }
+        layer.render(in: context)
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        let left = Int(max(0, min(size.width, pageFrame.minX).rounded(.down)))
+        let right = Int(max(0, min(size.width, pageFrame.maxX).rounded(.up)))
+        var count = 0
+        for row in 0..<height {
+            for column in 0..<width where column < left || column >= right {
+                if pixels[(row * width + column) * 4 + 3] > 8 { count += 1 }
+            }
+        }
+        return count
     }
 }
