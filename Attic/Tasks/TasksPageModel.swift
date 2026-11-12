@@ -520,8 +520,10 @@ final class TasksPageModel: ObservableObject {
     /// design's `listFilter`): one tag at a time, for the panel's session
     /// (not remembered), on Now and Later. Nil is All.
     @Published var tagFilter: String? {
-        // Done draws from its own results (T6: the tag bar filters Done).
-        willSet { if newValue != tagFilter { doneResults.objectWillChange.send() } }
+        // Done draws from its own results (T6). A shared tag change while
+        // Now or Later is active must not wake the retained offscreen Done
+        // list; opening Done reads the current tag and rebuilds its cache.
+        willSet { if newValue != tagFilter && tab == .done { doneResults.objectWillChange.send() } }
     }
     /// Bumped when the library's tags change (their order, a rename): the
     /// tag chips are rebuilt.
@@ -729,7 +731,8 @@ final class TasksPageModel: ObservableObject {
         PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
-                  view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), nextEvent: nextEvent(on: tab),
+                  view: viewOptions(for: tab), tag: self.tab == tab ? tagFilter(on: tab) : nil,
+                  folded: folded(on: tab), nextEvent: nextEvent(on: tab),
                   dayDrag: tab == .now && dayDragLive, owner: self.tab == tab && isPageShown)
     }
 

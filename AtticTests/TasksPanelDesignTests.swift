@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -428,6 +429,41 @@ final class TasksPanelDesignTests: XCTestCase {
         DispatchQueue.main.async { DispatchQueue.main.async { settled.fulfill() } }
         wait(for: [settled], timeout: 2)
         XCTAssertNil(model.tagFilter, "the last task losing the tag clears it on its own")
+    }
+
+    /// Changing the shared tag while Now is visible must not invalidate
+    /// retained, offscreen Later and Done page trees. They refresh from the
+    /// current filter when brought on screen, rather than paying for three
+    /// list diffs during the tag-chip click.
+    func testTagFilterKeepsOffscreenTaskPagesFrozenUntilShown() throws {
+        let now = try add("Write outline", due: nil, tab: .now)
+        let later = try add("Edit outline", due: nil, tab: .backlog)
+        tag(now, "writing")
+        tag(later, "writing")
+        model.select(tab: .now)
+
+        let visibleBefore = model.pageToken(.now)
+        let laterBefore = model.pageToken(.backlog)
+        let doneBefore = model.pageToken(.done)
+        var doneInvalidations = 0
+        let doneObserver = model.doneResults.objectWillChange.sink { doneInvalidations += 1 }
+        defer { doneObserver.cancel() }
+        model.chooseTagChip("writing")
+
+        XCTAssertNotEqual(model.pageToken(.now), visibleBefore, "the active page must update")
+        XCTAssertEqual(model.pageToken(.backlog), laterBefore, "a hidden Later list must not diff during the click")
+        XCTAssertEqual(model.pageToken(.done), doneBefore, "a hidden Done list must not diff during the click")
+        XCTAssertEqual(doneInvalidations, 0, "the offscreen Done results must not publish")
+
+        model.select(tab: .backlog)
+        XCTAssertNotEqual(model.pageToken(.backlog), laterBefore, "Later must refresh on opening")
+        XCTAssertEqual(model.rows(for: .backlog).map(\.id), [later], "the newly shown page must use the chosen tag")
+        model.chooseTagChip(nil)
+        XCTAssertEqual(model.rows(for: .backlog).map(\.id), [later], "clearing the filter restores the full list")
+        model.select(tab: .done)
+        let beforeDoneClick = doneInvalidations
+        model.chooseTagChip("writing")
+        XCTAssertGreaterThan(doneInvalidations, beforeDoneClick, "a visible Done page must still respond to a tag change")
     }
 
     /// Accepted 2026-10-30 ("Top row and bottom bar"): the search has no
