@@ -111,7 +111,7 @@ final class PanelIslandTests: XCTestCase {
         var requests: [PanelPage] = []
         var approaches = 0
         let a = state.island.requests.sink { requests.append($0) }
-        let b = state.island.approaches.sink { approaches += 1 }
+        let b = state.island.approaches.sink { _ in approaches += 1 }
         defer { a.cancel(); b.cancel() }
         state.island.point(at: .calendar)
         state.island.point(at: .notes)
@@ -160,6 +160,35 @@ final class PanelIslandTests: XCTestCase {
         XCTAssertGreaterThan(try rowInk(2), 0.5, "Calendar's label shows")
         XCTAssertLessThan(try rowInk(0), 0.01, "no other label")
         XCTAssertLessThan(try rowInk(1), 0.01)
+    }
+
+    func testFirstTouchIslandHoverWarmsOnceWithoutSwitchingAndCancelsOnLeave() throws {
+        try withController { controller, state, _ in
+            let initial = controller.firstTouchWarmupRunsForTesting.island
+            let visibilityChanges = controller.performanceVisibilityChanges
+            state.releaseBackgroundPages()
+            XCTAssertFalse(state.builtPages.contains(.notes))
+            state.island.point(at: .notes)
+            state.island.leave(.notes) // Drop pending work before its next turn.
+            spin(0.06)
+            XCTAssertEqual(controller.firstTouchWarmupRunsForTesting.island, initial)
+
+            state.island.point(at: .notes)
+            spin(0.06)
+            XCTAssertEqual(controller.firstTouchWarmupRunsForTesting.island, initial + 1)
+            XCTAssertEqual(state.selectedSection, .tasks, "hover must never change the page")
+            XCTAssertEqual(controller.performanceVisibilityChanges, visibilityChanges,
+                           "hover must never show or hide the panel")
+            XCTAssertTrue(state.builtPages.contains(.notes), "hover should prepare the page the first click will show")
+            state.island.point(at: .calendar)
+            spin(0.06)
+            XCTAssertEqual(controller.firstTouchWarmupRunsForTesting.island, initial + 1)
+            state.island.leave(.calendar)
+            state.island.point(at: .notes)
+            spin(0.06)
+            XCTAssertEqual(controller.firstTouchWarmupRunsForTesting.island, initial + 2)
+            XCTAssertEqual(state.selectedSection, .tasks)
+        }
     }
 
     func testIslandOffersPullOutAndPutBackAsVoiceOverActions() throws {

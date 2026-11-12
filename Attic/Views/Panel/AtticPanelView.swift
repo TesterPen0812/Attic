@@ -674,7 +674,7 @@ struct AtticPanelView: View {
             // clicks come here, to the one page-switch path, and pointing
             // at it builds the other pages early, as the old switch did.
             .onReceive(uiState.island.requests) { selectPage($0) }
-            .onReceive(uiState.island.approaches) { prepareOtherPages() }
+            .onReceive(uiState.island.approaches) { _ in prepareOtherPages() }
             .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)

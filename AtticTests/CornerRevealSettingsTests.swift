@@ -288,6 +288,37 @@ final class CornerRevealSettingsTests: XCTestCase {
             "leaving the hotspot must cancel hidden retries before they can mount pages")
     }
 
+    func testFirstTouchWarmsOnceDuringCornerDwellAndCancelsOnExit() throws {
+        let rig = try makePanel()
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        let away = CGPoint(x: frame.midX, y: frame.midY)
+        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
+        rig.monitor.pointerActivityForTesting(at: away)
+        let initial = rig.controller.firstTouchWarmupRunsForTesting.corner
+
+        rig.monitor.pointerActivityForTesting(at: corner)
+        rig.monitor.pointerActivityForTesting(at: away) // Cancel before its next run-loop turn.
+        spin(0.06)
+        XCTAssertEqual(rig.controller.firstTouchWarmupRunsForTesting.corner, initial)
+        XCTAssertFalse(rig.controller.isPanelVisible)
+
+        rig.monitor.pointerActivityForTesting(at: corner)
+        spin(0.06) // Less than the prescribed 200 ms dwell.
+        XCTAssertEqual(rig.controller.firstTouchWarmupRunsForTesting.corner, initial + 1)
+        XCTAssertFalse(rig.controller.isPanelVisible, "approach must not reveal the panel")
+        rig.monitor.pointerActivityForTesting(at: corner)
+        spin(0.06)
+        XCTAssertEqual(rig.controller.firstTouchWarmupRunsForTesting.corner, initial + 1,
+                       "repeated samples in the same approach cannot warm twice")
+        rig.monitor.pointerActivityForTesting(at: away)
+        rig.monitor.pointerActivityForTesting(at: corner)
+        spin(0.06)
+        XCTAssertEqual(rig.controller.firstTouchWarmupRunsForTesting.corner, initial + 2,
+                       "leaving the corner makes a later approach independent")
+    }
+
     private func spin(_ seconds: TimeInterval = 0.1) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }

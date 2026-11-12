@@ -308,6 +308,9 @@ enum IdleLatencyTrace {
     #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
     private static var serial = 0
     private static var current: (id: Int, begunNS: UInt64, kind: String, downOriginNS: UInt64)?
+    /// Island hover precedes a mouse-down trace, so give it its own memory
+    /// checkpoints without changing the clock that classifies actual inputs.
+    private static var islandHover: (id: Int, begunNS: UInt64)?
     private static var hiddenNS: UInt64?
     private static var lastInputNS = DispatchTime.now().uptimeNanoseconds
     private static var isPrimed = false
@@ -321,7 +324,8 @@ enum IdleLatencyTrace {
         case "reveal_decision", "hotspot_entered", "page_change_decision", "mouse_down_returned",
              "sendEvent_dispatched", "island_sendEvent_dispatched", "handler_entered",
              "view_dispatch_done", "commit_handoff", "transaction_flushed",
-             "cleanup_begin", "cleanup_end", "followup_scheduled", "followup_fired": return true
+             "cleanup_begin", "cleanup_end", "followup_scheduled", "followup_fired",
+             "warmup_begin", "warmup_end", "island_hover_entered", "island_hover_left": return true
         default: return false
         }
     }
@@ -329,7 +333,8 @@ enum IdleLatencyTrace {
     private static func validSpan(_ phase: String) -> Bool {
         switch phase {
         case "show_build_layout", "page_build", "page_layout", "snapshot_capture",
-             "snapshot_prepare", "transaction_flush": return true
+             "snapshot_prepare", "transaction_flush", "warmup_model", "warmup_layout",
+             "warmup_layers": return true
         default: return false
         }
     }
@@ -350,6 +355,21 @@ enum IdleLatencyTrace {
 
     static func hidden() { hiddenNS = timestamp }
     static func revealed() { hiddenNS = nil }
+    static func islandHoverEntered() {
+        serial &+= 1
+        let at = timestamp
+        islandHover = (serial, at)
+        var record = FirstTouchLogRecord(id: serial, event: "stage", atNS: at)
+        record.stage = "island_hover_entered"
+        emit(record)
+    }
+    static func islandHoverLeft() {
+        guard let hover = islandHover else { return }
+        islandHover = nil
+        var record = FirstTouchLogRecord(id: hover.id, event: "stage", atNS: timestamp)
+        record.stage = "island_hover_left"
+        emit(record)
+    }
     static var shouldTracePanelPress: Bool {
         let at = timestamp
         return lastPanelPressNS.map { at >= $0 && at - $0 >= 1_000_000_000 } ?? true
@@ -404,7 +424,11 @@ enum IdleLatencyTrace {
     }
 
     static func point(_ phase: String) {
-        guard validPhase(phase), let trace = current else { return }
+        guard validPhase(phase) else { return }
+        let trace = phase.hasPrefix("warmup_") && islandHover != nil
+            ? islandHover.map { (id: $0.id, begunNS: $0.begunNS) }
+            : current.map { (id: $0.id, begunNS: $0.begunNS) }
+        guard let trace else { return }
         let at = timestamp
         guard at >= trace.begunNS, at - trace.begunNS <= 8_000_000_000 else { return }
         var record = FirstTouchLogRecord(id: trace.id, event: "stage", atNS: at)
@@ -463,7 +487,10 @@ enum IdleLatencyTrace {
     }
 
     static func span<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
-        guard validSpan(phase), let trace = current else { return try body() }
+        let trace = phase.hasPrefix("warmup_") && islandHover != nil
+            ? islandHover.map { (id: $0.id, begunNS: $0.begunNS) }
+            : current.map { (id: $0.id, begunNS: $0.begunNS) }
+        guard validSpan(phase), let trace else { return try body() }
         let before = timestamp
         defer {
             let after = timestamp
@@ -521,6 +548,8 @@ enum IdleLatencyTrace {
     static func startMonitoring() {}
     static func hidden() {}
     static func revealed() {}
+    static func islandHoverEntered() {}
+    static func islandHoverLeft() {}
     static var shouldTracePanelPress: Bool { false }
     static func panelPressBegan(original: TimeInterval, context: Context) {}
     static func untracedInput() {}

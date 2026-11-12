@@ -236,6 +236,7 @@ final class CornerHoverMonitor {
         trailingSampleWork = nil
         followUpWork?.cancel()
         followUpWork = nil
+        panelController.endCornerFirstTouchWarmup()
         endResponsivenessActivity()
         let hideResult = panelController.requestHide { [weak self] completion in
             guard let self else { return }
@@ -388,9 +389,7 @@ final class CornerHoverMonitor {
             pointerInside: isInPanel,
             secondsSinceKeyboardInput: uptime - lastKeyboardInputAt
         ) || isMouseButtonPressed
-        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
         let hadRevealDeadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil
-        #endif
         let transition = stateMachine.update(
             at: uptime,
             isInHotspot: isInHotspot,
@@ -401,8 +400,9 @@ final class CornerHoverMonitor {
             hideDelay: settings.hideDelay,
             dismissMode: settings.panelDismissMode
         )
+        let hasRevealDeadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil
         #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
-        if !hadRevealDeadline, stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil {
+        if !hadRevealDeadline, hasRevealDeadline {
             IdleLatencyTrace.cornerHotspotEntered(revealDelay: settings.revealDelay)
         }
         #endif
@@ -410,6 +410,12 @@ final class CornerHoverMonitor {
             at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
             isInteractionLocked: isInteractionLocked, isMouseButtonPressed: isMouseButtonPressed
         )
+        if hasRevealDeadline {
+            panelController.beginCornerFirstTouchWarmup()
+        } else if hadRevealDeadline {
+            panelController.endCornerFirstTouchWarmup()
+            panelController.cancelHiddenPagePreparation()
+        }
 
         switch transition {
         case .none:
