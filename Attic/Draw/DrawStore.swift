@@ -28,6 +28,9 @@ class DrawStore: DrawStoreProtocol {
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
     @ObservationIgnored private var pending: [UUID: [Pending]] = [:]
+    /// If a burst failed, Retry must publish the original per-key Undo chain.
+    /// Crash recovery is session-scoped and reopens the merged durable draft.
+    @ObservationIgnored private var typingStepsPending: [UUID: [UUID: [Step]]] = [:]
 
     private struct State {
         var canvas: DrawCanvas
@@ -260,6 +263,73 @@ class DrawStore: DrawStoreProtocol {
             publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
             return flush(id, head: .auto)
         } catch { return .held("Could not prepare the edit: \(error)") }
+    }
+
+    /// R-19: one physical save for a short burst of text commands. Each
+    /// intermediate text change remains its own Undo step after the commit.
+    /// The merged repository change still checks the original physical
+    /// before-values and updates every replica in a single transaction.
+    func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
+        guard !commands.isEmpty else { return .unchanged }
+        guard recoveryIssue == nil else { return .held(recoveryIssue!) }
+        if pending[id] != nil {
+            var result: DrawSaveResult = .unchanged
+            for command in commands { result = perform(command, on: id) }
+            return result
+        }
+        do {
+            let original = try state(id)
+            var steps: [Step] = []
+            do {
+                for command in commands {
+                    guard let step = try prepare(command, on: id) else { continue }
+                    let fresh = stamped(step)
+                    show(fresh)
+                    steps.append(fresh)
+                }
+            } catch {
+                states[id] = original
+                throw error
+            }
+            guard let first = steps.first, let last = steps.last else { return .unchanged }
+            var merged = last
+            merged.before = first.before
+            merged.beforePersisted = first.beforePersisted
+            merged.change.before = first.change.before
+            merged.change.objectsBefore = first.change.objectsBefore
+            // Text edits always touch one box. Never merge across distinct
+            // object IDs: a sparse physical inverse must stay complete.
+            guard steps.allSatisfy({ $0.change.objectIDs == merged.change.objectIDs }) else {
+                states[id] = original
+                return .held("Could not safely merge the text edits.")
+            }
+            typingStepsPending[id, default: [:]][merged.id] = steps
+            if let recovery {
+                do {
+                    try recovery.update(id, edits: [Pending(step: merged, action: .edit)], proof: nil, unattempted: true)
+                } catch {
+                    pending[id] = [Pending(step: merged, action: .edit)]
+                    return publishPending(id, outcome: .held("The text cannot be saved until its recovery checkpoint is written: \(error.localizedDescription)"))
+                }
+            }
+            let outcome = write(merged)
+            switch outcome {
+            case .committed:
+                try? recovery?.update(id, edits: nil, proof: nil)
+                for step in steps { _ = commit(step, action: .edit) }
+                typingStepsPending[id]?[merged.id] = nil
+                return .saved(DrawDelta(canvas: merged.after,
+                    upserted: merged.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
+                    removedIDs: merged.change.objectIDs.filter { merged.change.objectsAfter[$0]?.deletedAt != nil || merged.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
+                    revision: revision))
+            case .retry(let message):
+                pending[id] = [Pending(step: merged, action: .edit)]
+                return publishPending(id, outcome: .retry(message))
+            case .held(let message):
+                pending[id] = [Pending(step: merged, action: .edit)]
+                return publishPending(id, outcome: .held(message))
+            }
+        } catch { return .held("Could not prepare the text edits: \(error)") }
     }
 
     func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
@@ -634,7 +704,12 @@ class DrawStore: DrawStoreProtocol {
                     pendingEdits[id] = nil
                     recoveredCanvasIDs.remove(id)
                 }
-                saved.append(commit(edit.step, action: edit.action))
+                if let steps = typingStepsPending[id]?[edit.step.id] {
+                    for step in steps { saved.append(commit(step, action: edit.action)) }
+                    typingStepsPending[id]?[edit.step.id] = nil
+                } else {
+                    saved.append(commit(edit.step, action: edit.action))
+                }
                 // Retire the proven head and its proof together; later edits
                 // remain checkpointed until their own saves settle.
                 if let recovery {

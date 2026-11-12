@@ -32,7 +32,7 @@ protocol DrawImageSeam: AnyObject {
     func copyAsImage(_ objects: [DrawObject])
 }
 
-/// The open text box: typing goes straight to the store, one Undo step each.
+/// The open text box: each committed text change has its own Undo step.
 struct DrawTextEdit: Equatable {
     var id: UUID
     var origin: CGPoint
@@ -166,6 +166,12 @@ final class DrawPageModel: ObservableObject {
     /// Last drag modifier for callers that finish an input without an event.
     var lastPointerShift = false
     private(set) var editing: DrawTextEdit?
+    /// Disk-backed typing is visible immediately; its bounded burst reaches
+    /// the recovery checkpoint and repository after a frame opportunity.
+    private var typingCommands: [DrawCommand] = []
+    private var typingCanvasID: UUID?
+    private var typingStartedAt: UInt64 = 0
+    private var typingTimer: DispatchWorkItem?
     private(set) var isShown = false
     var spaceHeld = false
     /// Where the board is, and its clear area (inside the top row and the
@@ -349,6 +355,8 @@ final class DrawPageModel: ObservableObject {
     /// are regenerable and never hold the quit reply indefinitely.
     func prepareToQuit() async -> Bool {
         finishLiveInput()
+        endEditing()
+        flushTyping()
         flushViewportMemory()
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(750))
         while !imports.isEmpty, ContinuousClock.now < deadline {
@@ -895,6 +903,7 @@ final class DrawPageModel: ObservableObject {
 
     func undo() {
         guard let canvasID, live == nil else { return }
+        flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return }
         if editing == nil { select([]) }
@@ -903,6 +912,7 @@ final class DrawPageModel: ObservableObject {
 
     func redo() {
         guard let canvasID, live == nil else { return }
+        flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return }
         if editing == nil { select([]) }
@@ -937,8 +947,8 @@ final class DrawPageModel: ObservableObject {
         board?.drawEditingChanged(replacingText: true)
     }
 
-    /// Each edit is one store command (Undo works while typing). IME's
-    /// marked text is never sent; the editor calls this once it's committed.
+    /// Each edit has one Undo step. Disk-backed typing is painted before its
+    /// bounded burst save; IME marked text is never sent here.
     func typed(_ text: String) {
         // The observer callback is asynchronous. A keystroke arriving first
         // must still use the agent's current position and text geometry.
@@ -947,7 +957,12 @@ final class DrawPageModel: ObservableObject {
         edit.text = text
         if text.isEmpty {
             editing = edit
-            if edit.stored { editing?.stored = false; perform(.remove([edit.id])) }
+            if edit.stored {
+                editing?.stored = false
+                if store is DrawPersistentStore {
+                    queueTyping(.remove([edit.id]), changed: nil, id: edit.id)
+                } else { perform(.remove([edit.id])) }
+            }
             return
         }
         var object = object(edit.id) ?? DrawObject(id: edit.id, frame: DrawFrame(x: edit.origin.x, y: edit.origin.y),
@@ -959,10 +974,13 @@ final class DrawPageModel: ObservableObject {
         Self.measure(&object, text: text)
         edit.stored = true
         editing = edit
-        perform(.put([object]))
+        if store is DrawPersistentStore {
+            queueTyping(.put([object]), changed: object, id: edit.id)
+        } else { perform(.put([object])) }
     }
 
     func endEditing() {
+        flushTyping()
         guard editing != nil else { return }
         editing = nil
         editingID = nil
@@ -970,6 +988,40 @@ final class DrawPageModel: ObservableObject {
         contentRevision += 1
         board?.drawEditingChanged(replacingText: false)
         board?.drawContentChanged()
+    }
+
+    /// A quiet burst saves 120 ms after its last key; continuous typing
+    /// checkpoints at most 250 ms after its first key. Quit, blur, page
+    /// switch and Undo flush the outstanding changes immediately.
+    private func queueTyping(_ command: DrawCommand, changed: DrawObject?, id: UUID) {
+        guard let canvasID else { return }
+        if typingCanvasID != nil, typingCanvasID != canvasID { flushTyping() }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if typingCommands.isEmpty { typingStartedAt = now; typingCanvasID = canvasID }
+        typingCommands.append(command)
+        if let changed {
+            if let index = objects.firstIndex(where: { $0.id == id }) { objects[index] = changed }
+            else { objects.append(changed); objects.sort(by: Self.order) }
+        } else { objects.removeAll { $0.id == id } }
+        afterContentChange(replacingEditorText: false)
+        typingTimer?.cancel()
+        let elapsed = Double(now - typingStartedAt) / 1_000_000_000
+        let delay = max(0, min(0.120, 0.250 - elapsed))
+        let timer = DispatchWorkItem { [self] in flushTyping() }
+        typingTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: timer)
+    }
+
+    private func flushTyping() {
+        typingTimer?.cancel()
+        typingTimer = nil
+        guard let canvasID = typingCanvasID, !typingCommands.isEmpty else { return }
+        let commands = typingCommands
+        typingCommands = []
+        typingCanvasID = nil
+        typingStartedAt = 0
+        let result = store.performTypingBurst(commands, on: canvasID)
+        if self.canvasID == canvasID { apply(result) }
     }
 
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
@@ -1117,6 +1169,7 @@ final class DrawPageModel: ObservableObject {
     @discardableResult
     func perform(_ command: DrawCommand) -> DrawSaveResult {
         guard let canvasID else { return .unchanged }
+        flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return .unchanged }
         let result = store.perform(command, on: canvasID)
@@ -1257,6 +1310,10 @@ final class DrawPageModel: ObservableObject {
 
     func syncExternalChanges() {
         guard let canvasID else { return }
+        if !typingCommands.isEmpty {
+            if store.revision != appliedRevision { externalSyncDeferred = true }
+            return
+        }
         if live != nil {
             if store.revision != appliedRevision { externalSyncDeferred = true }
             return
@@ -1271,7 +1328,7 @@ final class DrawPageModel: ObservableObject {
         }
         canvasName = confirmedName(in: snapshot)
         let fresh = snapshot.objects.filter { $0.deletedAt == nil }
-        // Editing text is saved on every committed keystroke. If an agent
+        // Editing text is checkpointed in bounded bursts. If an agent
         // replaces/deletes that text, stop the old editor rather than letting
         // its next keystroke restore stale content. The previous text remains
         // in the store's undo history for recovery.

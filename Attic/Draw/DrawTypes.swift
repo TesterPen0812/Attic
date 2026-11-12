@@ -223,6 +223,9 @@ protocol DrawStoreProtocol: AnyObject {
     /// The 30-day removal: everything deleted strictly before `cutoff`.
     func purge(deletedBefore cutoff: Date) -> DrawPurgeReport
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
+    /// A bounded text burst is one physical write while retaining each
+    /// keystroke as a separate session Undo step.
+    func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult
     /// Agent-only write with physical replica preflight, without altering
     /// the owner's regular Draw command and Undo behavior.
     func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
@@ -252,6 +255,11 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
+        var result: DrawSaveResult = .unchanged
+        for command in commands { result = perform(command, on: id) }
+        return result
+    }
     func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult { perform(command, on: id) }
     func library() throws -> [DrawCanvas] { try library(deleted: false) }
     func create() -> DrawCanvas { create(name: nil) }

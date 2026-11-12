@@ -70,6 +70,9 @@ final class DrawPersistenceTests: XCTestCase {
             model.pointerDown(at: CGPoint(x: 80, y: 120))
             model.typed("Draft")
             model.typed("Draft 👩🏽‍🚀")
+            // An unclean relaunch after the bounded 250 ms typing window
+            // still has the most recent durable text, without blur or quit.
+            RunLoop.main.run(until: Date().addingTimeInterval(0.35))
             XCTAssertNotNil(model.editing, "No blur or graceful shutdown should be needed to save text")
             XCTAssertFalse(store.hasUnsettledEdits)
             XCTAssertEqual(try store.open(canvasID).objects.map(\.text), ["Draft 👩🏽‍🚀"])
