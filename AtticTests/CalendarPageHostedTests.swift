@@ -868,6 +868,163 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    // MARK: - Calendar hunt: generated actions against a mounted page
+
+    func testCalendarHuntSeededHostedNavigationKeepsThePickedGrid() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var spanning = event("spanning", on: 28)
+        spanning.start = date(2026, 10, 28, 23)
+        spanning.end = date(2026, 10, 30, 2)
+        let occurrences = [event("overlap-1", on: 29), event("overlap-2", on: 29, hour: 9),
+                           event("repeat-0", on: 25), event("repeat-1", on: 1, month: 11), spanning]
+        let picks = [day(2026, 10, 29), day(2026, 10, 31), day(2026, 11, 1),
+                     day(2026, 3, 29), day(2027, 8, 31)]
+
+        for seed in [UInt64(0xCAA1_1201), UInt64(0xCAA1_1202)] {
+            var state = seed
+            func next(_ upper: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 33) % UInt64(upper))
+            }
+            try withPage(events: occurrences, height: 460) { page in
+                for step in 0..<300 {
+                    let action = next(11)
+                    switch action {
+                    case 0: page.model.pickWeek(!page.model.isWeekPicked)
+                    case 1: page.model.setDayView(!page.model.isDayView)
+                    case 2: page.model.select(picks[next(picks.count)])
+                    case 3: page.model.shift(by: next(2) == 0 ? -1 : 1, weekView: page.model.isWeekPicked)
+                    case 4: page.model.shiftDay(by: next(2) == 0 ? -1 : 1)
+                    case 5: page.model.goToToday()
+                    case 6:
+                        if let nextButton = page.element("calendar-next") {
+                            XCTAssertTrue(nextButton.accessibilityPerformPress?() ?? false)
+                        }
+                    case 7:
+                        if !page.model.isDayView, let title = page.element("calendar-month-pill") {
+                            XCTAssertTrue(title.accessibilityPerformPress?() ?? false)
+                        }
+                    case 8:
+                        page.model.setQuery(next(3) == 0 ? "spanning" : "")
+                        page.model.commitSearch()
+                    case 9: page.source.replace(next(2) == 0 ? occurrences : Array(occurrences.suffix(3)))
+                    default:
+                        if !page.model.isDayView { page.jump(to: [CGFloat(0), 65, 175, 0][next(4)]) }
+                    }
+                    // Wait for the first settled render: SwiftUI can display
+                    // the previous month during a legal navigation transition.
+                    page.settle(0.15)
+                    let label = "seed=\(seed) step=\(step) action=\(action)"
+                    let snapshot = page.model.snapshot
+                    XCTAssertEqual(snapshot.month, CalendarMonth(snapshot.selected), label)
+                    XCTAssertNotNil(snapshot.pinnedWeekIndex, label)
+                    XCTAssertEqual(snapshot.weeks.flatMap(\.days).filter(\.isSelected).count, 1, label)
+                    if page.model.isDayView && !snapshot.isSearching {
+                        XCTAssertNotNil(page.element("calendar-day"), label)
+                    } else if page.model.isWeekPicked {
+                        let drawn = page.ids("calendar-day-")
+                        let expected = snapshot.weeks[snapshot.pinnedWeekIndex!].days.map { $0.day.description }
+                        XCTAssertEqual(drawn, expected, label)
+                        XCTAssertEqual(page.value("calendar-month-pill"), "Week", label)
+                    } else if page.offset <= 0.5 {
+                        XCTAssertTrue(page.ids("calendar-day-").contains(snapshot.selected.description),
+                                      "\(label), pickedWeek=\(page.model.isWeekPicked), dayView=\(page.model.isDayView), "
+                                      + "scroll=\(page.offset), pill=\(page.value("calendar-month-pill") ?? "none"), "
+                                      + "drawn=\(page.ids("calendar-day-")) selected=\(snapshot.selected)")
+                    }
+                }
+                print("CALENDAR_HUNT_HOSTED seed=\(seed) steps=300")
+            }
+        }
+    }
+
+    func testCalendarHuntHideAndRevealDuringAnAnimatedFoldSettlesThePickedView() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let source = CalendarEventSourceStub(events: [event("one", on: 29)])
+        let model = CalendarPageModel(store: try makeTestStore(), source: source,
+                                      calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        let visible = CalendarVisibilityProbe()
+        let size = CGSize(width: 320, height: 460)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AnyView(CalendarVisibilityProbeView(probe: visible, model: model)))
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let page = MountedPage(model: model, source: source, host: host, window: window)
+        visible.onScreen = true
+        page.settle(0.2)
+
+        for cycle in 0..<4 {
+            model.pickWeek(true)
+            page.settle(0.06)
+            visible.onScreen = false
+            page.settle(0.02)
+            // While hidden, the owner may pick Month and reveal the panel.
+            model.pickWeek(false)
+            visible.onScreen = true
+            page.settle(0.8)
+            XCTAssertFalse(model.isWeekPicked, "cycle \(cycle)")
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "cycle \(cycle): no unfinished fold")
+            XCTAssertTrue(page.ids("calendar-day-").contains("2026-10-12"),
+                          "cycle \(cycle): month restored; drawn=\(page.ids("calendar-day-")), "
+                          + "pill=\(page.value("calendar-month-pill") ?? "none")")
+        }
+    }
+
+    /// Off-screen, first-frame candidates. Includes the source read and
+    /// SwiftUI's first layout/display turn, with identical work at both sizes.
+    func testCalendarHuntMonthWeekAndPagingFrameCandidatesAt10And300Events() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        func percentile(_ times: [Double], _ fraction: Double) -> Double {
+            let ordered = times.sorted()
+            return ordered[min(ordered.count - 1, Int(Double(ordered.count) * fraction))]
+        }
+        for count in [10, 300] {
+            let occurrences: [CalendarEvent] = (0..<count).map { index in
+                let start = calendar.date(byAdding: .minute, value: (index % 14) * 1440 + (index % 18) * 20,
+                                          to: date(2026, 10, 29))!
+                return CalendarEvent(id: "hunt-frame-\(index)", title: "Meeting \(index)", start: start,
+                                     end: start.addingTimeInterval(45 * 60), isAllDay: false, location: nil,
+                                     calendarTitle: "Fake", colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9))
+            }
+            try withPage(events: occurrences, height: 460) { page in
+                var fold: [Double] = [], unfold: [Double] = [], paging: [Double] = []
+                for repetition in 0..<9 {
+                    // Allow an initial warm pass before recording eight samples.
+                    @MainActor func frame(_ action: @MainActor () -> Void) -> Double {
+                        let begin = ProcessInfo.processInfo.systemUptime
+                        action()
+                        page.settle(0.016)
+                        return (ProcessInfo.processInfo.systemUptime - begin) * 1_000
+                    }
+                    let toWeek = frame { page.model.pickWeek(true) }
+                    let toNextWeek = frame { page.model.shift(by: 1, weekView: true) }
+                    _ = frame { page.model.shift(by: -1, weekView: true) }
+                    let toMonth = frame { page.model.pickWeek(false) }
+                    if repetition > 0 {
+                        fold.append(toWeek)
+                        paging.append(toNextWeek)
+                        unfold.append(toMonth)
+                    }
+                }
+                print(String(format: "CALENDAR_HUNT_FRAME events=%d samples=8 fold_p50=%.2fms fold_p95=%.2fms unfold_p50=%.2fms unfold_p95=%.2fms page_p50=%.2fms page_p95=%.2fms",
+                             count, percentile(fold, 0.5), percentile(fold, 0.95),
+                             percentile(unfold, 0.5), percentile(unfold, 0.95),
+                             percentile(paging, 0.5), percentile(paging, 0.95)))
+                XCTAssertFalse(page.model.isWeekPicked)
+            }
+        }
+    }
+
     // MARK: - Mounting
 
     @MainActor private struct MountedPage {

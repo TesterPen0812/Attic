@@ -570,6 +570,36 @@ final class CalendarPageTests: XCTestCase {
         }, "revealed snapshot reflects the latest source")
     }
 
+    func testCalendarHuntTimeZoneSpecificModelsRegroupAndRelayoutEvent() throws {
+        let utc = ISO8601DateFormatter()
+        let start = try XCTUnwrap(utc.date(from: "2026-10-29T23:30:00Z"))
+        let now = try XCTUnwrap(utc.date(from: "2026-10-29T12:00:00Z"))
+        let occurrence = event("boundary", "Boundary", start: start, end: start.addingTimeInterval(1800))
+        let utcCalendar = CalendarMonthMath.calendar(timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 0)))
+        let plusTwo = CalendarMonthMath.calendar(timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 2 * 3600)))
+        let before = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: [occurrence]),
+                                       calendar: utcCalendar, now: { now })
+        let after = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: [occurrence]),
+                                      calendar: plusTwo, now: { now })
+        func daysWithEvent(_ model: CalendarPageModel) -> [DueDay] {
+            model.snapshot.groups.filter { group in
+                group.items.contains { if case .event = $0 { return true }; return false }
+            }.map(\.day)
+        }
+        XCTAssertEqual(daysWithEvent(before), [day(2026, 10, 29)])
+        XCTAssertEqual(daysWithEvent(after), [day(2026, 10, 30)],
+                       "the same fake occurrence falls on another day in GMT+2")
+        XCTAssertEqual(after.snapshot.today, day(2026, 10, 29))
+        let utcLayout = CalendarDayLayout(day: day(2026, 10, 29), today: day(2026, 10, 29), now: now,
+                                          events: [occurrence], calendar: before.calendar)
+        let plusTwoLayout = CalendarDayLayout(day: day(2026, 10, 30), today: day(2026, 10, 29), now: now,
+                                              events: [occurrence], calendar: after.calendar)
+        XCTAssertEqual(utcLayout.blocks.count, 1)
+        XCTAssertEqual(plusTwoLayout.blocks.count, 1)
+        XCTAssertNotEqual(utcLayout.blocks[0].y, plusTwoLayout.blocks[0].y,
+                          "the Day timeline follows the injected local clock")
+    }
+
     func testWithoutAccessOnlyTasksShow() throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Return parcel", dueDay: day(2026, 10, 29))])
@@ -771,6 +801,116 @@ final class CalendarPageTests: XCTestCase {
         if let scroll = view as? NSScrollView, scroll.documentView != nil { return scroll }
         for sub in view.subviews { if let found = scrollView(in: sub) { return found } }
         return nil
+    }
+
+    // MARK: - Calendar hunt: reproducible generated actions
+
+    func testCalendarHuntSeededModelActionsPreserveDaysEventsAndSelection() throws {
+        let seeds: [UInt64] = [0xCA1E_DA12, 0xD57A_2026, 0xA11D_A4E5]
+        let today = day(2026, 10, 29)
+        let events = [
+            event("trip", "Trip", start: date(2026, 10, 24), end: date(2026, 10, 27), allDay: true),
+            event("night", "Trip overnight", start: date(2026, 10, 24, 23, 30), end: date(2026, 10, 25, 2, 30)),
+            event("overlap-a", "Meeting", start: date(2026, 10, 29, 9), end: date(2026, 10, 29, 11)),
+            event("overlap-b", "Meeting", start: date(2026, 10, 29, 10), end: date(2026, 10, 29, 12)),
+            event("repeat-0", "Trip repeat", start: date(2026, 10, 18, 10), end: date(2026, 10, 18, 11)),
+            event("repeat-1", "Trip repeat", start: date(2026, 10, 25, 10), end: date(2026, 10, 25, 11)),
+            event("repeat-2", "Trip repeat", start: date(2026, 11, 1, 10), end: date(2026, 11, 1, 11)),
+            event("spring", "Trip spring", start: date(2026, 3, 28, 23), end: date(2026, 3, 29, 4)),
+        ]
+        let clockChoices = [date(2026, 3, 29, 12), date(2026, 10, 25, 12),
+                            date(2026, 10, 29, 12), date(2026, 11, 1, 12)]
+        let selectionChoices = [day(2026, 3, 29), day(2026, 10, 24), today,
+                                day(2026, 11, 1), day(2027, 2, 1), day(2027, 8, 31)]
+
+        for seed in seeds {
+            var state = seed
+            func next(_ upper: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 33) % UInt64(upper))
+            }
+            var clock = clockChoices[2]
+            var currentSource = CalendarEventSourceStub(events: events)
+            let model = CalendarPageModel(store: try makeTestStore(), source: currentSource,
+                                          calendar: calendar, now: { clock })
+            var visible = true
+            model.setVisible(true)
+            defer { model.setVisible(false) }
+
+            for step in 0..<360 {
+                let action = next(12)
+                switch action {
+                case 0: model.pickWeek(!model.isWeekPicked)
+                case 1: model.setDayView(!model.isDayView)
+                case 2: model.shift(by: next(5) - 2, weekView: model.isWeekPicked)
+                case 3: model.shiftDay(by: next(7) - 3)
+                case 4: model.select(selectionChoices[next(selectionChoices.count)])
+                case 5: model.goToToday()
+                case 6:
+                    model.setQuery(["Meeting", "repeat", ""][next(3)])
+                    model.commitSearch()
+                case 7:
+                    visible.toggle()
+                    model.setVisible(visible)
+                case 8: currentSource.replace(next(2) == 0 ? events : Array(events.prefix(4)))
+                case 9:
+                    clock = clockChoices[next(clockChoices.count)]
+                    model.refreshNowPosition()
+                case 10:
+                    currentSource = CalendarEventSourceStub(events: next(2) == 0 ? events : Array(events.suffix(4)))
+                    model.replaceSource(currentSource)
+                default: model.rebuild()
+                }
+
+                let label = "seed=\(seed) step=\(step) action=\(action)"
+                let snapshot = model.snapshot
+                XCTAssertEqual(snapshot.month, CalendarMonth(snapshot.selected), label)
+                XCTAssertEqual(snapshot.weeks.flatMap(\.days).filter(\.isSelected).map(\.day), [snapshot.selected], label)
+                XCTAssertTrue((4...6).contains(snapshot.weeks.count), label)
+                XCTAssertNotNil(snapshot.pinnedWeekIndex, label)
+                XCTAssertTrue(snapshot.weeks.allSatisfy { $0.days.count == 7 }, label)
+                XCTAssertEqual(model.nowTimerForTesting != nil, visible, label)
+                guard visible else { continue } // Hidden models defer occurrence reads until their next reveal.
+
+                XCTAssertEqual(snapshot.today, DueDay(date: clock, calendar: calendar), label)
+                let matching = currentSource.storedEvents.filter { !snapshot.isSearching || $0.matches(snapshot.query) }
+                if snapshot.isSearching {
+                    var expectedDays = Set<DueDay>()
+                    for item in matching {
+                        var start = calendar.startOfDay(for: item.start)
+                        for _ in 0..<8 where start < item.end {
+                            let end = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+                            let interval = DateInterval(start: start, end: end)
+                            if item.overlaps(interval) { expectedDays.insert(DueDay(date: start, calendar: calendar)) }
+                            start = end
+                        }
+                    }
+                    XCTAssertEqual(snapshot.groups.map(\.day), expectedDays.sorted(), label)
+                } else {
+                    let expected = (0..<CalendarAgenda.dayCount).map { i -> DueDay in
+                        DueDay(date: calendar.date(byAdding: .day, value: i,
+                                                   to: snapshot.selected.startDate(in: calendar)!)!, calendar: calendar)
+                    }
+                    XCTAssertEqual(snapshot.groups.map(\.day), expected, label)
+                }
+                for group in snapshot.groups {
+                    let interval = try XCTUnwrap(calendar.dateInterval(of: .day, for: group.day.startDate(in: calendar)!))
+                    let expected = matching.filter { $0.overlaps(interval) }.map(\.id).sorted()
+                    let actual = group.items.compactMap { item -> String? in
+                        if case let .event(event) = item { return event.id }
+                        return nil
+                    }.sorted()
+                    XCTAssertEqual(actual, expected, "\(label) group=\(group.day)")
+                }
+                for gridDay in snapshot.weeks.flatMap(\.days) {
+                    let interval = try XCTUnwrap(calendar.dateInterval(of: .day, for: gridDay.day.startDate(in: calendar)!))
+                    let count = currentSource.storedEvents.filter { $0.overlaps(interval) }.count
+                    XCTAssertEqual(gridDay.marks.eventColours.count, min(count, CalendarDesign.maxEventDots),
+                                   "\(label) mark=\(gridDay.day)")
+                }
+            }
+            print("CALENDAR_HUNT_MODEL seed=\(seed) steps=360")
+        }
     }
 
     // MARK: - Rendering

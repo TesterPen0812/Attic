@@ -223,6 +223,72 @@ final class CalendarDayLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarDayLayout.clampedOffset(900, contentHeight: 1000, viewport: 300), 700)
         XCTAssertEqual(CalendarDayLayout.clampedOffset(900, contentHeight: 200, viewport: 300), 0)
     }
+
+    func testCalendarHuntSeededDayLayoutsKeepOneBlockAtItsLocalTime() throws {
+        let base = date(2026, 10, 24, 21)
+        let fixtures = (0..<32).map { index -> CalendarEvent in
+            let start = base.addingTimeInterval(Double(index % 17) * 1800)
+            return event("occurrence-\(index)", start,
+                         start.addingTimeInterval(Double([15, 60, 120, 180][index % 4]) * 60),
+                         allDay: index % 11 == 0)
+        } + [
+            event("fall-span", date(2026, 10, 24, 23), date(2026, 10, 25, 4)),
+            event("spring-span", date(2026, 3, 28, 23), date(2026, 3, 29, 4)),
+            event("all-day-span", date(2026, 10, 24), date(2026, 10, 27), allDay: true),
+        ]
+        let focus = [day(2026, 3, 28), day(2026, 3, 29), day(2026, 10, 24),
+                     day(2026, 10, 25), day(2026, 10, 26), day(2026, 10, 27)]
+        let timeZones = ["Europe/London", "UTC", "Asia/Tokyo"]
+
+        for seed in [UInt64(0xD4A1_1201), UInt64(0xD4A1_1202), UInt64(0xD4A1_1203)] {
+            var rng = seed
+            func next(_ limit: Int) -> Int {
+                rng = rng &* 6364136223846793005 &+ 1442695040888963407
+                return Int((rng >> 33) % UInt64(limit))
+            }
+            var zone = london
+            var selected = focus[3]
+            var active = fixtures
+            for step in 0..<320 {
+                let operation = next(7)
+                switch operation {
+                case 0: selected = focus[next(focus.count)]
+                case 1: selected = CalendarMonthMath.adding(days: next(5) - 2, to: selected, calendar: zone)
+                case 2: zone = CalendarMonthMath.calendar(timeZone: try XCTUnwrap(TimeZone(identifier: timeZones[next(timeZones.count)])))
+                case 3: active = Array(fixtures.prefix(next(fixtures.count) + 1))
+                case 4: active = fixtures
+                case 5: active = Array(fixtures.suffix(next(fixtures.count) + 1))
+                default: break
+                }
+                let label = "seed=\(seed) step=\(step) operation=\(operation)"
+                let interval = try XCTUnwrap(CalendarMonthMath.interval(of: selected, calendar: zone), label)
+                let occurrences = CalendarAgenda.events(on: selected, in: active, calendar: zone)
+                let timeline = CalendarDayLayout(day: selected, today: day(2026, 10, 29),
+                                                 now: date(2026, 10, 29, 12), events: occurrences, calendar: zone)
+                let expected = occurrences.filter { !$0.isAllDay }.map(\.id).sorted()
+                XCTAssertEqual(timeline.blocks.map(\.id).sorted(), expected, label)
+                XCTAssertEqual(timeline.hours.count, Int(interval.duration / 3600) + 1, label)
+                XCTAssertEqual(timeline.height, CalendarDayDesign.topInset
+                               + CGFloat(interval.duration / 3600) * hour + CalendarDayDesign.tail, accuracy: 0.01, label)
+                for block in timeline.blocks {
+                    let start = max(0, min(interval.duration, block.event.start.timeIntervalSince(interval.start)))
+                    let end = max(0, min(interval.duration, block.event.end.timeIntervalSince(interval.start)))
+                    XCTAssertEqual(block.y, top + CGFloat(start / 3600) * hour + CalendarDayDesign.blockInset,
+                                   accuracy: 0.01, label)
+                    XCTAssertEqual(block.height, max(CalendarDayDesign.minBlock, CGFloat((end - start) / 3600) * hour)
+                                   - 2 * CalendarDayDesign.blockInset, accuracy: 0.01, label)
+                }
+                let frames = timeline.blocks.map { timeline.frame(of: $0, width: 320) }
+                for i in frames.indices {
+                    for j in frames.indices where j > i {
+                        XCTAssertTrue(frames[i].intersection(frames[j]).isEmpty,
+                                      "\(label) \(timeline.blocks[i].id) vs \(timeline.blocks[j].id) overlap")
+                    }
+                }
+            }
+            print("CALENDAR_HUNT_DAY_LAYOUT seed=\(seed) steps=320")
+        }
+    }
 }
 
 final class CalendarDayNavigationTests: XCTestCase {
