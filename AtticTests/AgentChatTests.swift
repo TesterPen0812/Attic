@@ -2432,3 +2432,111 @@ private extension Result {
         return nil
     }
 }
+
+/// Gap fixes 2 (Accepted 6 Nov, "Chat with an agent: floating, Chat life
+/// alive"): the closed ✦'s states as drawn in `Preview - settings at
+/// bottom.dc.html` (`[data-chat-trigger] svg`, `.ch-tg-need svg`,
+/// `ch-breathe`).
+@MainActor
+final class AgentChatTriggerMotionTests: XCTestCase {
+    func testNeedsYouBreathesOverOnePointTwoSecondsToOnePointOneEightWithEaseInOut() {
+        typealias M = AgentChatTriggerMotion
+        XCTAssertEqual(M.breathPeriod, 1.2)
+        XCTAssertEqual(M.breath(at: 0), 1, accuracy: 0.0001, "each breath starts at scale 1")
+        XCTAssertEqual(M.breath(at: 0.6), 1.18, accuracy: 0.0001, "and peaks at 1.18 half way")
+        XCTAssertEqual(M.breath(at: 1.2), 1, accuracy: 0.0001)
+        XCTAssertEqual(M.breath(at: 0.3), 1.09, accuracy: 0.0001, "ease-in-out is half way at half time")
+        // CSS ease-in-out (0.42, 0, 0.58, 1): slow out of each end.
+        XCTAssertEqual(M.breath(at: 0.06), 1 + 0.18 * CGFloat(AgentEase.curve(0.42, 0, 0.58, 1, 0.1)), accuracy: 0.0001)
+        XCTAssertLessThan(M.breath(at: 0.06) - 1, 0.18 * 0.1, "slower than linear at the start")
+        XCTAssertEqual(M.breath(at: 0.9), M.breath(at: 0.3), accuracy: 0.0001, "the way down mirrors the way up")
+        XCTAssertEqual(M.breath(at: 1.8), 1.18, accuracy: 0.0001, "and it repeats")
+    }
+
+    func testOnlyNeedsYouBreathesAndReducedMotionKeepsItStill() {
+        typealias M = AgentChatTriggerMotion
+        XCTAssertTrue(M.breathes(.needsYou, reduceMotion: false))
+        XCTAssertFalse(M.breathes(.needsYou, reduceMotion: true), "Reduce Motion or Animations: Reduced: no breath")
+        for state: AgentChatBarState in [.idle, .working(step: nil, of: nil), .working(step: 2, of: 3), .changes(2), .done] {
+            XCTAssertFalse(M.breathes(state, reduceMotion: false), "\(state): no motion on the closed ✦ (thinking has no look)")
+            XCTAssertTrue(M.pose(state, hovered: false, reduceMotion: false, time: 0.6) == (0, 1))
+        }
+        XCTAssertTrue(M.pose(.needsYou, hovered: false, reduceMotion: true, time: 0.6) == (0, 1), "reduced: still")
+    }
+
+    func testHoverTurnsAndScalesTheGlyphButTheBreathWinsWhileItNeedsYou() {
+        typealias M = AgentChatTriggerMotion
+        XCTAssertTrue(M.pose(.idle, hovered: true, reduceMotion: false, time: 0) == (90, 1.14))
+        XCTAssertTrue(M.pose(.working(step: 1, of: 3), hovered: true, reduceMotion: false, time: 0) == (90, 1.14))
+        XCTAssertTrue(M.pose(.idle, hovered: true, reduceMotion: true, time: 0) == (0, 1))
+        let pose = M.pose(.needsYou, hovered: true, reduceMotion: false, time: 0.6)
+        XCTAssertTrue(pose == (0, 1.18), "the CSS animation replaces the hover's transform")
+    }
+
+    /// Off-screen renders of the real button at paused times, Light and
+    /// Dark. Saved for the report (`GF2RENDER` in the log gives the folder).
+    func testTheClosedTriggerRendersIdleWorkingAndNeedsYouAtPausedTimes() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-gap-fixes-2-renders")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        print("GF2RENDER \(folder.path)")
+        func render(_ state: AgentChatBarState, _ time: Double, dark: Bool, reduced: Bool = false,
+                    name: String) throws -> NSBitmapImageRep {
+            var design = AtticDesignContext.default
+            design.mode = dark ? .dark : .light
+            design.reduceMotion = reduced
+            // Glass draws as artefacts off-screen: the solid (craft) button
+            // stands in, with the same glyph, label and motion.
+            design.controls = .craft
+            let root = AgentChatBarButton(bar: AgentChatBar(showing: state), action: {}, frozenTime: time)
+                .environment(\.atticDesign, design)
+                .padding(12)
+                .frame(width: 150, height: 52, alignment: .leading)
+                .background(dark ? Color(white: 0.13) : Color(white: 0.95))
+                .environment(\.colorScheme, dark ? .dark : .light)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(x: 0, y: 0, width: 150, height: 52)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = host
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                .write(to: folder.appendingPathComponent("\(name)-\(dark ? "dark" : "light").png"))
+            return rep
+        }
+        /// Pixels that differ around the glyph (12 + 8 pt in, 13 pt square
+        /// covers the 11 pt ✦ at 1.18).
+        func glyphDifference(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+            let scale = CGFloat(a.pixelsWide) / 150
+            XCTAssertEqual(a.pixelsHigh, Int(52 * scale), "the render keeps its 150 × 52 pt frame")
+            var count = 0
+            for y in Int(12 * scale)..<Int(40 * scale) {
+                for x in Int(16 * scale)..<Int(36 * scale) {
+                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                          let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
+                        + abs(p.blueComponent - q.blueComponent) > 0.06 { count += 1 }
+                }
+            }
+            return count
+        }
+        for dark in [false, true] {
+            _ = try render(.idle, 0, dark: dark, name: "idle")
+            let working = try [0.0, 0.4, 0.8].map { try render(.working(step: 2, of: 3), $0, dark: dark, name: "working-\(Int($0 * 1000))ms") }
+            let needsStart = try render(.needsYou, 0, dark: dark, name: "needs-start")
+            let needsPeak = try render(.needsYou, 0.6, dark: dark, name: "needs-peak")
+            let reducedStart = try render(.needsYou, 0, dark: dark, reduced: true, name: "needs-reduced-start")
+            let reducedPeak = try render(.needsYou, 0.6, dark: dark, reduced: true, name: "needs-reduced-peak")
+            XCTAssertEqual(glyphDifference(working[0], working[1]), 0, "Working: the closed ✦ holds still")
+            XCTAssertEqual(glyphDifference(working[0], working[2]), 0)
+            XCTAssertGreaterThan(glyphDifference(needsStart, needsPeak), 10, "Needs you: the ✦ grows at the breath's peak")
+            XCTAssertEqual(glyphDifference(reducedStart, reducedPeak), 0, "reduced: no breath")
+            XCTAssertEqual(glyphDifference(needsStart, reducedStart), 0, "the reduced Needs you is the breath's resting pose")
+        }
+    }
+}
