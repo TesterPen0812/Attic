@@ -112,15 +112,38 @@ struct GlobalHotKeyCombination: Equatable {
         guard control || option || (command && shift) else {
             return String(localized: "Use Control or Option, or Command with Shift, so the shortcut doesn’t take a key other apps use.")
         }
-        let reserved: [GlobalHotKeyCombination] = [
+        let reservedBySystem: [GlobalHotKeyCombination] = [
             .init(keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey)),
             .init(keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey | optionKey | cmdKey)),
             .init(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | optionKey)),
             .init(keyCode: UInt32(kVK_Tab), modifiers: UInt32(cmdKey | shiftKey))
         ]
-        if reserved.contains(self) { return String(localized: "macOS uses that shortcut. Try another.") }
+        if reservedBySystem.contains(self) { return String(localized: "macOS uses that shortcut. Try another.") }
+        if Self.reservedByAttic.contains(self) { return String(localized: "Attic already uses that shortcut. Try another.") }
         return nil
     }
+
+    /// Quick Capture is global, so these active in-app commands must stay
+    /// available while the panel, Notes or a task's editor is open. Keep this
+    /// list aligned with MenuBarCommands, AtticTaskShortcut, NoteCommandCatalog,
+    /// NotesEditorPage and NoteEditorTextView when their shortcuts change.
+    private static let reservedByAttic: [GlobalHotKeyCombination] = {
+        func chords(_ keys: [Int], modifiers: UInt32) -> [GlobalHotKeyCombination] {
+            keys.map { .init(keyCode: UInt32($0), modifiers: modifiers) }
+        }
+        return chords([
+            kVK_ANSI_N, kVK_ANSI_F, kVK_ANSI_P, kVK_ANSI_Z,
+            kVK_ANSI_I, kVK_ANSI_L, kVK_ANSI_S, kVK_ANSI_X, kVK_ANSI_K,
+            kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9
+        ], modifiers: UInt32(cmdKey | shiftKey))
+        + chords([
+            kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3,
+            kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_T, kVK_ANSI_S,
+            kVK_UpArrow, kVK_DownArrow, kVK_RightArrow
+        ], modifiers: UInt32(cmdKey | optionKey))
+        + chords([kVK_ANSI_C, kVK_ANSI_V], modifiers: UInt32(cmdKey | optionKey | shiftKey))
+        + chords([kVK_ANSI_H], modifiers: UInt32(cmdKey | controlKey))
+    }()
 }
 
 #if canImport(SwiftUI)

@@ -3,6 +3,28 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+/// Signals when SwiftUI has evaluated the next Appearance state. The test
+/// then forces the hosted layout/display candidate; no onscreen frame is used.
+@MainActor
+private struct SettingsHuntFrameProbe: View {
+    @ObservedObject var settings: AppSettings
+    let content: SettingsView
+    let onCandidate: (TimeInterval) -> Void
+
+    private var appearanceSignature: String {
+        [settings.appearance.rawValue, settings.panelTheme.rawValue,
+         settings.panelSurfaceStyle.rawValue, settings.panelTint.rawValue,
+         String(settings.brightenGlass), String(settings.panelTintLength)]
+            .joined(separator: "/")
+    }
+
+    var body: some View {
+        content.onChange(of: appearanceSignature) { _, _ in
+            onCandidate(ProcessInfo.processInfo.systemUptime)
+        }
+    }
+}
+
 /// The Settings window as AppKit really lays it out: its traffic lights
 /// sit on the page title's line, keep the system's spacing, still take
 /// clicks there, and stay put through resizes.
@@ -21,18 +43,182 @@ final class SettingsWindowHostedTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    func testSettingsHuntHostedNavigationReadsTheScratchSuite() throws {
+        let suite = "SettingsHuntNavigation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let outsideBefore = UserDefaults.standard.object(forKey: SettingsSection.selectionStorageKey) as? String
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+
+        for selected in [SettingsSection.appearance, .panel] {
+            defaults.set(selected.rawValue, forKey: SettingsSection.selectionStorageKey)
+            XCTAssertEqual(SettingsNavigation(defaults: defaults).selection, selected)
+            let host = NSHostingView(rootView: SettingsView(
+                settings: AppSettings(defaults: defaults, motionLabAvailable: false),
+                loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+            let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 860, height: 650),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            spin(0.3)
+            host.layoutSubtreeIfNeeded()
+
+            func find(_ element: AnyObject, id: String, visited: inout Set<ObjectIdentifier>) -> AnyObject? {
+                guard visited.insert(ObjectIdentifier(element)).inserted else { return nil }
+                if element.accessibilityIdentifier?() == id { return element }
+                for child in (element.accessibilityChildren?() ?? nil) ?? [] {
+                    if let match = find(child as AnyObject, id: id, visited: &visited) { return match }
+                }
+                return nil
+            }
+            var visited = Set<ObjectIdentifier>()
+            // The page identifier is on a mask-wrapped ScrollView, which
+            // AppKit omits from the AX tree. Read controls unique to the
+            // actual page instead of mistaking a missing scroll AX node for
+            // the wrong navigation selection.
+            let expectedID = selected == .appearance ? "setting-appearance-system" : "setting-reveal-on-hover"
+            let otherID = selected == .appearance ? "setting-reveal-on-hover" : "setting-appearance-system"
+            let found = find(host, id: expectedID, visited: &visited) != nil
+            visited.removeAll()
+            let wrongPageVisible = find(host, id: otherID, visited: &visited) != nil
+            if !found {
+                var seen = Set<ObjectIdentifier>()
+                func snapshot(_ element: AnyObject, depth: Int) {
+                    guard depth < 24, seen.insert(ObjectIdentifier(element)).inserted else { return }
+                    if let id = element.accessibilityIdentifier?() {
+                        print("SETTINGS_NAV_AX selected=\(selected.rawValue) depth=\(depth) id=\(id) label=\(element.accessibilityLabel?() ?? "")")
+                    }
+                    for child in (element.accessibilityChildren?() ?? nil) ?? [] {
+                        snapshot(child as AnyObject, depth: depth + 1)
+                    }
+                }
+                snapshot(host, depth: 0)
+            }
+            // A click must write the same scratch suite used for the initial
+            // selection, and the resulting page must update immediately.
+            let next = selected == .appearance ? SettingsSection.panel : .appearance
+            visited.removeAll()
+            let nextSidebarRow = find(host, id: next.accessibilityIdentifier, visited: &visited)
+            XCTAssertTrue(nextSidebarRow?.accessibilityPerformPress?() ?? false)
+            spin(0.2)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(SettingsNavigation(defaults: defaults).selection, next)
+            visited.removeAll()
+            XCTAssertNotNil(find(host, id: otherID, visited: &visited),
+                            "The newly selected Settings page must appear in the hosted control tree")
+            XCTAssertEqual(UserDefaults.standard.object(forKey: SettingsSection.selectionStorageKey) as? String,
+                           outsideBefore, "Switching a scratch Settings page must not change standard defaults")
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+            XCTAssertTrue(found, "A hosted SettingsView must show \(expectedID) for \(selected.rawValue)")
+            XCTAssertFalse(wrongPageVisible, "The old Settings page must not remain in the hosted control tree")
+        }
+        XCTAssertEqual(UserDefaults.standard.object(forKey: SettingsSection.selectionStorageKey) as? String,
+                       outsideBefore, "A scratch Settings window must not write its navigation to standard defaults")
+    }
+
+    /// Elapsed time from a setting change to SwiftUI's next observed
+    /// Appearance update plus an offscreen layout/display candidate. This
+    /// cannot establish actual display or compositor presentation latency.
+    func testSettingsHuntAppearanceToNextHostedFrameCandidate() throws {
+        let suite = "SettingsHuntFrame.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+        // Prime the last value of each group before hosting. The first
+        // measured choice must be a real change, including on a fresh suite.
+        settings.appearance = try XCTUnwrap(AppearancePreference.allCases.last)
+        settings.panelTheme = try XCTUnwrap(AtticPanelTheme.allCases.last)
+        settings.panelSurfaceStyle = try XCTUnwrap(PanelSurfaceStyle.allCases.last)
+        settings.panelTint = try XCTUnwrap(PanelTintLevel.allCases.last)
+        var candidateTimes: [TimeInterval] = []
+        let content = SettingsView(
+            settings: settings,
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil)
+        let host = NSHostingView(rootView: SettingsHuntFrameProbe(
+            settings: settings, content: content, onCandidate: { candidateTimes.append($0) }))
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 860, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+
+        var samples: [String: [Double]] = [:]
+        func measure(_ choice: String, _ action: () -> Void) {
+            let previousCandidates = candidateTimes.count
+            let start = ProcessInfo.processInfo.systemUptime
+            action()
+            let deadline = Date().addingTimeInterval(1)
+            while candidateTimes.count == previousCandidates && Date() < deadline {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.005))
+            }
+            XCTAssertGreaterThan(candidateTimes.count, previousCandidates,
+                                 "SwiftUI must observe Appearance mutation \(choice) in the hosted frame")
+            guard candidateTimes.count > previousCandidates else { return }
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let durationMS = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+            XCTAssertTrue(durationMS.isFinite && durationMS >= 0)
+            samples[choice, default: []].append(durationMS)
+        }
+
+        for _ in 0..<5 {
+            for mode in AppearancePreference.allCases {
+                measure("mode.\(mode.rawValue)") { settings.appearance = mode }
+            }
+            for theme in AtticPanelTheme.allCases {
+                measure("palette.\(theme.rawValue)") { settings.panelTheme = theme }
+            }
+            for surface in PanelSurfaceStyle.allCases {
+                measure("surface.\(surface.rawValue)") { settings.panelSurfaceStyle = surface }
+            }
+            for tint in PanelTintLevel.allCases {
+                measure("tint.\(tint.rawValue)") { settings.panelTint = tint }
+            }
+            for enabled in [true, false] {
+                measure("brighten.\(enabled)") { settings.brightenGlass = enabled }
+            }
+            for length in [0.3, 0.65, 1.0] {
+                measure("tintLength.\(length)") { settings.panelTintLength = length }
+            }
+        }
+        for key in samples.keys.sorted() {
+            let ordered = try XCTUnwrap(samples[key]).sorted()
+            guard ordered.count == 5 else {
+                XCTFail("Expected five genuine Appearance transitions for \(key), got \(ordered.count)")
+                continue
+            }
+            let median = ordered[2]
+            let p95 = ordered[4]
+            print(String(format: "SETTINGS_FRAME_CANDIDATE kind=%@ n=5 median_ms=%.3f p95_ms=%.3f",
+                         key, median, p95))
+        }
+    }
+
     /// Accessibility of each Settings page's hosted controls; the earlier
     /// appearance/defaults audit did not exercise VoiceOver's control tree.
     func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
-        // SettingsNavigation persists its selection in standard defaults,
-        // independently of the isolated AppSettings preferences below.
-        // Visiting About here must not change the starting page of later tests.
-        let selectionKey = SettingsSection.selectionStorageKey
-        let previousSelection = UserDefaults.standard.object(forKey: selectionKey)
-        defer {
-            if let previousSelection { UserDefaults.standard.set(previousSelection, forKey: selectionKey) }
-            else { UserDefaults.standard.removeObject(forKey: selectionKey) }
-        }
+        // Navigation follows the isolated AppSettings suite, so visiting
+        // About cannot change another test's starting page.
         let suite = "SettingsAX.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -193,14 +379,7 @@ final class SettingsWindowHostedTests: XCTestCase {
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
         // The viewport assertion targets General's controls; an earlier AX
-        // navigation test or a persisted user choice may have selected About.
-        let selectionKey = SettingsSection.selectionStorageKey
-        let previousSelection = UserDefaults.standard.object(forKey: selectionKey)
-        UserDefaults.standard.set(SettingsSection.general.rawValue, forKey: selectionKey)
-        defer {
-            if let previousSelection { UserDefaults.standard.set(previousSelection, forKey: selectionKey) }
-            else { UserDefaults.standard.removeObject(forKey: selectionKey) }
-        }
+        // navigation test cannot affect this fresh scratch suite.
         let suite = "SettingsUX2.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

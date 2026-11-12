@@ -684,6 +684,289 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(defaults.double(forKey: "hideDelay"), 0.3)
     }
 
+    @MainActor
+    func testSettingsHuntClampedChoicesRemainSavedAfterReload() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+
+        // The first valid edit ensures a stale stored value exists before
+        // each user-controlled setting is clamped by the property observer.
+        settings.panelCornerSize = 28
+        settings.panelCornerSize = 200
+        XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.max)
+        XCTAssertEqual(defaults.double(forKey: "panelCornerSize"), PanelCornerSize.max)
+
+        settings.panelContentSize = 360
+        settings.panelContentSize = 1_000
+        XCTAssertEqual(settings.panelContentSize, PanelContentSize.max)
+        XCTAssertEqual(defaults.double(forKey: "panelContentSize"), PanelContentSize.max)
+
+        settings.revealDelay = 1.5
+        settings.revealDelay = .infinity
+        XCTAssertEqual(settings.revealDelay, 0.2)
+        XCTAssertEqual(defaults.double(forKey: "revealDelay"), 0.2)
+
+        settings.hideDelay = 1.5
+        settings.hideDelay = .nan
+        XCTAssertEqual(settings.hideDelay, 0.3)
+        XCTAssertEqual(defaults.double(forKey: "hideDelay"), 0.3)
+
+        let restored = AppSettings(defaults: defaults, motionLabAvailable: false)
+        XCTAssertEqual(restored.panelCornerSize, settings.panelCornerSize)
+        XCTAssertEqual(restored.panelContentSize, settings.panelContentSize)
+        XCTAssertEqual(restored.revealDelay, settings.revealDelay)
+        XCTAssertEqual(restored.hideDelay, settings.hideDelay)
+    }
+
+    @MainActor
+    func testSettingsHuntUnsortedDisplayEditsPersistTheNormalizedSelection() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+
+        settings.revealDisplayIDs = ["screen-z"]
+        settings.revealDisplayIDs.append("screen-a")
+        XCTAssertEqual(settings.revealDisplayIDs, ["screen-a", "screen-z"])
+        XCTAssertEqual(defaults.stringArray(forKey: "revealDisplayIDs"), ["screen-a", "screen-z"])
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: false).revealDisplayIDs,
+                       ["screen-a", "screen-z"])
+    }
+
+    /// A reproducible Settings action hunt. Each input is checked against an
+    /// independent expected state, then against a fresh reader of the same
+    /// scratch suite. Recreating the reader after each step also exercises
+    /// changes made while the panel is hidden or another page is being edited.
+    @MainActor
+    func testSettingsHuntSeededPreferenceSequencesRoundTripEveryStep() {
+        for seed: UInt64 in [0x51A711, 0xCA1E42, 0xA11CE5, 0xD0C0DE] {
+            let (defaults, suiteName) = makeDefaults()
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            var random = SettingsHuntRandom(state: seed)
+            var settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+            let fresh = SettingsHuntState(settings)
+            var expected = fresh
+            var navigation = SettingsNavigation(defaults: defaults)
+            var expectedPage = SettingsSection.general
+
+            XCTAssertEqual(fresh.theme, .original)
+            XCTAssertEqual(fresh.surface, .glass)
+            XCTAssertEqual(fresh.tint, .off)
+            XCTAssertEqual(fresh.appearance, .system)
+            XCTAssertFalse(fresh.brightenGlass)
+            XCTAssertTrue(fresh.soundsEnabled)
+            XCTAssertEqual(fresh.animations, .lively)
+            XCTAssertEqual(fresh.reducedStyle, .instant)
+            XCTAssertEqual(fresh.dismissMode, .clickAway)
+            XCTAssertFalse(fresh.agentAccess)
+            XCTAssertEqual(fresh.claudeChoice, AgentRunChoice(model: "sonnet", effort: "medium"))
+            XCTAssertEqual(fresh.codexChoice, AgentRunChoice(model: "gpt-6.1-sol", effort: "medium"))
+
+            for step in 0..<420 {
+                switch random.next(31) {
+                case 0:
+                    let choice = AtticPanelTheme.allCases[random.next(AtticPanelTheme.allCases.count)]
+                    settings.panelTheme = choice; expected.theme = choice
+                case 1:
+                    let choice = PanelSurfaceStyle.allCases[random.next(PanelSurfaceStyle.allCases.count)]
+                    settings.panelSurfaceStyle = choice; expected.surface = choice
+                case 2:
+                    let choice = PanelTintLevel.allCases[random.next(PanelTintLevel.allCases.count)]
+                    settings.panelTint = choice; expected.tint = choice
+                case 3:
+                    let choice = AppearancePreference.allCases[random.next(AppearancePreference.allCases.count)]
+                    settings.appearance = choice; expected.appearance = choice
+                case 4:
+                    let input = [0.01, 0.3, 0.65, 0.95, 2.0][random.next(5)]
+                    settings.panelTintLength = input
+                    expected.tintLength = min(1, max(PanelTintLength.range.lowerBound, input))
+                case 5:
+                    settings.brightenGlass.toggle(); expected.brightenGlass.toggle()
+                case 6:
+                    settings.soundsEnabled.toggle(); expected.soundsEnabled.toggle()
+                case 7:
+                    settings.hapticsEnabled.toggle(); expected.hapticsEnabled.toggle()
+                case 8:
+                    let choice = AtticAnimationLevel.allCases[random.next(AtticAnimationLevel.allCases.count)]
+                    settings.animations = choice; expected.animations = choice
+                case 9:
+                    let choice = AtticReducedMotionStyle.allCases[random.next(AtticReducedMotionStyle.allCases.count)]
+                    settings.reducedMotionStyle = choice; expected.reducedStyle = choice
+                case 10:
+                    settings.nextEventInNow.toggle(); expected.nextEventInNow.toggle()
+                case 11:
+                    settings.isAgentAccessEnabled.toggle(); expected.agentAccess.toggle()
+                case 12:
+                    let choice = AgentBackend.allCases[random.next(AgentBackend.allCases.count)]
+                    settings.inAppAgentBackend = choice; expected.backend = choice
+                case 13, 14:
+                    let backend: AgentBackend = step % 2 == 0 ? .claude : .codex
+                    let options = AgentModelCatalog.models(for: backend)
+                    let model = options[random.next(options.count)]
+                    let choice = AgentRunChoice(model: model.id, effort: model.efforts.first)
+                    settings.setInAppAgentChoice(choice, for: backend)
+                    if backend == .claude { expected.claudeChoice = choice }
+                    else { expected.codexChoice = choice }
+                case 15:
+                    let choice = ScreenCorner.allCases[random.next(ScreenCorner.allCases.count)]
+                    settings.corner = choice; expected.corner = choice
+                case 16:
+                    let choice = PanelIslandSpot.allCases[random.next(PanelIslandSpot.allCases.count)]
+                    settings.islandSpot = choice; expected.islandSpot = choice
+                case 17:
+                    let choice = PanelDismissMode.allCases[random.next(PanelDismissMode.allCases.count)]
+                    settings.panelDismissMode = choice; expected.dismissMode = choice
+                case 18:
+                    let input = [-1.0, 0.2, 0.8, 2.0, .infinity][random.next(5)]
+                    settings.revealDelay = input
+                    expected.revealDelay = input.isFinite ? min(2, max(0.2, input)) : 0.2
+                case 19:
+                    let input = [-1.0, 0.1, 0.9, 2.0, .nan][random.next(5)]
+                    settings.hideDelay = input
+                    expected.hideDelay = input.isFinite ? min(2, max(0.1, input)) : 0.3
+                case 20:
+                    let input = [-1.0, 10, 52, 140, 900, .nan][random.next(6)]
+                    settings.panelCornerSize = input
+                    expected.cornerSize = input.isFinite ? min(PanelCornerSize.max, max(PanelCornerSize.min, input)) : PanelCornerSize.defaultValue
+                case 21:
+                    let input = [-1.0, 320, 365, 2_000, .infinity][random.next(5)]
+                    settings.panelContentSize = input
+                    expected.panelWidth = input.isFinite ? min(PanelContentSize.max, max(PanelContentSize.min, input)) : PanelContentSize.defaultValue
+                case 22:
+                    settings.quickCaptureEnabled.toggle(); expected.quickCaptureEnabled.toggle()
+                case 23:
+                    let choice = [GlobalHotKeyCombination.newTask,
+                                  GlobalHotKeyCombination(keyCode: 0, modifiers: GlobalHotKeyCombination.newTask.modifiers),
+                                  GlobalHotKeyCombination(keyCode: 1, modifiers: GlobalHotKeyCombination.newTask.modifiers)][random.next(3)]
+                    XCTAssertNil(choice.recordingProblem)
+                    settings.quickCaptureShortcut = choice; expected.shortcut = choice
+                case 24:
+                    settings.revealOnHover.toggle(); expected.revealOnHover.toggle()
+                case 25:
+                    let choice = RevealModifier.allCases[random.next(RevealModifier.allCases.count)]
+                    settings.revealModifier = choice; expected.revealModifier = choice
+                case 26:
+                    let choice = RevealDisplays.allCases[random.next(RevealDisplays.allCases.count)]
+                    settings.revealDisplays = choice; expected.revealDisplays = choice
+                case 27:
+                    let choices = ["screen-z", "screen-a", "screen-b", "screen-z", ""]
+                    let list = (0...random.next(5)).map { _ in choices[random.next(choices.count)] }
+                    settings.revealDisplayIDs = list
+                    expected.revealDisplayIDs = Array(Set(list.filter { !$0.isEmpty })).sorted()
+                case 28:
+                    let choice = PanelHideAnimation.allCases[random.next(PanelHideAnimation.allCases.count)]
+                    settings.hideAnimation = choice; expected.hideAnimation = choice
+                case 29:
+                    let choice = SettingsSection.allCases[random.next(SettingsSection.allCases.count)]
+                    navigation.select(choice); expectedPage = choice
+                default:
+                    defaults.removePersistentDomain(forName: suiteName)
+                    settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+                    navigation = SettingsNavigation(defaults: defaults)
+                    expected = fresh
+                    expectedPage = .general
+                }
+
+                let label = "seed=\(String(seed, radix: 16)) step=\(step)"
+                XCTAssertEqual(SettingsHuntState(settings), expected, "live state: \(label)")
+                XCTAssertEqual(SettingsHuntState(AppSettings(defaults: defaults, motionLabAvailable: false)),
+                               expected, "relaunch state: \(label)")
+                XCTAssertEqual(navigation.selection, expectedPage, "navigation: \(label)")
+                XCTAssertEqual(SettingsNavigation(defaults: defaults).selection, expectedPage,
+                               "relaunch navigation: \(label)")
+
+                // The panel, its miniature and the island use one surface
+                // treatment model even when contrast/transparency changes.
+                let reduceTransparency = step % 2 == 0
+                let contrast: ColorSchemeContrast = step % 3 == 0 ? .increased : .standard
+                let scheme: ColorScheme = step % 2 == 0 ? .light : .dark
+                XCTAssertEqual(settings.panelSurfaceTreatment(colorScheme: scheme, contrast: contrast,
+                                                               reduceTransparency: reduceTransparency),
+                               expected.theme.surfaceTreatment(colorScheme: scheme, contrast: contrast,
+                                                               surface: expected.surface, tint: expected.tint,
+                                                               tintLength: expected.tintLength,
+                                                               reduceTransparency: reduceTransparency),
+                               "panel appearance: \(label)")
+            }
+            print("SETTINGS_HUNT seed=\(String(seed, radix: 16)) steps=420")
+        }
+    }
+
+    private struct SettingsHuntRandom {
+        var state: UInt64
+        mutating func next(_ bound: Int) -> Int {
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return Int(state % UInt64(bound))
+        }
+    }
+
+    private struct SettingsHuntState: Equatable {
+        var theme: AtticPanelTheme
+        var surface: PanelSurfaceStyle
+        var tint: PanelTintLevel
+        var tintLength: Double
+        var appearance: AppearancePreference
+        var brightenGlass: Bool
+        var soundsEnabled: Bool
+        var hapticsEnabled: Bool
+        var animations: AtticAnimationLevel
+        var reducedStyle: AtticReducedMotionStyle
+        var nextEventInNow: Bool
+        var agentAccess: Bool
+        var backend: AgentBackend
+        var claudeChoice: AgentRunChoice
+        var codexChoice: AgentRunChoice
+        var corner: ScreenCorner
+        var islandSpot: PanelIslandSpot
+        var dismissMode: PanelDismissMode
+        var revealDelay: Double
+        var hideDelay: Double
+        var cornerSize: Double
+        var panelWidth: Double
+        var quickCaptureEnabled: Bool
+        var shortcut: GlobalHotKeyCombination
+        var revealOnHover: Bool
+        var revealModifier: RevealModifier
+        var revealDisplays: RevealDisplays
+        var revealDisplayIDs: [String]
+        var hideAnimation: PanelHideAnimation
+
+        @MainActor
+        init(_ settings: AppSettings) {
+            theme = settings.panelTheme
+            surface = settings.panelSurfaceStyle
+            tint = settings.panelTint
+            tintLength = settings.panelTintLength
+            appearance = settings.appearance
+            brightenGlass = settings.brightenGlass
+            soundsEnabled = settings.soundsEnabled
+            hapticsEnabled = settings.hapticsEnabled
+            animations = settings.animations
+            reducedStyle = settings.reducedMotionStyle
+            nextEventInNow = settings.nextEventInNow
+            agentAccess = settings.isAgentAccessEnabled
+            backend = settings.inAppAgentBackend
+            claudeChoice = settings.inAppAgentChoice(for: .claude)
+            codexChoice = settings.inAppAgentChoice(for: .codex)
+            corner = settings.corner
+            islandSpot = settings.islandSpot
+            dismissMode = settings.panelDismissMode
+            revealDelay = settings.revealDelay
+            hideDelay = settings.hideDelay
+            cornerSize = settings.panelCornerSize
+            panelWidth = settings.panelContentSize
+            quickCaptureEnabled = settings.quickCaptureEnabled
+            shortcut = settings.quickCaptureShortcut
+            revealOnHover = settings.revealOnHover
+            revealModifier = settings.revealModifier
+            revealDisplays = settings.revealDisplays
+            revealDisplayIDs = settings.revealDisplayIDs
+            hideAnimation = settings.hideAnimation
+        }
+    }
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suiteName = "AppSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

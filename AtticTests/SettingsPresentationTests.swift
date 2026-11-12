@@ -361,6 +361,60 @@ final class SettingsPresentationTests: XCTestCase {
                      "a key Attic never binds must show no equivalent rather than a wrong one")
     }
 
+    func testSettingsHuntRecorderCannotClaimAnExistingAtticCommand() {
+        // All of these have a command in Attic already; registering one as
+        // Quick Capture makes two actions compete for the same key.
+        let existing: [(Int, UInt32, String)] = [
+            (kVK_ANSI_N, UInt32(cmdKey | shiftKey), "New note"),
+            (kVK_ANSI_F, UInt32(cmdKey | shiftKey), "Search Done Tasks"),
+            (kVK_ANSI_P, UInt32(cmdKey | shiftKey), "Pin Panel"),
+            (kVK_ANSI_Z, UInt32(cmdKey | shiftKey), "Redo"),
+            (kVK_ANSI_I, UInt32(cmdKey | shiftKey), "Task/Note actions"),
+            (kVK_ANSI_L, UInt32(cmdKey | shiftKey), "All notes"),
+            (kVK_ANSI_S, UInt32(cmdKey | shiftKey), "Save Recovery Copy"),
+            (kVK_ANSI_X, UInt32(cmdKey | shiftKey), "Strikethrough"),
+            (kVK_ANSI_K, UInt32(cmdKey | shiftKey), "Link"),
+            (kVK_ANSI_7, UInt32(cmdKey | shiftKey), "Bulleted list"),
+            (kVK_ANSI_8, UInt32(cmdKey | shiftKey), "Numbered list"),
+            (kVK_ANSI_9, UInt32(cmdKey | shiftKey), "Checklist"),
+            (kVK_ANSI_0, UInt32(cmdKey | optionKey), "Body/No Priority"),
+            (kVK_ANSI_1, UInt32(cmdKey | optionKey), "Heading/Low Priority"),
+            (kVK_ANSI_2, UInt32(cmdKey | optionKey), "Heading/Medium Priority"),
+            (kVK_ANSI_3, UInt32(cmdKey | optionKey), "Heading/High Priority"),
+            (kVK_ANSI_4, UInt32(cmdKey | optionKey), "Quote"),
+            (kVK_ANSI_5, UInt32(cmdKey | optionKey), "Mono"),
+            (kVK_ANSI_T, UInt32(cmdKey | optionKey), "Table"),
+            (kVK_ANSI_S, UInt32(cmdKey | optionKey), "Make Subtask"),
+            (kVK_UpArrow, UInt32(cmdKey | optionKey), "Move line up"),
+            (kVK_DownArrow, UInt32(cmdKey | optionKey), "Move line/Add row"),
+            (kVK_RightArrow, UInt32(cmdKey | optionKey), "Add column"),
+            (kVK_ANSI_C, UInt32(cmdKey | optionKey | shiftKey), "Copy as Markdown"),
+            (kVK_ANSI_V, UInt32(cmdKey | optionKey | shiftKey), "Paste as Text"),
+            (kVK_ANSI_H, UInt32(cmdKey | controlKey), "Fold heading")
+        ]
+        for (keyCode, modifiers, action) in existing {
+            let combination = GlobalHotKeyCombination(
+                keyCode: UInt32(keyCode), modifiers: modifiers)
+            XCTAssertNotNil(combination.recordingProblem,
+                            "Quick Capture must not claim the \(action) shortcut")
+        }
+        // Keep valid modified letter recording available.
+        XCTAssertNil(GlobalHotKeyCombination(
+            keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(controlKey | optionKey)).recordingProblem)
+    }
+
+    @MainActor
+    func testSettingsHuntOldRecordedAppShortcutIsRejectedOnRelaunch() throws {
+        try withSettingsDefaults { defaults in
+            defaults.set(Int(kVK_ANSI_N), forKey: "quickCaptureKeyCode")
+            defaults.set(Int(cmdKey | shiftKey), forKey: "quickCaptureModifiers")
+            let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+            XCTAssertEqual(settings.quickCaptureShortcut, .newTask,
+                           "An older recorded key may no longer shadow the New note command")
+            XCTAssertNil(settings.quickCaptureShortcut.recordingProblem)
+        }
+    }
+
     /// Whatever the system answers, `register()` must leave a state the UI can
     /// read: success, or a failure carrying the refusing stage and status.
     /// Silently staying `notRegistered` is what hid the old defect.
