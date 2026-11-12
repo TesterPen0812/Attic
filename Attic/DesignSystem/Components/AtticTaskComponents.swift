@@ -976,7 +976,7 @@ struct AtticOwnFocusRing: ViewModifier {
         case circle(diameter: CGFloat)
         /// A rounded rectangle of this radius; `height` limits it to the
         /// visible chip inside a taller hit area.
-        case rounded(radius: CGFloat, height: CGFloat? = nil)
+        case rounded(radius: CGFloat, height: CGFloat? = nil, width: CGFloat? = nil)
     }
 
     let outline: Outline
@@ -1008,8 +1008,8 @@ struct AtticOwnFocusRing: ViewModifier {
         switch outline {
         case let .circle(diameter):
             AtticFocusRing(cornerRadius: diameter / 2).frame(width: diameter, height: diameter)
-        case let .rounded(radius, height):
-            AtticFocusRing(cornerRadius: radius).frame(height: height)
+        case let .rounded(radius, height, width):
+            AtticFocusRing(cornerRadius: radius).frame(width: width, height: height)
         }
     }
 }

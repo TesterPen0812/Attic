@@ -198,16 +198,16 @@ final class CalendarPageTests: XCTestCase {
         let onPast = CalendarMonthMath.weeks(for: CalendarMonth(year: 2026, month: 10), today: day(2026, 10, 29),
                                              selected: day(2026, 10, 5), calendar: calendar).flatMap(\.days)
         XCTAssertEqual(onPast.first { $0.day == day(2026, 10, 5) }?.style, .selected, "a selected past day is the ink key")
-        // The older key (owner, 2026-10-31): the whole cell, 60 px tall,
-        // radius 20 px.
+        // Option D (owner, 12 Nov): a 30 pt square, 8 pt continuous corners.
         XCTAssertEqual(CalendarDesign.keyHeight, 30)
-        XCTAssertEqual(CalendarDesign.keyRadius, 10)
+        XCTAssertEqual(CalendarDesign.keyWidth, 30)
+        XCTAssertEqual(CalendarDesign.keyRadius, 8)
     }
 
     func testTheSelectedDayIsTheOlderInkKeyRedOnToday() throws {
         let selected = try render(key(day(2026, 10, 31), today: day(2026, 10, 29), selected: day(2026, 10, 31)))
         let box = try XCTUnwrap(inkBox(selected, minAlpha: 0.5))
-        XCTAssertGreaterThan(box.width, 70, "the key fills its cell, wider than a 30 pt square")
+        XCTAssertEqual(box.width, 60, accuracy: 2, "a 30 pt square, not the whole cell")
         XCTAssertEqual(box.height, 60, accuracy: 2, "60 px tall")
         for mode in AtticDesignContext.Mode.allCases {
             for increased in [false, true] {

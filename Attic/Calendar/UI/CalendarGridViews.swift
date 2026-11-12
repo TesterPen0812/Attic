@@ -62,9 +62,9 @@ struct CalendarWeekRow: View, Equatable {
 
 /// A day (Accepted 2026-10-30, "Calendar page: Grid"): flat in every
 /// month. The number (today red, past days grey, the rest ink) and its
-/// event dots and open-task ring under it. The selected day is the older
-/// big key (owner, 2026-10-31): ink with a white number, red when it is
-/// today.
+/// event dots and open-task ring under it. The selected day sits on a
+/// square key (owner, 12 Nov: option D): ink with a white number, red when
+/// it is today.
 struct CalendarKey: View {
     let day: CalendarGridDay
     let action: () -> Void
@@ -97,7 +97,7 @@ struct CalendarKey: View {
         }
         .buttonStyle(CalendarKeyButtonStyle(style: day.style))
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: CalendarDesign.keyRadius, height: CalendarDesign.keyHeight))
+        .atticOwnFocusRing(.rounded(radius: CalendarDesign.keyRadius, height: CalendarDesign.keyHeight, width: CalendarDesign.keyWidth))
         .accessibilityLabel(Self.accessibilityName(day.day))
         .accessibilityAddTraits(day.isSelected ? .isSelected : [])
         .accessibilityIdentifier("calendar-day-\(day.day.rawValue)")
@@ -166,10 +166,9 @@ private struct CalendarKeyFace: View {
     let style: CalendarKeyStyle
 
     @Environment(\.atticDesign) private var design
-    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
-        let shape = AtticControlShape.shape(cornerRadius: CalendarDesign.keyRadius, exponent: cornerExponent)
+        let shape = RoundedRectangle(cornerRadius: CalendarDesign.keyRadius, style: .continuous)
         let fill = CalendarKeyButtonStyle.fill(style: style, isPressed: configuration.isPressed, tokens: design.tokens)
         configuration.label
             .background {
@@ -183,8 +182,10 @@ private struct CalendarKeyFace: View {
                                                           startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.25)))
                             }
                         }
+                        .frame(width: CalendarDesign.keyWidth, height: CalendarDesign.keyHeight)
                 }
             }
-            .contentShape(shape)
+            // The whole cell still takes the click.
+            .contentShape(Rectangle())
     }
 }

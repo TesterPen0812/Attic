@@ -16,10 +16,11 @@ enum CalendarDesign {
     static let gridInset: CGFloat = 15
     static let keyGap: CGFloat = 3.5
     // Days: 60 px tall; 2 px above and 7 px below each row. The selected
-    // day's key fills its cell, radius 20 px (owner, 2026-10-31: the older
-    // key).
+    // day's key is a 30 pt square with 8 pt continuous corners, centred in
+    // its cell (owner, 12 Nov: calendar-day-shape-drafts option D).
     static let keyHeight: CGFloat = 30
-    static let keyRadius: CGFloat = 10
+    static let keyWidth: CGFloat = 30
+    static let keyRadius: CGFloat = 8
     static let weekTop: CGFloat = 1
     static let weekBottom: CGFloat = 3.5
     static let weekPitch: CGFloat = weekTop + keyHeight + weekBottom
