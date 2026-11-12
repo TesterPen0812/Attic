@@ -276,6 +276,11 @@ final class AtticGlassMenuTests: XCTestCase {
     func testTheCardGrowsAndItsRowsCascadeButReduceMotionOnlyFades() throws {
         let saved = AtticGlassMenu.design
         defer { AtticGlassMenu.design = saved }
+        // GitHub's macOS runners can enable system Reduce Motion. This case
+        // exercises both explicit branches regardless of the runner setting.
+        var animated = saved
+        animated.reduceMotion = false
+        AtticGlassMenu.design = animated
         let menu = open(commands())
         let card = menu.cards[0]
         let lift = try XCTUnwrap(card.window.lift.layer)
@@ -293,7 +298,7 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(AtticMenuMetrics.stagger(20), 0.24, "at most 240 ms")
         menu.close(animated: false)
 
-        var reduced = saved
+        var reduced = animated
         reduced.reduceMotion = true
         AtticGlassMenu.design = reduced
         let calm = open(commands())
