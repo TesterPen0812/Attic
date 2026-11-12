@@ -21,6 +21,103 @@ final class SettingsWindowHostedTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    /// Accessibility of each Settings page's hosted controls; the earlier
+    /// appearance/defaults audit did not exercise VoiceOver's control tree.
+    func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
+        // SettingsNavigation persists its selection in standard defaults,
+        // independently of the isolated AppSettings preferences below.
+        // Visiting About here must not change the starting page of later tests.
+        let selectionKey = SettingsSection.selectionStorageKey
+        let previousSelection = UserDefaults.standard.object(forKey: selectionKey)
+        defer {
+            if let previousSelection { UserDefaults.standard.set(previousSelection, forKey: selectionKey) }
+            else { UserDefaults.standard.removeObject(forKey: selectionKey) }
+        }
+        let suite = "SettingsAX.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let host = NSHostingView(rootView: SettingsView(
+            settings: AppSettings(defaults: defaults),
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 860, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let roles: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuButton", "AXPopUpButton",
+                                  "AXComboBox", "AXTextField", "AXTextArea", "AXSlider", "AXLink", "AXSwitch"]
+        func descendants(_ node: AnyObject, visited: inout Set<ObjectIdentifier>) -> [AnyObject] {
+            guard visited.insert(ObjectIdentifier(node)).inserted else { return [] }
+            var result: [AnyObject] = [node]
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] {
+                result.append(contentsOf: descendants(child as AnyObject, visited: &visited))
+            }
+            return result
+        }
+        func externalScrollbarsAreHidden() -> Bool {
+            var found = false
+            var allHidden = true
+            func visit(_ element: AXUIElement, depth: Int) {
+                guard depth < 25 else { return }
+                var rawRole: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole) == .success,
+                   rawRole as? String == kAXScrollBarRole as String {
+                    found = true
+                    var hidden: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden) != .success ||
+                       hidden as? Bool != true { allHidden = false }
+                }
+                var children: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success else {
+                    return
+                }
+                for child in (children as? [AXUIElement]) ?? [] { visit(child, depth: depth + 1) }
+            }
+            visit(AXUIElementCreateApplication(getpid()), depth: 0)
+            return found && allHidden
+        }
+        for section in SettingsSection.allCases {
+            host.layoutSubtreeIfNeeded()
+            spin(0.12)
+            var visited = Set<ObjectIdentifier>()
+            let before = descendants(host, visited: &visited)
+            let row = try XCTUnwrap(before.first { $0.accessibilityIdentifier?() == section.accessibilityIdentifier },
+                                    "Settings sidebar exposes \(section.rawValue)")
+            XCTAssertTrue(row.accessibilityPerformPress?() ?? false, "Settings can switch to \(section.rawValue) through AX")
+            spin(0.15)
+            visited.removeAll()
+            let after = descendants(host, visited: &visited)
+            // AppKit reports four NSAccessibilityScrollerPart pseudo-buttons
+            // even while their parent scrollbar has AXHidden=true. They are
+            // not reachable controls; require that state from an external AX
+            // client before excluding only those system-created parts.
+            let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
+            if !hiddenParts.isEmpty {
+                XCTAssertTrue(externalScrollbarsAreHidden(),
+                              "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
+            }
+            let interactive = after.filter {
+                roles.contains($0.accessibilityRole?()?.rawValue ?? "") &&
+                String(describing: type(of: $0)) != "NSAccessibilityScrollerPart"
+            }
+            let missing = interactive.filter {
+                ($0.accessibilityLabel?() ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }.map { "\($0.accessibilityRole?()?.rawValue ?? "?") \($0.accessibilityIdentifier?() ?? "")" }
+            print("A11Y_SETTINGS section=\(section.rawValue) interactive=\(interactive.count) hiddenNativeScrollParts=\(hiddenParts.count) missing=\(missing)")
+            XCTAssertFalse(interactive.isEmpty, "Settings has accessible controls on \(section.rawValue)")
+            XCTAssertTrue(missing.isEmpty, "\(section.rawValue) has unnamed controls: \(missing)")
+        }
+    }
+
     func testR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
         let suite = "SettingsR24.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -86,6 +183,15 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
+        // The viewport assertion targets General's controls; an earlier AX
+        // navigation test or a persisted user choice may have selected About.
+        let selectionKey = SettingsSection.selectionStorageKey
+        let previousSelection = UserDefaults.standard.object(forKey: selectionKey)
+        UserDefaults.standard.set(SettingsSection.general.rawValue, forKey: selectionKey)
+        defer {
+            if let previousSelection { UserDefaults.standard.set(previousSelection, forKey: selectionKey) }
+            else { UserDefaults.standard.removeObject(forKey: selectionKey) }
+        }
         let suite = "SettingsUX2.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
