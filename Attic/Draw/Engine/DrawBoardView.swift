@@ -12,6 +12,9 @@ import QuartzCore
 /// every conversion flips once here.
 @MainActor
 final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
+    #if DEBUG
+    static private(set) var activeNotificationRegistrationsForTesting = 0
+    #endif
     let model: DrawPageModel
 
     private let dotsLayer = CALayer()
@@ -731,6 +734,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         releaseCursor()
         super.viewDidMoveToWindow()
         for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
+        #if DEBUG
+        Self.activeNotificationRegistrationsForTesting -= stateObservers.count
+        #endif
         stateObservers = []
         guard let window else { return }
         if model.isShown { queueInitialKeyboardFocus() }
@@ -749,6 +755,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                 }
             })
         }
+        #if DEBUG
+        Self.activeNotificationRegistrationsForTesting += stateObservers.count
+        #endif
         queueCursorRefresh()
     }
 
