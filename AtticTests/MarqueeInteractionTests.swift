@@ -106,6 +106,39 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertNil(adapter.controller.handle(blank), "genuine whitespace still starts a marquee")
     }
 
+    func testFilteredShowAllRowKeepsNativeMouseDownWhenListIsEmpty() throws {
+        let store = try makeTestStore()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = FlippedView(frame: CGRect(x: 0, y: 0, width: 320, height: 360))
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        windows.append(window)
+        let pointer = TasksPointer()
+        pointer.view = document
+        let adapter = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: .now)
+
+        for filter in ["overdue", "due", "priority"] {
+            var options = TasksViewOptions()
+            switch filter {
+            case "overdue": options.show = .overdueOnly
+            case "due": options.show = .dueOrOverdue
+            default: options.priority = .highOnly
+            }
+            model.setViewOptions(options, for: .now)
+            XCTAssertTrue(model.viewOptions(for: .now).filters)
+            XCTAssertTrue(model.rows(for: .now).isEmpty)
+            let showAll = event(.leftMouseDown, point: CGPoint(x: 280, y: 16), in: document)
+            XCTAssertTrue(adapter.controller.handle(showAll) === showAll,
+                          "Show All must receive its pointer press with an empty \(filter) filter")
+            let blank = event(.leftMouseDown, point: CGPoint(x: 140, y: 100), in: document)
+            XCTAssertNil(adapter.controller.handle(blank), "blank area still begins a marquee for \(filter)")
+            _ = adapter.controller.handle(event(.leftMouseUp, point: CGPoint(x: 140, y: 100), in: document))
+        }
+    }
+
     func testR12GeometryTracksFoldAndUnfoldBeforeDeletingTheHitBlock() throws {
         for initiallyFolded in [false, true] {
             var heading = NoteBlock.text("A", style: "heading")
