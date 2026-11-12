@@ -1004,6 +1004,27 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try store.open(id).objects.first?.text, "Owner's saved sentence")
     }
 
+    func testHunt16AgentDeletesCurrentCanvasDuringInkNeverTransfersStrokeToAnotherCanvas() throws {
+        let erased = try XCTUnwrap(model.canvasID)
+        let survivor = store.create(name: "Surviving board")
+        let kept = DrawObject(frame: DrawFrame(x: 60, y: 130, width: 65, height: 45),
+                              content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([kept]), on: survivor.id).isSaved)
+
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 100, y: 200))
+        model.pointerDragged(to: CGPoint(x: 140, y: 225))
+        // The agent removes the entire canvas while the gesture is in flight.
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: erased).isSaved)
+        model.pointerUp(at: CGPoint(x: 170, y: 240))
+
+        XCTAssertEqual(model.canvasID, survivor.id)
+        XCTAssertEqual(try store.open(survivor.id).objects, [kept],
+                       "A stroke begun on a deleted board must never be saved to an unrelated board")
+        XCTAssertNil(model.live)
+        XCTAssertFalse(model.isDrawingLive)
+    }
+
     func testHunt16AgentDeletesCanvasBeforePasteNeverPastesIntoReplacement() throws {
         let originalID = try XCTUnwrap(model.canvasID)
         let copied = DrawObject(frame: DrawFrame(x: 75, y: 100, width: 55, height: 35),
