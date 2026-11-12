@@ -622,24 +622,25 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The capture seam
 
-    /// Planning.md, Accepted 2026-11-10 (Loam's menus): the picker cards
-    /// were opaque, which the glass rule forbids, so with the controls on
-    /// Liquid Glass the priority picker's card is glass, not the opaque
-    /// `popoverFill`; Reduce Transparency still gets the solid card.
-    func testAGlassConfiguredPickerIsGlassAndReduceTransparencyStaysSolid() throws {
-        for (mode, glass) in [(AtticDesignContext.Mode.light, true), (.dark, true), (.light, false), (.dark, false)] {
-            let design = AtticDesignContext(mode: mode, reduceTransparency: !glass, controls: .liquidGlass)
-            XCTAssertEqual(design.effectiveControls, glass ? .liquidGlass : .craft)
+    /// Owner, 12 Nov ("the same material as the panel"): the priority
+    /// picker's card is the panel's own surface, not the opaque
+    /// `popoverFill`, whatever the controls setting; a solid panel (and
+    /// Reduce Transparency) gives a solid card in the panel's base. Glass
+    /// and Frosted are covered in capture mode by `AtticGlassMenuTests`.
+    func testAPickerCardIsThePanelsSurface() throws {
+        for (mode, surface, reduced) in [(AtticDesignContext.Mode.light, PanelSurfaceStyle.solid, false), (.dark, .solid, false),
+                                         (.light, .glass, true), (.dark, .frosted, true)] {
+            let design = AtticDesignContext(mode: mode, surface: surface, reduceTransparency: reduced, controls: .liquidGlass)
             let margin: CGFloat = 30
             let cardWidth = AtticDropdownMetrics.commandCardWidth
-            // A swatch of `popoverFill` beside the card, through the same
-            // renderer, is the reference.
+            // A swatch of the panel's surface beside the card, through the
+            // same renderer, is the reference.
             let view = ZStack(alignment: .topLeading) {
                 Color(red: 1, green: 0, blue: 1)
                 HStack(alignment: .top, spacing: margin) {
                     AtticDropdownCard { TaskPriorityPickerView(current: .high, onPick: { _ in }) }
                         .frame(width: cardWidth)
-                    Rectangle().fill(design.tokens.popoverFill.color).frame(width: 20, height: 20)
+                    AtticPanelStageSurface(cornerSize: 0).frame(width: 20, height: 20)
                 }
                 .padding(margin)
             }
@@ -657,16 +658,10 @@ final class AtticDropdownTests: XCTestCase {
             // Inside the card's top and bottom edges, clear of its corners and rows.
             for point in [CGPoint(x: margin + cardWidth / 2, y: margin + 1.5), CGPoint(x: margin + cardWidth / 2, y: height - margin - 1.5)] {
                 let c = try colour(point)
-                if glass {
-                    let apart = [abs(c.redComponent - fill.redComponent), abs(c.greenComponent - fill.greenComponent),
-                                 abs(c.blueComponent - fill.blueComponent)].max() ?? 0
-                    XCTAssertGreaterThan(apart, 0.05, "\(mode): glass, not popoverFill, at \(point)")
-                    continue
-                }
                 XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "\(mode): opaque at \(point)")
-                XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
-                XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
-                XCTAssertEqual(Double(c.blueComponent), Double(fill.blueComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
+                XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
+                XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
+                XCTAssertEqual(Double(c.blueComponent), Double(fill.blueComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
             }
         }
     }

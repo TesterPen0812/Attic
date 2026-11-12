@@ -97,7 +97,11 @@ final class AtticGlassMenuTests: XCTestCase {
                      "a bare key is the list's, not drawn")
     }
 
-    func testMenuSecondaryInksReadThroughGlass() throws {
+    /// The card is the panel's material (owner, 12 Nov), so its inks are
+    /// the panel's: see-through exactly when the panel is (whatever the
+    /// controls setting), and on a solid card the greys are opaque and keep
+    /// their floor against the panel's own base.
+    func testMenuSecondaryInksAreThePanelsOnItsMaterial() throws {
         for mode in AtticDesignContext.Mode.allCases {
             for surface in [PanelSurfaceStyle.glass, .frosted, .solid] {
                 for controls in AtticControlMaterial.allCases {
@@ -105,22 +109,73 @@ final class AtticGlassMenuTests: XCTestCase {
                         for contrast in [false, true] {
                             let style = AtticGlassMenuStyle(design: AtticDesignContext(mode: mode, surface: surface,
                                 increaseContrast: contrast, reduceTransparency: reduced, controls: controls))
-                            XCTAssertEqual(style.isGlass, controls == .liquidGlass && !reduced)
-                            guard !style.isGlass else { continue } // Real glass is an on-screen gate.
+                            XCTAssertEqual(style.isSeeThrough, surface != .solid && !reduced, "\(surface), \(controls), RT=\(reduced)")
+                            guard !style.isSeeThrough else { continue } // Real glass is an on-screen gate.
                             let floor = contrast ? 4.5 : 3.0
                             for ink in [style.detail, style.header, style.disabled] {
                                 let colour = try XCTUnwrap(ink.usingColorSpace(.sRGB))
                                 let rgba = AtticRGBA(red: colour.redComponent, green: colour.greenComponent,
                                     blue: colour.blueComponent, alpha: colour.alphaComponent)
                                 XCTAssertEqual(rgba.alpha, 1, "opaque card on \(surface), \(controls), \(mode)")
-                                XCTAssertGreaterThanOrEqual(rgba.contrast(on: style.tokens.popoverFill), floor,
-                                    "the actual opaque card fill: \(surface), \(controls), \(mode), IC=\(contrast)")
+                                XCTAssertGreaterThanOrEqual(rgba.contrast(on: style.tokens.panel.base), floor,
+                                    "the panel's base under the card: \(surface), \(controls), \(mode), IC=\(contrast)")
                             }
                             for colour in [style.tokens.tagInk(.pink), style.tokens.ink(.priorityMark)] {
-                                XCTAssertEqual(style.colourInk(colour), colour, "no vivid on the opaque card")
+                                XCTAssertEqual(style.colourInk(colour), colour, "no vivid on a solid card")
                             }
                             XCTAssertEqual(style.destructive, style.tokens.ink(.dueText).nsColor,
-                                "opaque cards keep the original colour, without vivid")
+                                "solid cards keep the original colour, without vivid")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Owner, 12 Nov: "make them the same material as the panel". Every
+    /// menu card's face (the command menus' `AtticGlassMenuSurface` and the
+    /// picker cards' `AtticDropdownSurface`) draws the panel's own surface
+    /// (`AtticPanelStageSurface`'s path) in every appearance: rendered in
+    /// capture mode over the same desktop, the card's middle is the panel's
+    /// middle. A bare `.glassEffect(.regular)` card draws nothing here, so
+    /// the backdrop (magenta) would show through.
+    func testEveryMenuCardWearsThePanelsMaterialInEveryAppearance() throws {
+        let size = CGSize(width: 120, height: 120)
+        let capture = AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey))
+        func middle<V: View>(_ view: V, _ design: AtticDesignContext) throws -> NSColor {
+            let content = view.frame(width: size.width, height: size.height)
+                .padding(40)
+                .background(Color(red: 1, green: 0, blue: 1))
+                .atticDesign(design)
+                .environment(\.atticCapture, capture)
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            return try XCTUnwrap(bitmap.colorAt(x: 40 + Int(size.width / 2), y: 40 + Int(size.height / 2))?.usingColorSpace(.sRGB))
+        }
+        let access: [(contrast: Bool, reduced: Bool)] = [(false, false), (true, false), (false, true)]
+        for mode in AtticDesignContext.Mode.allCases {
+            for palette in AtticPanelTheme.allCases {
+                for surface in PanelSurfaceStyle.allCases {
+                    for tint in [PanelTintLevel.off, .vivid] {
+                        for (contrast, reduced) in access {
+                            for controls in AtticControlMaterial.allCases {
+                                let design = AtticDesignContext(mode: mode, palette: palette, surface: surface, tint: tint,
+                                    increaseContrast: contrast, reduceTransparency: reduced, controls: controls)
+                                let label = "\(design.caption), \(controls)"
+                                let panel = try middle(AtticPanelStageSurface(cornerSize: 0), design)
+                                let cards = [
+                                    ("command menu", try middle(AtticGlassMenuSurface(style: AtticGlassMenuStyle(design: design)), design)),
+                                    ("picker card", try middle(AtticDropdownSurface(), design)),
+                                ]
+                                for (name, card) in cards {
+                                    XCTAssertEqual(Double(card.alphaComponent), Double(panel.alphaComponent), accuracy: 0.01, "\(name): \(label)")
+                                    XCTAssertEqual(Double(card.redComponent), Double(panel.redComponent), accuracy: 0.01, "\(name): \(label)")
+                                    XCTAssertEqual(Double(card.greenComponent), Double(panel.greenComponent), accuracy: 0.01, "\(name): \(label)")
+                                    XCTAssertEqual(Double(card.blueComponent), Double(panel.blueComponent), accuracy: 0.01, "\(name): \(label)")
+                                }
+                            }
                         }
                     }
                 }
