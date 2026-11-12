@@ -1442,6 +1442,16 @@ final class AtticGlassMenuWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    // The system menu's own window (`NSPopupMenuWindow`) never becomes key
+    // either, but it overrides these two to say it is active, so its Liquid
+    // Glass draws the active look: brighter, a glossy rim, lensed edges.
+    // Without them this window's glass draws the inactive look, flatter and
+    // greyer (owner, 12 Nov: "its not the same glass at all"). Private AppKit
+    // methods, read and measured on macOS 27; if a later macOS drops them
+    // these are never called and the glass falls back to the inactive look.
+    @objc func _hasActiveAppearanceIgnoringKeyFocus() -> Bool { true }
+    @objc func _hasActiveControls() -> Bool { true }
+
     /// The rows' view (the card's menu for accessibility).
     var rows: AtticGlassMenuView? { root?.subviews.lazy.compactMap { $0 as? AtticGlassMenuView }.first }
     /// The card's clipping view (its squircle mask).
