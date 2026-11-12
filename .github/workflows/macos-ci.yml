@@ -227,6 +227,53 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  notes-seeds:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    name: Notes editor generated seed ${{ matrix.seed }}
+    runs-on: macos-26
+    # Each seed replays the complete history after every generated command.
+    # That quadratic, deliberately checked behavior is independent of the
+    # functional unit suite, so give each full seed its own required runner.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [11012, 11013, 11014, 11015]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build local-only Notes editor test host
+        run: |
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+          Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
+      - name: Verify complete generated Notes editor seed
+        timeout-minutes: 75
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
+            -resultBundlePath "$RUNNER_TEMP/AtticNotesSeed.xcresult" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed${{ matrix.seed }}
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticNotesSeed.xcresult" --format json > "$RUNNER_TEMP/notes-seed-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/notes-seed-summary.json"
+      - name: Upload Notes editor generated-seed evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-${{ matrix.seed }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   macos:
     needs: validate-inputs
     if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
@@ -400,6 +447,10 @@ jobs:
             -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
             -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
             -skip-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown \
+            -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11012 \
+            -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11013 \
+            -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11014 \
+            -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11015 \
             test-without-building
 
       # Native timing collection has its own bounded step. Its required
@@ -601,17 +652,18 @@ jobs:
         run: python3 Scripts/ci_required_checks.py
 
   required:
-    needs: [validate-inputs, macos, round-trips]
+    needs: [validate-inputs, macos, round-trips, notes-seeds]
     if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Require both parallel test lanes
+      - name: Require every parallel test lane
         env:
           LANE: ${{ inputs.lane }}
           MACOS_JOB: ${{ needs.macos.result }}
           ROUND_TRIPS: ${{ needs.round-trips.result }}
+          NOTES_SEEDS: ${{ needs.notes-seeds.result }}
         run: python3 Scripts/ci_required_checks.py --parallel
 
 

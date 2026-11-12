@@ -176,8 +176,8 @@ Scripts/run_local_ui_tests.zsh
 - **CI** is [`.github/workflows/macos-ci.yml`](.github/workflows/macos-ci.yml)
   ("Attic CI"). It runs on pull requests and on pushes to `main`, using the
   `full` lane. A manual run picks a lane:
-  - `fast`: builds, runs the unit tests and the generated round trips in
-    parallel, the static analyzer, and the project-generation checks. Timing
+  - `fast`: builds, runs the unit tests, full-history Notes editor seeds and
+    generated round trips in parallel, the static analyzer, and the project-generation checks. Timing
     gates report but don't block.
   - `full` (the default): everything in `fast`, plus UI tests, Full Keyboard
     Access tests, the optimized cost gates with the heavy retention soaks,

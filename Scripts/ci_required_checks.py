@@ -21,6 +21,7 @@ FULL_ONLY = {'FKA_TESTS', 'PERF_UI_TESTS', 'DROPDOWN_TESTS'}
 PARALLEL_CHECKS = {
     'MACOS_JOB': 'macos',
     'ROUND_TRIPS': 'round-trips',
+    'NOTES_SEEDS': 'notes-editor-seeds',
 }
 
 
