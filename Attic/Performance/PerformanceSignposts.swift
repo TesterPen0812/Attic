@@ -355,7 +355,7 @@ enum IdleLatencyTrace {
              "task_rows_build", "task_save_durable", "task_save_publish", "task_reload",
              "note_leave", "note_session_open", "note_groups_metadata", "note_groups_rows",
              "calendar_rebuild", "calendar_day_offset",
-             "draw_undo_apply", "draw_board_open", "draw_store_undo",
+             "draw_undo_apply", "draw_board_open", "draw_accessibility_refresh", "draw_store_undo",
              "draw_store_write", "draw_store_recovery": return true
         default: return false
         }

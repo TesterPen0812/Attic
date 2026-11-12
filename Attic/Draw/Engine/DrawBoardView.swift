@@ -921,14 +921,21 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     private func prepareObjectAccessibility() {
         guard accessibilityRevision != model.contentRevision else { return }
-        accessibilityRevision = model.contentRevision
-        let ids = Set(model.objectNavigationIDs)
-        objectAccessibility = objectAccessibility.filter { ids.contains($0.key) }
-        for (index, id) in model.objectNavigationIDs.enumerated() {
-            guard let object = model.object(id) else { continue }
-            let element = objectAccessibility[id] ?? DrawAccessibilityObjectElement(board: self, id: id)
-            element.update(object, number: index + 1)
-            objectAccessibility[id] = element
+        IdleLatencyTrace.span("draw_accessibility_refresh") {
+            let navigationIDs = model.objectNavigationIDs
+            // model.object(id) scans the array. Doing so once for every
+            // VoiceOver child makes each edit's accessibility refresh O(n²).
+            let objectsByID = Dictionary(model.objects.map { ($0.id, $0) },
+                                         uniquingKeysWith: { first, _ in first })
+            let ids = Set(navigationIDs)
+            objectAccessibility = objectAccessibility.filter { ids.contains($0.key) }
+            for (index, id) in navigationIDs.enumerated() {
+                guard let object = objectsByID[id] else { continue }
+                let element = objectAccessibility[id] ?? DrawAccessibilityObjectElement(board: self, id: id)
+                element.update(object, number: index + 1)
+                objectAccessibility[id] = element
+            }
+            accessibilityRevision = model.contentRevision
         }
     }
 

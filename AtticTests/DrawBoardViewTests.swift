@@ -105,6 +105,41 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertFalse(first.accessibilityPerformPress(), "a removed element cannot select a stale object")
     }
 
+    /// A 2,000-object board is navigable to VoiceOver; refreshes after each
+    /// edit must scale with the objects, without a search through all objects
+    /// for every accessibility element.
+    func testLargeBoardAccessibilityRefreshScalesWithObjectCount() throws {
+        model.setShown(false)
+
+        func refreshMS(objects count: Int) -> Double {
+            let canvas = store.create(name: "Accessibility \(count)")
+            let shapes = (0..<count).map { index in
+                DrawObject(frame: DrawFrame(x: Double(index % 40) * 21,
+                                             y: Double(index / 40) * 21, width: 18, height: 18),
+                           zIndex: Int64(index), content: .shape(.rectangle))
+            }
+            XCTAssertTrue(store.perform(.put(shapes), on: canvas.id).isSaved)
+            model.open(canvas.id)
+            XCTAssertEqual(board.accessibilityChildren()?.count, count)
+
+            var samples: [Double] = []
+            for revision in 1...5 {
+                var changed = shapes[0]
+                changed.frame.x = Double(revision)
+                XCTAssertTrue(model.perform(.put([changed])).isSaved)
+                let start = DispatchTime.now().uptimeNanoseconds
+                XCTAssertEqual(board.accessibilityChildren()?.count, count)
+                samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            return samples.sorted()[samples.count / 2]
+        }
+
+        let small = refreshMS(objects: 200)
+        let large = refreshMS(objects: 2_000)
+        XCTAssertLessThan(large, small * 35 + 5,
+                          "Refreshing 10× more objects must not take quadratic time (200: \(small) ms, 2,000: \(large) ms)")
+    }
+
     func testAuditB4TabLeavesTheBoardAtBothEndsOfItsNativeKeyViewLoop() throws {
         final class Stop: NSView { override var acceptsFirstResponder: Bool { true } }
         let id = try XCTUnwrap(model.canvasID)
