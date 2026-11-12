@@ -85,7 +85,7 @@ struct TaskNoteHeadView: View {
             }
         }
         .contentShape(Rectangle())
-        .contextMenu { if head.exists { AtticMenuItems(commands: taskMenu()) } }
+        .atticContextMenu { model.head.exists ? taskMenu() : [] }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(spokenSummary(head))
         .accessibilityIdentifier("task-note-head")
@@ -289,18 +289,8 @@ struct TaskNoteSubtasksBlock: View {
             AtticText(model.alternateNotes.count == 1 ? "Another note for this task" : "Other notes for this task",
                       style: .rowMeta, ink: .helper)
             AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
-            Menu {
-                AtticMenuItems(commands: reviewAlternate())
-            } label: {
-                Text(String(localized: "Review"))
-                    .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
-                    .foregroundStyle(design.tokens.color(.heading))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityIdentifier("task-note-review-alternate")
+            TaskNoteMenuLink(title: String(localized: "Review"), commands: reviewAlternate)
+                .accessibilityIdentifier("task-note-review-alternate")
         }
         .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -312,18 +302,8 @@ struct TaskNoteSubtasksBlock: View {
     private var earlierFilesLine: some View {
         let status = model.earlierFiles
         return HStack(spacing: 6) {
-            Menu {
-                AtticMenuItems(commands: earlierFiles())
-            } label: {
-                Text(String(localized: "Earlier files · \(status.earlier.count)"))
-                    .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
-                    .foregroundStyle(design.tokens.color(.heading))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityIdentifier("task-note-earlier-files-menu")
+            TaskNoteMenuLink(title: String(localized: "Earlier files · \(status.earlier.count)"), commands: earlierFiles)
+                .accessibilityIdentifier("task-note-earlier-files-menu")
             if let reason = status.refusal?.reason ?? (status.kind == .legacy ? String(localized: "not moved into the note yet") : nil) {
                 AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
                 AtticText(verbatim: reason, style: .rowMeta, ink: .helper, truncates: true)
@@ -456,7 +436,7 @@ struct TaskNoteSubtasksBlock: View {
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in rowKey(press, row: row.id) }
             .onTapGesture { select(row.id) }
-            .contextMenu { AtticMenuItems(commands: subtaskMenu(row.id)) }
+            .atticContextMenu { subtaskMenu(row.id) }
             .id(row.id)
         return rowAccessibility(line, row: row, value: value)
     }
@@ -669,5 +649,32 @@ struct TaskNoteAddField: NSViewRepresentable {
             if command == #selector(NSResponder.insertBacktab(_:)) { parent.tab(true); return true }
             return false
         }
+    }
+}
+
+/// A notice line's menu (S10's Review, Earlier files): its semibold title
+/// opens Attic's glass command menu under itself (10 Nov, "Menus:
+/// Loam's glass menu … Everywhere"), as the other command menus do. The
+/// commands are built when it opens.
+struct TaskNoteMenuLink: View {
+    let title: String
+    let commands: () -> [AtticMenuCommand]
+
+    @Environment(\.atticDesign) private var design
+    @State private var anchor = AtticMenuAnchor.Holder()
+
+    var body: some View {
+        Button {
+            guard let view = anchor.view else { return }
+            AtticNativeMenu.popUp(commands(), in: view)
+        } label: {
+            Text(title)
+                .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
+                .foregroundStyle(design.tokens.color(.heading))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
+        .accessibilityHint(String(localized: "Opens a menu"))
     }
 }
