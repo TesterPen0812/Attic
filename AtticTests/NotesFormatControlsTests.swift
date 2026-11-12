@@ -196,6 +196,37 @@ final class NotesFormatControlsTests: XCTestCase {
         return nil
     }
 
+    func testNotesTextRightClickOpensGlassWithSystemCopyAndKeepsItsAction() async throws {
+        let (_, engine, textView) = make()
+        let selection = range("most people", textView)
+        textView.setSelectedRange(selection)
+        let rect = try XCTUnwrap(engine.rect(for: selection))
+        let point = NSPoint(x: rect.midX, y: rect.midY)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
+        let titles = commands.map(\.title)
+        XCTAssertTrue(titles.contains("Format"), "the note's own format commands")
+        XCTAssertTrue(titles.contains("Insert"), "the note's own insertion commands")
+        XCTAssertTrue(titles.contains("Copy"), "the system text commands survive")
+        XCTAssertNotNil(find("Bold", in: commands), "native Format submenu retains its items")
+        try XCTUnwrap(find("Copy", in: commands)).action()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "most people")
+    }
+
+    func testNotesLinkRightClickOpensGlassWithLinkActionsInOrder() async throws {
+        let (controls, _, textView) = make()
+        let selection = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: selection)
+        let rect = try XCTUnwrap(controls.engine.rect(for: selection))
+        let point = NSPoint(x: rect.midX, y: rect.midY)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
+        XCTAssertEqual(Array(commands.map(\.title).prefix(4)),
+                       ["Open Link", "Edit Link…", "Copy Link", "Remove Link"])
+        try XCTUnwrap(find("Copy Link", in: commands)).action()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "https://example.com")
+    }
+
     // H13: owner feedback, 11 October 2026.
     func testH13ObjectOnlySelectionOffersNoTextFormatting() {
         for object: NoteBlock in [
