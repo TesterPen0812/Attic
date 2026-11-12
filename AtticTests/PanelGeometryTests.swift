@@ -615,6 +615,34 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testOrdinaryHeaderControlDoesNotEatTheFirstTrackpadDismissSwipe() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.contentView = SwipeHitTargetView(target: NSButton(title: "Page", target: nil, action: nil))
+        var hides = 0
+        panel.canBeginTrackpadSwipe = { _ in true }
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 1, "a header button has no horizontal scroll of its own")
+    }
+
+    @MainActor
+    func testEditableTextFieldRetainsItsHorizontalScrollGesture() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let field = NSTextField(string: "A long editable line can scroll horizontally")
+        field.isEditable = true
+        panel.contentView = SwipeHitTargetView(target: field)
+        var hides = 0
+        panel.canBeginTrackpadSwipe = { _ in true }
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0, "an editable native field owns its text's horizontal scroll")
+    }
+
+    @MainActor
     func testNotesNavigationAndPanelHidingHaveOneDirectionOwner() throws {
         let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
