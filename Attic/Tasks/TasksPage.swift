@@ -384,6 +384,10 @@ struct TasksPage: View {
                 }
             } else {
                 at(delay) { open() }
+                // `ATTIC_UI_TEST_MENU_HIGHLIGHT=<entry>`: light that row, as a hover would.
+                if let row = Int(environment["ATTIC_UI_TEST_MENU_HIGHLIGHT"] ?? "") {
+                    at(delay + 0.8) { AtticGlassMenu.current?.cards.first?.setHighlight(row) }
+                }
             }
         }
         #endif
