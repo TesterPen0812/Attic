@@ -30,6 +30,11 @@ REPLACEMENTS = {
 # bodies byte-identical on both sides, including every functional assertion.
 # Other tests belong to their matching app revision, not the cost overlay.
 INTEGRATION_MEMBERS = {
+    "TaskPerformanceGateTests.swift": (
+        "seedStore", "medianMilliseconds",
+        "testFamilySummaryPassAtSixThousandTasksIsMilliseconds",
+        "testStatusToggleAtSixThousandTasksStaysBounded",
+    ),
     "NotesPageControllerTests.swift": (
         "setUp", "tearDown", "makeController", "type", "realImage",
         "testMeasuredMainActorSaveOnFiveThousandLineNote",

@@ -767,7 +767,7 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/AtticIntegrationCostReference" "$INTEGRATION_COST_REFERENCE_COMMIT"
           # Test-only overlay: identical measurement code, pinned reference app.
           # Mixed functional/cost files receive only measured members below.
-          for fixture in DoneSearchCostTests TaskPerformanceGateTests TasksKeystrokeCostTests; do
+          for fixture in DoneSearchCostTests TasksKeystrokeCostTests; do
             cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
           done
           git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj

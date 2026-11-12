@@ -92,6 +92,17 @@ class RequiredChecksTests(unittest.TestCase):
                     self.assertIn('ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui', result.stdout)
                     self.assertIn('CODE_SIGNING_ALLOWED=YES', result.stdout)
 
+    def test_optimized_reference_uses_historical_task_tests_with_current_cost_members(self):
+        from prepare_cost_reference import INTEGRATION_MEMBERS
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        job = workflow.split('  costs:', 1)[1].split('\n  performance:', 1)[0]
+        self.assertIn('for fixture in DoneSearchCostTests TasksKeystrokeCostTests; do', job)
+        self.assertEqual(INTEGRATION_MEMBERS['TaskPerformanceGateTests.swift'], (
+            'seedStore', 'medianMilliseconds',
+            'testFamilySummaryPassAtSixThousandTasksIsMilliseconds',
+            'testStatusToggleAtSixThousandTasksStaysBounded',
+        ))
+
     def test_workflow_passes_actual_step_outcomes(self):
         import re
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()

@@ -40,6 +40,9 @@ class CostGatePlumbingTests(unittest.TestCase):
                     self.assertEqual(member(adapted, member_name), measured)
                     expected = expected.replace(member(expected, member_name), measured, 1)
                 self.assertEqual(adapted, expected, "unrelated historical tests stay intact")
+                if name == "TaskPerformanceGateTests.swift":
+                    self.assertNotIn("completeAcknowledged", adapted)
+                    self.assertIn("func testRepeatedAttachmentReadsAreMemoizedPerPayload", adapted)
 
     def test_integration_overlay_fails_closed_before_writing_on_member_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
