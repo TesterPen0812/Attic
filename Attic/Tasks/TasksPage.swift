@@ -347,6 +347,24 @@ struct TasksPage: View {
                 }
             }
         }
+        // Capture seam (`ATTIC_UI_TEST_MENU=view|row`, optionally
+        // `@<seconds>`, 3 by default; `ATTIC_UI_TESTING=1` in a preview
+        // identity only): the view options menu, or the first row's
+        // right-click menu, opens by itself, for hands-off captures of a
+        // menu card over the panel.
+        if environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
+           let seam = environment["ATTIC_UI_TEST_MENU"] {
+            let parts = seam.split(separator: "@", maxSplits: 1).map(String.init)
+            let delay = parts.count > 1 ? Double(parts[1]) ?? 3 : 3
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if parts.first == "row" {
+                    guard let row = model.rows(for: model.tab).first else { return }
+                    showActions(for: row.id, anchor: nil, tab: model.tab)
+                } else {
+                    openViewOptions()
+                }
+            }
+        }
         #endif
         if !eventMonitors.isInstalled {
             eventMonitors.add(matching: .keyDown) { event in

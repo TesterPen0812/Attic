@@ -365,6 +365,51 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertTrue(calmRows.allSatisfy { $0.layer?.animation(forKey: "attic.row.slide") == nil }, "no cascade")
     }
 
+    /// Owner, 12 Nov ("it's not even the same glass"): over the panel the
+    /// card's glass blurred the panel's rows. Each card cuts its place out
+    /// of the panel's page on its own spring, cards chain their cuts, and a
+    /// Solid card cuts nothing.
+    func testACardCutsItsPlaceOutOfThePanelOnTheCardsOwnMotion() throws {
+        final class Host: NSWindow, AtticMenuBackdropHost {
+            let page = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 500))
+            var menuBackdropView: NSView? { page }
+        }
+        let window = Host(contentRect: NSRect(x: 100, y: 100, width: 400, height: 500), styleMask: .borderless,
+                          backing: .buffered, defer: true)
+        window.page.wantsLayer = true
+        window.contentView = window.page
+        let layer = try XCTUnwrap(window.page.layer)
+        var design = AtticDesignContext(mode: .light, surface: .glass)
+        design.reduceMotion = false
+        let style = AtticGlassMenuStyle(design: design)
+        // The test host keeps its windows off screen: place the card by the window.
+        let card = NSRect(x: window.frame.minX + 50, y: window.frame.minY + 200, width: 216, height: 200)
+        let root = try XCTUnwrap(AtticMenuBackdropHole.open(under: card, in: window, corner: .topLeading, animated: true, style: style))
+        XCTAssertTrue(layer.mask === root.mask, "the page is masked")
+        XCTAssertEqual(root.cut.frame, window.page.convert(window.convertFromScreen(card), from: nil))
+        let grow = try XCTUnwrap(root.cut.animation(forKey: "attic.open.grow") as? CASpringAnimation)
+        XCTAssertEqual(grow.perceptualDuration, 0.30, accuracy: 0.01)
+        XCTAssertEqual(grow.bounce, 0.28, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap((grow.fromValue as? NSValue)?.caTransform3DValue).m11, 0.86, accuracy: 1e-6)
+        XCTAssertNotNil(root.page.animation(forKey: "attic.open.fade"), "the page fades out under the card")
+        XCTAssertEqual(root.page.opacity, 0)
+
+        let submenu = try XCTUnwrap(AtticMenuBackdropHole.open(under: card.offsetBy(dx: 220, dy: 0), in: window,
+                                                              corner: .topLeading, animated: false, style: style))
+        XCTAssertTrue(root.mask.mask === submenu.mask, "cuts chain")
+        root.close(animated: false, reduceMotion: false)
+        XCTAssertTrue(layer.mask === submenu.mask)
+        XCTAssertNil(submenu.mask.mask)
+        submenu.close(animated: false, reduceMotion: false)
+        XCTAssertNil(layer.mask, "the page is whole again")
+
+        XCTAssertNil(AtticMenuBackdropHole.open(under: card.offsetBy(dx: 2000, dy: 0), in: window, corner: .topLeading,
+                                                animated: false, style: style), "off the panel: nothing to cut")
+        let solid = AtticGlassMenuStyle(design: AtticDesignContext(mode: .light, surface: .solid))
+        XCTAssertNil(AtticMenuBackdropHole.open(under: card, in: window, corner: .topLeading, animated: false, style: solid))
+        XCTAssertNil(layer.mask)
+    }
+
     func testASubmenuOpensBesideItsRowAndFlipsAtTheEdge() {
         let parent = NSRect(x: 400, y: 300, width: 184, height: 400)
         let size = CGSize(width: 150, height: 200)

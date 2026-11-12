@@ -2782,6 +2782,12 @@ protocol AtticFirstPressWindow: NSWindow {}
 
 extension AtticPanel: AtticFirstPressWindow {}
 
+/// A menu card over the panel wears the panel's material over the desktop:
+/// the page and its surface are cut away under it (`AtticMenuBackdropHole`).
+extension AtticPanel: AtticMenuBackdropHost {
+    var menuBackdropView: NSView? { (contentView as? AtticPanelContentContainer)?.hostingView }
+}
+
 /// One choke point for the first press (2 Nov, owner: "This keeps coming
 /// back"): before AppKit sees a press, the window hit-tests it as AppKit
 /// will and gives the view it hits the first-press policy. Views reached
