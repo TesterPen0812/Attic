@@ -161,7 +161,8 @@ struct DrawTitleCapsule: View {
                             onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil,
                             alignment: .left, font: .systemFont(ofSize: m.titleFont), identifier: "draw-title-filter",
                             requestsFocus: model.isFiltering && library.mode == .list)
-                            .accessibilityIdentifier("draw-title-filter")
+                            .accessibilityLabel(String(localized: "Find a canvas"))
+                            .accessibilityHidden(!model.isFiltering || library.mode != .list)
                         Button(action: model.closeFilter) {
                             AtticIcon(systemName: "xmark", size: 8, weight: .medium, ink: .helper)
                                 .frame(width: 16, height: m.capsule)
@@ -325,6 +326,7 @@ struct DrawTitleField: NSViewRepresentable {
         if let identifier { field.setAccessibilityIdentifier(identifier) }
         field.delegate = context.coordinator
         field.setAccessibilityLabel(label)
+        field.setAccessibilityElement(requestsFocus)
         field.isEnabled = requestsFocus
         if requestsFocus { context.coordinator.claimFocus(field) }
         return field
@@ -334,6 +336,8 @@ struct DrawTitleField: NSViewRepresentable {
         let takesFocus = requestsFocus && !context.coordinator.parent.requestsFocus
         context.coordinator.parent = self
         field.isEnabled = requestsFocus
+        field.setAccessibilityElement(requestsFocus)
+        field.setAccessibilityLabel(label)
         if takesFocus { context.coordinator.claimFocus(field) }
         if field.stringValue != text { field.stringValue = text }
         if field.placeholderString != placeholder { field.placeholderString = placeholder }
