@@ -71,9 +71,10 @@ enum AtticShadows {
     /// Attic's own dropdowns (E1, p2-25): D's drop shadow, CSS
     /// `0 12px 32px` and `0 2px 6px` (a SwiftUI radius is half a CSS blur),
     /// in `dropdownShadow` and `dropdownContactShadow`.
-    /// Draft C's card shadow (the Craft spec): CSS `0 6px 16px`, black
-    /// 12 % Light / 28 % Dark, and a hairline-close contact shadow.
-    static let dropdown = AtticShadowSpec(radius: 8, y: 6)
+    /// The system menu's shadow (measured on macOS 27, 12 Nov): radius 7,
+    /// 4 pt down, black 24 % Light / 28 % Dark, and a hairline-close
+    /// contact shadow.
+    static let dropdown = AtticShadowSpec(radius: 7, y: 4)
     static let dropdownContact = AtticShadowSpec(radius: 0.5, y: 0)
 }
 

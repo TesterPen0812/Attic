@@ -53,7 +53,7 @@ struct AtticDropdownSurface: View {
             AtticGlassCardFace(shape: shape, tokens: tokens, dark: design.mode == .dark)
             if AtticSurfaceInk.seeThrough(tokens) {
                 shape.inset(by: edge / 2).stroke((design.increaseContrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark)
-                                                  : tokens.dropdownRim).color, lineWidth: edge)
+                                                  : AtticMenuLook.outline(dark: design.mode == .dark)).color, lineWidth: edge)
             } else {
                 // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
                 shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
@@ -64,9 +64,9 @@ struct AtticDropdownSurface: View {
     }
 }
 
-/// The card's face (owner, 12 Nov quick look: "proper liquid glass and
-/// proper shadows and outline"): regular Liquid Glass, nothing over it;
-/// its edge, the rim and the soft shadow outside it are the outline.
+/// The card's face (owner, 12 Nov: the system menu's Liquid Glass on
+/// Attic's card): the menu's own glass (`AtticMenuLook.glass`), with the
+/// lift to the system menu's brightness; the outline and shadow are the surface's.
 /// Solid and Reduce Transparency keep the opaque `popoverFill`.
 struct AtticGlassCardFace<S: Shape>: View {
     let shape: S
@@ -75,7 +75,11 @@ struct AtticGlassCardFace<S: Shape>: View {
 
     var body: some View {
         if AtticSurfaceInk.seeThrough(tokens) {
-            Color.clear.glassEffect(.regular, in: shape)
+            ZStack {
+                AtticMenuGlassView(cornerRadius: AtticDropdownMetrics.cornerRadius)
+                shape.fill(AtticMenuLook.lift(dark: dark).color)
+            }
+            .clipShape(shape)
         } else {
             shape.fill(tokens.popoverFill.color)
         }

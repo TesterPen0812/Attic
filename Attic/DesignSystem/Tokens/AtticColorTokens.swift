@@ -1051,7 +1051,7 @@ struct AtticColorTokens: Equatable, Sendable {
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
             popoverShadow: .black(dark ? 0.40 : 0.11),
             dropdownHighlight: dropdownHighlight,
-            dropdownShadow: .black(dark ? 0.28 : 0.12),
+            dropdownShadow: .black(dark ? 0.28 : 0.24),
             dropdownContactShadow: .black(dark ? 0.30 : 0.05),
             dropdownRim: .white(dark ? (ic ? 0.35 : 0.15) : 0.5),
             dropdownRule: dark ? .white(ic ? 0.30 : 0.10) : .black(ic ? 0.28 : 0.08),

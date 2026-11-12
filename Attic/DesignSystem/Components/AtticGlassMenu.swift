@@ -737,7 +737,7 @@ struct AtticGlassMenuStyle {
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var rim: NSColor {
         if !isSeeThrough { return tokens.popoverOuterRim.nsColor }
-        return (design.increaseContrast ? AtticGlassModel.contrastEdge(dark: dark) : tokens.dropdownRim).nsColor
+        return (design.increaseContrast ? AtticGlassModel.contrastEdge(dark: dark) : AtticMenuLook.outline(dark: dark)).nsColor
     }
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
     var shadow: NSColor { tokens.dropdownShadow.nsColor }
@@ -1331,11 +1331,56 @@ final class AtticMenuBackdropHole {
 /// piece by piece, to measure each cause on screen. `inshadow`: the shadow
 /// fills the card under its glass; `nocut`: the panel stays under the card;
 /// `cardsize`: the native glass at the card's own size.
-/// Which menu Attic opens (12 Nov quick look): the system's own.
+/// Which menu Attic opens, and the system menu's look on Attic's card
+/// (owner, 12 Nov: the system menu's Liquid Glass, "but the same shape
+/// and card as what we had before … improved"). Measured on macOS 27 from
+/// an `NSMenu`: its face is a plain `NSGlassEffectView` (regular, no tint),
+/// its outline a dark hairline at the edge (black 30 % Light, 85 % Dark),
+/// its shadow soft and mostly below (about 22 % at the edge, gone 15 pt
+/// out).
 enum AtticMenuLook {
-    static let native = true
+    /// The system's `NSMenu` instead of Attic's card.
+    static let native = false
     /// From a control: this far out of it.
     static let gap: CGFloat = 4
+
+    static func outline(dark: Bool) -> AtticRGBA { .black(dark ? 0.85 : 0.30) }
+
+    /// The system menu's glass: `NSGlassEffectView`, regular, with the
+    /// "menu" sub-variant `NSMenu` sets (private; skipped if a future macOS
+    /// drops it, leaving plain regular glass). Measured over one window on
+    /// macOS 27: plain regular 230 Light / 69 Dark, "menu" 243 / 43, the
+    /// real menu 254 / 59; `lift` closes the rest.
+    static func glass(frame: NSRect, cornerRadius: CGFloat) -> NSGlassEffectView {
+        let glass = NSGlassEffectView(frame: frame)
+        glass.style = .regular
+        glass.cornerRadius = cornerRadius
+        if glass.responds(to: NSSelectorFromString("set_subvariant:")) {
+            glass.setValue("menu", forKey: "_subvariant")
+        }
+        if glass.responds(to: NSSelectorFromString("set_variant:")) { glass.setValue(0, forKey: "_variant") }
+        if glass.responds(to: NSSelectorFromString("set_adaptiveAppearance:")) { glass.setValue(1, forKey: "_adaptiveAppearance") }
+        return glass
+    }
+
+    /// White over the glass, up to the real menu's brightness. Light: the
+    /// menu is near-white over anything (254); 80 % white takes the "menu"
+    /// glass from 243 to 253. Dark: the menu reads 45 over the Attic panel
+    /// (where these cards open) against the glass's 41; 2 % white.
+    static func lift(dark: Bool) -> AtticRGBA { .white(dark ? 0.02 : 0.80) }
+}
+
+/// The system menu's glass in SwiftUI (the picker cards).
+struct AtticMenuGlassView: NSViewRepresentable {
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        AtticMenuLook.glass(frame: .zero, cornerRadius: cornerRadius)
+    }
+
+    func updateNSView(_ glass: NSGlassEffectView, context: Context) {
+        if glass.cornerRadius != cornerRadius { glass.cornerRadius = cornerRadius }
+    }
 }
 
 enum AtticMenuSurfaceSeam {
@@ -1431,9 +1476,16 @@ final class AtticGlassMenuWindow: NSPanel {
         root.autoresizingMask = [.width, .height]
         rows.frame = root.bounds
         rows.autoresizingMask = [.width, .height]
-        // SwiftUI supplies the shaped system material; rows remain AppKit's
-        // views with the existing native menu accessibility.
-        let face = NSHostingView(rootView: AtticGlassMenuSurface(style: style))
+        // The system menu's own face (12 Nov): AppKit's NSGlassEffectView,
+        // regular, untinted, as NSMenu draws it; SwiftUI adds the outline
+        // (and the opaque fill on Solid). Rows remain AppKit's views with
+        // the existing native menu accessibility.
+        if style.isSeeThrough {
+            let glass = AtticMenuLook.glass(frame: root.bounds, cornerRadius: AtticGlassMenuShape.radius)
+            glass.autoresizingMask = [.width, .height]
+            root.addSubview(glass)
+        }
+        let face = NSHostingView(rootView: AtticGlassMenuSurface(style: style, nativeGlass: style.isSeeThrough))
         face.frame = root.bounds
         face.autoresizingMask = [.width, .height]
         root.addSubview(face)
@@ -1546,10 +1598,14 @@ private final class AtticGlassMenuRootView: NSView {
 /// 12 Nov quick look), with the menus' own shape, rim and rows.
 struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
+    /// The glass is AppKit's view under this one: draw only the outline.
+    var nativeGlass = false
 
     var body: some View {
         let shape = AtticGlassMenuShape.card
-        AtticGlassCardFace(shape: shape, tokens: style.tokens, dark: style.dark)
+        Group {
+            if nativeGlass { shape.fill(AtticMenuLook.lift(dark: style.dark).color) } else { AtticGlassCardFace(shape: shape, tokens: style.tokens, dark: style.dark) }
+        }
             .environment(\.atticDesign, style.design)
             .overlay {
                 shape.inset(by: style.rimWidth / 2)
