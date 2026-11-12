@@ -2526,7 +2526,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // Recover them from the first surviving run before history records the
         // edit, so Undo and redo preserve the paragraph style as well.
         let editedLine = lineRange(at: editedRange.location)
-        if !isTitleLine(editedLine.location), editedLine.length > 1,
+        // History already holds the original attributed replacement. Inferring
+        // a donor during replay can turn a Body tail into a list paragraph.
+        if !history.isReplaying, !isTitleLine(editedLine.location), editedLine.length > 1,
            textStorage.attribute(.noteBlockStyle, at: editedLine.location, effectiveRange: nil) == nil {
             let rest = NSRange(location: editedLine.location + 1, length: editedLine.length - 1)
             var donor: [NSAttributedString.Key: Any]?
