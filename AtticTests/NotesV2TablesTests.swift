@@ -75,6 +75,38 @@ final class NotesV2TablesTests: XCTestCase {
         return try XCTUnwrap(attachment.hostedView, "TextKit hosted the table's view")
     }
 
+    func testNotesTableCanvasRightClickOpensGlassAndAddsARow() async throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        let before = attachment.table.rowCount
+        let point = CGPoint(x: 30, y: 30)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(view.canvas, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: view.canvas, at: point)
+        XCTAssertEqual(commands.map(\.title), ["Add Row Above", "Add Row Below", "Add Column Before",
+                        "Add Column After", "Delete Row", "Delete Column", "Header Row", "Copy as Markdown", "Delete Table"])
+        try XCTUnwrap(commands.first { $0.title == "Add Row Below" }).action()
+        XCTAssertEqual(attachment.table.rowCount, before + 1)
+    }
+
+    func testNotesActiveTableCellRightClickOpensGlassWithTextAndTableCommands() async throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .all)
+        let before = attachment.table.columnCount
+        let point = CGPoint(x: 12, y: 9)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(view.editor, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: view.editor, at: point)
+        XCTAssertEqual(commands.first?.title, "Table")
+        XCTAssertEqual(commands.first?.children.map(\.title),
+            ["Add Row Above", "Add Row Below", "Add Column Before", "Add Column After",
+             "Delete Row", "Delete Column", "Header Row", "Copy as Markdown", "Delete Table"])
+        XCTAssertTrue(commands.contains { $0.title == "Copy" }, "native cell text commands remain present")
+        try XCTUnwrap(commands.first?.children.first { $0.title == "Add Column After" }).action()
+        XCTAssertEqual(attachment.table.columnCount, before + 1)
+    }
+
     private func location(of text: String, in engine: NoteEditorEngine) -> Int {
         (engine.textStorage.string as NSString).range(of: text).location
     }
