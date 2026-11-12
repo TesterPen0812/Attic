@@ -1978,8 +1978,7 @@ enum AtticContextMenus {
         var best: (view: AtticContextMenuAnchor.AnchorView, area: CGFloat)?
         // What AppKit would hit there: an anchor under another view (a
         // section drawn over a kept page, a card's own window) opens nothing.
-        let content = window.contentView
-        let hit = content?.hitTest(content?.convert(event.locationInWindow, from: nil) ?? .zero)
+        let hit = hitView(for: event, in: window)
         for view in anchors.allObjects where view.window === window && view.build != nil && Self.isShown(view) {
             if let hit, !Self.shares(hit, with: view) { continue }
             let local = view.convert(event.locationInWindow, from: nil)
@@ -1988,6 +1987,16 @@ enum AtticContextMenus {
             if best.map({ area < $0.area }) ?? true { best = (view, area) }
         }
         return best?.view
+    }
+
+    /// Some AppKit text views claim clicks well outside their frames during
+    /// window hit-testing (including above the task page's writing). Ignore
+    /// that result; it cannot cover the pointer or suppress an anchor there.
+    private static func hitView(for event: NSEvent, in window: NSWindow) -> NSView? {
+        guard let content = window.contentView,
+              let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
+              hit.bounds.contains(hit.convert(event.locationInWindow, from: nil)) else { return nil }
+        return hit
     }
 
     /// No hidden or fully transparent view holds it.
@@ -2040,7 +2049,7 @@ enum AtticContextMenus {
               let anchor = self.target(for: event) else { return event }
         // An editable or selectable text view keeps its own menu (Cut, Copy,
         // Paste, Spelling).
-        if let hit = window.contentView?.hitTest(window.contentView?.convert(event.locationInWindow, from: nil) ?? .zero) {
+        if let hit = hitView(for: event, in: window) {
             if let text = hit as? NSTextView, text.isEditable || text.isSelectable { return event }
             if let field = hit as? NSTextField, field.isEditable { return event }
         }
