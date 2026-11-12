@@ -54,6 +54,58 @@ final class TasksFrameCostTests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// Comparable input-to-frame candidates, with the actual Tasks page
+    /// hosted off-screen and the same interactions at both list sizes.
+    /// A frame includes the action, run-loop turn, layout, display and
+    /// Core Animation flush; it is not an on-screen pixel latency claim.
+    func testH12TickReorderAndRowTypingInputToFrameCandidates() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Hosted keyboard timing requires ATTIC_KEY_WINDOW_TESTS=1")
+        }
+        for taskCount in [20, 500] {
+            let host = try FrameCostHost(taskCount: taskCount)
+            hosted = host
+            let ids = host.model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, taskCount)
+            let tickID = ids[2], reorderID = ids[4], titleID = ids[7]
+
+            var ticks: [Double] = []
+            for _ in 0..<10 {
+                var success = false
+                let sample = host.frame { success = host.model.toggleDone(tickID).isApplied }
+                XCTAssertTrue(success)
+                ticks.append(sample)
+                host.model.releaseHold(tickID)
+                host.spin(0.04)
+            }
+
+            var reorders: [Double] = []
+            for index in 0..<10 {
+                let before = host.model.rows(for: .now).map(\.id)
+                var success = false
+                let sample = host.frame {
+                    success = host.model.moveBy(reorderID, offset: index.isMultiple(of: 2) ? 1 : -1).isApplied
+                }
+                XCTAssertTrue(success)
+                XCTAssertNotEqual(before, host.model.rows(for: .now).map(\.id), "reorder must actually change what is shown")
+                reorders.append(sample)
+                host.spin(0.04)
+            }
+
+            host.model.selectOnly(titleID)
+            host.model.beginEditingTitle(titleID)
+            host.spin(0.4)
+            let editBefore = host.model.editingTitle
+            let typed = host.type(" input to frame candidate", focusAddBar: false, settle: false)
+            XCTAssertEqual(host.model.editingTitle, editBefore + " input to frame candidate",
+                           "the measured keystrokes must reach the row editor")
+            print("ATTIC_H12_INPUT_FRAME tasks=\(taskCount) tick=\(Self.stats(ticks)) reorder=\(Self.stats(reorders)) row_typing=\(Self.stats(typed))")
+            host.model.cancelEditing()
+            host.close()
+            hosted = nil
+        }
+    }
+
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
@@ -235,9 +287,17 @@ final class FrameCostHost {
         override var canBecomeKey: Bool { true }
     }
 
-    init() throws {
+    init(taskCount: Int? = nil) throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        if ProcessInfo.processInfo.environment["ATTIC_EXP_SEED"] == "demo" {
+        if let taskCount {
+            let context = ModelContext(container)
+            for index in 0..<taskCount {
+                let task = TaskItem(title: "H12 row \(index)", manualOrder: Int64(index) * 1_024)
+                task.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(task)
+            }
+            try context.save()
+        } else if ProcessInfo.processInfo.environment["ATTIC_EXP_SEED"] == "demo" {
             try TasksPagePreview.seedDemo(in: container)
         } else {
             try TasksPagePreview.seedScale(in: container)
