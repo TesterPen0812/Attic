@@ -409,8 +409,8 @@ jobs:
       - name: Run macOS unit tests
         id: unit_tests
         continue-on-error: true
-        # CIT moves broad generated/model/matrix/stress coverage to the required
-        # parallel round-trips job; the watchdog is headroom against a hang.
+        # Generated/property coverage runs on required parallel jobs. Split
+        # complete XCTestCase suites at O/P for margin on the unit watchdog.
         # Run 39819662022: Phase 3's suites brought 3,422 tests to 35:00 and the
         # step was cut 0.5 s after TEST EXECUTE SUCCEEDED, so 45 minutes.
         # Run 41266792926 took 41:41 (4:00 build, 37:35 tests); run
@@ -432,6 +432,10 @@ jobs:
             -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticUnitTests/Build/Products/Local/AtticUnitTestHost.app"
+          python3 Scripts/ci_unit_shards.py --unit-skips > "$RUNNER_TEMP/AtticUnitContinuation.skips"
+          continuation_skips=()
+          while IFS= read -r selector; do continuation_skips+=("$selector"); done < "$RUNNER_TEMP/AtticUnitContinuation.skips"
+          test "${#continuation_skips[@]}" -gt 0
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
@@ -451,6 +455,7 @@ jobs:
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11013 \
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11014 \
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11015 \
+            "${continuation_skips[@]}" \
             test-without-building
 
       # Native timing collection has its own bounded step. Its required
@@ -651,8 +656,53 @@ jobs:
           FINAL_STATE: ${{ steps.final_state.outcome }}
         run: python3 Scripts/ci_required_checks.py
 
+  unit-continuation:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    name: Required macOS unit continuation (P-Z and exhaustive first mouse)
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build local-only continuation test host
+        run: |
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitContinuation" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+          Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticUnitContinuation/Build/Products/Local/AtticUnitTestHost.app"
+      - name: Run every continuation unit suite
+        timeout-minutes: 55
+        run: |
+          python3 Scripts/ci_unit_shards.py --continuation-only > "$RUNNER_TEMP/AtticUnitContinuation.only"
+          continuation_only=()
+          while IFS= read -r selector; do continuation_only+=("$selector"); done < "$RUNNER_TEMP/AtticUnitContinuation.only"
+          test "${#continuation_only[@]}" -gt 0
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitContinuation" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUnitContinuation.xcresult" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            "${continuation_only[@]}"
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticUnitContinuation.xcresult" --format json > "$RUNNER_TEMP/unit-continuation-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]>0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/unit-continuation-summary.json"
+      - name: Upload continuation XCTest result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-unit-continuation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticUnitContinuation.xcresult
+            ${{ runner.temp }}/unit-continuation-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
   required:
-    needs: [validate-inputs, macos, round-trips, notes-seeds]
+    needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]
     if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
@@ -664,6 +714,7 @@ jobs:
           MACOS_JOB: ${{ needs.macos.result }}
           ROUND_TRIPS: ${{ needs.round-trips.result }}
           NOTES_SEEDS: ${{ needs.notes-seeds.result }}
+          UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}
         run: python3 Scripts/ci_required_checks.py --parallel
 
 

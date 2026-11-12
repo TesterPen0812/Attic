@@ -173,12 +173,16 @@ Scripts/run_local_ui_tests.zsh
   bundle. `Scripts/generated_test_routes.json` lists which test methods move
   there, and the project generator compiles each method into exactly one
   bundle.
+- **Required unit continuation.** `Scripts/ci_unit_shards.py` selects the P–Z
+  XCTest suites and the exhaustive first-mouse grid for a second CI runner.
+  The main unit runner skips those complete suites; optimized cost tests keep
+  their existing jobs. Both unit runners are required in `fast` and `full`.
 - **CI** is [`.github/workflows/macos-ci.yml`](.github/workflows/macos-ci.yml)
   ("Attic CI"). It runs on pull requests and on pushes to `main`, using the
   `full` lane. A manual run picks a lane:
-  - `fast`: builds, runs the unit tests, full-history Notes editor seeds and
-    generated round trips in parallel, the static analyzer, and the project-generation checks. Timing
-    gates report but don't block.
+  - `fast`: builds, runs the split unit suites, full-history Notes editor seeds
+    and generated round trips in parallel, the static analyzer, and the
+    project-generation checks. Timing gates report but don't block.
   - `full` (the default): everything in `fast`, plus UI tests, Full Keyboard
     Access tests, the optimized cost gates with the heavy retention soaks,
     seeded performance runs and the design-system appearance matrix.

@@ -22,6 +22,7 @@ PARALLEL_CHECKS = {
     'MACOS_JOB': 'macos',
     'ROUND_TRIPS': 'round-trips',
     'NOTES_SEEDS': 'notes-editor-seeds',
+    'UNIT_CONTINUATION': 'unit-continuation',
 }
 
 
