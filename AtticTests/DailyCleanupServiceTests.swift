@@ -33,6 +33,72 @@ final class DailyCleanupServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testDatesHuntSeededClockAndZoneCleanupNeverLosesOrReplaysDoneTasks() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let datePieces: [(Int, Int, Int, Int, Int)] = [
+            (2026, 3, 8, 6, 59), (2026, 3, 8, 7, 1),
+            (2026, 3, 8, 9, 59), (2026, 3, 8, 10, 1),
+            (2026, 3, 29, 0, 59), (2026, 3, 29, 1, 1),
+            (2026, 10, 25, 0, 30), (2026, 10, 25, 1, 30),
+            (2026, 11, 1, 5, 30), (2026, 11, 1, 6, 30),
+            (2026, 11, 1, 8, 30), (2026, 11, 1, 9, 30),
+            (2026, 12, 31, 23, 59), (2027, 1, 1, 0, 1),
+            (2028, 2, 28, 23, 59), (2028, 2, 29, 0, 1), (2028, 3, 1, 0, 1)
+        ]
+        let instants = try datePieces.map { y, m, d, h, minute in
+            try XCTUnwrap(utc.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: minute)))
+        }
+        let zones = ["Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"]
+        for seed in [UInt64(0xDA7E_C101), 0xDA7E_C102] {
+            var state = seed
+            func draw(_ upper: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 33) % UInt64(upper))
+            }
+            let clock = MutableNow(instants[0])
+            var calendar = utc
+            let store = try makeTestStore(now: { clock.value })
+            let service = DailyCleanupService(store: store, now: { clock.value }, calendar: { calendar })
+            var created = Set<UUID>()
+            var pending: [UUID] = []
+            var completed: [UUID: Date] = [:]
+            var logged = Set<UUID>()
+
+            for step in 0..<360 {
+                switch draw(6) {
+                case 0: clock.value = instants[draw(instants.count)]
+                case 1: calendar.timeZone = try XCTUnwrap(TimeZone(identifier: zones[draw(zones.count)]))
+                case 2 where created.count < 90:
+                    let new = try XCTUnwrap(store.create(title: "Seed \(seed) task \(step)"))
+                    created.insert(new.id)
+                    pending.append(new.id)
+                case 3 where !pending.isEmpty:
+                    let id = pending.remove(at: draw(pending.count))
+                    let task = try XCTUnwrap(store.task(withID: id))
+                    XCTAssertTrue(store.markDone(task), "seed=\(seed) step=\(step)")
+                    completed[id] = try XCTUnwrap(store.task(withID: id)?.completedAt)
+                default: break // timer ticks, returning from sleep, or no-op
+                }
+                let cutoff = calendar.startOfDay(for: clock.value)
+                let newlyEligible = Set(completed.filter { $0.value < cutoff }.map { $0.key })
+                    .subtracting(logged)
+                logged.formUnion(newlyEligible)
+                XCTAssertEqual(service.performCleanup(), newlyEligible.count,
+                               "seed=\(seed) step=\(step) cutoff=\(cutoff)")
+                XCTAssertEqual(Set(store.doneLog().map(\.id)), logged, "seed=\(seed) step=\(step)")
+                XCTAssertEqual(Set(store.tasks.map(\.id)), created.subtracting(logged),
+                               "seed=\(seed) step=\(step) neither live nor logged tasks may disappear")
+                if step.isMultiple(of: 30) {
+                    let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                    XCTAssertEqual(Set(rows.map(\.id)), created, "seed=\(seed) step=\(step) physical records stay durable")
+                }
+            }
+            print("DATES_HUNT_CLEANUP seed=\(seed) steps=360")
+        }
+    }
+
+    @MainActor
     func testV10NotificationsOnSeparateMainQueueTurnsShareOneCleanup() async throws {
         let store = try makeTestStore()
         var passes = 0

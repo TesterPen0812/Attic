@@ -322,4 +322,159 @@ final class TaskTextParserTests: XCTestCase {
             XCTAssertEqual(parser(now: instant, calendar: changed).parse("Pay tomorrow").dueDay, saved, "\(identifier)")
         }
     }
+
+    func testDatesHuntSeededClockLocaleAndCalendarSequencesStayConsistent() throws {
+        // Each seed represents 420 date-entry / view-change actions. UTC instants
+        // straddle both occurrences of the UK and US autumn hours, both spring
+        // gaps, New Year, leap day and an ordinary midnight. No system clock,
+        // calendar settings or persisted task store is changed.
+        let seeds: [UInt64] = [0xDA7E_1201, 0xDA7E_1202, 0xDA7E_1203, 0xDA7E_1204]
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let instants: [Date] = [
+            (2026, 3, 8, 6, 59), (2026, 3, 8, 7, 1),
+            (2026, 3, 8, 9, 59), (2026, 3, 8, 10, 1),
+            (2026, 3, 29, 0, 59), (2026, 3, 29, 1, 1),
+            (2026, 10, 25, 0, 30), (2026, 10, 25, 1, 30),
+            (2026, 11, 1, 5, 30), (2026, 11, 1, 6, 30),
+            (2026, 11, 1, 8, 30), (2026, 11, 1, 9, 30),
+            (2026, 12, 31, 23, 59), (2027, 1, 1, 0, 1),
+            (2028, 2, 28, 23, 59), (2028, 2, 29, 0, 1),
+            (2028, 3, 1, 0, 1), (2026, 11, 12, 23, 59)
+        ].compactMap { y, m, d, h, minute in
+            utc.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: minute))
+        }
+        XCTAssertEqual(instants.count, 18)
+        let zones = ["Europe/London", "America/New_York", "America/Los_Angeles", "UTC", "Asia/Tokyo"]
+
+        for seed in seeds {
+            var state = seed
+            func draw(_ upper: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 33) % UInt64(upper))
+            }
+            for step in 0..<420 {
+                let moment = instants[draw(instants.count)]
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = try XCTUnwrap(TimeZone(identifier: zones[draw(zones.count)]))
+                // Exercise both regional week starts. A separately overridden
+                // calendar preference is tracked as a P2 card mismatch.
+                let locale = Locale(identifier: draw(2) == 0 ? "en_GB" : "en_US")
+                calendar.locale = locale
+                calendar.firstWeekday = locale.identifier == "en_GB" ? 2 : 1
+                let parser = TaskTextParser(calendar: calendar, locale: locale, now: { moment })
+                let today = DueDay(date: moment, calendar: calendar)
+                let midnight = try XCTUnwrap(today.startDate(in: calendar))
+                let action = draw(8)
+                let input: String
+                let expectedDay: DueDay?
+                let expectedTime: Int?
+                switch action {
+                case 0: // Today, including the two repeated local hours.
+                    input = "Read today"
+                    expectedDay = today
+                    expectedTime = nil
+                case 1:
+                    input = "Read tomorrow"
+                    expectedDay = DueDay(date: try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: midnight)), calendar: calendar)
+                    expectedTime = nil
+                case 2:
+                    input = "Read in 2 weeks"
+                    expectedDay = DueDay(date: try XCTUnwrap(calendar.date(byAdding: .day, value: 14, to: midnight)), calendar: calendar)
+                    expectedTime = nil
+                case 3:
+                    input = "Read next fri"
+                    let distance = (6 - calendar.component(.weekday, from: midnight) + 7) % 7
+                    expectedDay = DueDay(date: try XCTUnwrap(calendar.date(byAdding: .day, value: distance == 0 ? 7 : distance, to: midnight)), calendar: calendar)
+                    expectedTime = nil
+                case 4:
+                    input = "Read 15 nov 2026 3pm"
+                    expectedDay = day(2026, 11, 15)
+                    expectedTime = 900
+                case 5:
+                    input = "Read 2028-02-29 01:30"
+                    expectedDay = day(2028, 2, 29)
+                    expectedTime = 90
+                case 6:
+                    input = "Read 3/4"
+                    let uk = TaskTextParser.prefersDayFirst(locale: locale)
+                    let month = uk ? 4 : 3
+                    let date = uk ? 3 : 4
+                    let thisYear = try XCTUnwrap(DueDay(year: today.year, month: month, day: date))
+                    expectedDay = thisYear < today ? day(today.year + 1, month, date) : thisYear
+                    expectedTime = nil
+                default:
+                    input = "Read 32 feb 2026 25:00"
+                    expectedDay = nil
+                    expectedTime = nil
+                }
+                let label = "seed=\(seed) step=\(step) zone=\(calendar.timeZone.identifier) input=\(input)"
+                let parsed = parser.parse(input)
+                XCTAssertEqual(parsed.dueDay, expectedDay, label)
+                XCTAssertEqual(parsed.dueTimeMinutes, expectedTime, label)
+                XCTAssertEqual(TaskDateChoices(parser: parser).today, today, label)
+                XCTAssertEqual(TaskDateChoices(parser: parser).quick[1].day,
+                               DueDay(date: try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: midnight)), calendar: calendar), label)
+                XCTAssertEqual(TaskDateChoices(parser: parser).cardCalendar.firstWeekday,
+                               calendar.firstWeekday, label)
+
+                let entryID = UUID()
+                let groups = TasksPanelDesign.groups([(entryID, expectedDay)], today: today, calendar: calendar, locale: locale)
+                XCTAssertEqual(groups.flatMap(\.ids), [entryID], label)
+                let expectedKind: TasksPanelDesign.GroupKind = expectedDay.map { date in
+                    if date < today { return .overdue }
+                    if date == today { return .today }
+                    return .day(date)
+                } ?? .noDate
+                XCTAssertEqual(groups.first?.kind, expectedKind, label)
+                let task = TaskItem(title: "Read")
+                task.dueDay = expectedDay
+                var filter = TasksViewOptions()
+                filter.show = .dueOrOverdue
+                XCTAssertEqual(filter.includes(task, today: today), expectedDay != nil, label)
+                filter.show = .overdueOnly
+                XCTAssertEqual(filter.includes(task, today: today), expectedDay.map { $0 < today } ?? false, label)
+
+                if let date = expectedDay {
+                    XCTAssertEqual(DueDay(rawValue: date.rawValue), date, label)
+                    // The picked day exists on exactly one grid cell and is
+                    // the date under which Calendar would show this task.
+                    let weeks = CalendarMonthMath.weeks(for: CalendarMonth(date), today: today,
+                                                        selected: date, calendar: calendar)
+                    XCTAssertEqual(weeks.flatMap(\.days).filter(\.isSelected).map(\.day), [date], label)
+                    XCTAssertEqual(weeks.flatMap(\.days).map(\.day).count, Set(weeks.flatMap(\.days).map(\.day)).count, label)
+                    XCTAssertEqual(weeks[0].days[0].day,
+                                   CalendarMonthMath.weekStart(of: CalendarMonth(date).firstDay, calendar: calendar), label)
+                    let forwardWeek = CalendarMonthMath.shifted(date, by: 1, weekView: true,
+                                                                today: today, calendar: calendar)
+                    XCTAssertEqual(forwardWeek,
+                                   DueDay(date: try XCTUnwrap(calendar.date(byAdding: .day, value: 7,
+                                                                           to: try XCTUnwrap(date.startDate(in: calendar)))), calendar: calendar), label)
+                    XCTAssertEqual(CalendarMonthMath.shifted(forwardWeek, by: -1, weekView: true,
+                                                             today: today, calendar: calendar), date, label)
+                    let forwardMonth = CalendarMonth(date).adding(months: 1)
+                    XCTAssertEqual(CalendarMonthMath.shifted(date, by: 1, weekView: false,
+                                                             today: today, calendar: calendar),
+                                   forwardMonth == CalendarMonth(today) ? today : forwardMonth.firstDay, label)
+                    let interval = try XCTUnwrap(CalendarMonthMath.interval(of: date, calendar: calendar))
+                    XCTAssertEqual(interval.start, date.startDate(in: calendar), label)
+                    XCTAssertEqual(DueDay(date: interval.end.addingTimeInterval(1), calendar: calendar),
+                                   CalendarMonthMath.adding(days: 1, to: date, calendar: calendar), label)
+                    if date >= today {
+                        let choices = TaskDateChoices(parser: parser)
+                        XCTAssertEqual(parser.parseDueDay(choices.shorthand(for: date)), date,
+                                       "parse → picker label → parse must preserve a future date: \(label)")
+                    }
+                    let entry = CalendarTaskEntry(id: entryID, title: "Read", due: date, isOpen: true)
+                    let agenda = CalendarAgenda.groups(selected: date, clock: .init(today: today, now: moment),
+                                                       events: [], tasks: [entry], calendar: calendar)
+                    XCTAssertEqual(agenda.first?.day, date, label)
+                    XCTAssertTrue(agenda.first?.items.contains(.task(entry)) == true, label)
+                    XCTAssertTrue(CalendarAgenda.marks(for: [date], events: [], tasks: [entry],
+                                                        calendar: calendar)[date]?.hasOpenTasks == true, label)
+                }
+            }
+            print("DATES_HUNT_SEED seed=\(seed) steps=420")
+        }
+    }
 }

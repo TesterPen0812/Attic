@@ -89,6 +89,116 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(published, 1, "row groups and due labels must refresh after a manual clock change")
     }
 
+    func testDatesHuntSeededHostedTaskDateActionsPreserveGroupingAcrossZones() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let choices: [(Int, Int, Int, Int, Int)] = [
+            (2026, 3, 8, 6, 59), (2026, 3, 8, 7, 1),
+            (2026, 3, 8, 9, 59), (2026, 3, 8, 10, 1),
+            (2026, 3, 29, 0, 59), (2026, 3, 29, 1, 1),
+            (2026, 10, 25, 0, 30), (2026, 10, 25, 1, 30),
+            (2026, 11, 1, 5, 30), (2026, 11, 1, 6, 30),
+            (2026, 11, 1, 8, 30), (2026, 11, 1, 9, 30),
+            (2026, 12, 31, 23, 59), (2027, 1, 1, 0, 1),
+            (2028, 2, 28, 23, 59), (2028, 2, 29, 0, 1)
+        ]
+        let instants = try choices.map { y, m, d, h, minute in
+            try XCTUnwrap(utc.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: minute)))
+        }
+        let zones = ["Europe/London", "America/New_York", "America/Los_Angeles", "UTC", "Asia/Tokyo"]
+        final class CalendarSource { var value: Calendar; init(_ value: Calendar) { self.value = value } }
+        let phrases = ["Call today", "Plan tomorrow", "Meet next fri 3pm",
+                       "Renew in 2 weeks", "Launch 15 nov 2026 3pm", "Leap 2028-02-29", "Invalid 31/13"]
+
+        for seed in [UInt64(0xDA7E_A101), 0xDA7E_A102] {
+            var state = seed
+            func draw(_ upper: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 33) % UInt64(upper))
+            }
+            let clock = MutableNow(instants[0])
+            let source = CalendarSource(utc)
+            let localStore = try makeTestStore(now: { clock.value })
+            let localLibrary = AtticLibrary(tasks: localStore, now: { clock.value })
+            let page = TasksPageModel(library: localLibrary, services: TasksPageServices(
+                now: { clock.value }, calendar: { source.value }, locale: Locale(identifier: "en_GB"),
+                doneHold: .seconds(3_600)
+            ))
+            var identifiers: [UUID] = []
+
+            for step in 0..<330 {
+                let label = "seed=\(seed) step=\(step) zone=\(source.value.timeZone.identifier)"
+                let before = Dictionary(uniqueKeysWithValues: identifiers.compactMap { id in
+                    localStore.task(withID: id).map { (id, $0.dueDayRaw) }
+                })
+                let action = draw(10)
+                var changedDate = false
+                switch action {
+                case 0: clock.value = instants[draw(instants.count)]
+                case 1: source.value.timeZone = try XCTUnwrap(TimeZone(identifier: zones[draw(zones.count)]))
+                case 2 where identifiers.count < 35:
+                    let text = phrases[draw(phrases.count)]
+                    let expected = TaskTextParser(calendar: source.value, locale: Locale(identifier: "en_GB"),
+                                                  now: { clock.value }).parse(text).dueDay
+                    page.select(tab: .now)
+                    page.addBar.text = text
+                    let id = try XCTUnwrap(page.submitAddBar(), label)
+                    identifiers.append(id)
+                    XCTAssertEqual(localStore.task(withID: id)?.dueDay, expected, "typed day: \(label)")
+                case 3 where !identifiers.isEmpty:
+                    let id = identifiers[draw(identifiers.count)]
+                    let date = page.parser.parseDueDay("tomorrow")
+                    XCTAssertTrue(page.setDueDay(date, for: [id]).isApplied, label)
+                    XCTAssertEqual(localStore.task(withID: id)?.dueDay, date, label)
+                    changedDate = true
+                case 4 where !identifiers.isEmpty:
+                    let id = identifiers[draw(identifiers.count)]
+                    XCTAssertTrue(page.setDueDay(nil, for: [id]).isApplied, label)
+                    XCTAssertNil(localStore.task(withID: id)?.dueDay, label)
+                    changedDate = true
+                case 5 where !identifiers.isEmpty:
+                    XCTAssertTrue(page.moveToBacklog([identifiers[draw(identifiers.count)]]).isApplied, label)
+                case 6 where !identifiers.isEmpty:
+                    XCTAssertTrue(page.moveToNow([identifiers[draw(identifiers.count)]]).isApplied, label)
+                case 7:
+                    var options = page.viewOptions(for: .now)
+                    options.show = [.all, .dueOrOverdue, .overdueOnly][draw(3)]
+                    page.setViewOptions(options, for: .now)
+                case 8:
+                    var options = page.viewOptions(for: .now)
+                    options.sort = [.manual, .dueDate, .priority][draw(3)]
+                    page.setViewOptions(options, for: .now)
+                default: page.select(tab: draw(2) == 0 ? .now : .backlog)
+                }
+
+                if !changedDate { // Clock, zone, display, order and placement never rewrite a due day.
+                    for (id, raw) in before {
+                        XCTAssertEqual(localStore.task(withID: id)?.dueDayRaw, raw, label)
+                    }
+                }
+                let today = DueDay(date: clock.value, calendar: source.value)
+                XCTAssertEqual(page.dateChoices.today, today, label)
+                let all = identifiers.compactMap(localStore.task(withID:))
+                let nowTasks = all.filter { $0.listedStatus != .backlog }
+                let backlogTasks = all.filter { $0.listedStatus == .backlog }
+                let view = page.viewOptions(for: .now)
+                let expectedNow = Set(nowTasks.filter { view.includes($0, today: today) }.map(\.id))
+                XCTAssertEqual(Set(page.rows(for: .now).map(\.id)), expectedNow, label)
+                XCTAssertEqual(Set(page.rows(for: .backlog).map(\.id)), Set(backlogTasks.map(\.id)), label)
+                let grouping = page.sections(for: .now).groups
+                for task in nowTasks where expectedNow.contains(task.id) {
+                    let expectedKind: TasksPanelDesign.GroupKind = task.dueDay.map { date in
+                        if date < today { return .overdue }
+                        if date == today { return .today }
+                        return .day(date)
+                    } ?? .noDate
+                    XCTAssertEqual(grouping.first(where: { $0.ids.contains(task.id) })?.kind, expectedKind, label)
+                }
+            }
+            print("DATES_HUNT_HOSTED_TASKS seed=\(seed) steps=330")
+        }
+    }
+
     func testAR08TabAndShiftTabPreserveExtendedSelectionButReturnUsesNewFocus() throws {
         let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
         let visible = [a, b, c]
