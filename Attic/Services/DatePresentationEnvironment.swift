@@ -19,7 +19,7 @@ struct DatePresentationEnvironment: Equatable {
     }
 
     static let notifications: [Notification.Name] = [
-        .NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+        .NSCalendarDayChanged, .NSSystemClockDidChange, .NSSystemTimeZoneDidChange,
         NSLocale.currentLocaleDidChangeNotification
     ]
 }

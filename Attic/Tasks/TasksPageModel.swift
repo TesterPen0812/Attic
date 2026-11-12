@@ -559,7 +559,11 @@ final class TasksPageModel: ObservableObject {
     private var doneLogCursor = TaskStore.DoneLogCursor()
 
     var dateEnvironmentDidPublish: ((Notification) -> Void)?
-    let parser: TaskTextParser
+    /// Resolve the calendar when shorthand is used: the retained page can
+    /// outlive a system time-zone change or a change in the injected calendar.
+    var parser: TaskTextParser {
+        TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
+    }
     /// Where the page's Undo toast shows: the shell's one toast host (the
     /// panel supplies its own; the page alone gets a private one).
     let toasts: PanelToastCenter
@@ -578,7 +582,6 @@ final class TasksPageModel: ObservableObject {
         self.services = services
         self.toasts = toasts ?? PanelToastCenter()
         self.memory = memory
-        parser = TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
         Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
             NotificationCenter.default.publisher(for: $0)
         }).sink { [weak self] notification in

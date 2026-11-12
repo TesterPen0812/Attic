@@ -600,6 +600,20 @@ final class CalendarPageTests: XCTestCase {
                           "the Day timeline follows the injected local clock")
     }
 
+    func testDatesHuntClockCorrectionImmediatelyRefreshesCalendarToday() throws {
+        let clock = MutableNow(date(2026, 11, 12, 23, 58))
+        let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
+                                      calendar: calendar, now: { clock.value })
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        XCTAssertEqual(model.snapshot.today, day(2026, 11, 12))
+        clock.value = date(2026, 11, 14, 9)
+        NotificationCenter.default.post(name: .NSSystemClockDidChange, object: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(model.snapshot.today, day(2026, 11, 14),
+                       "a clock jump should update grid and agenda without waiting for the next timer tick")
+    }
+
     func testWithoutAccessOnlyTasksShow() throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Return parcel", dueDay: day(2026, 10, 29))])
@@ -806,7 +820,7 @@ final class CalendarPageTests: XCTestCase {
     // MARK: - Calendar hunt: reproducible generated actions
 
     func testCalendarHuntSeededModelActionsPreserveDaysEventsAndSelection() throws {
-        let seeds: [UInt64] = [0xCA1E_DA12, 0xD57A_2026, 0xA11D_A4E5]
+        let seeds: [UInt64] = [0xCA1E_DA12, 0xD57A_2026, 0xA11D_A4E5, 0xDA7E_1204]
         let today = day(2026, 10, 29)
         let events = [
             event("trip", "Trip", start: date(2026, 10, 24), end: date(2026, 10, 27), allDay: true),
@@ -823,7 +837,10 @@ final class CalendarPageTests: XCTestCase {
         let selectionChoices = [day(2026, 3, 29), day(2026, 10, 24), today,
                                 day(2026, 11, 1), day(2027, 2, 1), day(2027, 8, 31)]
 
-        for seed in seeds {
+        let zones = ["Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"]
+        for (index, seed) in seeds.enumerated() {
+            let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: zones[index])!)
+            let locale = Locale(identifier: index.isMultiple(of: 2) ? "en_GB" : "en_US")
             var state = seed
             func next(_ upper: Int) -> Int {
                 state = state &* 6364136223846793005 &+ 1442695040888963407
@@ -832,7 +849,7 @@ final class CalendarPageTests: XCTestCase {
             var clock = clockChoices[2]
             var currentSource = CalendarEventSourceStub(events: events)
             let model = CalendarPageModel(store: try makeTestStore(), source: currentSource,
-                                          calendar: calendar, now: { clock })
+                                          calendar: calendar, locale: locale, now: { clock })
             var visible = true
             model.setVisible(true)
             defer { model.setVisible(false) }
