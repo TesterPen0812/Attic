@@ -1,3 +1,10 @@
+## 2026-11-12 · Task page glass context-menu routing
+
+An AppKit text view could claim a pointer above its own bounds and hide the
+task head's context-menu anchor. The shared router now ignores out-of-bounds
+hit-test results, so the head and subtask menus open through the existing glass
+menu path. The menu card's appearance, motion, and commands are unchanged.
+
 ## 2026-11-12 · Retired unused Notes line and chat motion tokens
 
 Removed the test-only `AtticNoteLibraryLine` and `AtticChatMotion` table.

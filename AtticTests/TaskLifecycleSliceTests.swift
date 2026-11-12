@@ -1560,6 +1560,101 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt == nil && $0.taskID == id }, "nothing merges by itself")
     }
 
+    /// Gap fixes 3 (Accepted 10 Nov, "Menus: Loam's glass menu … Everywhere"):
+    /// the task page's head and subtask right-clicks, Review and Earlier files
+    /// open Attic's glass menu with the page's own commands, not SwiftUI's
+    /// native `.contextMenu` or `Menu`.
+    func testTheTaskPagesMenusAreGlassMenusWithThePagesOwnCommands() async throws {
+        let id = try seed(.boundary)
+        _ = try addAlternate(to: id)
+        makeStores()
+        // An unmigrated legacy file makes the same task page show Earlier
+        // files alongside Review, so both menu openers are exercised.
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("GapFix3-\(UUID()).txt")
+        try Data("earlier file".utf8).write(to: input)
+        defer { try? FileManager.default.removeItem(at: input) }
+        let references = try await tasks.taskImageFiles.importAttachments([input], existing: [])
+        let context = ModelContext(container)
+        for task in try context.fetch(FetchDescriptor<TaskItem>()) where task.id == id {
+            task.imageReferencesData = try JSONEncoder().encode(references)
+        }
+        try context.save()
+        tasks.refresh()
+        tasks.fileMigration.refreshAfterLegacyChange(id, tasks: tasks)
+        let presenter = try open(id)
+        XCTAssertEqual(presenter.model.earlierFiles.earlier.map(\.id), references.map(\.id))
+        var ran: [String] = []
+        func probe(_ title: String) -> AtticMenuCommand {
+            AtticMenuCommand(verbatim: title, shortcut: .init("i", modifiers: [.command, .shift])) { ran.append(title) }
+                .identified("probe-" + title)
+        }
+        presenter.menus.taskMenu = { [probe("Task A"), probe("Task B")] }
+        presenter.menus.subtaskMenu = { [probe($0.uuidString)] }
+        presenter.menus.reviewAlternate = { [probe("Merge"), probe("Keep")] }
+        presenter.menus.earlierFiles = { [probe("Move into Note"), probe("Earlier file")] }
+        let window = try XCTUnwrap(presenter.host.scrollView.window)
+        // SwiftUI builds its accessibility tree once something asks for it.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        settle(presenter.host.textView)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        func element(_ identifier: String) throws -> AnyObject {
+            let host = presenter.host
+            host.headView.layoutSubtreeIfNeeded(); host.blockView.layoutSubtreeIfNeeded()
+            return try XCTUnwrap((elements(host.headView) + elements(host.blockView)).first { $0.accessibilityIdentifier?() == identifier }, identifier)
+        }
+        func rightClick(_ identifier: String) throws -> [AtticMenuCommand]? {
+            let frame = try XCTUnwrap((try element(identifier) as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+            let point = window.convertPoint(fromScreen: CGPoint(x: frame.minX + 40, y: frame.midY))
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            return AtticContextMenus.commands(for: event)
+        }
+
+        let head = try XCTUnwrap(try rightClick("task-note-head"), "the head's right-click is a glass context menu")
+        XCTAssertEqual(head.map(\.title), ["Task A", "Task B"], "the same items in the same order")
+        XCTAssertEqual(head.map(\.identifier), ["probe-Task A", "probe-Task B"])
+        XCTAssertEqual(head.first?.menuShortcut, probe("x").menuShortcut, "with their shortcuts")
+        head.last?.action()
+        XCTAssertEqual(ran, ["Task B"], "and their actions")
+
+        // The invisible AppKit host exposes a frame for the first rendered
+        // row, but may leave its AX label nil until the UI is onscreen.
+        // ForEach renders visibleRows in order; verify that row's exact ID.
+        let rowID = try XCTUnwrap(presenter.model.visibleRows.first?.id)
+        let row = try XCTUnwrap(try rightClick("task-note-subtask-row"), "a subtask's right-click is a glass context menu")
+        XCTAssertEqual(row.map(\.title), [rowID.uuidString], "the menu of the row under the pointer")
+        row.first?.action()
+        XCTAssertEqual(ran, ["Task B", rowID.uuidString])
+
+        AtticGlassMenu.ordersCardsFront = false
+        var opened: [[AtticMenuCommand]] = []
+        AtticGlassMenu.testDriver = { opened.append($0.commands) }
+        defer { AtticGlassMenu.ordersCardsFront = true; AtticGlassMenu.testDriver = nil }
+        let review = try element("task-note-review-alternate")
+        XCTAssertTrue((review as? NSAccessibilityProtocol)?.accessibilityPerformPress() ?? false)
+        // The menu opens on a deferred main-queue turn; the async test must
+        // yield its MainActor executor so that the opener can run.
+        for _ in 0..<20 where opened.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(opened.first?.map(\.title), ["Merge", "Keep"], "Review opens the glass command menu")
+        opened.first?.last?.action()
+        XCTAssertEqual(ran.last, "Keep", "Review's commands act on the page")
+
+        opened.removeAll()
+        let earlier = try element("task-note-earlier-files-menu")
+        XCTAssertTrue((earlier as? NSAccessibilityProtocol)?.accessibilityPerformPress() ?? false)
+        for _ in 0..<20 where opened.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(opened.first?.map(\.title), ["Move into Note", "Earlier file"], "Earlier files opens the glass command menu")
+        opened.first?.first?.action()
+        XCTAssertEqual(ran.last, "Move into Note", "Earlier files' commands act on the page")
+    }
+
     func testKeepAsSeparateNoteMakesTheAlternateAnOrdinaryNote() async throws {
         let id = try seed(.boundary)
         let alternate = try addAlternate(to: id)
