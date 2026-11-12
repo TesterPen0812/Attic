@@ -692,7 +692,8 @@ final class TasksRound10Tests: XCTestCase {
         }
         XCTAssertNil(GlobalHotKeyCombination.newTask.recordingProblem, "the default is fine")
         XCTAssertNil(combination(kVK_ANSI_K, controlKey | optionKey).recordingProblem)
-        XCTAssertNil(combination(kVK_ANSI_N, cmdKey | shiftKey).recordingProblem)
+        XCTAssertNotNil(combination(kVK_ANSI_N, cmdKey | shiftKey).recordingProblem,
+                        "New Note already owns Command-Shift-N inside Attic")
         XCTAssertNotNil(combination(kVK_ANSI_K, 0).recordingProblem, "no modifier")
         XCTAssertNotNil(combination(kVK_ANSI_K, shiftKey).recordingProblem, "Shift alone types")
         XCTAssertNotNil(combination(kVK_ANSI_C, cmdKey).recordingProblem, "Command alone: every app's commands")
