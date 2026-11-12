@@ -58,7 +58,12 @@ final class CalendarTaskRowState: ObservableObject {
 /// the right; today's day on its raised card (owner, 2026-10-31: the older
 /// agenda), a squircle surface at the card radius (Shapes), the tile
 /// concentric inside it.
-struct CalendarAgendaDay: View {
+struct CalendarAgendaDay: View, Equatable {
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Count real SwiftUI body evaluations by day, including reused days.
+    static var bodyEvaluationsByDay: [DueDay: Int] = [:]
+    #endif
+
     let group: CalendarAgendaGroup
     let today: DueDay
     let taskActions: CalendarTaskRowActions
@@ -73,7 +78,23 @@ struct CalendarAgendaDay: View {
     /// The agenda's rows' page in `AtticRowFocusID` (the Tasks tabs use 0–2).
     static let focusPage = 90
 
+    static func == (lhs: CalendarAgendaDay, rhs: CalendarAgendaDay) -> Bool {
+        // The seven-day window advances by one day at a time. Six existing
+        // groups often move to a new index without changing their contents;
+        // let SwiftUI reuse their rendered rows. Event and task edits still
+        // invalidate their observed state, and focus changes rebuild the row.
+        lhs.group == rhs.group && lhs.today == rhs.today
+            && lhs.rows === rhs.rows && lhs.eventRows === rhs.eventRows
+            && lhs.focused == rhs.focused
+            && (lhs.taskActions.rename != nil) == (rhs.taskActions.rename != nil)
+            && (lhs.taskActions.removeFromTasks != nil) == (rhs.taskActions.removeFromTasks != nil)
+            && (lhs.taskActions.addFiles != nil) == (rhs.taskActions.addFiles != nil)
+    }
+
     var body: some View {
+        #if DEBUG && ATTIC_UNIT_TEST_HOST
+        let _ = Self.bodyEvaluationsByDay[group.day, default: 0] += 1
+        #endif
         HStack(alignment: .top, spacing: CalendarDesign.tileToRows) {
             CalendarDateTile(group: group) { onSelectDay(group.day) }
                 .frame(maxHeight: .infinity, alignment: .top)

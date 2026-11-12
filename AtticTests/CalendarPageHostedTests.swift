@@ -236,6 +236,23 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    func testPickingNextDayReusesUnchangedAgendaDayBody() throws {
+        try withPage(events: []) { page in
+            let retained = day(2026, 10, 30)
+            let oldGroups = page.model.snapshot.groups
+            let before = CalendarAgendaDay.bodyEvaluationsByDay[retained, default: 0]
+            XCTAssertGreaterThan(before, 0, "the retained day was rendered before navigation")
+
+            page.model.select(retained)
+            page.settle()
+
+            XCTAssertEqual(page.model.snapshot.groups.first, oldGroups[1],
+                           "the next day and its content are unchanged after the selection")
+            XCTAssertEqual(CalendarAgendaDay.bodyEvaluationsByDay[retained, default: 0], before,
+                           "moving a day within the agenda must not rebuild its unchanged rows")
+        }
+    }
+
     /// Events loading while the page is scrolled: the days keep their tiles
     /// with unique ids, the selected day and the scroll position hold, and
     /// each load updates the page boundedly.
