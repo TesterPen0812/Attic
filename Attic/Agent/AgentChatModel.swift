@@ -412,7 +412,10 @@ final class AgentChatModel: ObservableObject {
     /// A stopped run still drains committed action receipts before its thread
     /// can be archived. Keep an immediate next message until that completes.
     private var newChatDrainTask: Task<Void, Never>?
-    private var newChatQueuedSend: (text: String, context: AgentRequestContext)?
+    private typealias QueuedSend = (text: String, context: AgentRequestContext,
+                                    attachments: [AgentChatAttachment])
+    private var newChatQueuedSend: QueuedSend?
+    private var pendingQueuedSaveFailure: String?
     private var queuedApprovals: [AgentApproval] = []
     private var progress: (done: Int, total: Int)?
     private var isRunning = false
@@ -718,21 +721,49 @@ final class AgentChatModel: ObservableObject {
         refreshBar()
         if isOpen { effects.send(.sent(entry.id)) }
         let context = requestContext
-        // What was added went with this message; the page chip stays.
-        attachments = []
-        attachmentRefusal = nil
         if newChatDrainTask != nil {
-            newChatQueuedSend = (text, context)
+            // The queued request already owns this context while the old run drains.
+            newChatQueuedSend = (text, context, attachments)
+            attachments = []
+            attachmentRefusal = nil
             return
         }
         sendToRunner(text, context: context)
     }
 
-    private func sendToRunner(_ text: String, context: AgentRequestContext) {
+    private func sendToRunner(_ text: String, context: AgentRequestContext, queued: QueuedSend? = nil) {
         guard let runner else { runEnded(); return }
         let sent = runner.send(text, context: context, watching: isOpen)
+        if runner.retainsThread && !runner.threadSnapshot().isRunning {
+            // The live runner refused to persist the question. Keep the draft
+            // and its attachments so the owner can retry without losing input.
+            if let queued {
+                if draft.isEmpty && attachments.isEmpty {
+                    draft = text
+                    attachments = queued.attachments
+                } else {
+                    pendingQueuedSaveFailure = Self.unsentQueuedNotice(queued)
+                }
+            } else {
+                draft = text
+            }
+            restore(runner.threadSnapshot().entries)
+            listen(to: sent)
+            return
+        }
+        // Only an accepted request consumes its attached context.
+        if queued == nil {
+            attachments = []
+            attachmentRefusal = nil
+        }
         let stream = runner.retainsThread ? runner.observe() : sent
         listen(to: stream)
+    }
+
+    private static func unsentQueuedNotice(_ queued: QueuedSend) -> String {
+        let names = queued.attachments.map(\.name)
+        let attached = names.isEmpty ? "" : " Attached: \(names.joined(separator: ", "))."
+        return "The previous message was not sent: \(queued.text).\(attached) Copy it to retry."
     }
 
     /// The run's events reach the thread in order. They are stamped as they
@@ -942,13 +973,25 @@ final class AgentChatModel: ObservableObject {
         newChatDrainTask?.cancel()
         newChatDrainTask = nil
         newChatQueuedSend = nil
+        pendingQueuedSaveFailure = nil
         let draining = runner?.retainsThread == true && runner?.threadSnapshot().isRunning == true
         if isRunning || draining { runner?.cancel() }
         runTask?.cancel()
         runTask = nil
         feedTask?.cancel()
         feedTask = nil
+        let beforeForget = runner?.threadSnapshot().entries
         runner?.forgetThread()
+        if !draining, runner?.retainsThread == true,
+           let beforeForget, !beforeForget.isEmpty,
+           runner?.threadSnapshot().entries == beforeForget {
+            // Failed journal write: the runner still owns the old thread.
+            // The view must keep it visible and available for another try.
+            restore(beforeForget)
+            presented = Set(entries.map(\.id))
+            runEnded()
+            return
+        }
         if draining, let runner {
             newChatDrainTask = Task { [weak self] in
                 // The runner finishes this stream only after action receipts
@@ -956,10 +999,29 @@ final class AgentChatModel: ObservableObject {
                 for await _ in runner.observe() {}
                 guard !Task.isCancelled, let self else { return }
                 self.newChatDrainTask = nil
+                if runner.threadSnapshot().entries.contains(where: { $0.role == "user" }) {
+                    // Deferred forgetting failed during the old run's final save.
+                    // A queued send must not accidentally enter that old thread.
+                    self.restore(runner.threadSnapshot().entries)
+                    self.presented = Set(self.entries.map(\.id))
+                    if let queued = self.newChatQueuedSend {
+                        if self.draft.isEmpty && self.attachments.isEmpty {
+                            self.draft = queued.text
+                            self.attachments = queued.attachments
+                        } else {
+                            self.entries.append(AgentChatEntry(.note(Self.unsentQueuedNotice(queued))))
+                        }
+                    }
+                    self.newChatQueuedSend = nil
+                    self.runEnded()
+                    self.refreshBar()
+                    self.refreshHistory()
+                    return
+                }
                 self.refreshHistory()
                 if let queued = self.newChatQueuedSend {
                     self.newChatQueuedSend = nil
-                    self.sendToRunner(queued.text, context: queued.context)
+                    self.sendToRunner(queued.text, context: queued.context, queued: queued)
                 }
             }
         }
@@ -1236,6 +1298,22 @@ final class AgentChatModel: ObservableObject {
             #if DEBUG && ATTIC_LOCAL_ONLY
             AgentPassProbe.mark("RunFailed")
             #endif
+            if message == AgentRunEngine.journalSaveFailure {
+                // The runner reverted an uncommitted streamed answer. Restore
+                // the actual checkpoint, including any durable action receipts.
+                restore(runner?.threadSnapshot().entries ?? [])
+                presented = Set(entries.map(\.id))
+                pendingItems = []
+                pendingSteps = []
+                runWeek = nil
+                runChangeCount = 0
+                nextWordTime = nil
+                replyEnds = nil
+            }
+            if let pendingQueuedSaveFailure {
+                entries.append(AgentChatEntry(.note(pendingQueuedSaveFailure)))
+                self.pendingQueuedSaveFailure = nil
+            }
             entries.append(AgentChatEntry(.note(message)))
             runEnded()
         }

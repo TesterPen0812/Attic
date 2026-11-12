@@ -53,8 +53,8 @@ final class AgentServer: ObservableObject {
     /// The installed Claude Code/Codex client uses this run-specific bearer
     /// instead of the external Settings credential. The listener is started
     /// only once the trusted run coordinator explicitly begins a run.
-    func beginAgentRun(title: String, watching: Bool) throws -> String {
-        let token = try handler.beginAgentRun(title: title, watching: watching)
+    func beginAgentRun(title: String, watching: Bool, requestID: UUID? = nil) throws -> String {
+        let token = try handler.beginAgentRun(title: title, watching: watching, requestID: requestID)
         // A chat-only run must not open Keychain or request a persistent
         // external-agent credential. Its own bearer authenticates every call.
         if !externalAccessEnabled && listener == nil {

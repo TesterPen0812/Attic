@@ -160,6 +160,21 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(runner.forgotten, "A new conversation must also clear the persisted CLI thread")
     }
 
+    func testDataSafetyFailedForgetWhileChatCatchesUpEndsVisibleRun() async {
+        runner.retainsThread = true
+        let saved = AgentThreadEntry(id: UUID(), role: "user", text: "Keep this saved question")
+        runner.snapshot = AgentThreadSnapshot(entries: [saved], events: [], isRunning: true)
+        model.connect(runner)
+        XCTAssertTrue(model.isBusy)
+        // The runner has stopped, but the view has not consumed its last event.
+        runner.snapshot = AgentThreadSnapshot(entries: [saved], events: [], isRunning: false)
+        model.newChat()
+        XCTAssertFalse(model.isBusy, "a failed new-chat save must not trap the composer in a busy state")
+        XCTAssertTrue(model.entries.contains { if case .asked("Keep this saved question") = $0.content {
+            return true
+        }; return false }, "the original durable chat must still be presented")
+    }
+
     private func readTheCalendar() async {
         var read = step(.read, targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)])
         await emit(.stepStarted(read))

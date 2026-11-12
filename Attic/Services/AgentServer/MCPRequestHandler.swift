@@ -35,9 +35,9 @@ final class MCPRequestHandler {
         self.approvalWait = approvalWait
     }
 
-    func beginAgentRun(title: String, watching: Bool) throws -> String {
+    func beginAgentRun(title: String, watching: Bool, requestID: UUID? = nil) throws -> String {
         guard let runActions else { throw AgentActionsError.invalid("Agent actions unavailable.") }
-        return runActions.beginRun(title: title, watching: watching)
+        return runActions.beginRun(title: title, watching: watching, requestID: requestID)
     }
 
     func setWatching(_ watching: Bool, runToken: String) throws {
