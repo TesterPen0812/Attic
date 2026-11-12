@@ -676,5 +676,13 @@ struct TaskNoteMenuLink: View {
         .fixedSize()
         .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
         .accessibilityHint(String(localized: "Opens a menu"))
+        .accessibilityRepresentation {
+            AtticMenuButtonAccessibility(label: title) { _ in
+                // The accessibility representation's AppKit view can be
+                // detached; the rendered label's anchor is in the window.
+                guard let view = anchor.view else { return }
+                AtticNativeMenu.popUp(commands(), in: view)
+            }
+        }
     }
 }
