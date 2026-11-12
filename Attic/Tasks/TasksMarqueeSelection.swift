@@ -46,6 +46,14 @@ final class TasksMarqueeSelection {
 
     private func press(at point: CGPoint) -> AtticMarqueeController.Press {
         guard let scroll, let document = scroll.documentView else { return .ignore }
+        // The filter summary occupies the first row of the list. With no
+        // matching tasks, the marquee sees every point as "below the rows";
+        // keep Show All's real pointer press out of that empty-space route.
+        if let model, model.viewOptions(for: tab).filters,
+           model.trimmedQuery(for: tab).isEmpty,
+           CGRect(x: 0, y: 0, width: document.bounds.width, height: AtticLayout.rowPitch).contains(point) {
+            return .ignore
+        }
         if let page = pointer?.view, let control = pointer?.completedTodayFrames[tab],
            document.convert(control, from: page).contains(point) { return .ignore }
         measured = [:]
