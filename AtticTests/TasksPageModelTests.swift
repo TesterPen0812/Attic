@@ -47,6 +47,38 @@ final class TasksPageModelTests: XCTestCase {
         return model.submitAddBar()
     }
 
+    func testDatesHuntTypedDaysTrackAnInjectedTimeZoneChangeInARetainedPage() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        var tokyo = utc
+        tokyo.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        // The same instant is Thursday in UTC and Friday in Tokyo.
+        let instant = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 11, day: 12,
+                                                                 hour: 23, minute: 30)))
+        final class CalendarSource { var value: Calendar; init(_ value: Calendar) { self.value = value } }
+        let source = CalendarSource(utc)
+        let localStore = try makeTestStore(now: { instant })
+        let localLibrary = AtticLibrary(tasks: localStore, now: { instant })
+        let page = TasksPageModel(library: localLibrary, services: TasksPageServices(
+            now: { instant }, calendar: { source.value }, locale: Locale(identifier: "en_GB"),
+            doneHold: .seconds(3_600)
+        ))
+
+        page.addBar.text = "Before today"
+        let beforeID = try XCTUnwrap(page.submitAddBar())
+        XCTAssertEqual(localStore.task(withID: beforeID)?.dueDay?.rawValue, "2026-11-12")
+
+        source.value = tokyo
+        XCTAssertEqual(page.dateChoices.today.rawValue, "2026-11-13")
+        page.addBar.text = "After today"
+        let afterID = try XCTUnwrap(page.submitAddBar())
+        XCTAssertEqual(localStore.task(withID: afterID)?.dueDay?.rawValue, "2026-11-13",
+                       "the typed date must use the same day as the current date card and grouping")
+        page.addBar.text = "Next tomorrow"
+        let tomorrowID = try XCTUnwrap(page.submitAddBar())
+        XCTAssertEqual(localStore.task(withID: tomorrowID)?.dueDay?.rawValue, "2026-11-14")
+    }
+
     func testAR08TabAndShiftTabPreserveExtendedSelectionButReturnUsesNewFocus() throws {
         let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
         let visible = [a, b, c]
