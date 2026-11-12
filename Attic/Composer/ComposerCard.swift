@@ -508,6 +508,7 @@ struct ComposerCard: View {
                 model.submit(openingPage: press.modifiers.contains(.command))
                 return .handled
             }
+            .accessibilityLabel(String(localized: "Notes"))
             .accessibilityIdentifier("composer-writing")
     }
 

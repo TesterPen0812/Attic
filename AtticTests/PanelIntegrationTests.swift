@@ -897,4 +897,238 @@ final class PanelIntegrationTests: XCTestCase {
         settings.hapticsEnabled = false
         XCTAssertFalse(settings.panelHapticsEnabled)
     }
+
+    /// A11y hunt: inspect the actual hosted AX tree after switching pages.
+    /// Unnamed buttons and fields are unusable with VoiceOver even when the
+    /// icon or placeholder makes their purpose clear to a sighted user.
+    func testA11yInteractiveControlsAreNamedOnEveryPage() throws {
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = previousDraw }
+        DrawPageModel.shared.closeFilter()
+        let panel = try makePanel()
+        _ = panel.store.create(title: "Accessible task")
+        guard case .success = panel.notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Accessible note")])) else {
+            return XCTFail("seed a note")
+        }
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+        let roles: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuButton", "AXPopUpButton",
+                                  "AXComboBox", "AXTextField", "AXTextArea", "AXSlider", "AXLink"]
+        for page in PanelPage.allCases {
+            panel.uiState.selectSection(page.section)
+            spin(0.35)
+            let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
+            var visited = Set<ObjectIdentifier>()
+            var missing: [String] = []
+            var named = 0
+            var exposedIDs = Set<String>()
+            func walk(_ node: AnyObject) {
+                guard visited.insert(ObjectIdentifier(node)).inserted else { return }
+                if let identifier = node.accessibilityIdentifier?(), !identifier.isEmpty {
+                    exposedIDs.insert(identifier)
+                }
+                if let role = node.accessibilityRole?()?.rawValue, roles.contains(role) {
+                    let label = node.accessibilityLabel?()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let identifier = node.accessibilityIdentifier?() ?? ""
+                    if label.isEmpty { missing.append("\(role) id=\(identifier)") }
+                    else { named += 1 }
+                }
+                for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+            }
+            walk(root)
+            print("A11Y_TREE page=\(page.rawValue) named=\(named) missing=\(missing)")
+            XCTAssertGreaterThan(named, 0, "the hosted \(page.title) tree contains reachable controls")
+            XCTAssertTrue(missing.isEmpty, "\(page.title): unnamed AX controls: \(missing)")
+            if page == .canvas {
+                XCTAssertFalse(exposedIDs.contains("draw-title-filter"),
+                               "the closed Draw menu's prepared native field must not be in VoiceOver's tree")
+                DrawPageModel.shared.openFilter()
+                spin(0.3)
+                visited.removeAll()
+                exposedIDs.removeAll()
+                missing.removeAll()
+                walk(root)
+                XCTAssertTrue(exposedIDs.contains("draw-title-filter"),
+                              "opening Draw's canvas menu exposes its native search field")
+                XCTAssertTrue(missing.isEmpty, "the open Draw filter needs a spoken label: \(missing)")
+                DrawPageModel.shared.closeFilter()
+            }
+        }
+    }
+
+    /// The island is a separate hosted window. Its resting dots are still
+    /// labelled page buttons to VoiceOver, and page selection is spoken.
+    func testA11yIslandControlsStayNamedAndExposeSelection() throws {
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = previousDraw }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let island = try XCTUnwrap(panel.controller.islandWindowsForTesting.island.contentView)
+        func elements(_ root: AnyObject, visited: inout Set<ObjectIdentifier>) -> [AnyObject] {
+            guard visited.insert(ObjectIdentifier(root)).inserted else { return [] }
+            var all: [AnyObject] = [root]
+            for child in (root.accessibilityChildren?() ?? nil) ?? [] {
+                all.append(contentsOf: elements(child as AnyObject, visited: &visited))
+            }
+            return all
+        }
+        func element(_ id: String) -> AnyObject? {
+            var seen = Set<ObjectIdentifier>()
+            return elements(island, visited: &seen).first { $0.accessibilityIdentifier?() == id }
+        }
+        func externalElement(_ identifier: String) -> AXUIElement? {
+            func search(_ node: AXUIElement, depth: Int) -> AXUIElement? {
+                guard depth < 28 else { return nil }
+                var id: CFTypeRef?
+                if AXUIElementCopyAttributeValue(node, kAXIdentifierAttribute as CFString, &id) == .success,
+                   id as? String == identifier { return node }
+                var children: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &children) == .success else {
+                    return nil
+                }
+                for child in (children as? [AXUIElement]) ?? [] {
+                    if let match = search(child, depth: depth + 1) { return match }
+                }
+                return nil
+            }
+            return search(AXUIElementCreateApplication(getpid()), depth: 0)
+        }
+        for page in PanelPage.allCases {
+            panel.uiState.selectSection(page.section)
+            spin(0.13)
+            let choice = try XCTUnwrap(element(page.accessibilityIdentifier), "island must expose \(page.title)")
+            XCTAssertEqual(choice.accessibilityRole?()?.rawValue, "AXButton")
+            XCTAssertEqual(choice.accessibilityLabel?(), page.title)
+            let exposedChoice = try XCTUnwrap(externalElement(page.accessibilityIdentifier),
+                                              "island page is visible through the external AX client API")
+            var rawSelected: CFTypeRef?
+            let selectionError = AXUIElementCopyAttributeValue(exposedChoice, kAXSelectedAttribute as CFString, &rawSelected)
+            let selectedAttribute = rawSelected as? Bool
+            var rawValue: CFTypeRef?
+            let valueError = AXUIElementCopyAttributeValue(exposedChoice, kAXValueAttribute as CFString, &rawValue)
+            let value = rawValue as? String
+            let selected = selectedAttribute == true || value == "Selected"
+            print("A11Y_ISLAND page=\(page.rawValue) selected=\(selected) selectionError=\(selectionError.rawValue) valueError=\(valueError.rawValue) value=\(String(describing: value))")
+            XCTAssertTrue(selected, "the current island page must announce selection")
+        }
+        let settings = try XCTUnwrap(element("panel-island-settings"), "Settings in island's AX tree")
+        XCTAssertEqual(settings.accessibilityRole?()?.rawValue, "AXButton")
+        XCTAssertEqual(settings.accessibilityLabel?(), "Settings")
+    }
+
+    /// A reproducible keyboard-only hunt through the hosted panel. Every
+    /// generated action checks the current accessibility tree, including
+    /// the retained pages while the current page changes. No system keyboard
+    /// preferences are changed on the shared Air host.
+    func testA11ySeededKeyboardNavigationKeepsVisibleControlsNamed() throws {
+        struct Random {
+            var state: UInt64
+            mutating func next() -> UInt64 {
+                state ^= state << 13
+                state ^= state >> 7
+                state ^= state << 17
+                return state
+            }
+        }
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = previousDraw }
+        DrawPageModel.shared.closeFilter()
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let roles: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuButton", "AXPopUpButton",
+                                  "AXComboBox", "AXTextField", "AXTextArea", "AXSlider", "AXLink"]
+        let stepsPerSeed = 320
+        for seed in [UInt64(0xA11E_1201), UInt64(0xA11E_1202)] {
+            var random = Random(state: seed)
+            let panel = try makePanel()
+            _ = panel.store.create(title: "Keyboard task")
+            guard case .success = panel.notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Keyboard note")])) else {
+                return XCTFail("seed the Notes library")
+            }
+            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
+            let window = panel.controller.panelForTesting
+            let root = try XCTUnwrap(window.contentView)
+            func event(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
+                let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+                window.sendEvent(key)
+            }
+            func elements() -> [AnyObject] {
+                var seen = Set<ObjectIdentifier>()
+                func walk(_ node: AnyObject) -> [AnyObject] {
+                    guard seen.insert(ObjectIdentifier(node)).inserted else { return [] }
+                    return [node] + ((node.accessibilityChildren?() ?? nil) ?? []).flatMap { walk($0 as AnyObject) }
+                }
+                return walk(root)
+            }
+            for step in 0..<stepsPerSeed {
+                let action = Int(random.next() % 10)
+                if !window.isVisible {
+                    _ = panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true)
+                    spin(0.06)
+                }
+                switch action {
+                case 0...3:
+                    panel.uiState.selectSection(PanelPage.allCases[action].section)
+                case 4: try event("\t", keyCode: 48)
+                case 5: try event("\t", keyCode: 48, modifiers: .shift)
+                case 6:
+                    if panel.uiState.isComposerPresented { try event("\u{1b}", keyCode: 53) }
+                    else { panel.uiState.selectSection(.tasks) }
+                case 7: try event("\r", keyCode: 36)
+                case 8:
+                    let plus = panel.uiState.selectedSection == .tasks ? "tasks-new-task" :
+                        panel.uiState.selectedSection == .notes ? "notes-new-note" : ""
+                    if let button = elements().first(where: { $0.accessibilityIdentifier?() == plus }) {
+                        _ = button.accessibilityPerformPress?()
+                    }
+                default:
+                    let page = PanelPage.allCases[Int(random.next() % UInt64(PanelPage.allCases.count))]
+                    panel.uiState.selectSection(page.section)
+                }
+                spin(0.04)
+                guard window.isVisible else { continue }
+                let current = panel.uiState.selectedSection
+                let ax = elements()
+                let interactive = ax.filter { roles.contains($0.accessibilityRole?()?.rawValue ?? "") }
+                let missing = interactive.filter {
+                    ($0.accessibilityLabel?() ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }.map { "\($0.accessibilityRole?()?.rawValue ?? "?") \($0.accessibilityIdentifier?() ?? "")" }
+                guard !interactive.isEmpty, missing.isEmpty else {
+                    return XCTFail("seed=\(seed) step=\(step) action=\(action) page=\(current): interactive=\(interactive.count) missing=\(missing)")
+                }
+                let ids = Set(ax.compactMap { $0.accessibilityIdentifier?() })
+                if current != .tasks, ids.contains("tasks-new-task") {
+                    return XCTFail("seed=\(seed) step=\(step): a hidden Tasks page remains in AX")
+                }
+                if current != .notes, ids.contains("notes-new-note") {
+                    return XCTFail("seed=\(seed) step=\(step): a hidden Notes page remains in AX")
+                }
+                if current == .canvas, !DrawPageModel.shared.isFiltering, ids.contains("draw-title-filter") {
+                    return XCTFail("seed=\(seed) step=\(step): closed Draw filter remains in AX")
+                }
+                if let nativeFocus = (window.firstResponder as? NSTextView)?.delegate as? NSView
+                    ?? window.firstResponder as? NSView,
+                   nativeFocus.window === window,
+                   nativeFocus.isHiddenOrHasHiddenAncestor {
+                    return XCTFail("seed=\(seed) step=\(step): keyboard focus belongs to a hidden native view")
+                }
+            }
+            print("A11Y_SEEDED seed=\(seed) steps=\(stepsPerSeed) keyboard=Tab,Shift-Tab,Escape,Return,AXPress")
+        }
+    }
 }
