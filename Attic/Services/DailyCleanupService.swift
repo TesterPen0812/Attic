@@ -40,6 +40,7 @@ final class DailyCleanupService {
         let center = NotificationCenter.default
         let refreshNotifications: [Notification.Name] = [
             .NSCalendarDayChanged,
+            .NSSystemClockDidChange,
             .NSSystemTimeZoneDidChange,
             NSApplication.didBecomeActiveNotification
         ]

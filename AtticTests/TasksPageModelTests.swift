@@ -79,6 +79,16 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(localStore.task(withID: tomorrowID)?.dueDay?.rawValue, "2026-11-14")
     }
 
+    func testDatesHuntTasksPublishClockCorrectionForLiveDateLabels() async throws {
+        var published = 0
+        model.dateEnvironmentDidPublish = { notification in
+            if notification.name == .NSSystemClockDidChange { published += 1 }
+        }
+        NotificationCenter.default.post(name: .NSSystemClockDidChange, object: nil)
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(published, 1, "row groups and due labels must refresh after a manual clock change")
+    }
+
     func testAR08TabAndShiftTabPreserveExtendedSelectionButReturnUsesNewFocus() throws {
         let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
         let visible = [a, b, c]

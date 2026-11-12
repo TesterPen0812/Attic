@@ -5,6 +5,34 @@ import SwiftData
 final class DailyCleanupServiceTests: XCTestCase {
 
     @MainActor
+    func testDatesHuntClockCorrectionCleansOldDoneWithoutWaitingForTheOldMidnightTimer() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 12,
+                                                                     hour: 23, minute: 58)))
+        let later = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 14,
+                                                                     hour: 9)))
+        let clock = MutableNow(start)
+        let store = try makeTestStore(now: { clock.value })
+        let task = try XCTUnwrap(store.create(title: "Finished before clock correction"))
+        XCTAssertTrue(store.markDone(task))
+        let service = DailyCleanupService(store: store, now: { clock.value }, calendar: { calendar })
+        service.start()
+        defer { service.stop() }
+        XCTAssertTrue(store.doneLog().isEmpty)
+
+        // Manual/NTP clock jumps do not necessarily emit a calendar-day or
+        // time-zone notification. The platform emits a clock-change event.
+        clock.value = later
+        NotificationCenter.default.post(name: .NSSystemClockDidChange, object: nil)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(store.doneLog().map(\.id), [task.id],
+                       "a live clock correction should archive yesterday's completed task")
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 1,
+                       "cleanup must preserve the task's stored record")
+    }
+
+    @MainActor
     func testV10NotificationsOnSeparateMainQueueTurnsShareOneCleanup() async throws {
         let store = try makeTestStore()
         var passes = 0

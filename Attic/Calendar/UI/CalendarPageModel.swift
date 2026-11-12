@@ -530,7 +530,8 @@ final class CalendarPageModel: ObservableObject {
                 self?.rebuildOrDefer()
             }
             .store(in: &cancellables)
-        for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange,
+                     NSLocale.currentLocaleDidChangeNotification] {
             NotificationCenter.default.publisher(for: name)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in

@@ -600,6 +600,20 @@ final class CalendarPageTests: XCTestCase {
                           "the Day timeline follows the injected local clock")
     }
 
+    func testDatesHuntClockCorrectionImmediatelyRefreshesCalendarToday() throws {
+        let clock = MutableNow(date(2026, 11, 12, 23, 58))
+        let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
+                                      calendar: calendar, now: { clock.value })
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        XCTAssertEqual(model.snapshot.today, day(2026, 11, 12))
+        clock.value = date(2026, 11, 14, 9)
+        NotificationCenter.default.post(name: .NSSystemClockDidChange, object: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(model.snapshot.today, day(2026, 11, 14),
+                       "a clock jump should update grid and agenda without waiting for the next timer tick")
+    }
+
     func testWithoutAccessOnlyTasksShow() throws {
         let store = try makeTestStore()
         _ = store.commit([TaskDraft(title: "Return parcel", dueDay: day(2026, 10, 29))])
