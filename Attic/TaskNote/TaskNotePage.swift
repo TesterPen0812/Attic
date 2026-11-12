@@ -278,6 +278,7 @@ final class TaskNotePresenter: ObservableObject {
         model.onCompleted = nil
         host.textView.workspaceShortcut = nil
         host.textView.workspaceMenuItems = nil
+        menus.back = {}
         menus.noteMenu = {}
         menus.taskMenu = { [] }
         menus.restoreNote = {}
@@ -310,6 +311,7 @@ extension TaskNoteComposedHost {
 /// native regions made once per presenter, so they call through this.
 @MainActor
 final class TaskNoteMenuRelay {
+    var back: () -> Void = {}
     var noteMenu: () -> Void = {}
     var taskMenu: () -> [AtticMenuCommand] = { [] }
     var restoreNote: () -> Void = {}
@@ -471,9 +473,11 @@ struct TaskNotePage: View {
         .onChange(of: presenter.engineGeneration) { _, _ in installWritingCommands() }
         .onAppear(perform: installClickDiagnostics)
         // Esc from the head or the block goes Back (§ 7: after inner layers).
-        .onKeyPress(.escape) {
-            guard !model.isEditingTitle, model.renamingID == nil else { return .ignored }
-            onBack()
+        // SwiftUI may retain the key handler after unmount. Let the closed
+        // presenter go, and resolve its Back action through the cleared relay.
+        .onKeyPress(.escape) { [weak presenter] in
+            guard let presenter, !presenter.model.isEditingTitle, presenter.model.renamingID == nil else { return .ignored }
+            presenter.menus.back()
             return .handled
         }
         .onChange(of: model.pendingReopen) { _, request in if request != nil { confirming = .reopenRequest } }
@@ -651,6 +655,7 @@ struct TaskNotePage: View {
 
     private func installMenus() {
         installCompletionToast()
+        presenter.menus.back = { onBack() }
         presenter.menus.noteMenu = { presentNoteMenu() }
         presenter.menus.taskMenu = { taskCommands() }
         presenter.menus.restoreNote = { restoreNote() }
@@ -1243,6 +1248,12 @@ struct TaskNotePageContainer: View {
             }
         }
         .onAppear(perform: open)
+        .onDisappear {
+            // Back may close through the route owner while SwiftUI still
+            // retains this container's state and keyboard action closures.
+            // A closed lease must not keep its retired presenter alive.
+            if presenter?.lease == nil { presenter = nil }
+        }
     }
 
     /// Route controls must remain reachable even when no presenter/lease exists.

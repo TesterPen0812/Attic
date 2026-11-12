@@ -552,6 +552,9 @@ struct TasksPagerClock {
 /// moves: `tick` returns false when done, and the link is let go.
 @MainActor
 final class TasksDisplayClock: NSObject {
+    #if DEBUG
+    static private(set) var activeSourcesForTesting = 0
+    #endif
     /// One frame: when it began (the last refresh), when it will be shown,
     /// and the refresh interval. Returns false when the motion is done.
     typealias Tick = (_ now: CFTimeInterval, _ display: CFTimeInterval, _ interval: CFTimeInterval) -> Bool
@@ -581,9 +584,15 @@ final class TasksDisplayClock: NSObject {
             RunLoop.main.add(timer, forMode: .common)
             self.timer = timer
         }
+        #if DEBUG
+        Self.activeSourcesForTesting += 1
+        #endif
     }
 
     func stop() {
+        #if DEBUG
+        if link != nil || timer != nil { Self.activeSourcesForTesting -= 1 }
+        #endif
         link?.invalidate()
         link = nil
         timer?.invalidate()

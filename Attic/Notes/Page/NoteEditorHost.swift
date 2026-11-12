@@ -315,6 +315,9 @@ final class NotesKeyboardReturn {
 /// a run always reaches its next check and ends by its own bound.
 @MainActor
 final class NotesDisplayFrameClock: NSObject, NotesFrameClock {
+    #if DEBUG
+    static private(set) var activeSourcesForTesting = 0
+    #endif
     private weak var view: NSView?
     private var link: CADisplayLink?
     private var fallback: Timer?
@@ -340,9 +343,15 @@ final class NotesDisplayFrameClock: NSObject, NotesFrameClock {
         }
         self.fallback = fallback
         RunLoop.main.add(fallback, forMode: .common)
+        #if DEBUG
+        Self.activeSourcesForTesting += 1
+        #endif
     }
 
     func cancel() {
+        #if DEBUG
+        if link != nil || fallback != nil { Self.activeSourcesForTesting -= 1 }
+        #endif
         generation &+= 1
         pending = nil
         link?.invalidate()

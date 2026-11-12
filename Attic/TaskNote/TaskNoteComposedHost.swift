@@ -202,6 +202,9 @@ final class TaskNoteComposedHost: NSObject {
         textView.isEditable = false
         textView.writingToolsBehavior = .none
         textView.suggestionCommand = nil
+        // The closed host stays warm in the note session. Its Escape
+        // callback captures the former SwiftUI task page and presenter.
+        textView.escapeFallback = nil
         textView.onLayout = nil
         layoutCounter?.detach()
         if engine.textView === textView { engine.detachView() }

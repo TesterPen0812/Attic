@@ -618,6 +618,9 @@ enum PanelHideMotionTrace {
 /// in its bent outline between them: the glass samples the bent content and
 /// whatever is behind the window, as it does at rest.
 final class PanelGenieView: NSView {
+    #if DEBUG
+    static private(set) var activeDisplayLinksForTesting = 0
+    #endif
     /// Bottom to top: the content mesh, the controls' live glass, the
     /// controls' mesh (their glyphs and fills).
     private let contentView = NSView()
@@ -1314,6 +1317,9 @@ final class PanelGenieView: NSView {
         let link = displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
+        #if DEBUG
+        Self.activeDisplayLinksForTesting += 1
+        #endif
         // A display link stops while its window is on no screen (asleep,
         // locked, unplugged): the flight still ends, at its target.
         let watchdog = DispatchWorkItem { [weak self] in self?.finish(at: target) }
@@ -1327,6 +1333,9 @@ final class PanelGenieView: NSView {
         watchdog?.cancel()
         watchdog = nil
         if let run { progress = run.progress(at: CACurrentMediaTime()) }
+        #if DEBUG
+        if displayLink != nil { Self.activeDisplayLinksForTesting -= 1 }
+        #endif
         displayLink?.invalidate()
         displayLink = nil
         run = nil
@@ -1348,6 +1357,9 @@ final class PanelGenieView: NSView {
         let done = completion
         watchdog?.cancel()
         watchdog = nil
+        #if DEBUG
+        if displayLink != nil { Self.activeDisplayLinksForTesting -= 1 }
+        #endif
         displayLink?.invalidate()
         displayLink = nil
         run = nil

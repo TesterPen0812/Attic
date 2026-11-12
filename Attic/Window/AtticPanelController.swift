@@ -269,6 +269,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var swipeCarry: (velocity: CGFloat, start: CFTimeInterval)?
     private var lastSwipeDistance: CGFloat = 0
     private var swipeCarryTimer: Timer?
+    #if DEBUG
+    /// Hosted leak hunt: a hidden docked panel must not retain its 120 Hz swipe timer.
+    var hasSwipeCarryTimerForTesting: Bool { swipeCarryTimer != nil }
+    var activeEventMonitorsForTesting: Int {
+        [localPointerMonitor, globalPointerMonitor, localOutsidePressMonitor, globalOutsidePressMonitor]
+            .compactMap { $0 }.count
+    }
+    var activeSubscriptionsForTesting: Int { cancellables.count + (pageReleaseRetry == nil ? 0 : 1) }
+    #endif
     /// The next hide was asked for by a swipe: under Reduced motion it
     /// fades out rather than vanishing at once (owner, 2026-10-01).
     private var hideFadesWhenReduced = false
