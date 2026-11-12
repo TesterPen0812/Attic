@@ -129,6 +129,10 @@ final class PhaseXHunt7Tests: XCTestCase {
                 taskPage.selectOnly(ids[0]); taskPage.click(ids[1], modifiers: .command, visible: ids)
                 taskSelection = Set(ids)
                 guard taskPage.toggleDone(ids).isApplied else { return (index, "\(label): completion refused") }
+                // tasks-hunt's rule: no selection or focus stays on rows you
+                // can no longer see. Completing leaves Now and reopening
+                // leaves Done, so both rows drop out of the selection.
+                taskSelection = []
                 for id in ids { taskValues[id]!.status = complete ? .done : .todo; taskValues[id]!.logged = false }
             case 2: // Move to Backlog, then Undo and Redo the same menu command.
                 let choices = roots.dropFirst(3).filter { taskValues[$0]?.status == .todo }

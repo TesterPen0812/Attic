@@ -9,6 +9,37 @@ import XCTest
 /// compose in All notes' bottom bar, Back and Aa in the writing view's.
 @MainActor
 final class NotesChromeTests: XCTestCase {
+    /// CI regression (run 43198094521): the Notes UI tests still asked for
+    /// `notes-library-search-button` and `notes-library-tag-<tag>`, which the
+    /// shared top row and bottom bar replaced, so they waited five seconds
+    /// for nothing. Every id the Notes UI tests look up must still be one the
+    /// product spells (a literal, a literal stem ending in "-", or the tag
+    /// bar's `notes-tag-bar-<tag>`).
+    func testNotesUITestsOnlyAskForIdentifiersTheProductSpells() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func text(_ url: URL) -> String { (try? String(contentsOf: url, encoding: .utf8)) ?? "" }
+        let ui = text(root.appendingPathComponent("AtticUITests/NotesPageUITests.swift"))
+        try XCTSkipIf(ui.isEmpty, "sources are not beside the tests")
+        let literal = try NSRegularExpression(pattern: #""([a-z][a-z0-9-]*)(?=["\\])"#)
+        var stems = Set<String>()
+        let files = FileManager.default.enumerator(at: root.appendingPathComponent("Attic"), includingPropertiesForKeys: nil)
+        for case let url as URL in files ?? NSEnumerator() where url.pathExtension == "swift" {
+            let source = text(url)
+            for match in literal.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+                stems.insert(String(source[Range(match.range(at: 1), in: source)!]))
+            }
+        }
+        let lookups = try NSRegularExpression(pattern: #"\["([a-z][a-z0-9-]+)"\]"#)
+        let asked = Set(lookups.matches(in: ui, range: NSRange(ui.startIndex..., in: ui)).map {
+            String(ui[Range($0.range(at: 1), in: ui)!])
+        })
+        XCTAssertGreaterThan(asked.count, 5, "the scan found the UI test's lookups")
+        let missing = asked.filter { id in
+            !(stems.contains(id) || id.hasPrefix("notes-tag-bar-") || stems.contains { $0.hasSuffix("-") && id.hasPrefix($0) })
+        }
+        XCTAssertEqual(missing.sorted(), [], "UI-test identifiers the product no longer spells")
+    }
+
     func testBA5BlankUntouchedDraftMakesNoCreationSoundForCommandN() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: nil)

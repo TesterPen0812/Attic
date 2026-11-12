@@ -702,9 +702,11 @@ struct AtticGlassMenuStyle {
 
     var dark: Bool { design.mode == .dark }
     var reduceMotion: Bool { design.reduceMotion }
-    /// Real glass, unless Reduce Transparency or the solid controls setting
-    /// asks for the opaque card.
-    var isGlass: Bool { design.effectiveControls == .liquidGlass }
+    /// The card wears the panel's own material (owner, 12 Nov: "the same
+    /// material as the panel"), so it is see-through exactly when the panel
+    /// is: Glass or Frosted, not Solid, not made solid by Reduce
+    /// Transparency. The controls setting no longer changes the card.
+    var isSeeThrough: Bool { AtticSurfaceInk.seeThrough(tokens) }
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
     var detail: NSColor { secondary(.meta) }
@@ -716,24 +718,22 @@ struct AtticGlassMenuStyle {
         title.withAlphaComponent(design.increaseContrast ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha)
     }
     var separator: NSColor { tokens.dropdownRule.nsColor }
-    var fill: NSColor { tokens.popoverFill.nsColor }
     var rim: NSColor {
-        if !isGlass { return tokens.popoverOuterRim.nsColor }
+        if !isSeeThrough { return tokens.popoverOuterRim.nsColor }
         return (design.increaseContrast ? AtticGlassModel.contrastEdge(dark: dark) : tokens.dropdownRim).nsColor
     }
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
     var shadow: NSColor { tokens.dropdownShadow.nsColor }
 
-    /// The card's material controls its inks, independently of the panel.
+    /// The card is the panel's material, so its greys are the panel's
+    /// (see-through on Glass and Frosted, opaque and floored on Solid).
     private func secondary(_ tone: AtticPanelTone) -> NSColor {
-        if isGlass { return AtticSurfaceInk.toneInk(tone, tokens: tokens).nsColor }
-        // The opaque menu fill differs from the panel base, notably in Dark.
-        return AtticSurfaceInk.tone(tone, tokens: tokens)
-            .tuned(toContrast: AtticSurfaceInk.toneFloor(tokens), against: [tokens.popoverFill], lighten: dark).nsColor
+        AtticSurfaceInk.toneInk(tone, tokens: tokens).nsColor
     }
 
+    /// The panel's colour ink: vivid on a see-through surface only.
     func colourInk(_ colour: AtticRGBA) -> AtticRGBA {
-        isGlass ? AtticSurfaceInk.vivid(colour, tokens: tokens) : colour
+        AtticSurfaceInk.vivid(colour, tokens: tokens)
     }
 
     static let titleFont = NSFont.systemFont(ofSize: AtticMenuMetrics.titleSize, weight: .medium)
@@ -1291,26 +1291,28 @@ private final class AtticGlassMenuRootView: NSView {
     }
 }
 
-/// Its own window keeps this glass separate from the panel's container.
+/// The card's face: the panel's own surface (owner, 12 Nov: "the same
+/// material as the panel"), drawn by the panel's path
+/// (`AtticSurfaceBackground` on `tokens.panel`, as the island wears it):
+/// the native material on Glass and Frosted at the panel's footprint, its
+/// foundation, and the Tint; the flat base on Solid and under Reduce
+/// Transparency. Its own window keeps it separate from the panel's
+/// container; the shape, rim and rows stay the menus' own.
 struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
+    @Environment(\.atticPanelSurfaceSize) private var panelSize
 
     var body: some View {
         let shape = AtticGlassMenuShape.card
-        Group {
-            if style.isGlass {
-                Color.clear.glassEffect(.regular, in: shape)
-            } else {
-                shape.fill(Color(nsColor: style.fill))
+        AtticSurfaceBackground(model: style.tokens.panel, shape: shape, nativeGlassSize: panelSize)
+            .environment(\.atticDesign, style.design)
+            .overlay {
+                shape.inset(by: style.rimWidth / 2)
+                    .stroke(Color(nsColor: style.rim), lineWidth: style.rimWidth)
             }
-        }
-        .overlay {
-            shape.inset(by: style.rimWidth / 2)
-                .stroke(Color(nsColor: style.rim), lineWidth: style.rimWidth)
-        }
-        .environment(\.colorScheme, style.dark ? .dark : .light)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+            .environment(\.colorScheme, style.dark ? .dark : .light)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
