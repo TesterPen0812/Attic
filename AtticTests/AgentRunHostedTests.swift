@@ -99,6 +99,23 @@ final class AgentRunHostedTests: XCTestCase {
         reopenedRunner.cancel()
     }
 
+    func testDamagedThreadJournalIsReportedWithoutOverwritingItsContents() async throws {
+        let url = journalURL()
+        let original = Data("{partial-thread-from-interrupted-save".utf8)
+        try original.write(to: url)
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: url)
+
+        XCTAssertTrue(runner.threadSnapshot().entries.contains { $0.role == "error" },
+                      "A damaged journal must be visible to its owner")
+        _ = runner.send("Continue the saved chat", watching: false)
+        XCTAssertFalse(runner.threadSnapshot().isRunning,
+                       "A damaged journal must refuse a new run immediately")
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        XCTAssertFalse(runner.threadSnapshot().isRunning)
+        runner.shutdown()
+    }
+
     // MARK: Chat history and context
 
     private static let done = #"{"type":"result","is_error":false}"#
