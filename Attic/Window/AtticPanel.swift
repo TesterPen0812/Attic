@@ -2094,7 +2094,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// made and dismantled here): overlay hierarchy changes from it wait
     /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
     override func layout() {
-        AtticOverlayHierarchy.layoutPass { super.layout() }
+        IdleLatencyTrace.span("panel_host_layout") {
+            AtticOverlayHierarchy.layoutPass { super.layout() }
+        }
     }
 
     /// The accessibility hit test (VoiceOver's pointer, XCUITest's hit

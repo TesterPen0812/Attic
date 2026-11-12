@@ -1355,6 +1355,7 @@ final class TasksPageModel: ObservableObject {
         if !selection.isEmpty { selection = [] }
         if !bySwipe { PerformanceSignposts.beginPageChoice() }
         self.tab = tab
+        IdleLatencyTrace.point("task_tab_selected")
     }
 
     /// One "finish or keep the current edit" for every way out of it
