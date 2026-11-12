@@ -149,7 +149,16 @@ final class SettingsWindowHostedTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             spin(0.2)
             host.layoutSubtreeIfNeeded()
-            let scroll = try XCTUnwrap(scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 },
+            // On a slower hosted runner the NSHostingView can publish its
+            // first native ScrollView after the initial layout pass.
+            let deadline = Date().addingTimeInterval(2)
+            var candidate = scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 }
+            while candidate == nil && Date() < deadline {
+                spin(0.05)
+                host.layoutSubtreeIfNeeded()
+                candidate = scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 }
+            }
+            let scroll = try XCTUnwrap(candidate,
                                        "The undersized Settings host must offer scrolling")
             let content = try XCTUnwrap(scroll.documentView)
             XCTAssertGreaterThanOrEqual(content.frame.width, max(640, size.width) - 2,
@@ -254,7 +263,10 @@ final class SettingsWindowHostedTests: XCTestCase {
                                      "No horizontal Settings content beyond \(size)")
             try assertContentFits(["setting-launch-at-login", "setting-animations", "setting-hide-animation",
                                    "setting-quick-capture-shortcut"], at: size)
-            let sidebarBefore = try frame("settings-nav-general")
+            // The offscreen NSWindow can be repositioned by AppKit during an
+            // appearance change. Compare sidebar position inside the window,
+            // so real horizontal content movement still fails this test.
+            let sidebarBefore = try frame("settings-nav-general").minX - window.frame.minX
             let appearance = try XCTUnwrap(element("settings-nav-appearance"))
             XCTAssertTrue(appearance.accessibilityPerformPress?() ?? false)
             try assertContentFits(["setting-appearance-preview", "setting-appearance-system",
@@ -264,7 +276,7 @@ final class SettingsWindowHostedTests: XCTestCase {
             XCTAssertTrue(dark.accessibilityPerformPress?() ?? false)
             try assertContentFits(["setting-appearance-system", "setting-appearance-light",
                                    "setting-appearance-dark", "setting-panel-theme"], at: size)
-            XCTAssertEqual(try frame("settings-nav-general").minX, sidebarBefore.minX, accuracy: 0.5,
+            XCTAssertEqual(try frame("settings-nav-general").minX - window.frame.minX, sidebarBefore, accuracy: 0.5,
                            "Choosing Dark must not scroll the sidebar horizontally")
             let general = try XCTUnwrap(element("settings-nav-general"))
             XCTAssertTrue(general.accessibilityPerformPress?() ?? false)

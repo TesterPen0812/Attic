@@ -2477,11 +2477,12 @@ final class AtticDateCardTests: XCTestCase {
     func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
-        XCTAssertEqual(m.cornerRadius, 16, "the owner's 16 pt menus (2026-10-31)")
+        XCTAssertEqual(m.cornerRadius, 18, "Accepted 2026-11-10: Loam's 18 pt continuous glass card")
         XCTAssertEqual(m.inset, 3)
         XCTAssertEqual(m.rowPadding, 10)
         XCTAssertEqual(m.highlightRadius, 13)
-        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius)
+        XCTAssertEqual(m.highlightRadius, AtticRadius.menuRow,
+                       "the picker rows retain their own 13 pt radius inside the Loam card")
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
         XCTAssertEqual(m.inset + m.fieldInset, 5, "the field stays 2 pt inside the rows")
