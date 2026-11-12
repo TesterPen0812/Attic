@@ -29,10 +29,11 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: the menus' system glass (Accepted 2026-11-10: the
-/// picker cards take the glass menu's shell; the opaque card is only the
-/// fallback when Reduce Transparency or the solid controls ask for it),
-/// with its rim (1 pt under Increase Contrast) and soft shadow, in the
+/// The card's face: the panel's own material (owner, 12 Nov: "the same
+/// material as the panel"; the picker cards keep the glass menu's shell,
+/// Accepted 2026-11-10), drawn by the panel's path (`AtticSurfaceBackground`
+/// on `tokens.panel` at the panel's native footprint, as the command menus'
+/// `AtticGlassMenuSurface` and the island draw it), with its rim (1 pt under Increase Contrast) and soft shadow, in the
 /// menus' 18 pt squircle. The command menus' glass is `AtticGlassMenu`'s
 /// own.
 ///
@@ -41,6 +42,7 @@ import SwiftUI
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticUnfold) private var unfold
+    @Environment(\.atticPanelSurfaceSize) private var panelSize
 
     var body: some View {
         let tokens = design.tokens
@@ -53,12 +55,11 @@ struct AtticDropdownSurface: View {
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            if design.effectiveControls == .liquidGlass {
-                Color.clear.glassEffect(.regular, in: shape)
+            AtticSurfaceBackground(model: tokens.panel, shape: shape, nativeGlassSize: panelSize)
+            if AtticSurfaceInk.seeThrough(tokens) {
                 shape.inset(by: edge / 2).stroke((design.increaseContrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark)
                                                   : tokens.dropdownRim).color, lineWidth: edge)
             } else {
-                shape.fill(tokens.popoverFill.color)
                 // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
                 shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
             }
