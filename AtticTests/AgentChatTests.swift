@@ -1081,6 +1081,55 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testA11yChatNamesControlsAndEscapeClosesOneLevel() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let roles: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXMenuButton", "AXPopUpButton",
+                                  "AXComboBox", "AXTextField", "AXTextArea", "AXSlider", "AXLink"]
+        func inspect(_ state: String, field: Bool, picker: Bool = false) throws {
+            guard let root = window.contentView else { return XCTFail("chat host") }
+            var visited = Set<ObjectIdentifier>()
+            var interactive = 0
+            var missing: [String] = []
+            var identifiers = Set<String>()
+            func walk(_ node: AnyObject) {
+                guard visited.insert(ObjectIdentifier(node)).inserted else { return }
+                if let id = node.accessibilityIdentifier?() { identifiers.insert(id) }
+                if let role = node.accessibilityRole?()?.rawValue, roles.contains(role) {
+                    interactive += 1
+                    if (node.accessibilityLabel?() ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        missing.append("\(role) \(node.accessibilityIdentifier?() ?? "")")
+                    }
+                }
+                for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+            }
+            walk(root)
+            print("A11Y_CHAT state=\(state) interactive=\(interactive) missing=\(missing)")
+            XCTAssertGreaterThan(interactive, 0)
+            XCTAssertTrue(missing.isEmpty, "chat \(state) has unnamed controls: \(missing)")
+            XCTAssertEqual(identifiers.contains("agent-chat-field"), field, "chat field visible in \(state)")
+            XCTAssertEqual(identifiers.contains("agent-chat-pick-field"), picker,
+                           "only the open picker exposes its replacement search field")
+        }
+        model.open()
+        spin(0.45)
+        try inspect("open", field: true)
+        model.pickingItem = true
+        spin(0.2)
+        try inspect("picker", field: false, picker: true)
+        model.escape()
+        spin(0.2)
+        XCTAssertFalse(model.pickingItem, "first Escape closes the item picker")
+        XCTAssertTrue(model.isOpen, "first Escape must preserve the chat")
+        try inspect("returned", field: true)
+        model.escape()
+        spin(0.8)
+        XCTAssertFalse(model.isOpen, "second Escape closes chat")
+        try inspect("closed", field: false)
+    }
+
     func testSA5ComposerPhaseGeometryRespectsReduceMotion() {
         XCTAssertNil(AgentChatComposer.phaseAnimation(alive: false), "Reduce Motion must move composer geometry instantly")
         XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")

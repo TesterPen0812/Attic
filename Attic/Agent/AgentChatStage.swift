@@ -1011,6 +1011,7 @@ private struct AgentChatItemPicker: View {
             }
             TextField(String(localized: "Task or note…"), text: $query)
                 .textFieldStyle(.plain)
+                .accessibilityLabel(String(localized: "Find a task or note"))
                 .font(.system(size: 11.5))
                 .foregroundStyle(design.tokens.ink(.heading).color)
                 .focused($focused)
