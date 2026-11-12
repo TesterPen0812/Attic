@@ -1004,4 +1004,51 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try store.open(id).objects.first?.text, "Owner's saved sentence")
     }
 
+    func testHunt16AgentDeletesCanvasBeforePasteNeverPastesIntoReplacement() throws {
+        let originalID = try XCTUnwrap(model.canvasID)
+        let copied = DrawObject(frame: DrawFrame(x: 75, y: 100, width: 55, height: 35),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([copied])).isSaved)
+        model.setTool(.select)
+        model.select([copied.id])
+        model.copySelection()
+
+        let surviving = store.create(name: "Another board")
+        let kept = DrawObject(frame: DrawFrame(x: 190, y: 190, width: 45, height: 42),
+                              content: .shape(.ellipse))
+        XCTAssertTrue(store.perform(.put([kept]), on: surviving.id).isSaved)
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: originalID).isSaved)
+        model.paste() // Old board disappears when the pending agent change is reconciled.
+
+        XCTAssertEqual(model.canvasID, surviving.id)
+        XCTAssertEqual(try store.open(surviving.id).objects, [kept],
+                       "Paste begun on a removed canvas must not insert content into its replacement")
+    }
+
+    func testHunt16AgentAddBeforeOwnerPasteDoesNotJoinPastedSelection() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let copied = DrawObject(frame: DrawFrame(x: 65, y: 90, width: 55, height: 35),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([copied])).isSaved)
+        model.setTool(.select)
+        model.select([copied.id])
+        model.copySelection()
+
+        // The agent saves a new unrelated object before the asynchronous
+        // observation callback has refreshed the owner's canvas.
+        let agent = DrawObject(frame: DrawFrame(x: 160, y: 180, width: 50, height: 32),
+                               zIndex: 1, content: .shape(.ellipse))
+        XCTAssertTrue(store.performAgent(.put([agent]), on: id).isSaved)
+        model.paste()
+
+        let saved = try store.open(id).objects
+        let pasted = try XCTUnwrap(saved.first { $0.id != copied.id && $0.id != agent.id })
+        XCTAssertEqual(saved.count, 3)
+        XCTAssertEqual(model.selection, [pasted.id],
+                       "Paste must never select an unrelated object the agent just added")
+        model.deleteSelection()
+        XCTAssertTrue(try store.open(id).objects.contains { $0.id == agent.id },
+                      "Deleting the pasted object must leave the agent's independent object intact")
+    }
+
 }
