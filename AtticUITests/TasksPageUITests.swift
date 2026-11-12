@@ -662,7 +662,11 @@ final class TasksPageUITests: XCTestCase {
             app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
             var stop: String
-            if (footer.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+            // Tabbing to '+' can expand it into the add text field. The
+            // button leaves the accessibility tree at that point; querying
+            // its focus unconditionally throws even though focus is visible.
+            if (footer.exists && (footer.value(forKey: "hasKeyboardFocus") as? Bool) == true)
+                || (addBar.exists && (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true) {
                 stop = "+"
             } else {
                 let after = try windowBitmap()
