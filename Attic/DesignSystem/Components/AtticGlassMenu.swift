@@ -115,6 +115,21 @@ final class AtticGlassMenu {
     static func popUp(_ commands: [AtticMenuCommand], in view: NSView, placement: Placement,
                       opener: NSEvent? = NSApp.currentEvent) -> AtticMenuCommand? {
         guard current == nil, let window = view.window, !commands.isEmpty else { return nil }
+        // Quick look (owner, 12 Nov: "proper liquid glass and proper
+        // shadows and outline or whatever goes into a proper menu"): the
+        // system's own menu, which macOS draws in Liquid Glass with its own
+        // shadow and outline. Its items run their commands themselves.
+        if AtticMenuLook.native {
+            let menu = AtticNativeMenu.makeContextMenu(commands, appearance: window.effectiveAppearance)
+            let location: NSPoint
+            switch placement {
+            case let .point(point): location = point
+            case let .below(rect):
+                location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + AtticMenuLook.gap : rect.minY - AtticMenuLook.gap)
+            }
+            menu.popUp(positioning: nil, at: location, in: view)
+            return nil
+        }
         let screen: ScreenPlacement
         switch placement {
         case let .point(point):
@@ -1316,6 +1331,13 @@ final class AtticMenuBackdropHole {
 /// piece by piece, to measure each cause on screen. `inshadow`: the shadow
 /// fills the card under its glass; `nocut`: the panel stays under the card;
 /// `cardsize`: the native glass at the card's own size.
+/// Which menu Attic opens (12 Nov quick look): the system's own.
+enum AtticMenuLook {
+    static let native = true
+    /// From a control: this far out of it.
+    static let gap: CGFloat = 4
+}
+
 enum AtticMenuSurfaceSeam {
     #if DEBUG
     nonisolated static let flags: Set<String> = {
@@ -1520,14 +1542,14 @@ private final class AtticGlassMenuRootView: NSView {
     }
 }
 
-/// The card's face: Craft's frosted glass (`AtticCraftCardFace`, owner's
+/// The card's face: Liquid Glass (`AtticGlassCardFace`, owner's
 /// 12 Nov quick look), with the menus' own shape, rim and rows.
 struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
 
     var body: some View {
         let shape = AtticGlassMenuShape.card
-        AtticCraftCardFace(shape: shape, tokens: style.tokens, dark: style.dark)
+        AtticGlassCardFace(shape: shape, tokens: style.tokens, dark: style.dark)
             .environment(\.atticDesign, style.design)
             .overlay {
                 shape.inset(by: style.rimWidth / 2)

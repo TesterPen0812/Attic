@@ -29,7 +29,7 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: Craft's frosted glass (`AtticCraftCardFace`, owner's
+/// The card's face: Liquid Glass (`AtticGlassCardFace`, owner's
 /// 12 Nov quick look), with its rim (1 pt under Increase Contrast) and soft
 /// shadow, in the menus' 18 pt squircle.
 ///
@@ -50,7 +50,7 @@ struct AtticDropdownSurface: View {
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            AtticCraftCardFace(shape: shape, tokens: tokens, dark: design.mode == .dark)
+            AtticGlassCardFace(shape: shape, tokens: tokens, dark: design.mode == .dark)
             if AtticSurfaceInk.seeThrough(tokens) {
                 shape.inset(by: edge / 2).stroke((design.increaseContrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark)
                                                   : tokens.dropdownRim).color, lineWidth: edge)
@@ -64,27 +64,18 @@ struct AtticDropdownSurface: View {
     }
 }
 
-/// Craft's card face (owner, 12 Nov, a quick look to judge: "we already
-/// had the craft ones, can we have that again"): regular Liquid Glass
-/// under a near-opaque neutral frost, so whatever lies behind shows only
-/// as faint blurred smudges. Craft's card reads 248 over its white page
-/// with ghost text at 235–239; 86 % of 248 over the glass lands there.
+/// The card's face (owner, 12 Nov quick look: "proper liquid glass and
+/// proper shadows and outline"): regular Liquid Glass, nothing over it;
+/// its edge, the rim and the soft shadow outside it are the outline.
 /// Solid and Reduce Transparency keep the opaque `popoverFill`.
-struct AtticCraftCardFace<S: Shape>: View {
+struct AtticGlassCardFace<S: Shape>: View {
     let shape: S
     let tokens: AtticColorTokens
     let dark: Bool
 
-    static func frost(dark: Bool) -> AtticRGBA {
-        (dark ? AtticRGBA(0x2C2C2E) : AtticRGBA(0xF8F8F8)).withAlpha(0.86)
-    }
-
     var body: some View {
         if AtticSurfaceInk.seeThrough(tokens) {
-            ZStack {
-                Color.clear.glassEffect(.regular, in: shape)
-                shape.fill(Self.frost(dark: dark).color)
-            }
+            Color.clear.glassEffect(.regular, in: shape)
         } else {
             shape.fill(tokens.popoverFill.color)
         }
