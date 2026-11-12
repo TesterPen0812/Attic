@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from summarize_first_touch import load, one_touch, report
+from clicklag4_stats import cohorts
 from contextlib import redirect_stdout
 from io import StringIO
 
@@ -257,6 +258,35 @@ class FirstTouchSummaryTests(unittest.TestCase):
             report(samples)
         for name in ("task_now", "task_later", "task_done"):
             self.assertIn(f"{name}: touches=1", out.getvalue())
+
+    def test_capture_uses_latest_run_by_input_time_not_run_id_sort_order(self):
+        rows = []
+        for run, base_ns, count, board_opened in (
+            ("z-before", 1_000_000_000, 21, True),
+            ("a-after", 3_000_000_000, 20, False),
+        ):
+            for index in range(1, count + 1):
+                when = base_ns + index * 10_000_000
+                rows.extend([
+                    {"version": 1, "run": run, "id": index, "event": "input",
+                     "kind": "panel_control", "atNS": when},
+                    {"version": 1, "run": run, "id": index, "event": "stage",
+                     "stage": "control_dispatched", "control": "draw_library", "atNS": when + 1_000_000},
+                    {"version": 1, "run": run, "id": index, "event": "frame_candidate",
+                     "atNS": when + 5_000_000},
+                ])
+                if board_opened:
+                    rows.append({"version": 1, "run": run, "id": index, "event": "span",
+                                 "stage": "draw_board_open", "spanStartNS": when + 1_000_000,
+                                 "atNS": when + 2_000_000})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "steady-draw-library.jsonl"
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+            _, controls = cohorts(path)
+        newest = controls["draw_library"]
+        self.assertEqual(len(newest), 20)
+        self.assertEqual({touch["run"] for touch in newest}, {"a-after"})
+        self.assertTrue(all("span:draw_board_open" not in touch["stages"] for touch in newest))
 
 
 if __name__ == "__main__":

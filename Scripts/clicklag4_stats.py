@@ -46,8 +46,12 @@ def cohorts(path):
     if descriptor is None:
         return
     desired = CONTROLS[descriptor]
-    touches = [one_touch(records) for records in load(path)]
-    touches.sort(key=lambda touch: (touch["run"], touch["id"]))
+    # One rolling log can contain multiple app launches. Run identifiers do
+    # not sort chronologically, so selecting the last 20 by (run, id) can
+    # silently report the old build as the new build's measurements.
+    traces = sorted(load(path), key=lambda records: next(
+        record["atNS"] for record in records if record["event"] == "input"))
+    touches = [one_touch(records) for records in traces]
     result = {}
     if descriptor in ("now-later", "now-done") and not any(
             touch["control"] in desired for touch in touches):
