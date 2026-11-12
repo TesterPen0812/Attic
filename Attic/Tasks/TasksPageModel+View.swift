@@ -315,6 +315,7 @@ extension TasksPageModel {
     }
 
     func moveVisible(_ id: UUID, toShownIndex index: Int, in shown: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         guard shown.indices.contains(index), shown[index] != id else { return .applied }
         let group = store.orderGroup(of: task).map(\.id)

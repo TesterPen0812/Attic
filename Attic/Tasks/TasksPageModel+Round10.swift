@@ -54,6 +54,7 @@ extension TasksPageModel {
     /// are selected.
     @discardableResult
     func duplicate(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let sources = ids.compactMap { store.listedTask(withID: $0) }
         guard !sources.isEmpty else { return .failed(.taskGone) }
         guard let copies = library.duplicateTasks(sources.map(\.id)) else {
@@ -90,6 +91,7 @@ extension TasksPageModel {
     /// the rename is finished.
     @discardableResult
     func commitSubtaskRename() -> Bool {
+        settlePendingCompletionAcknowledgements()
         guard let id = renamingSubtaskID else { return true }
         let title = subtaskRename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let task = store.task(withID: id), !title.isEmpty, title != task.title else {
@@ -136,6 +138,7 @@ extension TasksPageModel {
     /// toast. Returns the outcome (a failure shows under the parent).
     @discardableResult
     func deleteSubtask(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id), task.parentID != nil else { return .failed(.taskGone) }
         let title = task.title
         let outcome = library.deleteTasks([id])
@@ -149,6 +152,7 @@ extension TasksPageModel {
     /// as one step. The open quick look shows the new order at once.
     @discardableResult
     func moveSubtask(_ id: UUID, by offset: Int) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id), let parentID = task.parentID else { return .failed(.taskGone) }
         let siblings = store.subtasks(of: parentID).filter { ($0.status == .done) == (task.status == .done) }
         guard let index = siblings.firstIndex(where: { $0.id == id }),

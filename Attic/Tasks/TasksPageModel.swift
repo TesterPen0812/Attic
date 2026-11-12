@@ -367,6 +367,9 @@ final class TasksPageModel: ObservableObject {
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
+    /// A row can acknowledge a press before its family transaction runs.
+    /// Retain the intent until that transaction has settled, including failure.
+    private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
 
     struct HeldPlace: Equatable {
         let tab: TasksTab
@@ -651,6 +654,9 @@ final class TasksPageModel: ObservableObject {
         let open = expanded.contains(task.id)
         var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                             calendar: services.calendar(), locale: services.locale)
+        // The tick is the acknowledgement of the press. The durable store
+        // can be slow; a failed save cancels the hold and restores this row.
+        if held[task.id] != nil, task.status != .done { model.state = .done }
         // Find's matches are marked in the title (item 6, as on Done).
         if let match, !match.isEmpty { model.titleMatch = match }
         // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
@@ -1641,6 +1647,7 @@ final class TasksPageModel: ObservableObject {
     /// back to what it was.
     @discardableResult
     func toggleDone(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.listedTask(withID: id) else { return .failed(.taskGone) }
         return task.status == .done ? reopen(id) : complete(id)
     }
@@ -1649,6 +1656,7 @@ final class TasksPageModel: ObservableObject {
     /// done already) all back, each as one step.
     @discardableResult
     func toggleDone(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let tasks = ids.compactMap { store.listedTask(withID: $0) }
         let reopeningAll = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
         let outcome: CommandOutcome
@@ -1673,6 +1681,7 @@ final class TasksPageModel: ObservableObject {
     /// circle's centre dot), or stop when every one is already started.
     @discardableResult
     func toggleWorking(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let tasks = ids.compactMap { store.task(withID: $0) }
         guard !tasks.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
         let target: TaskStatus = tasks.allSatisfy { $0.status == .inProgress } ? .todo : .inProgress
@@ -1684,12 +1693,59 @@ final class TasksPageModel: ObservableObject {
     /// records where the task was finished from, in the same save.
     @discardableResult
     func complete(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         guard task.status != .done else { return .applied }
         let holdTab: TasksTab? = tab == .done ? nil : tab
         let index = holdTab.flatMap { holdTab in rows(for: holdTab).firstIndex { $0.id == id } }
+        if let holdTab, let index { hold(id, tab: holdTab, at: index) }
+        return finishCompletion(id)
+    }
+
+    /// Row/keyboard acknowledgement: give AppKit a frame opportunity before
+    /// the synchronous, duplicate-safe family transaction. Other callers keep
+    /// complete(_:) and its immediate CommandOutcome/Undo semantics.
+    func completionAcknowledgementPending(for id: UUID) -> Bool {
+        completingAfterAcknowledgement.contains(where: { $0.id == id })
+    }
+
+    func completeAcknowledged(_ id: UUID, settled: @escaping (CommandOutcome) -> Void) {
+        guard let task = store.task(withID: id) else { settled(.failed(.taskGone)); return }
+        guard task.status != .done else { settled(.applied); return }
+        guard !completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
+        let holdTab: TasksTab? = tab == .done ? nil : tab
+        let index = holdTab.flatMap { rows(for: $0).firstIndex { $0.id == id } }
+        if let holdTab, let index { hold(id, tab: holdTab, at: index) }
+        completingAfterAcknowledgement.append((id, settled))
+        Task { @MainActor [self] in
+            // The next main-queue callback is not necessarily a drawn frame.
+            // Allow at least one display interval before the blocking save.
+            try? await Task.sleep(for: .milliseconds(20))
+            guard completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
+            settlePendingCompletionAcknowledgements(through: id)
+        }
+    }
+
+    /// Serialize acknowledged clicks with the next command's Undo history.
+    /// An immediate Undo or a following edit must not jump past a tick whose
+    /// durable completion has not yet entered the history. A scheduled task
+    /// for an already-settled click has no remaining work to do.
+    @discardableResult
+    func settlePendingCompletionAcknowledgements(through id: UUID? = nil) -> Bool {
+        var savedAny = false
+        while !completingAfterAcknowledgement.isEmpty {
+            let next = completingAfterAcknowledgement.removeFirst()
+            let outcome = finishCompletion(next.id)
+            savedAny = savedAny || outcome.isApplied
+            next.settled(outcome)
+            if next.id == id { break }
+        }
+        return savedAny
+    }
+
+    private func finishCompletion(_ id: UUID) -> CommandOutcome {
         let outcome = AtticSounds.play(.done, after: library.completeTask(id))
-        if outcome.isApplied, let holdTab, let index { hold(id, tab: holdTab, at: index) }
+        if !outcome.isApplied { cancelHold(id) }
         return outcome
     }
 
@@ -1700,6 +1756,7 @@ final class TasksPageModel: ObservableObject {
     /// task comes back with its family.
     @discardableResult
     func reopen(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let outcome = AtticSounds.play(.undone, after: library.reopenTasks([id]))
         if outcome.isApplied {
             cancelHold(id)
@@ -1758,6 +1815,7 @@ final class TasksPageModel: ObservableObject {
 
     @discardableResult
     func setStatus(_ status: TaskStatus, for ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         if status == .done {
             let outcome = ids.count == 1 ? complete(ids[0]) : AtticSounds.play(.done, after: library.updateTasks(ids, status: .done))
             if outcome.isApplied { pruneInvisibleSelection(on: tab) }
@@ -1782,6 +1840,7 @@ final class TasksPageModel: ObservableObject {
     /// one). Nothing to change is not a change.
     @discardableResult
     func setPriority(_ priority: TaskPriority, for ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let changing = ids.filter { store.listedTask(withID: $0).map { $0.priority != priority } == true }
         guard !changing.isEmpty else { return .applied }
         let outcome = reachesDoneLog(changing)
@@ -1800,6 +1859,7 @@ final class TasksPageModel: ObservableObject {
     /// ⌘B and the menu: to Later (the backlog), with an Undo toast (a move).
     @discardableResult
     func moveToBacklog(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let movable = ids.filter { store.task(withID: $0).map { $0.listedStatus != .backlog } == true }
         guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
@@ -1815,6 +1875,7 @@ final class TasksPageModel: ObservableObject {
     /// Back to Now as to do (from Later), with an Undo toast.
     @discardableResult
     func moveToNow(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let movable = ids.filter { store.task(withID: $0)?.listedStatus == .backlog }
         guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
@@ -1838,6 +1899,7 @@ final class TasksPageModel: ObservableObject {
     /// once it saved (round 4).
     @discardableResult
     func restoreToNow(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard !ids.isEmpty else { return .applied }
         let outcome = library.restoreToNow(ids)
         guard outcome.isApplied else { return outcome }
@@ -1856,6 +1918,7 @@ final class TasksPageModel: ObservableObject {
     /// saved; the caller moves focus only then (Astra 6).
     @discardableResult
     func delete(_ ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         // Done's rows too (round 10): a Done log task goes to Recently
         // Deleted with its family, and Undo puts it back in the log.
         let live = ids.filter { store.listedTask(withID: $0) != nil }
@@ -1889,6 +1952,7 @@ final class TasksPageModel: ObservableObject {
     /// of the group nothing moves (`.applied`: nothing needed to change).
     @discardableResult
     func moveBy(_ id: UUID, offset: Int) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         let group = store.orderGroup(of: task)
         guard let index = group.firstIndex(where: { $0.id == id }) else { return .failed(.taskGone) }
@@ -1904,7 +1968,8 @@ final class TasksPageModel: ObservableObject {
     /// A drag reorder: the row lands at `index` within its group.
     @discardableResult
     func move(_ id: UUID, toGroupIndex index: Int) -> CommandOutcome {
-        library.moveTask(id, toIndex: index)
+        settlePendingCompletionAcknowledgements()
+        return library.moveTask(id, toIndex: index)
     }
 
     // MARK: - Title and subtasks
@@ -1930,6 +1995,7 @@ final class TasksPageModel: ObservableObject {
     /// text and "Not saved · Retry". Returns whether the edit is finished.
     @discardableResult
     func commitTitle() -> Bool {
+        settlePendingCompletionAcknowledgements()
         guard let id = editingTitleID else { return true }
         guard let task = store.listedTask(withID: id), let patch = titlePatch(for: task) else {
             editingTitleID = nil
@@ -2054,6 +2120,7 @@ final class TasksPageModel: ObservableObject {
     /// library's duplicate-safe, fallible, undoable operation.
     @discardableResult
     func backspaceEmptySubtask() -> Bool {
+        settlePendingCompletionAcknowledgements()
         if let parent = newSubtaskParentID {
             guard newSubtaskTitle.isEmpty else { return false }
             let previous = quickLookSubtasks(of: parent, store.subtasks(of: parent)).last?.id
@@ -2104,6 +2171,7 @@ final class TasksPageModel: ObservableObject {
     /// keeps the field for the next one.
     @discardableResult
     func commitNewSubtask() -> Bool {
+        settlePendingCompletionAcknowledgements()
         guard let parentID = newSubtaskParentID else { return true }
         let text = TaskAddBarText(text: newSubtaskTitle)
         guard let draft = text.draft(parser: parser, status: .todo, parentID: parentID) else {
@@ -2124,6 +2192,7 @@ final class TasksPageModel: ObservableObject {
     /// family (Astra 6): the quick look shows it where the box is.
     @discardableResult
     func toggleSubtask(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         let isDone = task.status == .done
         return AtticSounds.play(isDone ? .undone : .done, after: library.updateTask(id, status: isDone ? .todo : .done))
@@ -2150,6 +2219,7 @@ final class TasksPageModel: ObservableObject {
     /// task. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
+        settlePendingCompletionAcknowledgements()
         guard composerFilesReadyForSubmission() else { return nil }
         // Submitting finishes the words at the end (round 8, G1): a date or
         // priority typed after a pick, still at the caret (`Call !` then
@@ -2192,6 +2262,7 @@ final class TasksPageModel: ObservableObject {
     /// Pasted lines: one task per line, or all of them as one task.
     /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
+        settlePendingCompletionAcknowledgements()
         guard composerFilesReadyForSubmission() else { return }
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
@@ -2243,8 +2314,16 @@ final class TasksPageModel: ObservableObject {
     /// notice (Astra 23).
     @discardableResult
     func undo() -> CommandOutcome {
+        let hadPending = !completingAfterAcknowledgement.isEmpty
+        let savedPending = settlePendingCompletionAcknowledgements()
+        // A failed acknowledged click never acquired an Undo step. Do not
+        // let ⌘Z reach back into an unrelated earlier saved task edit.
+        if hadPending && !savedPending { return .applied }
         let outcome = library.undo(in: .tasks)
         if outcome.isApplied {
+            // Undo may restore a still-held completed row. Show its genuine
+            // status immediately instead of keeping a false checked tick.
+            for id in Array(held.keys) where store.task(withID: id)?.status != .done { cancelHold(id) }
             dismissToast()
             reloadDoneLogAfterChange()
             pruneInvisibleSelection(on: tab)
@@ -2258,6 +2337,7 @@ final class TasksPageModel: ObservableObject {
 
     @discardableResult
     func redo() -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let outcome = library.redo(in: .tasks)
         if outcome.isApplied {
             reloadDoneLogAfterChange()
@@ -2281,19 +2361,21 @@ final class TasksPageModel: ObservableObject {
     /// A draft was edited: text Undo is the field's until a task change
     /// happens after this.
     func noteTextEdit() {
+        settlePendingCompletionAcknowledgements()
         stepAtLastTextEdit = library.undo.undoStepID(in: .tasks)
         taskRedoIsNext = false
     }
 
     /// A task change is newer than the draft's last edit: ⌘Z belongs to it.
     var taskChangeOwnsUndo: Bool {
+        if !completingAfterAcknowledgement.isEmpty { return true }
         guard let top = library.undo.undoStepID(in: .tasks) else { return false }
         return top != stepAtLastTextEdit
     }
 
     /// The step a claimed ⌘Z just undid is waiting for ⇧⌘Z.
     var taskChangeOwnsRedo: Bool {
-        taskRedoIsNext && library.undo.canRedo(in: .tasks)
+        completingAfterAcknowledgement.isEmpty && taskRedoIsNext && library.undo.canRedo(in: .tasks)
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the
@@ -2306,6 +2388,7 @@ final class TasksPageModel: ObservableObject {
         postedToastStep = step
         postedToastID = toasts.show(message, performing: { [weak self] in
             // Only the step the toast named: anything newer makes it stale.
+            self?.settlePendingCompletionAcknowledgements()
             guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return .applied }
             let outcome = self.library.undo(in: .tasks)
             // The toast says it where the Undo was pressed; the same

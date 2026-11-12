@@ -8,6 +8,263 @@ import XCTest
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
 
+    func testR04TwoPendingTicksUndoInInputOrder() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let first = TaskItem(title: "First tick")
+        let second = TaskItem(title: "Second tick")
+        context.insert(first)
+        context.insert(second)
+        try context.save()
+        let store = TaskStore(container: container)
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        var settled: [UUID] = []
+        page.completeAcknowledged(first.id) { if $0.isApplied { settled.append(first.id) } }
+        page.completeAcknowledged(second.id) { if $0.isApplied { settled.append(second.id) } }
+        XCTAssertTrue(page.undo().isApplied)
+        XCTAssertEqual(settled, [first.id, second.id])
+        XCTAssertEqual(store.task(withID: first.id)?.status, .done)
+        XCTAssertEqual(store.task(withID: second.id)?.status, .todo)
+        XCTAssertNil(page.held[second.id])
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(settled.count, 2, "Queued writes must not run twice")
+        XCTAssertTrue(page.redo().isApplied)
+        XCTAssertEqual(store.task(withID: second.id)?.status, .done)
+    }
+
+    func testR04FollowingPriorityChangeKeepsUndoOrder() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let ticking = TaskItem(title: "First click")
+        let priority = TaskItem(title: "Second click")
+        context.insert(ticking)
+        context.insert(priority)
+        try context.save()
+        let store = TaskStore(container: container)
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        var completed = 0
+        page.completeAcknowledged(ticking.id) { if $0.isApplied { completed += 1 } }
+        XCTAssertTrue(page.setPriority(.high, for: [priority.id]).isApplied)
+        XCTAssertEqual(completed, 1)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .done)
+        XCTAssertTrue(page.undo().isApplied)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .done, "Priority is newer than the pending tick")
+        XCTAssertEqual(store.task(withID: priority.id)?.priority, TaskPriority.none)
+        XCTAssertTrue(page.undo().isApplied)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .todo)
+    }
+
+    func testR04FailedPendingTickUndoCannotReachOlderEdit() async throws {
+        struct Rejected: Error {}
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let old = TaskItem(title: "Earlier edit")
+        let ticking = TaskItem(title: "Failed tick")
+        context.insert(old)
+        context.insert(ticking)
+        try context.save()
+        var fail = false
+        let store = TaskStore(container: container, persist: { context in
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        let library = AtticLibrary(tasks: store)
+        let page = TasksPageModel(library: library)
+        XCTAssertTrue(library.updateTask(old.id, priority: .high).isApplied)
+        fail = true
+        var result: CommandOutcome?
+        page.completeAcknowledged(ticking.id) { result = $0 }
+        XCTAssertTrue(page.undo().isApplied)
+        XCTAssertFalse(result?.isApplied ?? true)
+        XCTAssertEqual(store.task(withID: old.id)?.priority, .high)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .todo)
+        XCTAssertNil(page.held[ticking.id])
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(store.task(withID: old.id)?.priority, .high)
+    }
+
+    func testR04ImmediateUndoReversesAcknowledgedTickBeforeAnEarlierEdit() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let previous = TaskItem(title: "Earlier edit")
+        let ticking = TaskItem(title: "New tick")
+        context.insert(previous)
+        context.insert(ticking)
+        try context.save()
+        let store = TaskStore(container: container)
+        let library = AtticLibrary(tasks: store)
+        let page = TasksPageModel(library: library)
+        XCTAssertTrue(library.updateTask(previous.id, priority: .high).isApplied)
+        page.noteTextEdit() // The previous history step is already known to the draft.
+        var completionCount = 0
+        page.completeAcknowledged(ticking.id) { outcome in
+            XCTAssertTrue(outcome.isApplied)
+            completionCount += 1
+        }
+        XCTAssertTrue(page.taskChangeOwnsUndo, "The pending tick must win over draft Undo")
+        XCTAssertTrue(page.undo().isApplied)
+        XCTAssertEqual(store.task(withID: previous.id)?.priority, .high, "Undo must not touch an older edit")
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .todo)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(completionCount, 1, "The deferred save must not complete again after Undo")
+        XCTAssertEqual(store.task(withID: previous.id)?.priority, .high)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .todo)
+        XCTAssertTrue(page.redo().isApplied)
+        XCTAssertEqual(store.task(withID: ticking.id)?.status, .done)
+    }
+
+    func testR04VisualTickPrecedesWriteAndFailedWriteRollsItBack() throws {
+        struct Rejected: Error {}
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seeded = ModelContext(container)
+        let parent = TaskItem(title: "Failure must untick")
+        seeded.insert(parent)
+        seeded.insert(TaskItem(title: "Child", parentID: parent.id))
+        try seeded.save()
+        var fail = true
+        var observedTickInWriter = false
+        var observedHoldInWriter = false
+        var model: TasksPageModel?
+        let store = TaskStore(container: container, persist: { context in
+            if let model {
+                observedHoldInWriter = model.held[parent.id] != nil
+                observedTickInWriter = model.rows(for: .now).first { $0.id == parent.id }?.model.state == .done
+            }
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        var services = TasksPageServices()
+        services.doneHold = .seconds(30)
+        model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let page = try XCTUnwrap(model)
+        _ = page.sections(for: .now)
+
+        XCTAssertFalse(page.complete(parent.id).isApplied)
+        XCTAssertTrue(observedHoldInWriter, "Start the hold before asking the store to write")
+        XCTAssertTrue(observedTickInWriter, "Present a checked row before asking the store to write")
+        XCTAssertNil(page.held[parent.id], "Failed write must cancel the visual hold")
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == parent.id }?.model.state, .todo)
+        XCTAssertEqual(store.task(withID: parent.id)?.status, .todo)
+        XCTAssertEqual(store.subtasks(of: parent.id).first?.status, .todo)
+
+        fail = false
+        XCTAssertTrue(page.complete(parent.id).isApplied)
+        XCTAssertNotNil(page.held[parent.id])
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == parent.id }?.model.state, .done)
+        XCTAssertEqual(store.subtasks(of: parent.id).first?.status, .done)
+    }
+
+    func testR04AcknowledgementGetsAFrameBeforeAFailedFamilySave() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R04Fail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("tasks.store"), cloudKitDatabase: .none))
+        let seed = ModelContext(container)
+        let parent = TaskItem(title: "Failure must restore tick")
+        seed.insert(parent)
+        seed.insert(TaskItem(title: "Child", parentID: parent.id))
+        try seed.save()
+        var fail = true
+        var writerReached = false
+        let store = TaskStore(container: container, persist: { context in
+            writerReached = true
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        var services = TasksPageServices()
+        services.doneHold = .seconds(30)
+        let page = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        _ = page.sections(for: .now)
+        // TaskStore can persist its initial housekeeping during setup. Only
+        // count writes caused by the completion input below.
+        writerReached = false
+        var settled: CommandOutcome?
+        page.completeAcknowledged(parent.id) { settled = $0 }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertNotNil(page.held[parent.id])
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == parent.id }?.model.state, .done)
+        XCTAssertFalse(writerReached, "The first frame opportunity precedes the store write")
+        XCTAssertNil(settled)
+        try await Task.sleep(for: .milliseconds(240))
+        XCTAssertTrue(writerReached)
+        XCTAssertFalse(settled?.isApplied ?? true)
+        XCTAssertNil(page.held[parent.id])
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == parent.id }?.model.state, .todo)
+        XCTAssertEqual(store.task(withID: parent.id)?.status, .todo)
+        XCTAssertEqual(store.subtasks(of: parent.id).first?.status, .todo)
+
+        fail = false
+        writerReached = false
+        settled = nil
+        page.completeAcknowledged(parent.id) { settled = $0 }
+        try await Task.sleep(for: .milliseconds(240))
+        XCTAssertTrue(writerReached)
+        XCTAssertTrue(settled?.isApplied == true)
+        XCTAssertNotNil(page.held[parent.id])
+        XCTAssertEqual(store.task(withID: parent.id)?.status, .done)
+        XCTAssertEqual(store.subtasks(of: parent.id).first?.status, .done)
+    }
+
+    /// Hosted approximation of the first drawable frame: the next main-queue
+    /// handoff after a row's completion input. No window or pointer needed.
+    func testR04WriteDelayToFrameCandidate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R04Frame-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("tasks.store"), cloudKitDatabase: .none))
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<12 {
+            let parent = TaskItem(title: "Ack \(index)")
+            ids.append(parent.id)
+            seed.insert(parent)
+            seed.insert(TaskItem(title: "Child \(index)", parentID: parent.id))
+        }
+        try seed.save()
+        var delayMS = 0
+        let store = TaskStore(container: container, persist: { context in
+            #if ATTIC_OPERATION_CRASH_TESTS
+            if delayMS > 0 { Thread.sleep(forTimeInterval: Double(delayMS) / 1_000) }
+            #endif
+            try context.save()
+        })
+        var services = TasksPageServices()
+        services.doneHold = .seconds(30)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        _ = model.sections(for: .now)
+        var results: [Int: Double] = [:]
+        for (index, delay) in [0, 20, 100].enumerated() {
+            delayMS = delay
+            var samples: [Double] = []
+            for id in ids[(index * 3)..<(index * 3 + 3)] {
+                let started = DispatchTime.now().uptimeNanoseconds
+                var saved: CommandOutcome?
+                model.completeAcknowledged(id) { saved = $0 }
+                let frame = await withCheckedContinuation { (continuation: CheckedContinuation<UInt64, Never>) in
+                    DispatchQueue.main.async { continuation.resume(returning: DispatchTime.now().uptimeNanoseconds) }
+                }
+                XCTAssertNotNil(model.held[id])
+                XCTAssertNil(saved, "No durable write at the first frame candidate")
+                samples.append(Double(frame - started) / 1_000_000)
+                try await Task.sleep(for: .milliseconds(220))
+                XCTAssertTrue(saved?.isApplied == true)
+            }
+            results[delay] = samples.sorted()[1]
+            print("ACK_R04 delay_ms=\(delay) frame_candidate_ms=\(samples) median_ms=\(samples.sorted()[1])")
+        }
+        let baseline = results[0]!
+        for delay in [0, 20, 100] {
+            let measured = results[delay]!
+            let missedFrames = max(0, Int(((measured - baseline) / (1_000.0 / 60.0)).rounded(.down)))
+            print("ACK_R04_SUMMARY delay_ms=\(delay) input_to_candidate_ms=\(measured) extra_frames_60hz=\(missedFrames)")
+        }
+    }
+
     /// R-04: time the complete command through the page model, including
     /// its synchronous durable family save *before* the visual hold starts.
     func testR04CompletionToVisualHoldOnRealisticStore() throws {

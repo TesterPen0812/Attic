@@ -42,6 +42,7 @@ extension TasksPageModel {
     /// (or removed) as one step, with an Undo toast.
     @discardableResult
     func setDueDay(_ day: DueDay?, for ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         let live = ids.filter { listedTask($0) != nil }
         guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
         guard live.contains(where: { listedTask($0)?.dueDay != day }) else { return .applied }
@@ -72,6 +73,7 @@ extension TasksPageModel {
     /// that changes nothing commits nothing.
     @discardableResult
     func moveToDay(_ id: UUID, _ drop: TasksDayDrop) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         let day: DueDay?
         switch drop.change {
@@ -99,6 +101,7 @@ extension TasksPageModel {
     /// all. One step, with an Undo toast.
     @discardableResult
     func toggleTag(_ tag: String, for ids: [UUID]) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let tag = AtticTag.normalize(tag) else { return .applied }
         let live = ids.filter { listedTask($0) != nil }
         guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }

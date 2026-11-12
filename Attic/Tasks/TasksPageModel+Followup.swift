@@ -20,6 +20,7 @@ extension TasksPageModel {
     /// subtasks. The toast names where it went, with Undo.
     @discardableResult
     func moveSubtask(_ id: UUID, toTask parentID: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id), task.parentID != nil else { return .failed(.taskGone) }
         let destination = store.task(withID: parentID)?.title ?? ""
         let title = task.title
@@ -35,6 +36,7 @@ extension TasksPageModel {
     /// holds. It is selected and brought into view; the toast says so.
     @discardableResult
     func makeStandalone(_ id: UUID) -> CommandOutcome {
+        settlePendingCompletionAcknowledgements()
         guard let task = store.task(withID: id), task.parentID != nil else { return .failed(.taskGone) }
         let title = task.title
         if renamingSubtaskID == id { cancelSubtaskRename() }

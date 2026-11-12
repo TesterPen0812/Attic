@@ -2065,10 +2065,21 @@ struct TasksPage: View {
             toggleDone: {
                 IdleLatencyTrace.controlDispatched(.rowTick)
                 let targets = commandTargets(for: id)
-                let outcome = targets.count > 1
-                    ? model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
-                    : model.report(model.toggleDone(id), on: id) { [weak model] in model?.toggleDone(id) ?? .failed(.taskGone) }
-                completionFeedback(outcome, targets)
+                if targets.count == 1, store.task(withID: id)?.status != .done,
+                   !model.completionAcknowledgementPending(for: id) {
+                    model.completeAcknowledged(id) { [weak model] outcome in
+                        guard let model else { return }
+                        let reported = model.report(outcome, on: id) { [weak model] in
+                            model?.toggleDone(id) ?? .failed(.taskGone)
+                        }
+                        completionFeedback(reported, targets)
+                    }
+                } else {
+                    let outcome = model.report(model.toggleDone(targets), on: id) { [weak model] in
+                        model?.toggleDone(targets) ?? .failed(.taskGone)
+                    }
+                    completionFeedback(outcome, targets)
+                }
             },
             // ⇧Space (and VoiceOver): start or stop working, with the same
             // failure line and Retry the menu's command shows (round 5, F5).
@@ -2207,6 +2218,19 @@ struct TasksPage: View {
         } else {
             list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
                                          shortcut: AtticTaskShortcut.complete, startsSection: single) {
+                if single, store.task(withID: id)?.status != .done,
+                   !model.completionAcknowledgementPending(for: id) {
+                    guard !AtticTextInput.ownsCurrentKey else { return }
+                    pointer.endInvocation()
+                    model.completeAcknowledged(id) { [weak model, hapticsEnabled = design.hapticsEnabled] outcome in
+                        guard let model else { return }
+                        let reported = model.report(outcome, on: id) { [weak model] in
+                            model?.toggleDone(id) ?? .failed(.taskGone)
+                        }
+                        if reported.isApplied { AtticHaptics.tick(enabled: hapticsEnabled) }
+                    }
+                    return
+                }
                 menuCommand(key) { [weak model, hapticsEnabled = design.hapticsEnabled] targets in
                     guard let model else { return .failed(.taskGone) }
                     let outcome = model.toggleDone(targets)

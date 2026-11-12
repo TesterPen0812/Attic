@@ -45,6 +45,135 @@ enum Draw3Images {
 /// "2026-10-31 · Draw: the canvas page").
 @MainActor
 final class Draw3PageTests: XCTestCase {
+    func testR19CoalescedTypingKeepsEachUndoStepAfterSuccessAndRetry() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Undo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var fail = false
+        let durable = DrawPersistentStore(container: container, save: { context in
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        use(durable)
+        let canvasID = try XCTUnwrap(model.canvasID)
+        model.beginText(at: CGPoint(x: 80, y: 120))
+        let id = try XCTUnwrap(model.editing?.id)
+        for text in ["a", "ab", "abc"] { model.typed(text) }
+        XCTAssertEqual(model.object(id)?.text, "abc")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(try durable.open(canvasID).objects.first?.text, "abc")
+        XCTAssertFalse(durable.hasUnsettledEdits)
+        model.undo()
+        XCTAssertEqual(model.editing?.text, "ab")
+        model.undo()
+        XCTAssertEqual(model.editing?.text, "a")
+        model.redo()
+        XCTAssertEqual(model.editing?.text, "ab")
+        model.redo()
+        XCTAssertEqual(model.editing?.text, "abc")
+
+        fail = true
+        model.typed("abcd")
+        model.typed("abcde")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(durable.hasUnsettledEdits)
+        fail = false
+        XCTAssertTrue(durable.retry(on: canvasID).isSaved)
+        XCTAssertFalse(durable.hasUnsettledEdits)
+        model.undo()
+        XCTAssertEqual(model.editing?.text, "abcd", "Retry keeps the later typing Undo step")
+        model.undo()
+        XCTAssertEqual(model.editing?.text, "abc", "Retry keeps the earlier typing Undo step")
+        XCTAssertEqual(try durable.open(canvasID).objects.first?.text, "abc")
+    }
+
+    func testR19TextPaintsBeforeWriteAndFailedWriteRetainsRecoverableDraft() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Fail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var fail = false
+        var writerReached = false
+        let durable = DrawPersistentStore(container: container, save: { context in
+            if fail { writerReached = true; throw Rejected() }
+            try context.save()
+        })
+        use(durable)
+        let boardID = try XCTUnwrap(model.canvasID)
+        let original = DrawObject(content: .text("Before"))
+        XCTAssertTrue(model.perform(.put([original])).isSaved)
+        model.edit(original.id)
+        fail = true
+        let inputAt = DispatchTime.now().uptimeNanoseconds
+        model.typed("After")
+        let candidate = await withCheckedContinuation { (continuation: CheckedContinuation<UInt64, Never>) in
+            DispatchQueue.main.async { continuation.resume(returning: DispatchTime.now().uptimeNanoseconds) }
+        }
+        XCTAssertEqual(model.object(original.id)?.text, "After", "Editor sees the new text at first frame opportunity")
+        XCTAssertFalse(writerReached, "Durable write is scheduled after the text's first frame candidate")
+        print("ACK_R19_FIRST_FRAME_MS=\(Double(candidate - inputAt) / 1_000_000)")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(writerReached)
+        XCTAssertTrue(durable.hasUnsettledEdits)
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(boardID).objects.first { $0.id == original.id }?.text,
+                       "After", "Crash checkpoint keeps the failed draft recoverable")
+        fail = false
+        XCTAssertTrue(durable.retry(on: boardID).isSaved)
+        XCTAssertFalse(durable.hasUnsettledEdits)
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(boardID).objects.first { $0.id == original.id }?.text,
+                       "After")
+    }
+    /// Same next-main-queue frame candidate as R-04, using a real disk store.
+    func testR19WriteDelayToFrameCandidate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Frame-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var delayMS = 0
+        let store = DrawPersistentStore(container: container, save: { context in
+            #if ATTIC_OPERATION_CRASH_TESTS
+            if delayMS > 0 { Thread.sleep(forTimeInterval: Double(delayMS) / 1_000) }
+            #endif
+            try context.save()
+        })
+        use(store)
+        let boardID = try XCTUnwrap(model.canvasID)
+        let text = DrawObject(content: .text("Initial"))
+        XCTAssertTrue(model.perform(.put([text])).isSaved)
+        model.edit(text.id)
+        var results: [Int: Double] = [:]
+        for delay in [0, 20, 100] {
+            delayMS = delay
+            var samples: [Double] = []
+            for index in 0..<3 {
+                let replacement = "Typed \(delay) \(index)"
+                let started = DispatchTime.now().uptimeNanoseconds
+                model.typed(replacement)
+                let frame = await withCheckedContinuation { (continuation: CheckedContinuation<UInt64, Never>) in
+                    DispatchQueue.main.async { continuation.resume(returning: DispatchTime.now().uptimeNanoseconds) }
+                }
+                XCTAssertEqual(model.object(text.id)?.text, replacement)
+                samples.append(Double(frame - started) / 1_000_000)
+                try await Task.sleep(for: .milliseconds(350))
+            }
+            results[delay] = samples.sorted()[1]
+            print("ACK_R19 delay_ms=\(delay) frame_candidate_ms=\(samples) median_ms=\(samples.sorted()[1])")
+        }
+        let baseline = results[0]!
+        for delay in [0, 20, 100] {
+            let measured = results[delay]!
+            let missedFrames = max(0, Int(((measured - baseline) / (1_000.0 / 60.0)).rounded(.down)))
+            print("ACK_R19_SUMMARY delay_ms=\(delay) input_to_candidate_ms=\(measured) extra_frames_60hz=\(missedFrames)")
+        }
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(boardID).objects.first { $0.id == text.id }?.text,
+                       "Typed 100 2")
+    }
     private var store: DrawStore!
     private var model: DrawPageModel!
     private var folder: URL!
@@ -110,6 +239,9 @@ final class Draw3PageTests: XCTestCase {
         }
         let ordered = samples.sorted()
         let canvasID = try XCTUnwrap(model.canvasID)
+        // Each on-screen key is immediate; the bounded burst saves after
+        // input settles without requiring the editor to blur.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.35))
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(canvasID).objects.first { $0.id == target.id }?.text,
                        "Edited box 11: the user is typing committed text into an existing canvas.")
         print("GAP_R19 total_objects=150 samples_ms=\(samples) median_ms=\(ordered[ordered.count / 2]) max_ms=\(ordered.last!) save_attempts=\(durable.metrics.saveAttempts)")
