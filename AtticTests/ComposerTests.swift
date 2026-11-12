@@ -865,6 +865,22 @@ final class ComposerTests: XCTestCase {
         spin(0.1)
     }
 
+    func testA11yWritingFieldKeepsItsSpokenNameInTheHostedComposer() throws {
+        let (_, hosting, _) = try mountForKeys(on: .tasks(.now))
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        func descendants(_ node: AnyObject) -> [AnyObject] {
+            [node] + ((node.accessibilityChildren?() ?? nil) ?? []).flatMap { descendants($0 as AnyObject) }
+        }
+        let writing = try XCTUnwrap(descendants(hosting).first {
+            $0.accessibilityIdentifier?() == "composer-writing"
+        }, "the shared writing field must be in the hosted accessibility tree")
+        XCTAssertTrue(["AXTextField", "AXTextArea"].contains(writing.accessibilityRole?()?.rawValue ?? ""))
+        XCTAssertEqual(writing.accessibilityLabel?(), String(localized: "Notes"))
+    }
+
     /// The full Tasks page and its overlaid card share a key window. A
     /// printable key belongs to the card on either tab, never to Find.
     func testTypingInOpenTaskComposerDoesNotReachSearchOnDoneOrNow() throws {
