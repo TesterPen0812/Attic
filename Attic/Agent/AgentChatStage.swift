@@ -6,19 +6,31 @@ import SwiftUI
 struct AgentChatBarButton: View {
     @ObservedObject var bar: AgentChatBar
     let action: () -> Void
+    /// Tests and off-screen renders: seconds into the breath, in place of
+    /// the clock, so a frame can be drawn at a paused time.
+    var frozenTime: Double? = nil
 
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
+    /// When the breath began: each Needs you starts at scale 1, as the CSS
+    /// animation does when its class is added.
+    @State private var breathStart = Date()
 
     var body: some View {
         let label = bar.state.label
+        let breathes = AgentChatTriggerMotion.breathes(bar.state, reduceMotion: design.reduceMotion)
         Button(action: action) {
             HStack(spacing: 5) {
-                glyph(labelled: label != nil)
-                    .frame(width: 11, height: 11)
-                    .rotationEffect(.degrees(hovered && !design.reduceMotion ? 90 : 0))
-                    .scaleEffect(hovered && !design.reduceMotion ? 1.14 : 1)
-                    .animation(.timingCurve(0.3, 1.7, 0.5, 1, duration: 0.46), value: hovered)
+                TimelineView(.animation(paused: !breathes || frozenTime != nil)) { context in
+                    let pose = AgentChatTriggerMotion.pose(bar.state, hovered: hovered, reduceMotion: design.reduceMotion,
+                                                           time: frozenTime ?? context.date.timeIntervalSince(breathStart))
+                    glyph(labelled: label != nil)
+                        .frame(width: 11, height: 11)
+                        .rotationEffect(.degrees(pose.rotation))
+                        .scaleEffect(pose.scale)
+                        .animation(breathes ? nil : AgentChatTriggerMotion.hover, value: hovered)
+                }
+                .frame(width: 11, height: 11)
                 if let label {
                     Text(label)
                         .font(.system(size: 10.5, weight: .semibold))
@@ -35,6 +47,7 @@ struct AgentChatBarButton: View {
         .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: design.effectiveControls != .liquidGlass))
         .atticDesignCorners()
         .onHover { hovered = $0 }
+        .onChange(of: breathes, initial: true) { _, now in if now { breathStart = Date() } }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: true), value: label)
         .help(String(localized: "Chat"))
         .accessibilityLabel(label ?? String(localized: "Chat"))
@@ -48,6 +61,44 @@ struct AgentChatBarButton: View {
         } else {
             AgentSparkShape().fill(design.tokens.ink(.heading).color)
         }
+    }
+}
+
+/// The closed ✦'s motion, as drawn (`Preview - settings at bottom.dc.html`,
+/// `[data-chat-trigger] svg` and `.ch-tg-need svg`). Hover turns the ✦ 90°
+/// and scales it to 1.14 on `cubic-bezier(0.3, 1.7, 0.5, 1)` 460 ms. While
+/// the agent needs you it breathes instead (`ch-breathe`: 1.2 s, scale 1 →
+/// 1.18 → 1, ease-in-out each way), and the breath replaces the hover pose
+/// (a CSS animation wins over the hover's transform). Reduce Motion (or
+/// Animations: Reduced): neither; the label and the iris ✦ show the state.
+/// Thinking and Working add no motion: the drawing's spark motions (tumble …
+/// edge run) are a draft, and "Thinking still has no look" (Accepted 6 and
+/// 10 Nov).
+enum AgentChatTriggerMotion {
+    static let hover = Animation.timingCurve(0.3, 1.7, 0.5, 1, duration: 0.46)
+    static let hoverTurn: Double = 90
+    static let hoverScale: CGFloat = 1.14
+    static let breathPeriod: Double = 1.2
+    static let breathPeak: CGFloat = 1.18
+
+    static func breathes(_ state: AgentChatBarState, reduceMotion: Bool) -> Bool {
+        state == .needsYou && !reduceMotion
+    }
+
+    /// The breath's scale `time` seconds into a cycle: CSS `ease-in-out`
+    /// from 1 to the peak over the first half, and back over the second.
+    static func breath(at time: Double) -> CGFloat {
+        let phase = time.truncatingRemainder(dividingBy: breathPeriod) / breathPeriod
+        // ease-in-out is symmetric, so the way down is the way up reversed.
+        let half = phase < 0.5 ? phase * 2 : (1 - phase) * 2
+        return 1 + (breathPeak - 1) * CGFloat(AgentEase.curve(0.42, 0, 0.58, 1, half))
+    }
+
+    static func pose(_ state: AgentChatBarState, hovered: Bool, reduceMotion: Bool,
+                     time: Double) -> (rotation: Double, scale: CGFloat) {
+        if breathes(state, reduceMotion: reduceMotion) { return (0, breath(at: time)) }
+        let turned = hovered && !reduceMotion
+        return (turned ? hoverTurn : 0, turned ? hoverScale : 1)
     }
 }
 

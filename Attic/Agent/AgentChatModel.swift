@@ -129,6 +129,16 @@ final class AgentChatBar: ObservableObject {
     @Published fileprivate(set) var isChatOpen = false
 }
 
+#if DEBUG
+extension AgentChatBar {
+    /// Tests and off-screen renders: a closed bar showing `state`.
+    convenience init(showing state: AgentChatBarState) {
+        self.init()
+        self.state = state
+    }
+}
+#endif
+
 /// Where a run is, for the view. `waiting` is the gap before the first text or
 /// step: nothing special shows in it (`AgentChatWaitingSlot`).
 enum AgentChatPhase: Equatable {
