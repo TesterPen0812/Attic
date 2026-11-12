@@ -363,8 +363,24 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     func drawSelectionChanged() { updateSelection(); queueObjectAccessibilityUpdate() }
 
     func drawVisibilityChanged() {
-        if model.isShown { needsRaster = true; requestRaster() }
-        else { renderer.cancel(); requestedKey = nil; invalidateDetail(); releaseCursor() }
+        if model.isShown {
+            // Hiding cancels in-flight rendering, but leaves the last complete
+            // world backing installed. Keep using it when nothing changed;
+            // returning to a 2,000-object board needn't raster every object.
+            if let installedKey, installedKey == currentKey() {
+                needsRaster = false
+                requestedKey = installedKey
+                scheduleDetail()
+            } else {
+                needsRaster = true
+                requestRaster()
+            }
+        } else {
+            renderer.cancel()
+            requestedKey = nil
+            invalidateDetail()
+            releaseCursor()
+        }
         if model.isShown { queueInitialKeyboardFocus() }
         queueCursorRefresh()
     }

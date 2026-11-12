@@ -293,6 +293,24 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertEqual(DrawRasterProbe.mainThreadRasters, 0)
     }
 
+    func testUnchangedBoardReappearsFromInstalledRasterWithoutRerendering() throws {
+        XCTAssertTrue(waitForInstall(after: 0))
+        let initial = board.rasterRequests
+        for _ in 0..<3 {
+            model.setShown(false)
+            model.setShown(true)
+            XCTAssertEqual(board.rasterRequests, initial,
+                           "A completed, unchanged world raster survives a page switch")
+        }
+
+        model.setShown(false)
+        XCTAssertTrue(model.perform(.put([DrawObject(frame: DrawFrame(x: 40, y: 75),
+                                                        content: .shape(.rectangle))])).isSaved)
+        model.setShown(true)
+        XCTAssertGreaterThan(board.rasterRequests, initial,
+                             "Content changed while hidden still needs a new backing raster")
+    }
+
     func testZoomRefinesTheWorldImageAtScreenResolutionAfterGesturesSettle() throws {
         let id = try XCTUnwrap(model.canvasID)
         let image = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 585, height: 714),
