@@ -114,9 +114,14 @@ final class NotesPageUITests: XCTestCase {
         let plus = app.buttons["notes-new-note"]
         require(plus, "the New note + button")
         plus.click()
-        let titleField = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+        // The representable exposes its enclosing NSScrollView as well as the
+        // native NSTextView. Only the text field is a reliable click target:
+        // on the Air the scroll view has no XCUI hit point.
+        let titleField = app.textFields["composer-title"]
         require(titleField, "the New note composer title")
         titleField.click()
+        waitFor((titleField.value(forKey: "hasKeyboardFocus") as? Bool) == true,
+                "the composer title owns the keyboard before typing")
         titleField.typeText(title)
         if !writing.isEmpty {
             let body = app.descendants(matching: .any).matching(identifier: "composer-writing").firstMatch

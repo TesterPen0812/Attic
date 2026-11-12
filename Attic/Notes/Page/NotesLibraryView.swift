@@ -203,6 +203,9 @@ struct NotesLibraryView: View {
         // that is left alone.
         for delay in [0.0, 0.1, 0.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                // A '+' card may have opened since this search was queued.
+                // Its title owns the keyboard until the card closes.
+                guard panelComposer?.isOpen() != true else { return }
                 guard searchOpen || !model.query.isEmpty else { return }
                 if !fieldFocused { fieldFocused = true }
                 guard let editor = keys.window?.firstResponder as? NSTextView else { return }
@@ -240,7 +243,9 @@ struct NotesLibraryView: View {
         // The library slides away when a note opens, and this view (and its
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
-        guard isCurrent, controller.isLibraryPresented else { return false }
+        // The library remains mounted under the shared '+' composer. Do not
+        // interpret its title keystrokes as type-to-search or row shortcuts.
+        guard isCurrent, controller.isLibraryPresented, panelComposer?.isOpen() != true else { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
         let groups = model.navigable(all, layout: model.layout, store: store)
@@ -255,9 +260,6 @@ struct NotesLibraryView: View {
         case .passThrough:
             return false
         case .escape:
-            // The shared composer owns Escape while open, including while a
-            // "Added to Notes · Undo" notice is visible above the library.
-            if panelComposer?.isOpen() == true { return false }
             if Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query) { endSearch() } else { onBack() }
         case .find:
             beginSearch()
