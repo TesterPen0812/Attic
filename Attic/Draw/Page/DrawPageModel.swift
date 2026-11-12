@@ -863,7 +863,14 @@ final class DrawPageModel: ObservableObject {
     /// Draw objects paste as objects; otherwise an image pastes at the
     /// centre of the view.
     func paste() {
-        guard let canvasID else { return }
+        let requestedCanvas = canvasID
+        // Establish the current object set before comparing IDs. An agent
+        // may have inserted objects since the last asynchronous observation;
+        // those must never become part of the owner's pasted selection.
+        syncExternalChanges()
+        // The same reconciliation can reveal a deleted canvas. In that case
+        // the clipboard action belonged to the old canvas, not its successor.
+        guard canvasID == requestedCanvas, let canvasID else { return }
         guard let data = pasteboard.data(forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else {
             importImages(from: pasteboard, at: nil)
             return

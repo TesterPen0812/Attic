@@ -1004,4 +1004,213 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try store.open(id).objects.first?.text, "Owner's saved sentence")
     }
 
+    func testHunt16AgentDeletesCurrentCanvasDuringInkNeverTransfersStrokeToAnotherCanvas() throws {
+        let erased = try XCTUnwrap(model.canvasID)
+        let survivor = store.create(name: "Surviving board")
+        let kept = DrawObject(frame: DrawFrame(x: 60, y: 130, width: 65, height: 45),
+                              content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([kept]), on: survivor.id).isSaved)
+
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 100, y: 200))
+        model.pointerDragged(to: CGPoint(x: 140, y: 225))
+        // The agent removes the entire canvas while the gesture is in flight.
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: erased).isSaved)
+        model.pointerUp(at: CGPoint(x: 170, y: 240))
+
+        XCTAssertEqual(model.canvasID, survivor.id)
+        XCTAssertEqual(try store.open(survivor.id).objects, [kept],
+                       "A stroke begun on a deleted board must never be saved to an unrelated board")
+        XCTAssertNil(model.live)
+        XCTAssertFalse(model.isDrawingLive)
+    }
+
+    func testHunt16AgentDeletesCanvasBeforePasteNeverPastesIntoReplacement() throws {
+        let originalID = try XCTUnwrap(model.canvasID)
+        let copied = DrawObject(frame: DrawFrame(x: 75, y: 100, width: 55, height: 35),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([copied])).isSaved)
+        model.setTool(.select)
+        model.select([copied.id])
+        model.copySelection()
+
+        let surviving = store.create(name: "Another board")
+        let kept = DrawObject(frame: DrawFrame(x: 190, y: 190, width: 45, height: 42),
+                              content: .shape(.ellipse))
+        XCTAssertTrue(store.perform(.put([kept]), on: surviving.id).isSaved)
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: originalID).isSaved)
+        model.paste() // Old board disappears when the pending agent change is reconciled.
+
+        XCTAssertEqual(model.canvasID, surviving.id)
+        XCTAssertEqual(try store.open(surviving.id).objects, [kept],
+                       "Paste begun on a removed canvas must not insert content into its replacement")
+    }
+
+    func testHunt16AgentAddBeforeOwnerPasteDoesNotJoinPastedSelection() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let copied = DrawObject(frame: DrawFrame(x: 65, y: 90, width: 55, height: 35),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([copied])).isSaved)
+        model.setTool(.select)
+        model.select([copied.id])
+        model.copySelection()
+
+        // The agent saves a new unrelated object before the asynchronous
+        // observation callback has refreshed the owner's canvas.
+        let agent = DrawObject(frame: DrawFrame(x: 160, y: 180, width: 50, height: 32),
+                               zIndex: 1, content: .shape(.ellipse))
+        XCTAssertTrue(store.performAgent(.put([agent]), on: id).isSaved)
+        model.paste()
+
+        let saved = try store.open(id).objects
+        let pasted = try XCTUnwrap(saved.first { $0.id != copied.id && $0.id != agent.id })
+        XCTAssertEqual(saved.count, 3)
+        XCTAssertEqual(model.selection, [pasted.id],
+                       "Paste must never select an unrelated object the agent just added")
+        model.deleteSelection()
+        XCTAssertTrue(try store.open(id).objects.contains { $0.id == agent.id },
+                      "Deleting the pasted object must leave the agent's independent object intact")
+    }
+
+    /// Deterministic generated owner/agent sequences. Each epoch stays inside
+    /// the store's 100-command Undo bound, and is completely undone and redone.
+    func testHunt16SeededOwnerAgentRoundTrips() throws {
+        for seed in [UInt64(0xD12A_0011), 0xD12A_0B16, 0xD12A_F00D] {
+            var rng = DrawHuntRandom(seed: seed)
+            for epoch in 0..<5 {
+                XCTAssertTrue(model.newCanvas(name: "hunt-\(seed)-\(epoch)"))
+                let id = try XCTUnwrap(model.canvasID)
+                let initial = try store.open(id)
+                let imageData = Draw3Images.encoded(width: 8, height: 8)
+
+                for step in 0..<70 {
+                    let label = "seed=\(seed) epoch=\(epoch) step=\(step)"
+                    let current = try store.open(id).objects
+                    let target = current.isEmpty ? nil : current[rng.index(current.count)]
+                    let point = CGPoint(x: 50 + rng.index(180), y: 100 + rng.index(220))
+                    switch rng.index(19) {
+                    case 0, 1:
+                        model.setTool(.pen)
+                        model.pointerDown(at: point)
+                        model.pointerDragged(to: CGPoint(x: point.x + 14, y: point.y + 8))
+                        model.pointerUp(at: CGPoint(x: point.x + 24, y: point.y + 12))
+                    case 2:
+                        model.pickShape([.rectangle, .ellipse, .line, .arrow][rng.index(4)])
+                        model.pointerDown(at: point)
+                        model.pointerDragged(to: CGPoint(x: point.x + 32, y: point.y + 27))
+                        model.pointerUp()
+                    case 3:
+                        model.beginText(at: model.viewport.world(point))
+                        model.typed("seed \(seed) step \(step)")
+                        model.endEditing()
+                    case 4:
+                        let image = DrawObject(frame: DrawFrame(x: 40, y: 85, width: 32, height: 32),
+                            zIndex: model.topZ + 1,
+                            content: .image(DrawImage(original: imageData, pixelWidth: 8, pixelHeight: 8)))
+                        XCTAssertTrue(model.perform(.put([image])).isSaved, label)
+                    case 5:
+                        if let target { model.select([target.id]); model.styleSelection(colour: .blue) }
+                    case 6:
+                        if let target {
+                            model.select([target.id]); model.deleteSelection()
+                            XCTAssertNil(model.object(target.id), label + " deleted object came back")
+                        }
+                    case 7:
+                        if let target { model.select([target.id]); model.duplicateSelection() }
+                    case 8:
+                        if let target { model.select([target.id]); model.copySelection(); model.paste() }
+                    case 9:
+                        if let target { model.select([target.id]); model.styleSelection(size: .large) }
+                    case 10:
+                        if let target {
+                            model.setTool(.select); model.select([target.id])
+                            let bounds = DrawGeometry.bounds(target)
+                            let screen = model.viewport.screen(CGPoint(x: bounds.midX, y: bounds.midY))
+                            model.pointerDown(at: screen)
+                            model.pointerDragged(to: CGPoint(x: screen.x + 11, y: screen.y + 9))
+                            model.pointerUp()
+                        }
+                    case 11:
+                        if let target {
+                            model.setTool(.select); model.select([target.id])
+                            if let spot = model.handleSpots.first(where: { $0.handle == .right || $0.handle == .bottomRight }) {
+                                model.pointerDown(at: spot.point)
+                                model.pointerDragged(to: CGPoint(x: spot.point.x + 9, y: spot.point.y + 7))
+                                model.pointerUp()
+                            }
+                        }
+                    case 12:
+                        model.setTool(.pen); model.pointerDown(at: point)
+                        model.pointerDragged(to: CGPoint(x: point.x + 12, y: point.y + 7))
+                        if let target { XCTAssertTrue(store.performAgent(.remove([target.id]), on: id).isSaved, label) }
+                        model.pointerUp(at: CGPoint(x: point.x + 20, y: point.y + 10))
+                        if let target { XCTAssertNil(model.object(target.id), label + " agent deletion") }
+                    case 13:
+                        if let target, case .text(let old) = target.content {
+                            model.edit(target.id)
+                            var moved = target
+                            moved.frame.x += 13; moved.frame.y += 4
+                            XCTAssertTrue(store.performAgent(.put([moved]), on: id).isSaved, label)
+                            model.typed(old + "x")
+                            let after = try XCTUnwrap(store.open(id).objects.first(where: { $0.id == target.id }))
+                            XCTAssertEqual(after.frame.x, moved.frame.x, label)
+                            XCTAssertEqual(after.frame.y, moved.frame.y, label)
+                            XCTAssertEqual(after.text, old + "x", label)
+                            model.endEditing()
+                        }
+                    case 14: model.undo()
+                    case 15: model.redo()
+                    case 16:
+                        model.scroll(dx: CGFloat(rng.index(31) - 15), dy: 7, command: false, at: point)
+                        model.magnify(by: CGFloat(rng.index(15) - 7) / 100, at: point)
+                    case 17:
+                        if let other = (try store.library()).first(where: { $0.id != id }) {
+                            model.open(other.id); model.open(id)
+                        }
+                    default:
+                        model.setTool(.select)
+                        _ = model.handleKey(DrawKey(characters: "\t", keyCode: 48))
+                    }
+                    model.syncExternalChanges()
+                    let saved = try store.open(id).objects
+                    XCTAssertEqual(model.objects, saved, label + " model differs from store")
+                    XCTAssertTrue(model.selection.allSatisfy { selected in saved.contains { $0.id == selected } }, label)
+                    XCTAssertNil(store.pendingEdits[id], label)
+                    XCTAssertNil(model.live, label)
+                }
+
+                model.endEditing()
+                let final = try store.open(id)
+                var undos = 0
+                while store.canUndo(on: id), undos < 100 {
+                    model.undo(); undos += 1
+                    XCTAssertEqual(model.objects, try store.open(id).objects, "seed=\(seed) Undo \(undos)")
+                }
+                XCTAssertFalse(store.canUndo(on: id), "seed=\(seed) Undo cap reached")
+                XCTAssertEqual(try store.open(id).objects, initial.objects, "seed=\(seed) Undo to start")
+                XCTAssertEqual(try store.open(id).canvas.name, initial.canvas.name)
+                // A seed may finish after Undo with a future Redo still on
+                // the stack. Replay exactly the steps undone above.
+                for _ in 0..<undos {
+                    XCTAssertTrue(store.canRedo(on: id), "seed=\(seed) lost a Redo step")
+                    model.redo()
+                    XCTAssertEqual(model.objects, try store.open(id).objects, "seed=\(seed) Redo")
+                }
+                XCTAssertEqual(try store.open(id).objects, final.objects, "seed=\(seed) exact Redo")
+                try store.reload(id)
+                model.open(id)
+                XCTAssertEqual(model.objects, final.objects, "seed=\(seed) reload")
+                print("DRAW_HUNT16_SEED seed=\(seed) epoch=\(epoch) steps=70 undos=\(undos)")
+            }
+        }
+    }
+}
+
+private struct DrawHuntRandom {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func index(_ count: Int) -> Int {
+        state = 6364136223846793005 &* state &+ 1442695040888963407
+        return Int((state >> 32) % UInt64(count))
+    }
 }

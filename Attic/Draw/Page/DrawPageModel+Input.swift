@@ -187,11 +187,20 @@ extension DrawPageModel {
     /// hide, a page switch or a canvas change (a stroke is never cancelled).
     func finishLiveInput() {
         guard let finished = live else { return }
+        let startedOnCanvas = canvasID
         live = nil
         liveStartedWithMiddleButton = false
         // A gesture must finish against current objects. Otherwise a move
         // can put back a remotely deleted box or undo an agent restyle.
         syncExternalChanges()
+        // An agent can delete the active canvas mid-gesture. Reconciliation
+        // then opens another canvas, which must never receive this gesture.
+        guard canvasID == startedOnCanvas else {
+            isDrawingLive = false
+            isMovingSelection = false
+            board?.drawLiveChanged()
+            return
+        }
         switch finished {
         case .pan:
             break

@@ -476,6 +476,76 @@ final class DrawBoardViewTests: XCTestCase {
         }
     }
 
+    /// Measures input dispatch to the next committed layer/editor-frame
+    /// candidate inside the invisible host; no display refresh or vblank is
+    /// claimed. Both object counts share the same board and synthetic inputs.
+    func testHunt16StrokeAndTypingInputFrameCandidateAt20And2000Objects() throws {
+        model.thumbnailSettleDelay = 60
+        let bytes = Draw3Images.encoded(width: 8, height: 8)
+        for count in [20, 2_000] {
+            let canvas = store.create(name: "hunt-timing-\(count)")
+            let contents: [DrawObject] = (0..<count).map { n in
+                let frame = DrawFrame(x: Double((n % 50) * 23), y: Double((n / 50) * 23),
+                                      width: 19, height: 18)
+                let value: DrawContent
+                switch n % 13 {
+                case 0: value = .text("Text \(n)")
+                case 1: value = .image(DrawImage(original: bytes, pixelWidth: 8, pixelHeight: 8))
+                default: value = .shape(.rectangle)
+                }
+                return DrawObject(frame: frame, zIndex: Int64(n), content: value)
+            }
+            XCTAssertTrue(store.perform(.put(contents), on: canvas.id).isSaved)
+            model.open(canvas.id)
+            model.setViewport(DrawViewport(), byUser: true)
+            model.setTool(.pen)
+            model.pointerDown(at: CGPoint(x: 40, y: 160))
+            var strokeTimes: [Double] = []
+            for n in 0..<48 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                model.pointerDragged(to: CGPoint(x: 40 + Double(n) * 2, y: 160 + sin(Double(n) / 4) * 18))
+                strokeTimes.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            model.pointerUp()
+            model.undo() // Typing starts with exactly the requested object count.
+
+            model.beginText(at: CGPoint(x: 30, y: 330))
+            var typingTimes: [Double] = []
+            var text = ""
+            for _ in 0..<36 {
+                text += "x"
+                let start = DispatchTime.now().uptimeNanoseconds
+                board.editorTextChanged(text)
+                typingTimes.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            model.endEditing()
+            for (kind, timings) in [("stroke", strokeTimes), ("typing", typingTimes)] {
+                let sorted = timings.sorted()
+                let p50 = sorted[sorted.count / 2]
+                let p95 = sorted[Int(Double(sorted.count - 1) * 0.95)]
+                print("DRAW_HUNT16_INPUT_FRAME_CANDIDATE kind=\(kind) objects=\(count) " +
+                      "p50_ms=\(p50) p95_ms=\(p95) max_ms=\(sorted.last!)")
+            }
+            XCTAssertEqual(try store.open(canvas.id).objects.count, count + 1)
+        }
+    }
+
+    func testHunt16DeletedCanvasNeverLeavesItsLiveInkOverlayOnNextBoard() throws {
+        let deletedID = try XCTUnwrap(model.canvasID)
+        let survivor = store.create(name: "Other drawing")
+        let object = DrawObject(frame: DrawFrame(x: 40, y: 130, width: 60, height: 30),
+                                content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([object]), on: survivor.id).isSaved)
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 110, y: 180))
+        model.pointerDragged(to: CGPoint(x: 145, y: 205))
+        XCTAssertTrue(store.performAgent(.deleteCanvas, on: deletedID).isSaved)
+        model.pointerUp(at: CGPoint(x: 160, y: 215))
+        XCTAssertEqual(model.canvasID, survivor.id)
+        XCTAssertTrue(board.pendingOverlays.isEmpty,
+                      "Live ink from a deleted canvas must never become an overlay on the surviving board")
+    }
+
     func testPressAfterAPanIsHandledAtOnce() {
         model.setTool(.pen)
         board.keyDown(with: key(.keyDown, " ", code: 49))
