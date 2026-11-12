@@ -139,6 +139,26 @@ final class NotesSlice3bUITests: XCTestCase {
 
     // MARK: Menus from the command layer
 
+    func testNotesObjectRightClickUsesGlassAndRemoveDeletesTheHitObject() async throws {
+        let f = fixture()
+        let (window, textView, controls) = hosted(f.engine)
+        defer { controls.invalidate(); window.close() }
+        let range = try XCTUnwrap(f.engine.objectPlacement(f.failed)?.1)
+        let rect = try XCTUnwrap(f.engine.rect(for: range))
+        let point = CGPoint(x: rect.midX, y: rect.midY)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
+        XCTAssertEqual(commands.map(\.title), ["The file is larger than 15 MB.", "Retry", "Remove"])
+        XCTAssertTrue(commands[0].isHeader)
+        try XCTUnwrap(commands.first { $0.title == "Remove" }).action()
+        // The command is dispatched via Task @MainActor; an async XCTest
+        // must yield its actor executor for that task to perform the edit.
+        for _ in 0..<100 where f.engine.objectPlacement(f.failed) != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNil(f.engine.objectPlacement(f.failed), "the glass menu's Remove command mutates the note")
+    }
+
     func testObjectMenusListThePlansCommandsFromTheCommandLayer() throws {
         let f = fixture()
         var ran: [NoteObjectCommand] = []

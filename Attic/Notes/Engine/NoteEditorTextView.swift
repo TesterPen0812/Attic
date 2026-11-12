@@ -1769,6 +1769,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func rightMouseDown(with event: NSEvent) {
         calloutIconSession?.cancel(reason: "editor right click", returnFocus: true)
+        if let objectCommands = objectInteraction?.objectContextCommands(for: event) {
+            hideBlockHandle()
+            AtticGlassMenu.popUpLater(objectCommands, in: self,
+                placement: .point(convert(event.locationInWindow, from: nil)), opener: event)
+            return
+        }
         super.rightMouseDown(with: event)
     }
 
@@ -1959,6 +1965,7 @@ final class NoteUndoManagerShim: UndoManager {
 protocol NoteObjectInteraction: AnyObject {
     func handleMouseDown(_ event: NSEvent) -> Bool
     func objectMenu(for event: NSEvent) -> NSMenu?
+    func objectContextCommands(for event: NSEvent) -> [AtticMenuCommand]?
     func isFileDrag(_ info: any NSDraggingInfo) -> Bool
     /// The operation for a drag of files from elsewhere, or nil when it is
     /// not one (text, or a move within the note).

@@ -4,6 +4,96 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+/// Sends the actual AppKit secondary press to the hosted view. A glass menu's
+/// test driver catches its commands without ordering a window on the Air.
+@MainActor
+enum NotesGlassMenuTestSupport {
+    /// The editor's system menu differs by OS and user services. Assert the
+    /// actual menu returned by AppKit, including nested commands, instead
+    /// of hard-coding only a subset of native spelling/text actions.
+    static func assertNativeParity(_ commands: [AtticMenuCommand], in view: NSView,
+                                   at point: NSPoint, file: StaticString = #filePath, line: UInt = #line) throws {
+        let window = try XCTUnwrap(view.window)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown,
+            location: view.convert(point, to: nil), modifierFlags: [], timestamp: 2,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 2,
+            clickCount: 1, pressure: 1))
+        let menu = try XCTUnwrap(view.menu(for: event))
+        compare(commands, to: menu, file: file, line: line)
+    }
+
+    private static func compare(_ commands: [AtticMenuCommand], to menu: NSMenu,
+                                file: StaticString, line: UInt) {
+        menu.update()
+        let native = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden && !$0.isAlternate && !$0.title.isEmpty }
+        XCTAssertEqual(commands.map(\.title), native.map { item in
+            item.state == .off ? item.title : (item.title.split(separator: "\t", maxSplits: 1).first.map(String.init) ?? item.title)
+        },
+                       "glass menu must preserve every available native item and its order", file: file, line: line)
+        for (command, item) in zip(commands, native) {
+            XCTAssertEqual(command.isDisabled, !item.isEnabled, "\(item.title) enabled state", file: file, line: line)
+            let state: AtticCheckState? = switch item.state {
+            case .on: .on
+            case .mixed: .mixed
+            default: nil
+            }
+            XCTAssertEqual(command.state, state, "\(item.title) check state", file: file, line: line)
+            if let key = item.keyEquivalent.first {
+                var modifiers: EventModifiers = []
+                if item.keyEquivalentModifierMask.contains(.command) { modifiers.insert(.command) }
+                if item.keyEquivalentModifierMask.contains(.shift) { modifiers.insert(.shift) }
+                if item.keyEquivalentModifierMask.contains(.option) { modifiers.insert(.option) }
+                if item.keyEquivalentModifierMask.contains(.control) { modifiers.insert(.control) }
+                XCTAssertEqual(command.shortcut, KeyboardShortcut(KeyEquivalent(key), modifiers: modifiers),
+                               "\(item.title) keyboard shortcut", file: file, line: line)
+            } else {
+                XCTAssertNil(command.shortcut, "\(item.title) has no shortcut", file: file, line: line)
+            }
+            if let submenu = item.submenu, item.view == nil,
+               !(submenu.items.isEmpty && submenu.delegate != nil) {
+                compare(command.children, to: submenu, file: file, line: line)
+            } else {
+                XCTAssertTrue(command.children.isEmpty, "\(item.title) has no glass children", file: file, line: line)
+            }
+        }
+    }
+
+    static func rightClick(_ view: NSView, at point: NSPoint) async throws -> [AtticMenuCommand] {
+        let window = try XCTUnwrap(view.window)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown,
+            location: view.convert(point, to: nil), modifierFlags: [], timestamp: 1,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+            clickCount: 1, pressure: 1))
+        let previousDriver = AtticGlassMenu.testDriver
+        let previousOrdering = AtticGlassMenu.ordersCardsFront
+        var captured: [AtticMenuCommand]?
+        AtticGlassMenu.ordersCardsFront = false
+        AtticGlassMenu.testDriver = { captured = $0.commands }
+        // A pre-fix native NSMenu can enter AppKit's tracking loop. Dismiss
+        // it with Escape, so the red test fails instead of waiting for HID.
+        let dismissNative = Timer(timeInterval: 0.2, repeats: false) { _ in
+            guard captured == nil, let escape = NSEvent.keyEvent(with: .keyDown,
+                location: .zero, modifierFlags: [], timestamp: 2,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}",
+                isARepeat: false, keyCode: 53) else { return }
+            NSApp.postEvent(escape, atStart: true)
+        }
+        // AppKit tracks NSMenu in the event-tracking run-loop mode, where
+        // main-queue asyncAfter blocks do not execute until the menu closes.
+        RunLoop.main.add(dismissNative, forMode: .eventTracking)
+        RunLoop.main.add(dismissNative, forMode: .default)
+        defer {
+            dismissNative.invalidate()
+            AtticGlassMenu.testDriver = previousDriver
+            AtticGlassMenu.ordersCardsFront = previousOrdering
+        }
+        view.rightMouseDown(with: event)
+        for _ in 0..<30 where captured == nil { try await Task.sleep(for: .milliseconds(20)) }
+        return try XCTUnwrap(captured, "a right-click must open Attic's glass menu")
+    }
+}
+
 /// Slice 3a UI: the selection bar, Aa, the `/` list with its date and file
 /// flows, the link card, the menus and the keys all run the engine's one
 /// command layer through `NoteCommandRouter`.
