@@ -317,7 +317,7 @@ extension AgentActions {
         }
     }
 
-    func drawAction(_ name: String, _ args: [String: Any]) throws -> (String, AgentStep, DrawSnapshot?) {
+    func drawAction(_ name: String, _ args: [String: Any], beforeMutation: () throws -> Void) throws -> (String, AgentStep, DrawSnapshot?) {
         guard let draw else { throw AgentActionsError.invalid("Draw store unavailable.") }
         if name == "draw_list_canvases" {
             let canvases = try draw.library(deleted: false)
@@ -328,6 +328,7 @@ extension AgentActions {
                                     state: .done), nil)
         }
         if name == "draw_create_canvas" {
+            try beforeMutation()
             let canvas = draw.create(name: args["name"] as? String)
             let save = draw.performAgent(.saveCanvas, on: canvas.id)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw canvas did not save: \(save)") }
@@ -339,6 +340,7 @@ extension AgentActions {
         let canvasID = try Self.uuid(args["canvas_id"], "canvas_id")
         let snapshot = try draw.open(canvasID)
         if name == "draw_duplicate_canvas" {
+            try beforeMutation()
             guard let copy = try draw.duplicate(canvasID, name: args["name"] as? String) else {
                 throw AgentActionsError.invalid("Could not duplicate this Draw canvas.")
             }
@@ -396,6 +398,7 @@ extension AgentActions {
             }
             guard newText != currentText else { throw AgentActionsError.invalid("That text is already up to date.") }
             existing.content = .text(newText)
+            try beforeMutation()
             let save = draw.performAgent(.put([existing]), on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw text did not save: \(save)") }
             let after = try draw.open(canvasID)
@@ -420,6 +423,7 @@ extension AgentActions {
                 throw AgentActionsError.invalid("The object is already at that position.")
             }
             let moved = existing.translated(by: DrawPoint(x: x - expectedX, y: y - expectedY), id: objectID)
+            try beforeMutation()
             let save = draw.performAgent(.put([moved]), on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw move did not save: \(save)") }
             let after = try draw.open(canvasID)
@@ -464,6 +468,7 @@ extension AgentActions {
                 }
                 command = .put([updated]); kind = .update
             }
+            try beforeMutation()
             let save = draw.performAgent(command, on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
             let after = try draw.open(canvasID)
@@ -486,12 +491,19 @@ extension AgentActions {
                       !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw AgentActionsError.invalid("Provide a nonempty canvas name.")
                 }
+                guard newName.trimmingCharacters(in: .whitespacesAndNewlines) != snapshot.canvas.name else {
+                    throw AgentActionsError.invalid("The canvas already has that name.")
+                }
                 command = .rename(newName)
                 kind = .update
             } else {
+                guard snapshot.canvas.deletedAt == nil else {
+                    throw AgentActionsError.invalid("This canvas is already deleted.")
+                }
                 command = .deleteCanvas
                 kind = .delete
             }
+            try beforeMutation()
             let save = draw.performAgent(command, on: canvasID)
             guard save.isSaved else { throw AgentActionsError.invalid("Draw change did not save: \(save)") }
             let after = try draw.open(canvasID)
@@ -541,6 +553,7 @@ extension AgentActions {
         }
         let object = DrawObject(frame: frame, zIndex: (snapshot.objects.map(\.zIndex).max() ?? 0) + 1,
                                 style: style, content: content)
+        try beforeMutation()
         let save = draw.performAgent(.put([object]), on: canvasID)
         guard save.isSaved else {
             throw AgentActionsError.invalid("Draw edit did not save: \(String(describing: save))")
