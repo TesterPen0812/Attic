@@ -58,7 +58,7 @@ class RequiredChecksTests(unittest.TestCase):
                 env['FKA_TESTS'] = 'skipped'
                 self.assertEqual(gate(env), 1)
 
-    def test_both_parallel_lanes_are_required_in_fast_full_and_pull_requests(self):
+    def test_all_parallel_lanes_are_required_in_fast_full_and_pull_requests(self):
         for lane in ['fast', 'full', '']:
             for key in PARALLEL_CHECKS:
                 for outcome in ['failure', 'skipped', 'cancelled', '']:
@@ -161,7 +161,7 @@ class RequiredChecksTests(unittest.TestCase):
                         env=dict(os.environ, LANE=lane, HEADLESS_COSTS=headless), capture_output=True, text=True)
                     self.assertEqual(result.returncode, int(headless == 'true' and lane != 'costs'))
                     if result.returncode: self.assertIn('::error::headless_costs=true requires lane=costs', result.stdout)
-        for job in ['fka', 'round-trips', 'macos', 'ui', 'costs', 'performance', 'appearance', 'iphone']:
+        for job in ['fka', 'round-trips', 'notes-seeds', 'macos', 'unit-continuation', 'ui', 'costs', 'performance', 'appearance', 'iphone']:
             self.assertIn(f'  {job}:\n    needs: validate-inputs\n', workflow)
 
     def test_round_trips_are_a_required_parallel_job_without_reducing_coverage(self):
@@ -181,11 +181,71 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('round_trip_scheme.add_test_target(round_trip_tests)', generator)
         self.assertIn('%w[RoundFX3Tests.swift TestSupport.swift InvisibleHostObserver.swift]', generator)
         required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
-        self.assertIn('needs: [validate-inputs, macos, round-trips]', required)
+        self.assertIn('needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]', required)
         self.assertIn("always() && inputs.lane != 'costs' && inputs.lane != 'fka'", required)
         self.assertIn('MACOS_JOB: ${{ needs.macos.result }}', required)
         self.assertIn('ROUND_TRIPS: ${{ needs.round-trips.result }}', required)
+        self.assertIn('NOTES_SEEDS: ${{ needs.notes-seeds.result }}', required)
+        self.assertIn('UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}', required)
         self.assertIn('python3 Scripts/ci_required_checks.py --parallel', required)
+
+    def test_exhaustive_unit_suites_are_partitioned_across_required_runners(self):
+        import re
+        import subprocess
+        import sys
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        unit = workflow.split('      - name: Run macOS unit tests', 1)[1].split('      - name: Run native dropdown timing gates', 1)[0]
+        continuation = workflow.split('  unit-continuation:', 1)[1].split('\n  required:', 1)[0]
+        required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
+
+        script = root / 'Scripts/ci_unit_shards.py'
+        expected = set()
+        for source in (root / 'AtticTests').glob('*.swift'):
+            expected.update(re.findall(r'^\s*(?:final\s+)?class\s+([\w]+)\s*:\s*XCTestCase\b',
+                                           source.read_text(), re.MULTILINE))
+        self.assertIn('O14FirstMouseTests', expected)
+        only = subprocess.check_output([sys.executable, str(script), '--continuation-only'], text=True).splitlines()
+        skips = subprocess.check_output([sys.executable, str(script), '--unit-skips'], text=True).splitlines()
+        self.assertEqual({f.replace('-only-testing:', '-skip-testing:') for f in only}, set(skips))
+        self.assertEqual(len(only), len(set(only)))
+        self.assertTrue(set(s.split('/', 1)[1] for s in only).issubset(expected))
+        self.assertIn('-only-testing:AtticTests/O14FirstMouseTests', only)
+        self.assertNotIn('-only-testing:AtticTests/TasksFrameCostTests', only)
+        self.assertNotIn('-only-testing:AtticTests/TasksRowBuildCostTests', only)
+        self.assertTrue(all(s[0] >= 'P' or s == 'O14FirstMouseTests'
+                            for s in (f.rsplit('/', 1)[-1] for f in only)))
+        self.assertIn('python3 Scripts/ci_unit_shards.py --unit-skips', unit)
+        self.assertIn('"${continuation_skips[@]}"', unit)
+        self.assertIn('python3 Scripts/ci_unit_shards.py --continuation-only', continuation)
+        self.assertIn('"${continuation_only[@]}"', continuation)
+        self.assertIn('test-without-building', continuation)
+        self.assertIn('passedTests', continuation)
+        self.assertNotIn('continue-on-error', continuation)
+        self.assertIn('UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}', required)
+
+    def test_all_notes_hunt_generated_seeds_have_one_dedicated_required_runner(self):
+        import re
+        root = Path(__file__).resolve().parent.parent
+        source = (root / 'AtticTests/NotesEditorHuntTests.swift').read_text()
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        seeds = re.findall(r'func testGeneratedSeed(\d+)\(', source)
+        self.assertEqual(seeds, ['11012', '11013', '11014', '11015'])
+
+        unit = workflow.split('      - name: Run macOS unit tests', 1)[1].split('      - name: Run native dropdown timing gates', 1)[0]
+        job = workflow.split('  notes-seeds:', 1)[1].split('\n  macos:', 1)[0]
+        required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
+        for seed in seeds:
+            self.assertIn(f'-skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed{seed}', unit)
+        self.assertIn('seed: [' + ', '.join(seeds) + ']', job)
+        self.assertIn('-only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed${{ matrix.seed }}', job)
+        self.assertIn('timeout-minutes: 90', job)
+        self.assertIn('fail-fast: false', job)
+        self.assertNotIn('continue-on-error', job)
+        self.assertIn('s["passedTests"]==1', job)
+        self.assertIn('s["skippedTests"]==0', job)
+        self.assertIn('s["failedTests"]==0', job)
+        self.assertIn('NOTES_SEEDS: ${{ needs.notes-seeds.result }}', required)
 
     def test_generated_methods_compile_in_exactly_one_lane(self):
         import json
