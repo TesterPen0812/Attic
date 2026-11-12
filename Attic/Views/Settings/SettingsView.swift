@@ -51,9 +51,19 @@ struct SettingsView: View {
     @ObservedObject var globalHotKey: GlobalHotKey
     let library: AtticLibrary?
 
-    @StateObject private var navigation = SettingsNavigation()
+    @StateObject private var navigation: SettingsNavigation
     @StateObject private var keyboardFocusTracker = AtticKeyboardFocusTracker()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(settings: AppSettings, loginItemService: LoginItemService,
+         agentServer: AgentServer, globalHotKey: GlobalHotKey, library: AtticLibrary?) {
+        self.settings = settings
+        self.loginItemService = loginItemService
+        self.agentServer = agentServer
+        self.globalHotKey = globalHotKey
+        self.library = library
+        _navigation = StateObject(wrappedValue: SettingsNavigation(defaults: settings.userDefaults))
+    }
 
     var body: some View {
         GeometryReader { available in
