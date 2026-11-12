@@ -89,6 +89,8 @@ final class AtticGlassMenu {
     private var graceTimer: Timer?
     private var lastPointer: NSPoint?
     private weak var source: NSWindow?
+    /// The window that opened the menu (the panel, mostly).
+    var sourceWindow: NSWindow? { source }
     private var observers: [NSObjectProtocol] = []
     private var globalMonitor: Any?
     private var visible: NSRect = .zero
@@ -841,6 +843,8 @@ final class AtticGlassMenuCard {
     /// The corner it grew from, which it shrinks back toward.
     private var corner: AtticGlassMenu.Corner = .topLeading
     private var isHidden = false
+    /// The hole under the card in the panel it covers, while it is shown.
+    private var backdropHole: AtticMenuBackdropHole?
     unowned let menu: AtticGlassMenu
 
     init(commands: [AtticMenuCommand], menu: AtticGlassMenu, level: Int, title: String? = nil, width: CGFloat? = nil,
@@ -1032,9 +1036,13 @@ final class AtticGlassMenuCard {
         window.alphaValue = 1
         #if DEBUG
         // Tests: built and animated, never ordered on screen.
-        if AtticGlassMenu.ordersCardsFront { window.orderFront(nil) }
+        if AtticGlassMenu.ordersCardsFront {
+            window.orderFront(nil)
+            backdropHole = AtticMenuBackdropHole.open(under: frame, in: menu.sourceWindow, corner: corner, animated: animated, style: menu.style)
+        }
         #else
         window.orderFront(nil)
+        backdropHole = AtticMenuBackdropHole.open(under: frame, in: menu.sourceWindow, corner: corner, animated: animated, style: menu.style)
         #endif
         guard animated else { return }
         let lift: AtticGlassMenuLiftView = window.lift
@@ -1063,6 +1071,8 @@ final class AtticGlassMenuCard {
         isHidden = true
         let window = self.window
         window.ignoresMouseEvents = true
+        backdropHole?.close(animated: animated && window.isVisible, reduceMotion: menu.style.reduceMotion)
+        backdropHole = nil
         guard animated, window.isVisible, let layer = window.lift.layer else {
             window.orderOut(nil)
             return
@@ -1134,6 +1144,192 @@ enum AtticMenuMotion {
         transform = CATransform3DConcat(transform, CATransform3DMakeScale(scale, scale, 1))
         return CATransform3DConcat(transform, CATransform3DMakeTranslation(dx, dy, 0))
     }
+}
+
+// MARK: - The panel under a card
+
+/// A window whose own surface a menu card replaces where it covers it: the
+/// panel. The card's native glass blurs what is under it, and over the
+/// panel that was the panel's rows (ghosted grey text and tag smudges in
+/// the card) on the panel's glass, not the desktop the panel's own glass
+/// blurs. So while a card is shown, the panel's page and surface are cut
+/// away under it and the card's glass sees the desktop, as the panel does:
+/// one material, not glass on glass.
+@MainActor
+protocol AtticMenuBackdropHost: AnyObject {
+    /// The view to cut (the panel's page and surface), or nil.
+    var menuBackdropView: NSView? { get }
+}
+
+/// The cut under one card, in its host view's layer mask: the card's shape,
+/// 3 pt in, so no desktop shows at the card's edge. It grows from the card's
+/// corner on the card's own spring and the page under it fades as the card
+/// fades in (back as it fades out), so it follows the card's live frame and
+/// nothing pops. Several cards (a submenu over the panel) chain their masks,
+/// each multiplying the last. Only on a see-through surface: a Solid card
+/// already covers what is under it.
+@MainActor
+final class AtticMenuBackdropHole {
+    /// Every host's open cuts, in mask order.
+    private static var chains: [ObjectIdentifier: [AtticMenuBackdropHole]] = [:]
+    /// The cut stays this far inside the card. 1 pt let a 1 px sliver of
+    /// the desktop show at the card's moving edge as it grew (the panel's
+    /// window draws the cut a few ms ahead of the card's window); 3 pt keeps
+    /// the cut under the card at every frame on the Air.
+    private static let edgeInset: CGFloat = 3
+
+    private weak var host: NSView?
+    /// The whole host (the mask), holding `cut`.
+    let mask = CALayer()
+    /// The card's place in the host: the outside opaque, the card a hole.
+    let cut = CALayer()
+    /// The page under the card, fading out as the card fades in.
+    let page = CAShapeLayer()
+    /// The card's corner, which the cut grows from and shrinks toward.
+    private var corner: AtticGlassMenu.Corner = .topLeading
+    private var isClosed = false
+
+    private init(host: NSView, frame: NSRect) {
+        self.host = host
+        mask.frame = host.bounds
+        cut.frame = frame
+        let card = AtticGlassMenuShape.card.path(in: CGRect(origin: .zero, size: frame.size).insetBy(dx: Self.edgeInset, dy: Self.edgeInset)).cgPath
+        let outside = CAShapeLayer()
+        let room = max(host.bounds.width, host.bounds.height) * 4 + 1000
+        let path = CGMutablePath()
+        path.addRect(CGRect(origin: .zero, size: frame.size).insetBy(dx: -room, dy: -room))
+        path.addPath(card)
+        outside.path = path
+        outside.fillRule = .evenOdd
+        outside.fillColor = NSColor.black.cgColor
+        outside.frame = cut.bounds
+        // 1 pt past the hole's edge: two shapes meeting edge to edge left a
+        // faint antialiased outline of the cut while the page was whole
+        // (the open's first frames, the close's last).
+        page.path = AtticGlassMenuShape.card.path(in: CGRect(origin: .zero, size: frame.size)
+            .insetBy(dx: Self.edgeInset - 1, dy: Self.edgeInset - 1)).cgPath
+        page.fillColor = NSColor.black.cgColor
+        page.frame = cut.bounds
+        page.opacity = 0
+        cut.addSublayer(outside)
+        cut.addSublayer(page)
+        mask.addSublayer(cut)
+    }
+
+    /// Cuts the card's place (`frame`, screen) out of `window`'s surface,
+    /// with the card's open motion; nil when there is nothing to cut.
+    static func open(under frame: NSRect, in window: NSWindow?, corner: AtticGlassMenu.Corner, animated: Bool,
+                     style: AtticGlassMenuStyle) -> AtticMenuBackdropHole? {
+        guard style.isSeeThrough, AtticMenuSurfaceSeam.cutsPanel,
+              let window, let host = (window as? AtticMenuBackdropHost)?.menuBackdropView,
+              host.window === window, let layer = host.layer else { return nil }
+        let local = host.convert(window.convertFromScreen(frame), from: nil)
+        guard local.intersects(host.bounds) else { return nil }
+        let key = ObjectIdentifier(host)
+        // Another mask is the host's own: leave it be.
+        if layer.mask != nil, chains[key]?.first?.mask !== layer.mask { return nil }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let hole = AtticMenuBackdropHole(host: host, frame: local)
+        hole.corner = corner
+        chains[key, default: []].append(hole)
+        relink(key, layer: layer)
+        CATransaction.commit()
+        guard animated else { return hole }
+        if style.reduceMotion {
+            let fade = AtticMenuMotion.fade(from: 1, to: 0, duration: AtticMenuMetrics.openFade, easeIn: false)
+            hole.page.add(fade, forKey: "attic.open.fade")
+        } else {
+            // The page fades a beat behind the card, so the desktop never
+            // shows through a card still fading in.
+            hole.page.add(AtticMenuMotion.spring("opacity", from: 1, to: 0, duration: AtticMenuMetrics.openDuration,
+                                                 bounce: AtticMenuMetrics.openBounce, delay: AtticMenuMetrics.openFade / 2),
+                          forKey: "attic.open.fade")
+            let small = AtticMenuMotion.scale(AtticMenuMetrics.startScale, about: corner, in: hole.cut)
+            hole.cut.add(AtticMenuMotion.spring("transform", from: NSValue(caTransform3D: small),
+                                                to: NSValue(caTransform3D: CATransform3DIdentity),
+                                                duration: AtticMenuMetrics.openDuration, bounce: AtticMenuMetrics.openBounce),
+                         forKey: "attic.open.grow")
+        }
+        return hole
+    }
+
+    /// Gives the page back: ahead of the card's fade-out and with its
+    /// shrink, then the cut is gone.
+    func close(animated: Bool, reduceMotion: Bool) {
+        guard !isClosed else { return }
+        isClosed = true
+        guard animated, host != nil else { remove(); return }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [self] in
+            MainActor.assumeIsolated { self.remove() }
+        }
+        let back = AtticMenuMotion.fade(from: page.presentation()?.opacity ?? 0, to: 1,
+                                        duration: AtticMenuMetrics.closeFade / 2, easeIn: false)
+        back.fillMode = .forwards
+        back.isRemovedOnCompletion = false
+        page.removeAnimation(forKey: "attic.open.fade")
+        page.add(back, forKey: "attic.close.fade")
+        if !reduceMotion {
+            let from = cut.presentation()?.transform ?? CATransform3DIdentity
+            let shrink = CABasicAnimation(keyPath: "transform")
+            shrink.fromValue = NSValue(caTransform3D: from)
+            shrink.toValue = NSValue(caTransform3D: AtticMenuMotion.scale(AtticMenuMetrics.startScale, about: corner, in: cut))
+            shrink.duration = AtticMenuMetrics.closeFade
+            shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            shrink.fillMode = .forwards
+            shrink.isRemovedOnCompletion = false
+            cut.removeAnimation(forKey: "attic.open.grow")
+            cut.add(shrink, forKey: "attic.close.shrink")
+        }
+        CATransaction.commit()
+    }
+
+    private func remove() {
+        guard let host else { return }
+        let key = ObjectIdentifier(host)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        Self.chains[key]?.removeAll { $0 === self }
+        if Self.chains[key]?.isEmpty == true { Self.chains[key] = nil }
+        if let layer = host.layer { Self.relink(key, layer: layer, removing: self) }
+        CATransaction.commit()
+    }
+
+    /// The host's mask is the first cut's; each cut's mask, the next's.
+    private static func relink(_ key: ObjectIdentifier, layer: CALayer, removing gone: AtticMenuBackdropHole? = nil) {
+        let holes = chains[key] ?? []
+        gone?.mask.mask = nil
+        for hole in holes { hole.mask.mask = nil }
+        layer.mask = holes.first?.mask
+        for index in holes.indices.dropLast() { holes[index].mask.mask = holes[index + 1].mask }
+    }
+
+    #if DEBUG
+    /// Tests: the open cuts in `view`'s mask.
+    static func cuts(in view: NSView) -> [AtticMenuBackdropHole] { chains[ObjectIdentifier(view)] ?? [] }
+    #endif
+}
+
+/// Capture seam (`ATTIC_UI_TEST_MENU_SURFACE`, with `ATTIC_UI_TESTING=1`,
+/// preview identities only): a comma list that brings back round 1's card
+/// piece by piece, to measure each cause on screen. `inshadow`: the shadow
+/// fills the card under its glass; `nocut`: the panel stays under the card;
+/// `cardsize`: the native glass at the card's own size.
+enum AtticMenuSurfaceSeam {
+    #if DEBUG
+    nonisolated static let flags: Set<String> = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
+              let list = environment["ATTIC_UI_TEST_MENU_SURFACE"] else { return [] }
+        return Set(list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    }()
+    #else
+    nonisolated static let flags: Set<String> = []
+    #endif
+    nonisolated static var interiorShadow: Bool { flags.contains("inshadow") }
+    nonisolated static var cutsPanel: Bool { !flags.contains("nocut") }
+    nonisolated static var cardSizedGlass: Bool { flags.contains("cardsize") }
 }
 
 extension AtticGlassMenu {
@@ -1237,12 +1433,29 @@ final class AtticGlassMenuWindow: NSPanel {
 
 /// The card's moving part: it scales from its corner and fades, with its
 /// shadow (the glass's own shape), as one layer.
+///
+/// The shadow falls outside the card only. The card's native glass blurs
+/// whatever lies under it, its own window's shadow included: a shadow
+/// filling the card's shape (a layer shadow) greyed the glass from within,
+/// so the card read darker than the panel over the same backdrop (owner,
+/// 12 Nov: "it's not even the same glass").
 final class AtticGlassMenuLiftView: NSView {
     var shadowColor: NSColor = .clear
+    /// Holds the shadow, masked to outside the card.
+    private let shadowHost = NSView()
+    private let shadowCaster = CALayer()
+    private let outside = CAShapeLayer()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        shadowHost.wantsLayer = true
+        shadowHost.frame = bounds
+        shadowHost.autoresizingMask = [.width, .height]
+        addSubview(shadowHost)
+        shadowHost.layer?.addSublayer(shadowCaster)
+        outside.fillRule = .evenOdd
+        outside.fillColor = NSColor.black.cgColor
     }
 
     @available(*, unavailable)
@@ -1252,16 +1465,30 @@ final class AtticGlassMenuLiftView: NSView {
 
     override func layout() {
         super.layout()
-        guard let layer else { return }
+        guard let layer, let host = shadowHost.layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.masksToBounds = false
+        host.masksToBounds = false
         let colour = shadowColor.usingColorSpace(.sRGB) ?? shadowColor
-        layer.shadowColor = colour.withAlphaComponent(1).cgColor
-        layer.shadowOpacity = Float(colour.alphaComponent)
-        layer.shadowRadius = AtticShadows.dropdown.radius
-        layer.shadowOffset = CGSize(width: 0, height: layer.contentsAreFlipped() ? AtticShadows.dropdown.y : -AtticShadows.dropdown.y)
-        layer.shadowPath = AtticGlassMenuShape.card.path(in: bounds).cgPath
+        let card = AtticGlassMenuShape.card.path(in: bounds).cgPath
+        shadowCaster.frame = host.bounds
+        shadowCaster.shadowColor = colour.withAlphaComponent(1).cgColor
+        shadowCaster.shadowOpacity = Float(colour.alphaComponent)
+        shadowCaster.shadowRadius = AtticShadows.dropdown.radius
+        shadowCaster.shadowOffset = CGSize(width: 0, height: host.contentsAreFlipped() ? AtticShadows.dropdown.y : -AtticShadows.dropdown.y)
+        shadowCaster.shadowPath = card
+        if AtticMenuSurfaceSeam.interiorShadow {
+            host.mask = nil
+        } else {
+            let room = AtticMenuMetrics.windowMargin * 4
+            let path = CGMutablePath()
+            path.addRect(host.bounds.insetBy(dx: -room, dy: -room))
+            path.addPath(card)
+            outside.frame = host.bounds
+            outside.path = path
+            host.mask = outside
+        }
         CATransaction.commit()
     }
 }
@@ -1304,7 +1531,8 @@ struct AtticGlassMenuSurface: View {
 
     var body: some View {
         let shape = AtticGlassMenuShape.card
-        AtticSurfaceBackground(model: style.tokens.panel, shape: shape, nativeGlassSize: panelSize)
+        AtticSurfaceBackground(model: style.tokens.panel, shape: shape,
+                               nativeGlassSize: AtticMenuSurfaceSeam.cardSizedGlass ? nil : panelSize)
             .environment(\.atticDesign, style.design)
             .overlay {
                 shape.inset(by: style.rimWidth / 2)
