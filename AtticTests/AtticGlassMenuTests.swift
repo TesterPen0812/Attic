@@ -48,6 +48,18 @@ final class AtticGlassMenuTests: XCTestCase {
         return menu
     }
 
+    /// Keep the card's logical screen coordinates aligned with its window's
+    /// coordinates in the invisible test host. The host moves onscreen
+    /// windows a million points away without changing the menu's card frame.
+    /// A fully offscreen virtual screen avoids that remapping in either host.
+    private func openForAccessibilityGeometry(_ commands: [AtticMenuCommand]) -> AtticGlassMenu {
+        let testScreen = screen.offsetBy(dx: -2_000_000, dy: 0)
+        let point = CGPoint(x: testScreen.minX + 400, y: testScreen.minY + 600)
+        let menu = AtticGlassMenu(commands, appearance: NSAppearance(named: .aqua), opener: nil)
+        menu.open(.point(point), visible: testScreen, source: nil)
+        return menu
+    }
+
     private func key(_ keyCode: UInt16, _ characters: String = "", flags: NSEvent.ModifierFlags = [], time: TimeInterval = 1) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: time, windowNumber: 0, context: nil,
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
@@ -586,7 +598,7 @@ final class AtticGlassMenuTests: XCTestCase {
     /// "hittable" check) lands on the item, not on the card's window. The
     /// rows' view takes no AppKit hits (the menu tracks the pointer itself).
     func testThePointOverARowHitsItsMenuItem() throws {
-        let menu = open(commands())
+        let menu = openForAccessibilityGeometry(commands())
         let card = menu.cards[0]
         for title in ["Complete", "Date", "Delete"] {
             let point = center(of: row(titled: title, in: card), in: card)
@@ -609,7 +621,7 @@ final class AtticGlassMenuTests: XCTestCase {
     /// (the first row) landed on "Delete" (the last) and chose it (w4 trace,
     /// run 41196043594).
     func testEveryItemsFrameIsItsOwnRowOnScreen() throws {
-        let menu = open(commands())
+        let menu = openForAccessibilityGeometry(commands())
         for card in [menu.cards[0]] {
             for row in card.entries.indices {
                 guard let element = card.view.element(for: row) else { continue }
