@@ -207,9 +207,11 @@ final class NotesPageUITests: XCTestCase {
         showAllNotes()
         require(row("Groceries"), "the first note is listed")
         require(row("Kyoto trip"), "the second note is listed")
-        // The search is quiet: a magnifier on the label line opens the field.
-        let magnifier = app.buttons["notes-library-search-button"]
-        require(magnifier, "the magnifier on the All notes line")
+        // The search is quiet: the top row's magnifier opens the field (the
+        // All notes label line and its own magnifier were removed with the
+        // shared top row; the identifier is the row's `notes-search-button`).
+        let magnifier = app.buttons["notes-search-button"]
+        require(magnifier, "the magnifier on the top row")
         magnifier.click()
         // "Search 2 notes" (the Tasks page's Done search reads "Search done tasks").
         let search = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@",
@@ -230,13 +232,17 @@ final class NotesPageUITests: XCTestCase {
         waitFor(noteValue == "Groceries\nOat milk", "the untagged note typed")
 
         showAllNotes()
-        let tab = app.buttons["notes-library-tag-kyoto"]
-        require(tab, "the recent tag sits on the All notes line")
-        tab.click()
+        // The tag filter is the shared bottom bar's recent-tag pill
+        // (`notes-tag-bar-<tag>`), not a tab on the removed label line.
+        let pill = app.descendants(matching: .any)["notes-tag-bar-kyoto"]
+        require(pill, "the recent tag sits in the bottom bar")
+        pill.click()
         waitFor(!row("Groceries").exists, "the filter hides the untagged note")
         require(row("Trip"), "the tagged note stays")
 
-        app.buttons["notes-library-search-button"].click()
+        let magnifier = app.buttons["notes-search-button"]
+        require(magnifier, "the magnifier on the top row")
+        magnifier.click()
         let search = app.textFields.matching(NSPredicate(format: "label == %@", "Search #kyoto")).firstMatch
         require(search, "the placeholder names the tag")
         app.typeText("osaka")
