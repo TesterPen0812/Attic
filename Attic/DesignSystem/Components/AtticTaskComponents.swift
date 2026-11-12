@@ -2066,9 +2066,9 @@ private struct AtticDetailsTags: View {
     @State private var hovered = false
 
     /// The tags keep the previous app's inline look (owner, 2026-10-29)
-    /// inside the design's details line: their soft fills reach past the
-    /// words, so the line's gap is kept between fills, not words.
-    private static let spacing = AtticTaskRowMetrics.detailsItemSpacing + 2 * AtticTagMetrics.inlineFillOutset
+    /// inside the design's details line, sitting a short gap apart so
+    /// they read as one group.
+    private static let spacing = AtticTagMetrics.inlineGap
 
     var body: some View {
         // Each tag in its own colour (colour pass, owner 2026-10-10).

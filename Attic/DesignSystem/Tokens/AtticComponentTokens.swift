@@ -769,6 +769,11 @@ enum AtticTagMetrics {
     /// its hue's fill reaches this far past the words on each side, so the
     /// fill changes no layout (colour pass sheet: 4 px padding, -2 px margin).
     static let inlineFillOutset: CGFloat = 4
+    /// Between two tags in one line (and before a "+N"): close enough to
+    /// read as one group, wider than a word space. The fills only show on
+    /// hover, one at a time, so the gap no longer reserves room for them
+    /// (owner, 12 Nov: "#email #work" sat 15 pt apart, too wide).
+    static let inlineGap: CGFloat = 6
     static let inlineFillRadius: CGFloat = 5
 }
 
