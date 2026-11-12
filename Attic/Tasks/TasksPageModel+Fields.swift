@@ -51,6 +51,7 @@ extension TasksPageModel {
         if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         if day != nil { followDatedOutOfLater(live) }
+        pruneInvisibleSelection(on: tab)
         showToast(dueDayToast(day, count: live.count))
         return outcome
     }
@@ -80,6 +81,7 @@ extension TasksPageModel {
         guard task.dueDay != day else { return .applied }
         let outcome = library.moveTask(id, toDueDay: day, before: drop.before, after: drop.after)
         guard outcome.isApplied else { return outcome }
+        pruneInvisibleSelection(on: tab)
         showToast(dueDayToast(day, count: 1))
         return outcome
     }
@@ -106,6 +108,7 @@ extension TasksPageModel {
             : library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil)
         if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
+        pruneInvisibleSelection(on: tab)
         showToast(removing ? String(localized: "Removed #\(tag)") : String(localized: "Tagged #\(tag)"))
         return outcome
     }
