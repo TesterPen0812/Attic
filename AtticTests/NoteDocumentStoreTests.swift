@@ -1036,6 +1036,29 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .failure(.versionMissing) = store.restoreVersion(UUID(), noteID: id) else { return XCTFail() }
     }
 
+    func testDataSafetyFailedGroupedRestoreCannotLeakIntoNextSuccessfulSave() throws {
+        enum SyntheticFailure: Error { case staging }
+        let (id, _) = try create(document("Keep deleted"))
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        let deleted = try XCTUnwrap(store.replicasIncludingDeleted(of: id).first)
+        XCTAssertNotNil(deleted.deletedAt)
+        XCTAssertNotNil(deleted.deletionGroupID, "ordinary deletion uses the whole-item group")
+
+        XCTAssertFalse(store.restoreDeleted(noteID: id, staging: { _ in
+            throw SyntheticFailure.staging
+        }))
+        XCTAssertNil(store.note(withID: id), "the failed restore must not appear in the live library")
+        XCTAssertTrue(try store.replicasIncludingDeleted(of: id).allSatisfy { $0.deletedAt != nil },
+                      "the next edit must not see an uncommitted restore")
+        XCTAssertTrue(store.create(title: "Unrelated successful edit") != nil)
+        let persisted = try ModelContext(store.modelContext.container).fetch(
+            FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertTrue(persisted.allSatisfy { $0.deletedAt != nil },
+                      "the next successful save must not resurrect the failed restore")
+        XCTAssertTrue(store.restoreDeleted(noteID: id), "the original restoration can be retried")
+        XCTAssertNotNil(store.note(withID: id))
+    }
+
     func testS7ThinningKeepsAttachmentAndTableSnapshots() throws {
         let (id, _) = try create(document("Current"))
         let attachmentID = UUID()

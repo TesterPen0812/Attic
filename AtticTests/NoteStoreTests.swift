@@ -4,6 +4,75 @@ import XCTest
 
 final class NoteStoreTests: XCTestCase {
     @MainActor
+    func testDataSafetyForeignContextImportRebindsBeforeNextNoteMutation() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "External import")?.id)
+        let stale = try XCTUnwrap(store.note(withID: id))
+        let external = ModelContext(container)
+        let imported = try XCTUnwrap(external.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        imported.tagsRaw = AtticTag.encode(["foreign"])
+        try external.save()
+        store.refresh()
+        XCTAssertEqual(store.note(withID: id)?.tags, ["foreign"])
+        XCTAssertFalse(store.note(withID: id) === stale, "an import must rebind presentation to a fresh context")
+        XCTAssertTrue(store.setTags(["owner"], for: stale))
+        let saved = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        XCTAssertEqual(saved.tags, ["owner"], "a mutation with an older handle must apply to current replicas")
+    }
+
+    @MainActor
+    func testDataSafetyFailedDocumentEditDoesNotChangeRetainedNote() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Safe", body: "Original")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let originalRevision = retained.revisionID
+        reject = true
+        XCTAssertFalse(store.update(retained, body: "Must be discarded"))
+        XCTAssertEqual(retained.body, "Original", "a rejected document edit cannot change a retained row")
+        XCTAssertEqual(retained.revisionID, originalRevision)
+        reject = false
+        XCTAssertNotNil(store.create(title: "Successful later edit"))
+        let persisted = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        XCTAssertEqual(persisted.body, "Original")
+        XCTAssertEqual(persisted.revisionID, originalRevision)
+    }
+
+    @MainActor
+    func testDataSafetyFailedTagAndDeleteSaveDoNotMutateRetainedNote() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Retain me")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        reject = true
+        XCTAssertFalse(store.setTags(["injected"], for: retained))
+        XCTAssertEqual(retained.tags, [], "failed tag save must restore the retained Notes row")
+        XCTAssertFalse(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertNil(retained.deletedAt, "failed deletion must restore retained deletion state")
+        XCTAssertEqual(store.note(withID: id)?.tags, [])
+        XCTAssertNotNil(store.note(withID: id))
+        reject = false
+        XCTAssertNotNil(store.create(title: "Later successful save"))
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(rows.first(where: { $0.id == id })?.tags, [])
+        XCTAssertNil(rows.first(where: { $0.id == id })?.deletedAt)
+    }
+
+    @MainActor
     func testB04SupersededReconciliationLogsCancellationAndKeepsNewSignature() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))

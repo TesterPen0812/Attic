@@ -680,6 +680,9 @@ extension NoteStore {
         // arriving later may become the preflight's sorting winner before the
         // page refreshes, but it does not make that presented base stale.
         let main = note(withID: noteID) ?? preflight.canonical
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(replicas, includingDocument: true)
+        retainedEdits.capture([main], includingDocument: true)
         let presentedRevisionID = main.revisionID
         documentSaveAttempt?(baseRevisionID, presentedRevisionID)
         guard replicas.contains(where: { $0 === main }),
@@ -695,7 +698,7 @@ extension NoteStore {
             guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.tagsRaw = encodedTags }
-            guard commitStagedChanges() else {
+            guard commitStagedChanges(retaining: retainedEdits) else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
@@ -743,7 +746,7 @@ extension NoteStore {
             let visibilityChanged = try stageAttachmentVisibility(referencedBy: placements, noteID: noteID,
                 timestamp: timestamp, rows: attachmentPlan.existingRows)
 
-            guard commitStagedChanges() else {
+            guard commitStagedChanges(retaining: retainedEdits) else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
             refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty || visibilityChanged)
@@ -751,10 +754,12 @@ extension NoteStore {
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(revisionID)
         } catch let error as NoteDocumentStoreError {
-            context.rollback()
+            rollback(retaining: retainedEdits)
+            try? reloadPresentation()
             return .failure(error)
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
+            try? reloadPresentation()
             return .failure(.encodingFailed(error.localizedDescription))
         }
     }
