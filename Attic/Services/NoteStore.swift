@@ -605,17 +605,20 @@ final class NoteStore: ObservableObject {
     func setTags(_ tags: [String], for note: NoteItem) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let encoded = AtticTag.encode(tags)
+        let retainedEdits = RetainedNoteEdits()
         do {
             let replicas = try storedNotes(matching: note.id)
             guard replicas.contains(where: { $0.tagsRaw != encoded }) else { return true }
+            retainedEdits.capture(replicas)
+            retainedEdits.capture([note])
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas { replica.tagsRaw = encoded }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
             return false
         }
-        return save()
+        return save(retaining: retainedEdits)
     }
 
     /// Moves a note to Recently Deleted. Every replica is marked; the note's
@@ -711,17 +714,20 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
         lastRestoreWasSeparate = false
+        let retainedEdits = RetainedNoteEdits()
+        var separated = false
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
+            retainedEdits.capture(replicas, includingDocument: true)
             let groups = Set(replicas.compactMap(\.deletionGroupID))
             if !groups.isEmpty {
                 guard groups.count == 1, let group = groups.first else { throw WorkspaceFoundationError.conflict }
                 try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
                 try staging?(context)
-                guard save() else { return false }
+                guard save(retaining: retainedEdits) else { return false }
                 refresh()
                 WorkspaceItemLifecycle.didCommit(in: container)
                 return true
@@ -729,7 +735,7 @@ final class NoteStore: ObservableObject {
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
             // note returns as an ordinary note, materialized, in this save.
-            let separated = try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas)
+            separated = try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas)
             for replica in replicas where !separated {
                 guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                     if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
@@ -752,13 +758,13 @@ final class NoteStore: ObservableObject {
                 replica.deletedAttachmentIDsRaw = nil
             }
             try staging?(context)
-            lastRestoreWasSeparate = separated
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
             return false
         }
-        guard save() else { return false }
+        guard save(retaining: retainedEdits) else { return false }
+        lastRestoreWasSeparate = separated
 #if os(macOS)
         // Reconcile the returning attachments' files in full on the reload.
         reconciledAttachmentSignature = nil
@@ -980,9 +986,15 @@ final class NoteStore: ObservableObject {
            loadDocument(noteID: noteID)?.content.document?.attachmentIDs.contains(attachment.id) == true {
             return removeDocumentAttachment(attachment.id, noteID: noteID)
         }
+        let retainedEdits = RetainedNoteEdits()
+        retainedEdits.capture(replicas)
         let timestamp = now()
         do {
             let notes = try storedNotesIfPresent(matching: noteID)
+            retainedEdits.capture(notes, includingTimestamp: true)
+            if let visible = note(withID: noteID) {
+                retainedEdits.capture([visible], includingTimestamp: true)
+            }
             WorkspaceLegacyBridge.prepareMutations(notes, in: context)
             let preferred = Self.canonicalReplicas(from: notes).first
             for note in notes { note.updatedAt = timestamp }
@@ -997,7 +1009,7 @@ final class NoteStore: ObservableObject {
                 }
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
             return false
         }
@@ -1023,7 +1035,7 @@ final class NoteStore: ObservableObject {
         for noteID in attachmentsByNoteID.keys {
             attachmentsByNoteID[noteID]?.removeAll { $0.id == attachment.id }
         }
-        guard save() else { return false }
+        guard save(retaining: retainedEdits) else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
         // Visibility changed in place; reconcile the retained file inventory.
@@ -1549,7 +1561,7 @@ final class NoteStore: ObservableObject {
 
     /// Saves staged changes; on failure rolls back, reloads and records the
     /// error (the same rule every mutation here follows).
-    func commitStagedChanges() -> Bool { save() }
+    func commitStagedChanges(retaining edits: RetainedNoteEdits? = nil) -> Bool { save(retaining: edits) }
 
     func recordError(_ message: String) { lastErrorMessage = message }
 
@@ -1586,8 +1598,104 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Persistence
 
+    /// On this SwiftData runtime, ModelContext.rollback() can leave existing
+    /// NoteItem references with the rejected values. Restore those references
+    /// from their own pre-edit fields before replacing the transaction context.
+    final class RetainedNoteEdits {
+        private struct CapturedField {
+            let changed: () -> Bool
+            let restore: () -> Void
+        }
+
+        private struct Field {
+            let capture: (NoteItem) -> CapturedField
+
+            init<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<NoteItem, Value>) {
+                capture = { note in
+                    let value = note[keyPath: keyPath]
+                    return CapturedField(changed: { note[keyPath: keyPath] != value },
+                                         restore: { note[keyPath: keyPath] = value })
+                }
+            }
+        }
+
+        private static let metadataFields: [Field] = [
+            Field(\.tagsRaw), Field(\.deletedAt), Field(\.deletionGroupID),
+            Field(\.deletedAttachmentIDsRaw), Field(\.pinnedAt),
+            Field(\.externalEditorName), Field(\.externalEditedAt),
+            Field(\.taskID), Field(\.associationGeneration)
+        ]
+        private static let documentFields: [Field] = [
+            Field(\.title), Field(\.body), Field(\.updatedAt), Field(\.content),
+            Field(\.contentFingerprint), Field(\.contentFormat), Field(\.plainText),
+            Field(\.imageCount), Field(\.fileCount), Field(\.firstFileName),
+            Field(\.revision), Field(\.revisionID)
+        ]
+
+        private var restorations: [ObjectIdentifier: () -> Bool] = [:]
+
+        func capture(_ notes: [NoteItem], includingDocument: Bool = false,
+                     includingTimestamp: Bool = false) {
+            for note in notes {
+                let key = ObjectIdentifier(note)
+                guard restorations[key] == nil else { continue }
+                let fields = (Self.metadataFields + (includingDocument ? Self.documentFields
+                    : includingTimestamp ? [Field(\.updatedAt)] : []))
+                    .map { $0.capture(note) }
+                restorations[key] = {
+                    guard fields.contains(where: { $0.changed() }) else { return false }
+                    fields.forEach { $0.restore() }
+                    return true
+                }
+            }
+        }
+
+        func capture(_ attachments: [NoteAttachment]) {
+            for row in attachments {
+                let key = ObjectIdentifier(row)
+                guard restorations[key] == nil else { continue }
+                let previousUpdatedAt = row.updatedAt, previousDeletedAt = row.deletedAt
+                restorations[key] = {
+                    guard row.updatedAt != previousUpdatedAt || row.deletedAt != previousDeletedAt else { return false }
+                    row.updatedAt = previousUpdatedAt
+                    row.deletedAt = previousDeletedAt
+                    return true
+                }
+            }
+        }
+
+        func capture(_ proposals: [NotePendingEdit]) {
+            for row in proposals {
+                let key = ObjectIdentifier(row)
+                guard restorations[key] == nil else { continue }
+                let needsReview = row.needsReview
+                restorations[key] = {
+                    guard row.needsReview != needsReview else { return false }
+                    row.needsReview = needsReview
+                    return true
+                }
+            }
+        }
+
+        func restore() -> Bool {
+            var changed = false
+            for restore in restorations.values where restore() { changed = true }
+            return changed
+        }
+    }
+
     @discardableResult
-    private func save() -> Bool {
+    func rollback(retaining edits: RetainedNoteEdits?) -> Bool {
+        context.rollback()
+        guard edits?.restore() == true else { return false }
+        // The restorative setters dirtied the old context. Never let a later
+        // successful save flush any of those values to disk.
+        context = Self.makeStoreContext(container)
+        return true
+    }
+
+    @discardableResult
+    private func save(retaining edits: RetainedNoteEdits? = nil) -> Bool {
         do {
             invalidateTagInventory(in: context)
             invalidateAttachmentProofs(in: context)
@@ -1608,7 +1716,7 @@ final class NoteStore: ObservableObject {
             let saveError = error is WorkspaceLegacyBridge.CommitHeld
                 ? "The save outcome is still being checked. This note is held."
                 : error.localizedDescription
-            context.rollback()
+            rollback(retaining: edits)
             tagInventoryDidRefresh()
             do {
                 try reloadModels()

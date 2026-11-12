@@ -458,8 +458,7 @@ final class AgentActions {
     }
 
     @discardableResult
-    func beginRequest(title: String) -> UUID {
-        let id = UUID()
+    func beginRequest(title: String, id: UUID = UUID()) -> UUID {
         journals[id] = Journal(changeSet: AgentChangeSet(id: id, title: title, pages: [], count: 0))
         requestModes[id] = .askFirst
         order.append(id)
@@ -469,6 +468,13 @@ final class AgentActions {
     func changeSet(for requestID: UUID) -> AgentChangeSet? {
         guard let set = journals[requestID]?.changeSet, set.count > 0 else { return nil }
         return set
+    }
+
+    /// Finished mutations saved to the independent Undo journal. The chat
+    /// runner uses these to recover receipts after a rejected thread write.
+    func durableChangeSets() -> [AgentChangeSet] {
+        guard journalURL != nil, journalWritable else { return [] }
+        return order.compactMap { changeSet(for: $0) }
     }
 
     /// `watching` comes from the host run, never from the model's JSON.

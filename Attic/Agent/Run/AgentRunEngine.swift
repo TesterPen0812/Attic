@@ -25,6 +25,7 @@ struct AgentRunMCPAddress: Sendable {
 @MainActor
 protocol AgentRunToolServing: AnyObject {
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress
+    func open(title: String, watching: Bool, requestID: UUID) async throws -> AgentRunMCPAddress
     func setWatching(_ watching: Bool)
     func setMode(_ mode: AgentChatMode)
     func pendingApprovals() -> [AgentApproval]
@@ -35,6 +36,9 @@ protocol AgentRunToolServing: AnyObject {
 }
 
 extension AgentRunToolServing {
+    func open(title: String, watching: Bool, requestID: UUID) async throws -> AgentRunMCPAddress {
+        try await open(title: title, watching: watching)
+    }
     func setWatching(_ watching: Bool) {}
     func setMode(_ mode: AgentChatMode) {}
     func pendingApprovals() -> [AgentApproval] { [] }
@@ -50,7 +54,7 @@ extension AgentRunToolServing {
 /// returns; a plain legacy MCPRequestHandler must never serve this run.
 @MainActor
 final class AgentRunMCPServer: AgentRunToolServing {
-    private let begin: @MainActor (String, Bool) async throws -> AgentRunMCPAddress
+    private let begin: @MainActor (String, Bool, UUID?) async throws -> AgentRunMCPAddress
     private let watchingChanged: @MainActor (Bool) -> Void
     private let modeChanged: @MainActor (AgentChatMode) -> Void
     private let approvals: @MainActor () -> [AgentApproval]
@@ -59,7 +63,7 @@ final class AgentRunMCPServer: AgentRunToolServing {
     private let end: @MainActor () -> Void
     private let waitForChanges: @MainActor () async -> AgentChangeSet?
 
-    init(begin: @escaping @MainActor (String, Bool) async throws -> AgentRunMCPAddress,
+    init(begin: @escaping @MainActor (String, Bool, UUID?) async throws -> AgentRunMCPAddress,
          watchingChanged: @escaping @MainActor (Bool) -> Void,
          modeChanged: @escaping @MainActor (AgentChatMode) -> Void = { _ in },
          approvals: @escaping @MainActor () -> [AgentApproval],
@@ -78,7 +82,10 @@ final class AgentRunMCPServer: AgentRunToolServing {
     }
 
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress {
-        try await begin(title, watching)
+        try await begin(title, watching, nil)
+    }
+    func open(title: String, watching: Bool, requestID: UUID) async throws -> AgentRunMCPAddress {
+        try await begin(title, watching, requestID)
     }
     func setWatching(_ watching: Bool) { watchingChanged(watching) }
     func setMode(_ mode: AgentChatMode) { modeChanged(mode) }
@@ -103,9 +110,9 @@ extension AgentRunMCPServer {
     static func live(server: AgentServer) -> AgentRunMCPServer {
         let current = LiveAgentRunToken()
         return AgentRunMCPServer(
-            begin: { title, watching in
+            begin: { title, watching, requestID in
                 current.finishedID = nil
-                let token = try server.beginAgentRun(title: title, watching: watching)
+                let token = try server.beginAgentRun(title: title, watching: watching, requestID: requestID)
                 current.value = token
                 do {
                     try server.setRunMode(current.mode, token: token)
@@ -266,6 +273,7 @@ private struct AgentChatHistoryStore {
 @MainActor
 final class AgentRunEngine: AgentRunning {
     var retainsThread: Bool { true }
+    static let journalSaveFailure = "The agent thread could not be saved."
     typealias HelperFactory = @MainActor () throws -> any AgentHelperTransmitting
     typealias ToolFactory = @MainActor () -> any AgentRunToolServing
 
@@ -275,12 +283,15 @@ final class AgentRunEngine: AgentRunning {
     private let makeTools: ToolFactory
     private let undoChanges: (@MainActor (UUID) async throws -> Void)?
     private let recoverUndo: @MainActor (UUID) -> Bool
+    private let recoveredChangeSets: @MainActor () -> [AgentChangeSet]
     private let describeContext: @MainActor (AgentRequestContext) -> String
     private let journalURL: URL
     private let history: AgentChatHistoryStore
     private let journalIssue: String?
 
     private var archive: AgentRunArchive
+    /// The most recent journal image proven durable by a successful atomic write.
+    private var lastPersistedArchive: AgentRunArchive
     /// New chat while a run was still ending: it is kept and cleared once it ends.
     private var forgetWhenEnded = false
     /// The current chat was reopened from history and has not sent since.
@@ -312,6 +323,7 @@ final class AgentRunEngine: AgentRunning {
         journalURL: URL? = nil,
         undo: (@MainActor (UUID) async throws -> Void)? = nil,
         recoverUndo: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        recoveredChangeSets: @escaping @MainActor () -> [AgentChangeSet] = { [] },
         describeContext: @escaping @MainActor (AgentRequestContext) -> String = AgentRunEngine.plainContext
     ) {
         self.selectedBackend = selectedBackend
@@ -320,6 +332,7 @@ final class AgentRunEngine: AgentRunning {
         makeTools = tools
         undoChanges = undo
         self.recoverUndo = recoverUndo
+        self.recoveredChangeSets = recoveredChangeSets
         self.describeContext = describeContext
         let resolvedJournalURL = journalURL ?? Self.defaultJournalURL
         self.journalURL = resolvedJournalURL
@@ -331,10 +344,13 @@ final class AgentRunEngine: AgentRunning {
         archive = loaded ?? AgentRunArchive()
         if let journalIssue {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: journalIssue))
-        } else if archive.activeRun != nil {
+        }
+        lastPersistedArchive = archive
+        if journalIssue == nil, let interruptedRun = archive.activeRun {
             archive.activeRun = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error",
                 text: "An agent run was interrupted. Review its changes before continuing."))
+            restoreMissingDurableReceipts(for: interruptedRun)
             _ = persist()
         }
     }
@@ -350,13 +366,20 @@ final class AgentRunEngine: AgentRunning {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return singleEvent(.failed("Write a message first."))
         }
-        self.watching = watching
         let described = context.isEmpty ? "" : describeContext(context)
         let prompt = described.isEmpty ? text : described + "\n\n" + text
+        let previousArchive = archive
         archive.updated = Date()
         archive.entries.append(AgentThreadEntry(id: UUID(), role: "user", text: text))
         let reply = AgentThreadEntry(id: UUID(), role: "assistant", text: "")
         archive.entries.append(reply)
+        let runID = UUID()
+        archive.activeRun = runID
+        guard persist() else {
+            archive = previousArchive
+            return singleEvent(.failed(Self.journalSaveFailure))
+        }
+        self.watching = watching
         activeReplyID = reply.id
         unflushedCharacters = 0
         currentEvents = []
@@ -365,14 +388,8 @@ final class AgentRunEngine: AgentRunning {
         resolvingActionApprovalIDs.removeAll()
         isRunning = true
         ending = false
-        let runID = UUID()
         currentRunID = runID
-        archive.activeRun = runID
         let stream = addSubscriber(replay: false)
-        guard persist() else {
-            endRun(.failed("The agent thread could not be saved."))
-            return stream
-        }
         let wasReopened = reopened
         reopened = false
         work = Task { [weak self] in await self?.run(title: text, prompt: prompt, id: runID, reopened: wasReopened) }
@@ -436,11 +453,15 @@ final class AgentRunEngine: AgentRunning {
             return
         }
         guard keepCurrentInHistory() else { return }
+        let previousArchive = archive
         archive = AgentRunArchive()
+        guard persist() else {
+            archive = previousArchive
+            return
+        }
         currentEvents = []
         activeReplyID = nil
         reopened = false
-        _ = persist()
     }
 
     func chats() -> [AgentChatSummary] {
@@ -496,7 +517,7 @@ final class AgentRunEngine: AgentRunning {
             }
             guard let tools else { throw AgentRunError.toolServer("Attic's tools are unavailable.") }
             tools.setMode(mode)
-            let address = try await tools.open(title: title, watching: watching)
+            let address = try await tools.open(title: title, watching: watching, requestID: runID)
             guard currentRunID == runID else { tools.close(); return }
             try Task.checkCancellation()
             approvalWatch = Task { [weak self] in
@@ -635,17 +656,45 @@ final class AgentRunEngine: AgentRunning {
 
     private func finishWith(_ event: AgentEvent) {
         guard isRunning else { return }
-        emit(event)
+        if case let .failed(message) = event {
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
+        }
+        archive.activeRun = nil
+        // A final streamed reply and its Undo receipt are not committed until
+        // this write succeeds. A rejected write must not leave phantom chat
+        // content visible or let the next save resurrect it.
+        let saved = persist()
+        let terminal: AgentEvent
+        if saved {
+            terminal = event
+        } else {
+            // The action layer has independently committed these Undo receipts.
+            // Even if the chat journal is unwritable, keep them visible and
+            // recoverable from that journal on a later app launch.
+            let receipts = archive.entries.filter { $0.changeSet != nil }
+            archive = lastPersistedArchive
+            var seen = Set(archive.entries.compactMap { $0.changeSet?.id })
+            archive.entries.append(contentsOf: receipts.filter {
+                guard let id = $0.changeSet?.id else { return false }
+                return seen.insert(id).inserted
+            })
+            if let runID = lastPersistedArchive.activeRun {
+                restoreMissingDurableReceipts(for: runID)
+            }
+            currentEvents = []
+            terminal = .failed(Self.journalSaveFailure)
+        }
+        currentEvents.append(terminal)
+        for subscriber in subscribers.values { subscriber.yield(terminal) }
         isRunning = false
         ending = false
         currentRunID = nil
         activeReplyID = nil
-        archive.activeRun = nil
-        _ = persist()
         completeSubscribers()
         work = nil
-        if forgetWhenEnded {
-            forgetWhenEnded = false
+        let shouldForget = saved && forgetWhenEnded
+        forgetWhenEnded = false
+        if shouldForget {
             forgetThread()
         }
     }
@@ -713,6 +762,24 @@ final class AgentRunEngine: AgentRunning {
         subscribers.removeAll()
     }
 
+    /// A completed action can be durable in the separate Undo journal even
+    /// when writing the conversation failed or the app was interrupted.
+    private func restoreMissingDurableReceipts(for requestID: UUID) {
+        // The existing activeRun UUID is also the action request/Undo receipt
+        // UUID. A repeated prompt must never claim a different run's action.
+        guard let recovered = recoveredChangeSets().first(where: { $0.id == requestID }) else { return }
+        var known = Set(archive.entries.compactMap { $0.changeSet?.id })
+        for chat in history.list() {
+            for receipt in history.load(chat.id)?.entries ?? [] {
+                if let id = receipt.changeSet?.id { known.insert(id) }
+            }
+        }
+        if known.insert(recovered.id).inserted {
+            archive.entries.append(AgentThreadEntry(id: UUID(), role: "receipt", text: "",
+                                                    changeSet: recovered))
+        }
+    }
+
     @discardableResult
     private func persist() -> Bool {
         guard journalIssue == nil else { return false }
@@ -720,6 +787,7 @@ final class AgentRunEngine: AgentRunning {
             let directory = journalURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try JSONEncoder().encode(archive).write(to: journalURL, options: .atomic)
+            lastPersistedArchive = archive
             return true
         } catch { return false }
     }

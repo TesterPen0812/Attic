@@ -735,6 +735,7 @@ final class AppCoordinator: ObservableObject {
                 }
             },
             recoverUndo: { [weak agentActions] in agentActions?.canRecoverUndo($0) == true },
+            recoveredChangeSets: { [weak agentActions] in agentActions?.durableChangeSets() ?? [] },
             describeContext: { [weak agentActions] in agentActions?.requestContext($0) ?? AgentRunEngine.plainContext($0) }
         )
         agentChat.connect(agentRunner)

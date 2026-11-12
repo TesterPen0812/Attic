@@ -57,9 +57,9 @@ final class AgentActionsMCP {
     }
 
     /// Called only by the trusted app/run coordinator; never exposed as MCP.
-    func beginRun(title: String, watching: Bool) -> String {
+    func beginRun(title: String, watching: Bool, requestID: UUID? = nil) -> String {
         let token = UUID().uuidString + UUID().uuidString
-        runs[token] = Run(requestID: actions.beginRequest(title: title), watching: watching)
+        runs[token] = Run(requestID: actions.beginRequest(title: title, id: requestID ?? UUID()), watching: watching)
         return token
     }
 

@@ -4,6 +4,342 @@ import XCTest
 
 final class NoteStoreTests: XCTestCase {
     @MainActor
+    func testDataSafetyRejectedProposalReplacementKeepsRetainedNoteAndPendingEdit() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Original")?.id)
+        let original = NoteDocument(blocks: [.text("Owner"), .text("Original")])
+        let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        let proposed = NoteDocument(blocks: [.text("Owner"), .text("Changed")])
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: proposed, agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("proposal fixture")
+        }
+        let pending = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        let signature = NoteProposalSignature(pending)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let beforeContent = retained.content
+        reject = true
+        guard case .failure = store.replaceWithProposal(pending.id, noteID: id, expectedRevision: token,
+                expectedSavedContent: beforeContent, expectedProposal: signature, preserving: original) else {
+            return XCTFail("a rejected replacement must fail")
+        }
+        XCTAssertEqual(retained.body, "Original", "failed proposal replacement cannot change a retained note")
+        XCTAssertEqual(retained.revisionToken, token)
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1, "failed replacement keeps the pending proposal")
+        reject = false
+        guard case .success = store.replaceWithProposal(pending.id, noteID: id, expectedRevision: token,
+                expectedSavedContent: beforeContent, expectedProposal: signature, preserving: original) else {
+            return XCTFail("a later valid replacement must succeed")
+        }
+        XCTAssertEqual(store.note(withID: id)?.body, "Changed")
+    }
+
+    @MainActor
+    func testDataSafetyRejectedMarkForReviewRestoresRetainedPendingEdit() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Original")?.id)
+        let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: NoteDocument(blocks: [.text("Owner"), .text("Proposed")]),
+                agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("proposal fixture")
+        }
+        let pending = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        // The owner makes a newer edit, so the pending proposal must be marked
+        // for review. Refusing that metadata save must restore the live row.
+        let edited = try XCTUnwrap(store.note(withID: id))
+        XCTAssertTrue(store.update(edited, body: "Owner edited"))
+        reject = true
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertFalse(pending.needsReview, "rejected review flag must not remain on a retained proposal")
+        reject = false
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertTrue(try XCTUnwrap(store.pendingEdits(noteID: id).first).needsReview)
+    }
+
+    @MainActor
+    func testDataSafetyRejectedDeletedNoteRestoreKeepsRetainedTombstone() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let note = try XCTUnwrap(store.create(title: "Deleted", body: "Keep"))
+        XCTAssertTrue(store.delete(note))
+        let retained = try XCTUnwrap(store.replicasIncludingDeleted(of: note.id).first)
+        XCTAssertNotNil(retained.deletedAt)
+        reject = true
+        XCTAssertFalse(store.restoreDeleted(noteID: note.id))
+        XCTAssertNotNil(retained.deletedAt, "failed restore must keep retained deletion date")
+        reject = false
+        XCTAssertTrue(store.restoreDeleted(noteID: note.id))
+        XCTAssertNotNil(store.note(withID: note.id))
+    }
+
+    @MainActor
+    func testDataSafetyRejectedDirectAgentDeleteKeepsRetainedAttribution() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Retain")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let token = retained.revisionToken
+        reject = true
+        guard case .failure = store.agentDelete(noteID: id, baseRevisionToken: token,
+                agentName: "Agent", disposition: .direct) else {
+            return XCTFail("a rejected agent deletion must report failure")
+        }
+        XCTAssertNil(retained.externalEditorName, "failed agent delete cannot leave false attribution")
+        XCTAssertNil(retained.deletedAt, "failed agent delete cannot hide a retained note")
+        reject = false
+        guard case .success(.applied) = store.agentDelete(noteID: id, baseRevisionToken: token,
+                agentName: "Agent", disposition: .direct) else {
+            return XCTFail("a later successful agent delete must work")
+        }
+        XCTAssertNil(store.note(withID: id))
+    }
+
+    @MainActor
+    func testDataSafetyRejectedPendingAgentApplyRestoresRetainedNote() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Original")?.id)
+        let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        let proposed = NoteDocument(blocks: [.text("Owner"), .text("Agent changed")])
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: proposed, agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("proposal fixture must be committed")
+        }
+        let retained = try XCTUnwrap(store.note(withID: id))
+        reject = true
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertEqual(retained.body, "Original", "failed pending edit must keep retained text")
+        XCTAssertNil(retained.externalEditorName)
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+        reject = false
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 1)
+        XCTAssertEqual(store.note(withID: id)?.body, "Agent changed")
+    }
+
+    @MainActor
+    func testDataSafetyFailedDirectAgentNoteWriteRestoresRetainedContentAndAttribution() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Original")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let token = retained.revisionToken
+        let updated = NoteDocument(blocks: [.text("Owner"), .text("Agent changed")])
+        reject = true
+        guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: updated, agentName: "Agent", disposition: .direct) else {
+            return XCTFail("a rejected agent note write must report failure")
+        }
+        XCTAssertEqual(retained.body, "Original", "rejected agent edit cannot alter a retained note")
+        XCTAssertEqual(retained.revisionToken, token)
+        XCTAssertNil(retained.externalEditorName, "rejected agent edit cannot leave ghost attribution")
+        reject = false
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: updated, agentName: "Agent", disposition: .direct) else {
+            return XCTFail("the next valid agent edit must succeed")
+        }
+        XCTAssertEqual(store.note(withID: id)?.body, "Agent changed")
+    }
+
+    @MainActor
+    func testDataSafetyFailedVersionRestoreRestoresRetainedDocumentAndNextSave() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Owner", body: "Current")?.id)
+        let current = try XCTUnwrap(store.note(withID: id))
+        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .pause,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Owner"), .text("Earlier")])),
+            contentFormat: NoteDocument.currentFormat, title: "Owner", body: "Earlier",
+            attachmentIDs: [], sourceRevisionID: current.revisionID)
+        store.modelContext.insert(version)
+        try store.modelContext.save()
+        store.refresh()
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let token = retained.revisionToken
+        reject = true
+        guard case .failure = store.restoreVersion(version.id, noteID: id) else {
+            return XCTFail("a rejected version restore must report failure")
+        }
+        XCTAssertEqual(retained.body, "Current", "a failed restore must leave the live note intact")
+        XCTAssertEqual(retained.revisionToken, token)
+        reject = false
+        guard case .success = store.restoreVersion(version.id, noteID: id) else {
+            return XCTFail("a later restore must still be permitted")
+        }
+        XCTAssertEqual(store.note(withID: id)?.body, "Earlier")
+    }
+
+    @MainActor
+    func testDataSafetyFailedPinAndAcknowledgementRestoreRetainedMetadata() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Pinned")?.id)
+        XCTAssertTrue(store.setPinned(true, noteID: id))
+        let retainedPin = try XCTUnwrap(store.note(withID: id))
+        reject = true
+        XCTAssertFalse(store.setPinned(false, noteID: id))
+        XCTAssertTrue(retainedPin.isPinned, "failed unpin must not alter the retained note")
+
+        let external = ModelContext(container)
+        let row = try XCTUnwrap(external.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        row.externalEditorName = "Agent"
+        row.externalEditedAt = Date(timeIntervalSince1970: 1_500_000_000)
+        try external.save()
+        store.refresh()
+        let retainedAttribution = try XCTUnwrap(store.note(withID: id))
+        XCTAssertFalse(store.acknowledgeExternalEdit(noteID: id))
+        XCTAssertEqual(retainedAttribution.externalEditorName, "Agent",
+                       "failed acknowledgement must retain outside-edit attribution")
+    }
+
+    @MainActor
+    func testDataSafetyFailedLegacyAttachmentRemoveRestoresRetainedRows() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Attachment owner")
+        seed.insert(note)
+        seed.insert(NoteAttachment(noteID: note.id, originalFilename: "proof.txt", byteCount: 1,
+            sortIndex: 0, contentDigest: String(repeating: "a", count: 64), payload: Data([1])))
+        try seed.save()
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let retainedNote = try XCTUnwrap(store.note(withID: note.id))
+        let retainedAttachment = try XCTUnwrap(store.attachments(for: note.id).first)
+        let beforeTimestamp = retainedNote.updatedAt
+        reject = true
+        XCTAssertFalse(store.removeAttachment(retainedAttachment))
+        XCTAssertEqual(retainedNote.updatedAt, beforeTimestamp,
+                       "failed removal must not change the retained note's timestamp")
+        XCTAssertNil(retainedAttachment.deletedAt, "failed removal must restore the retained attachment")
+        let durable = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).first)
+        XCTAssertNil(durable.deletedAt)
+    }
+
+    @MainActor
+    func testDataSafetyForeignContextImportRebindsBeforeNextNoteMutation() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "External import")?.id)
+        let stale = try XCTUnwrap(store.note(withID: id))
+        let external = ModelContext(container)
+        let imported = try XCTUnwrap(external.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        imported.tagsRaw = AtticTag.encode(["foreign"])
+        try external.save()
+        store.refresh()
+        XCTAssertEqual(store.note(withID: id)?.tags, ["foreign"])
+        XCTAssertFalse(store.note(withID: id) === stale, "an import must rebind presentation to a fresh context")
+        XCTAssertTrue(store.setTags(["owner"], for: stale))
+        let saved = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        XCTAssertEqual(saved.tags, ["owner"], "a mutation with an older handle must apply to current replicas")
+    }
+
+    @MainActor
+    func testDataSafetyFailedDocumentEditDoesNotChangeRetainedNote() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Safe", body: "Original")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        let originalRevision = retained.revisionID
+        reject = true
+        XCTAssertFalse(store.update(retained, body: "Must be discarded"))
+        XCTAssertEqual(retained.body, "Original", "a rejected document edit cannot change a retained row")
+        XCTAssertEqual(retained.revisionID, originalRevision)
+        reject = false
+        XCTAssertNotNil(store.create(title: "Successful later edit"))
+        let persisted = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        XCTAssertEqual(persisted.body, "Original")
+        XCTAssertEqual(persisted.revisionID, originalRevision)
+    }
+
+    @MainActor
+    func testDataSafetyFailedTagAndDeleteSaveDoNotMutateRetainedNote() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+            persist: { context in
+                if reject { throw Rejected.save }
+                try context.save()
+            }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = try XCTUnwrap(store.create(title: "Retain me")?.id)
+        let retained = try XCTUnwrap(store.note(withID: id))
+        reject = true
+        XCTAssertFalse(store.setTags(["injected"], for: retained))
+        XCTAssertEqual(retained.tags, [], "failed tag save must restore the retained Notes row")
+        XCTAssertFalse(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertNil(retained.deletedAt, "failed deletion must restore retained deletion state")
+        XCTAssertEqual(store.note(withID: id)?.tags, [])
+        XCTAssertNotNil(store.note(withID: id))
+        reject = false
+        XCTAssertNotNil(store.create(title: "Later successful save"))
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(rows.first(where: { $0.id == id })?.tags, [])
+        XCTAssertNil(rows.first(where: { $0.id == id })?.deletedAt)
+    }
+
+    @MainActor
     func testB04SupersededReconciliationLogsCancellationAndKeepsNewSignature() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))

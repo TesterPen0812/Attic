@@ -124,6 +124,435 @@ final class AgentRunHostedTests: XCTestCase {
         #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""# + text + #""}}}"#
     }
 
+    func testFailedFirstThreadSaveRollsBackAndNextSaveCannotResurrectMessage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-agent-failed-save-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blockedParent = root.appendingPathComponent("blocked")
+        try Data("not a directory".utf8).write(to: blockedParent)
+        let journal = blockedParent.appendingPathComponent("journal.json")
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+
+        _ = runner.send("Should never be recorded", watching: false)
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertTrue(runner.threadSnapshot().entries.isEmpty, "a failed save must restore the pre-send thread")
+        XCTAssertTrue(runner.chats().isEmpty)
+
+        try FileManager.default.removeItem(at: blockedParent)
+        try FileManager.default.createDirectory(at: blockedParent, withIntermediateDirectories: true)
+        _ = runner.send("Only durable message", watching: false)
+        await wait { !helper.inputs.isEmpty }
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let users = runner.threadSnapshot().entries.filter { $0.role == "user" }.map(\.text)
+        XCTAssertEqual(users, ["Only durable message"])
+        let reopened = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: journal)
+        XCTAssertEqual(reopened.threadSnapshot().entries.filter { $0.role == "user" }.map(\.text), users)
+    }
+
+    func testFailedForgetThreadSaveKeepsCurrentChatVisibleAndDurable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-agent-failed-forget-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("thread.json")
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+        _ = runner.send("Keep this conversation", watching: false)
+        await wait { !helper.inputs.isEmpty }
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let before = runner.threadSnapshot().entries
+        let persisted = try Data(contentsOf: journal)
+
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("busy".utf8).write(to: journal.appendingPathComponent("blocker"))
+        runner.forgetThread()
+        XCTAssertEqual(runner.threadSnapshot().entries.map(\.id), before.map(\.id),
+                       "failing to persist the new empty thread must not hide the original")
+
+        try FileManager.default.removeItem(at: journal)
+        try persisted.write(to: journal, options: .atomic)
+        let reopened = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: journal)
+        XCTAssertEqual(reopened.threadSnapshot().entries.map(\.id), before.map(\.id))
+    }
+
+    func testFailedFinalAgentJournalWriteRestoresLastDurableReply() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-agent-failed-final-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("journal.json")
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+        _ = runner.send("Durable user prompt", watching: true)
+        await wait { !helper.inputs.isEmpty }
+        let persisted = try Data(contentsOf: journal)
+        helper.emitLine(Self.text("Uncommitted reply"))
+        await wait { runner.threadSnapshot().entries.last?.text == "Uncommitted reply" }
+
+        // The initial journal write succeeded; the completion write cannot.
+        // A later success must never resurrect a reply which was not saved.
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("block".utf8).write(to: journal.appendingPathComponent("occupant"))
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        XCTAssertEqual(runner.threadSnapshot().entries.last?.text, "",
+                       "the live thread must revert to its last durable checkpoint")
+        XCTAssertTrue(runner.threadSnapshot().events.contains { if case .failed = $0 { return true }; return false },
+                      "a journal failure must be communicated to the owner")
+
+        try FileManager.default.removeItem(at: journal)
+        try persisted.write(to: journal, options: .atomic)
+        let reopened = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() }, journalURL: journal)
+        XCTAssertEqual(reopened.threadSnapshot().entries.first?.text, "Durable user prompt")
+        XCTAssertEqual(reopened.threadSnapshot().entries[1].text, "")
+    }
+
+    func testDataSafetyRejectedFirstSendKeepsDraftAndDoesNotShowPhantomQuestion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-rejected-send-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blocker = root.appendingPathComponent("blocked")
+        try Data("file".utf8).write(to: blocker)
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() },
+                                    journalURL: blocker.appendingPathComponent("chat.json"))
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Keep this unsent question"
+        chat.send()
+        await wait { !chat.isBusy }
+
+        XCTAssertEqual(chat.draft, "Keep this unsent question")
+        XCTAssertFalse(chat.entries.contains { if case .asked = $0.content { return true }; return false },
+                       "a rejected send must not remain visible as a submitted question")
+        XCTAssertTrue(chat.entries.contains { if case let .note(text) = $0.content {
+            return text.contains("could not be saved")
+        }; return false }, "the owner must see why the send was rejected")
+        XCTAssertTrue(runner.threadSnapshot().entries.isEmpty)
+        XCTAssertTrue(helper.inputs.isEmpty)
+    }
+
+    func testDataSafetyRejectedNewChatKeepsVisibleConversation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-rejected-new-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+        _ = runner.send("Keep the original chat", watching: false)
+        await wait { !helper.inputs.isEmpty }
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: journal.appendingPathComponent("blocker"))
+        chat.newChat()
+        XCTAssertTrue(chat.entries.contains { if case .asked("Keep the original chat") = $0.content {
+            return true
+        }; return false }, "the UI must retain the active conversation when clearing it fails")
+        XCTAssertEqual(runner.threadSnapshot().entries.first?.text, "Keep the original chat")
+    }
+
+    func testDataSafetyRejectedFinalSaveReconcilesVisibleReply() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-rejected-final-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Saved question"
+        chat.send()
+        await wait { !helper.inputs.isEmpty }
+        helper.emitLine(Self.text("An unsaved answer"))
+        await wait { chat.entries.contains { if case let .reply(reply) = $0.content {
+            return reply.raw.contains("An unsaved answer")
+        }; return false } }
+
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: journal.appendingPathComponent("blocker"))
+        helper.emitLine(Self.done)
+        await wait { !chat.isBusy }
+        XCTAssertFalse(chat.entries.contains { if case let .reply(reply) = $0.content {
+            return reply.raw.contains("An unsaved answer")
+        }; return false }, "rejected streamed text must not remain as a phantom saved answer")
+        XCTAssertTrue(chat.entries.contains { if case .asked("Saved question") = $0.content {
+            return true
+        }; return false })
+        XCTAssertTrue(chat.entries.contains { if case let .note(text) = $0.content {
+            return text.contains("could not be saved")
+        }; return false })
+    }
+
+    func testDataSafetyFailedChatJournalRetainsCommittedActionReceiptInMemory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-receipt-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let set = AgentChangeSet(id: UUID(), title: "Edited a task", pages: [.tasks], count: 1)
+        tools.change = set
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journal,
+                                    undo: { _ in }, recoverUndo: { $0 == set.id })
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Change the task"
+        chat.send()
+        await wait { !helper.inputs.isEmpty }
+
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: journal.appendingPathComponent("blocker"))
+        helper.emitLine(Self.done)
+        await wait { !chat.isBusy }
+        XCTAssertTrue(runner.threadSnapshot().entries.contains { $0.changeSet?.id == set.id },
+                      "a completed action must remain accessible while its separate Undo journal survives")
+        XCTAssertTrue(chat.entries.contains { if case let .changes(changes) = $0.content {
+            return changes.set.id == set.id
+        }; return false }, "the owner must still see the committed action and its Undo control")
+    }
+
+    func testDataSafetyIndependentUndoJournalRestoresReceiptAfterRestart() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-recovered-receipt-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chatURL = root.appendingPathComponent("chat.json")
+        let undoURL = root.appendingPathComponent("durable-undo-fixture.json")
+        let readUndoJournal = { () -> [AgentChangeSet] in
+            guard let data = try? Data(contentsOf: undoURL) else { return [] }
+            return (try? JSONDecoder().decode([AgentChangeSet].self, from: data)) ?? []
+        }
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: chatURL,
+                                    undo: { _ in }, recoverUndo: { _ in true },
+                                    recoveredChangeSets: readUndoJournal)
+        _ = runner.send("Change the task", watching: false)
+        await wait { !helper.inputs.isEmpty }
+        let originalChat = try Data(contentsOf: chatURL)
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: originalChat) as? [String: Any])
+        let requestID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(raw["activeRun"] as? String)))
+        let change = AgentChangeSet(id: requestID, title: "Change the task", pages: [.tasks], count: 1)
+        tools.change = change
+        try JSONEncoder().encode([change]).write(to: undoURL, options: .atomic)
+        try FileManager.default.removeItem(at: chatURL)
+        try FileManager.default.createDirectory(at: chatURL, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: chatURL.appendingPathComponent("blocker"))
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+
+        // The independently durable action outlived the rejected chat write.
+        try FileManager.default.removeItem(at: chatURL)
+        try originalChat.write(to: chatURL, options: .atomic)
+        let relaunched = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() },
+                                        journalURL: chatURL, recoverUndo: { $0 == change.id },
+                                        recoveredChangeSets: readUndoJournal)
+        XCTAssertEqual(relaunched.threadSnapshot().entries.filter { $0.changeSet?.id == change.id }.count, 1)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(relaunched)
+        XCTAssertTrue(chat.entries.contains { if case let .changes(changes) = $0.content {
+            return changes.set.id == change.id
+        }; return false })
+        let twice = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() },
+                                   journalURL: chatURL, recoverUndo: { $0 == change.id },
+                                   recoveredChangeSets: readUndoJournal)
+        XCTAssertEqual(twice.threadSnapshot().entries.filter { $0.changeSet?.id == change.id }.count, 1,
+                       "recovery must not duplicate the same physical action receipt")
+    }
+
+    func testDataSafetyDeferredNewChatFailureRestoresOldThreadAndQueuedDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-deferred-forget-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chatURL = root.appendingPathComponent("chat.json")
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: chatURL)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Original question"
+        chat.send()
+        await wait { !helper.inputs.isEmpty }
+        chat.newChat()
+        chat.attach(AgentTarget(page: .tasks, itemID: UUID(), title: "Queued context"))
+        chat.draft = "Next question"
+        chat.send()
+
+        try FileManager.default.removeItem(at: chatURL)
+        try FileManager.default.createDirectory(at: chatURL, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: chatURL.appendingPathComponent("blocker"))
+        tools.releaseDrain()
+        await wait { !runner.threadSnapshot().isRunning }
+        await wait { chat.entries.contains { if case .asked("Original question") = $0.content {
+            return true
+        }; return false } }
+        XCTAssertEqual(chat.draft, "Next question", "a queued question must not be sent into the old thread")
+        XCTAssertFalse(chat.isBusy, "after a rejected transition, the composer must accept a retry")
+        XCTAssertEqual(chat.attachments.map(\.name), ["Queued context"],
+                       "a queued retry must keep the attachments selected with the question")
+        XCTAssertEqual(runner.threadSnapshot().entries.filter { $0.role == "user" }.map(\.text), ["Original question"])
+    }
+
+    func testDataSafetyDeferredSendFailurePreservesLaterComposerInput() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-queued-edit-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: journal)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Original question"
+        chat.send()
+        await wait { !helper.inputs.isEmpty }
+        chat.newChat()
+        chat.attach(AgentTarget(page: .tasks, itemID: UUID(), title: "Queued attachment"))
+        chat.draft = "Queued question"
+        chat.send()
+        chat.attach(AgentTarget(page: .notes, itemID: UUID(), title: "Later attachment"))
+        chat.draft = "Typed after queue"
+
+        try FileManager.default.removeItem(at: journal)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("occupied".utf8).write(to: journal.appendingPathComponent("blocker"))
+        tools.releaseDrain()
+        await wait { !runner.threadSnapshot().isRunning }
+        await wait { !chat.isBusy }
+
+        XCTAssertEqual(chat.draft, "Typed after queue", "newer owner typing must survive the failed transition")
+        XCTAssertEqual(chat.attachments.map(\.name), ["Later attachment"],
+                       "newer attachments must survive the failed queued request")
+        XCTAssertTrue(chat.entries.contains { if case let .note(text) = $0.content {
+            return text.contains("Queued question") && text.contains("not sent")
+        }; return false }, "the earlier unsent question must remain visible for manual recovery")
+    }
+
+    func testDataSafetyDeferredSendSuccessPreservesLaterComposerInput() async throws {
+        let url = journalURL()
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: {
+            let helper = FakeRunHelper()
+            helpers.append(helper)
+            return helper
+        }, tools: { FakeRunTools() }, journalURL: url)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "First question"
+        chat.send()
+        await wait { helpers.count == 1 && !helpers[0].inputs.isEmpty }
+
+        chat.newChat()
+        chat.attach(AgentTarget(page: .tasks, itemID: UUID(), title: "Queued attachment"))
+        chat.draft = "Queued question"
+        chat.send()
+        chat.attach(AgentTarget(page: .notes, itemID: UUID(), title: "Later attachment"))
+        chat.draft = "Later local draft"
+
+        await wait { helpers.count >= 2 && !helpers[1].inputs.isEmpty }
+        XCTAssertEqual(runner.threadSnapshot().entries.filter { $0.role == "user" }.map(\.text),
+                       ["Queued question"], "the accepted queued message must start a fresh conversation")
+        XCTAssertEqual(chat.draft, "Later local draft", "the queued send must not clear subsequent typing")
+        XCTAssertEqual(chat.attachments.map(\.name), ["Later attachment"],
+                       "the queued send must not consume attachments selected afterward")
+        helpers[1].emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+    }
+
+    func testDataSafetyDamagedAgentJournalIsPreservedInsteadOfOverwritten() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-damaged-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let damaged = Data(#"{"activeRun": "broken", "entries": ["#.utf8)
+        try damaged.write(to: journal, options: .atomic)
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journal)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Do not overwrite the damaged journal"
+        chat.send()
+        await wait { !chat.isBusy }
+
+        XCTAssertEqual(try Data(contentsOf: journal), damaged,
+                       "no future send may replace an unreadable owner conversation")
+        XCTAssertEqual(chat.draft, "Do not overwrite the damaged journal")
+        XCTAssertTrue(helper.inputs.isEmpty)
+        runner.forgetThread()
+        XCTAssertEqual(try Data(contentsOf: journal), damaged)
+    }
+
+    func testDataSafetyInterruptedChatDoesNotClaimUnrelatedDurableAction() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-unrelated-action-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let ownerPrompt = "Current unfinished request"
+        let unrelated = AgentChangeSet(id: UUID(), title: "Another request", pages: [.notes], count: 1)
+        let interrupted: [String: Any] = [
+            "id": UUID().uuidString, "activeRun": UUID().uuidString,
+            "entries": [["id": UUID().uuidString, "role": "user", "text": ownerPrompt]]
+        ]
+        try JSONSerialization.data(withJSONObject: interrupted).write(to: journal, options: .atomic)
+        let recovered = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() },
+                                       journalURL: journal, recoveredChangeSets: { [unrelated] })
+        XCTAssertEqual(recovered.threadSnapshot().entries.first?.text, ownerPrompt)
+        XCTAssertFalse(recovered.threadSnapshot().entries.contains { $0.changeSet?.id == unrelated.id },
+                       "another agent's durable receipt must not be attributed to this chat")
+    }
+
+    func testDataSafetyRepeatedPromptCannotRecoverAnOlderRunReceipt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-same-prompt-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = root.appendingPathComponent("chat.json")
+        let interruptedID = UUID()
+        let earlierAction = AgentChangeSet(id: UUID(), title: "Repeat this request", pages: [.tasks], count: 1)
+        let journalImage: [String: Any] = [
+            "id": UUID().uuidString, "activeRun": interruptedID.uuidString,
+            "entries": [["id": UUID().uuidString, "role": "user", "text": "Repeat this request"]]
+        ]
+        try JSONSerialization.data(withJSONObject: journalImage).write(to: journal, options: .atomic)
+
+        let restarted = AgentRunEngine(helper: { FakeRunHelper() }, tools: { FakeRunTools() },
+                                       journalURL: journal, recoveredChangeSets: { [earlierAction] })
+        XCTAssertFalse(restarted.threadSnapshot().entries.contains { $0.changeSet?.id == earlierAction.id },
+                       "an older identical prompt must not be given the interrupted run's Undo control")
+    }
+
+    func testDataSafetyAgentActionRequestUsesPersistedChatRunID() async throws {
+        let url = journalURL()
+        let helper = FakeRunHelper()
+        let tools = FakeRunTools()
+        let runner = AgentRunEngine(helper: { helper }, tools: { tools }, journalURL: url)
+        _ = runner.send("A new request", watching: false)
+        await wait { !helper.inputs.isEmpty }
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let activeID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(raw["activeRun"] as? String)))
+        XCTAssertEqual(tools.requestID, activeID, "Undo and chat journaling must refer to the same request UUID")
+        runner.cancel()
+    }
+
     func testChatsAreKeptListedReopenedAndSurviveRelaunch() async {
         let url = journalURL()
         var helpers: [FakeRunHelper] = []
@@ -539,12 +968,17 @@ private final class FakeRunTools: AgentRunToolServing {
     var watchingHistory: [Bool] = []
     var approval: AgentApproval?
     var change: AgentChangeSet?
+    var requestID: UUID?
     var resolved: [UUID: Bool] = [:]
     var holdDrain = false
     private var drainWaiter: CheckedContinuation<Void, Never>?
     func open(title: String, watching: Bool) async throws -> AgentRunMCPAddress {
         watchingHistory.append(watching)
         return AgentRunMCPAddress(url: "http://127.0.0.1:4400/mcp", token: String(repeating: "a", count: 43))
+    }
+    func open(title: String, watching: Bool, requestID: UUID) async throws -> AgentRunMCPAddress {
+        self.requestID = requestID
+        return try await open(title: title, watching: watching)
     }
     func setWatching(_ watching: Bool) { watchingHistory.append(watching) }
     func pendingApprovals() -> [AgentApproval] { approval.map { [$0] } ?? [] }

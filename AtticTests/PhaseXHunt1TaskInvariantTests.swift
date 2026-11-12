@@ -4,6 +4,121 @@ import XCTest
 
 @MainActor
 final class PhaseXHunt1TaskInvariantTests: XCTestCase {
+    func testDataSafetyTimeZoneChangeReevaluatesCleanupDayWithoutLoggingTwice() throws {
+        let formatter = ISO8601DateFormatter()
+        let now = try XCTUnwrap(formatter.date(from: "2026-11-12T01:00:00Z"))
+        let completed = try XCTUnwrap(formatter.date(from: "2026-11-11T20:00:00Z"))
+        let store = try makeTestStore(now: { now })
+        let seed = ModelContext(store.container)
+        let task = TaskItem(title: "Local boundary", status: .done, completedAt: completed)
+        seed.insert(task)
+        try seed.save()
+        store.refresh()
+        var zone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let cleanup = DailyCleanupService(store: store, now: { now }, calendar: {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return calendar
+        })
+        XCTAssertEqual(cleanup.performCleanup(), 0, "the task was completed today in New York")
+        zone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        XCTAssertEqual(cleanup.performCleanup(), 1, "the same instant was completed yesterday in London")
+        zone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        XCTAssertEqual(cleanup.performCleanup(), 0)
+        let replicas = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(replicas.filter { $0.id == task.id && $0.doneLoggedAt != nil }.count, 1)
+    }
+
+    func testDataSafetyFailedDeleteAndDoneCleanupRestoreRetainedTask() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let clock = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = try makeTestStore(now: { clock }, persist: { context in
+            if reject { throw Rejected.save }
+            try context.save()
+        })
+        let toDelete = try XCTUnwrap(store.create(title: "Keep this") )
+        let toLog = try XCTUnwrap(store.create(title: "Keep completed"))
+        XCTAssertTrue(store.markDone(toLog))
+        let retainedDelete = try XCTUnwrap(store.task(withID: toDelete.id))
+        let retainedDone = try XCTUnwrap(store.task(withID: toLog.id))
+        reject = true
+        XCTAssertFalse(store.delete(retainedDelete))
+        XCTAssertNil(retainedDelete.deletedAt, "failed deletion must restore the original row")
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: clock.addingTimeInterval(60)), 0)
+        XCTAssertNil(retainedDone.doneLoggedAt, "failed cleanup must restore the original row")
+        XCTAssertEqual(store.task(withID: toLog.id)?.status, .done)
+        let durable = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(durable.allSatisfy { $0.deletedAt == nil && $0.doneLoggedAt == nil })
+        reject = false
+        XCTAssertNotNil(store.create(title: "Next saved task"))
+        let after = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(after.filter { $0.id == toDelete.id || $0.id == toLog.id }
+            .allSatisfy { $0.deletedAt == nil && $0.doneLoggedAt == nil })
+    }
+
+    func testDataSafetyFailedFamilyCompletionAndSubtaskMoveRestoreRetainedModels() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let store = try makeTestStore(persist: { context in
+            if reject { throw Rejected.save }
+            try context.save()
+        })
+        let parentID = try XCTUnwrap(store.create(title: "Parent")?.id)
+        let firstID = try XCTUnwrap(store.create(title: "First", parentID: parentID)?.id)
+        let secondID = try XCTUnwrap(store.create(title: "Second", parentID: parentID)?.id)
+        let parent = try XCTUnwrap(store.task(withID: parentID))
+        let first = try XCTUnwrap(store.task(withID: firstID))
+        let beforeOrder = first.manualOrder
+        reject = true
+
+        XCTAssertFalse(store.completeFamily(taskID: parentID))
+        XCTAssertEqual(parent.status, .todo, "failed completion must not mutate a retained UI row")
+        XCTAssertEqual(first.status, .todo, "failed family completion must not mutate a retained subtask")
+        XCTAssertTrue(try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+            .allSatisfy { $0.status == .todo && $0.completedAt == nil })
+
+        XCTAssertFalse(store.moveSubtask(taskID: firstID, by: 1))
+        XCTAssertEqual(first.manualOrder, beforeOrder, "failed reorder must not mutate a retained subtask")
+        reject = false
+        XCTAssertTrue(store.moveSubtask(taskID: firstID, by: 1))
+        XCTAssertEqual(store.subtasks(of: parentID).map(\.id), [secondID, firstID])
+        let persisted = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(persisted.allSatisfy { $0.status == .todo && $0.completedAt == nil })
+    }
+
+    func testDataSafetyFailedTaskReordersKeepRetainedOrders() throws {
+        enum Rejected: Error { case save }
+        var reject = false
+        let store = try makeTestStore(persist: { context in
+            if reject { throw Rejected.save }
+            try context.save()
+        })
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let a = try XCTUnwrap(store.create(title: "First", parentID: parent.id))
+        _ = try XCTUnwrap(store.create(title: "Second", parentID: parent.id))
+        let retainedChild = try XCTUnwrap(store.task(withID: a.id))
+        let beforeChildOrder = retainedChild.manualOrder
+        reject = true
+        XCTAssertFalse(store.moveSubtask(taskID: a.id, by: 1))
+        XCTAssertEqual(retainedChild.manualOrder, beforeChildOrder,
+                       "failed subtask move must roll back the retained SwiftData model")
+
+        reject = false
+        let one = try XCTUnwrap(store.create(title: "Standalone one"))
+        let two = try XCTUnwrap(store.create(title: "Standalone two"))
+        let retained = try XCTUnwrap(store.task(withID: one.id))
+        let originalOrder = retained.manualOrder
+        let destination = store.orderGroup(of: retained).firstIndex(where: { $0.id == one.id }) == 0 ? 1 : 0
+        reject = true
+        XCTAssertFalse(store.move(taskID: one.id, toIndex: destination))
+        XCTAssertEqual(retained.manualOrder, originalOrder,
+                       "failed task move must roll back the retained SwiftData model")
+        let fresh = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(fresh.first { $0.id == one.id }?.manualOrder, originalOrder)
+        XCTAssertNotNil(fresh.first { $0.id == two.id })
+    }
+
     func testStableReorderStaysInCompletionGroupAndSubtasksFollowParent() throws {
         let store = try makeTestStore()
         let parent = try XCTUnwrap(store.create(title: "Parent"))
