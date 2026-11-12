@@ -240,6 +240,7 @@ struct CalendarPage: View {
                 CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
                                   rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
                                   onSelectDay: { day in afterClosingEvent { model.select(day) } })
+                    .equatable()
             }
             if snapshot.showsNoMatches {
                 Text("No matches")
