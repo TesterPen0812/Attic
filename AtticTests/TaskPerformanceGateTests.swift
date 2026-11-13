@@ -406,6 +406,41 @@ final class TaskPerformanceGateTests: XCTestCase {
         print("ATTIC_INTEGRATION_COST status-toggle median_ms=\(median)")
     }
 
+    /// A Now/Later tag edit must touch the edited root, not the 5,000
+    /// unrelated Done entries or every indexed task. Exercise the real
+    /// durable save 120 times on the Tasks scale fixture.
+    func testScaleTagEditsOnlyVisitChangedSearchRoots() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedScale(in: container)
+        let store = TaskStore(container: container)
+        XCTAssertEqual(store.indexedDoneLogCount(), 5_000)
+        let targets = Array(store.tasks.filter { $0.tags.contains("work") }.prefix(120))
+        XCTAssertEqual(targets.count, 120)
+        #if DEBUG
+        store.resetSearchIndexVisitCounters()
+        #endif
+        var milliseconds: [Double] = []
+        for task in targets {
+            let start = ContinuousClock.now
+            XCTAssertTrue(store.update(task, tags: ["home", "stress"]))
+            let duration = start.duration(to: .now).components
+            milliseconds.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+            XCTAssertTrue(store.matchesItemSearch(task, query: "#stress"))
+        }
+        let sorted = milliseconds.sorted()
+        let first = milliseconds.prefix(20).reduce(0, +) / 20
+        let last = milliseconds.suffix(20).reduce(0, +) / 20
+        print("PERF_TASKS_SCALE_EDIT n=\(milliseconds.count) median_ms=\(sorted[60]) p95_ms=\(sorted[114]) max_ms=\(sorted.last!) first20_mean_ms=\(first) last20_mean_ms=\(last)")
+        #if DEBUG
+        print("PERF_TASKS_SCALE_INDEX part_visits=\(store.itemSearchIndexPartVisits) done_membership_visits=\(store.doneSearchMembershipVisits)")
+        XCTAssertLessThanOrEqual(store.itemSearchIndexPartVisits, targets.count * 3,
+                                 "A single tag edit must not visit unrelated task search parts")
+        XCTAssertLessThanOrEqual(store.doneSearchMembershipVisits, targets.count,
+                                 "An open-task edit must not scan the Done search index")
+        #endif
+        XCTAssertEqual(store.indexedDoneLogCount(), 5_000)
+    }
+
     /// The audit measured 12.8 ms per 300-row × 6-read pass with a fresh
     /// JSON decode on every read. Compare the memoized path against that same
     /// decode-heavy work on the current runner instead of using a sub-3 ms
