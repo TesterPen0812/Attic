@@ -19,11 +19,28 @@ Target: `phase-3/pd-batch17` at `d503231d6d33459e09b158d4e7f34d7ecbfd39cd`; comp
 - Confidence: high for call chain and per-change work, medium for contribution; likely smaller than large hidden-page layout until profiled.
 - Mac measurement: signpost `windowDidResize`, island layout, each window `setFrame`, stand-in placement, island root/body, Core Animation commits and GPU offscreen passes. Compare with instrumented island updates suppressed in a disposable diagnostic build, not a product recommendation. Guard test: 100 synthetic resize callbacks in one frame produce at most one final island/label placement, no frame drift, and correct final geometry for all corners/spots.
 
+### DP-3 (P1, suspect): Notes table remeasures every cell as width changes
+- `Attic/Notes/Engine/NoteTableView.swift:184–199, 328–342` → `Attic/Notes/Engine/NoteTableAttachment.swift:58–87` → `Attic/Notes/Engine/NoteTableLayout.swift:121–135`.
+- Trigger: resizing a panel that has a mounted Notes editor containing a table. A table view width change over 0.25 pt invalidates the attachment layout, then `refreshLayout()` requests the new width. A cache miss creates per-cell arrays and `make` visits natural width, minimum width and wrapped height for cells. Text caches can reduce actual text measurement, but new widths can miss height entries. This is a resize-specific path, distinct from PF-11's cell-edit cost. Whether a hidden editor is laid out under the already-known host behavior must be measured.
+- Scaling: O(rows × columns) visits and array slots per invalidated table width, plus text measurement for cache misses; multiplied by mounted table attachments and distinct widths. Not all visits necessarily invoke expensive text measurement.
+- Smallest fix: preserve natural/minimum per-cell metrics across width-only changes, compute only width-dependent height where its effective column width changed, and coalesce width updates per display frame. Preserve exact wrapping, geometry, selection and accessibility; do not defer visible geometry past its presented frame.
+- Confidence: high for explicit loops and cache invalidation, medium for frequency and perceptible cost under AppKit.
+- Mac measurement: signpost `setFrameSize`, attachment `layout(width:)`, `NoteTableLayout.make`, and text-cache hit/miss/height measurements; count cell visits per resize frame for 10×5, 100×20 and multiple tables, with Notes visible versus retained hidden and AX on/off. Guard test: unchanged widths perform no full grid recompute; changed widths recompute only affected columns' height metrics and preserve exact row heights and hit geometry.
+
+### DP-4 (P2, stress-scale suspect): Draw recalculates full-scene coverage on every board frame-size call
+- `Attic/Draw/Engine/DrawBoardView.swift:161–167, 191–210, 227–257, 262–274`.
+- Trigger: resize while Draw's board view receives `setFrameSize`. It invalidates detail, repositions layers and calls `requestRaster`; before comparing `requestedKey`, `currentKey()` calls `rasterCoverage()`, which unions `model.objects` and may also scan moved/replaced objects. A matching key prevents a new world raster, so it would be incorrect to claim every size step rerenders the whole scene. Detail cancellation/rescheduling may still occur on this path when higher-density detail is needed (285–304).
+- Scaling: O(number of scene objects) main-thread bounds work per size callback, plus selection/layer geometry; a detail request may be restarted after a 35 ms settling delay. Bitmap work depends on key changes and renderer cancellation, not proven per step.
+- Smallest fix: cache scene coverage by content revision and movement/replacement identity; reuse on a viewport-size-only change. Coalesce detail settling without changing displayed content or input mapping. Preserve full-scene coverage and cancellation safety.
+- Confidence: high for repeated `currentKey` traversal, medium for its frequency and effect; hidden board behavior and `model.isShown` guard matter.
+- Mac measurement: signpost frame-size, coverage computation, object visits, world/detail raster requested/completed/cancelled and frame time; resize a board with 10, 1,000 and 10,000 objects, visible and retained hidden. Guard test: repeated frame sizes with unchanged content visit no scene objects after first cached coverage, and mutation/move invalidates it correctly.
+
 ### O-1 ranking and open questions
 1. Known single-host layout across retained pages: already assigned; no new DP finding. It is likely a major contributor but no resize measurement isolates it.
 2. DP-1 root size publication/invalidation, coupled with actual reflow: likely material, unmeasured.
-3. DP-2 island native windows and glass/mask work: plausible additive cost, unmeasured.
-Fix/measure in that order, preserving geometry and visuals. Trace expensive Notes text/table width reflow, Draw and Calendar geometry, AX frame propagation and whether floating-panel interactions add more work before finalizing O-1. None of these suspects is assigned a percentage or independent millisecond cost.
+3. DP-3 table remeasurement when a large table is mounted; DP-4 Draw coverage when a large scene is mounted. Relative order depends on page and data, unmeasured.
+4. DP-2 island native windows and glass/mask work: plausible additive cost, unmeasured.
+Fix/measure in that order, preserving geometry and visuals. Further trace Notes text reflow, Calendar geometry, AX frame propagation and floating-panel interaction before finalizing O-1. None of these suspects is assigned a percentage or independent millisecond cost.
 
 ## O-2: task scrolling
 Not yet reviewed.
@@ -35,7 +52,7 @@ The `0261cd21` comparison was confirmed and its task row modifier changes `.focu
 Not yet reviewed. PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 2 static resize suspects; neither is measured on the owner's Mac.
+- DP findings: 4 static resize suspects; neither is measured on the owner's Mac.
 - O-2, O-3 and whole-app top 15 are not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Stopped after initial O-1 shell/island tracing; remaining O-1 subpaths and all subsequent areas still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell, island, table and Draw tracing; remaining O-1 subpaths and all subsequent areas still need review. Continue rather than treat this checkpoint as a final audit.
