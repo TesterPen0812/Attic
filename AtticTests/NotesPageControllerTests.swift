@@ -3850,4 +3850,107 @@ extension RoundPRAMarkdownTests {
         }
     }
 }
-#endif
+    #endif
+
+/// Recovery publication is secondary to the committed checkpoint. A failed
+/// directory inventory must never strand the live writer's ownership claim.
+@MainActor
+extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
+    private final class DS8InventoryFault: FileManager, @unchecked Sendable {
+        private let lock = NSLock()
+        private let root: URL
+        private let checkpoint: URL
+        private var failures = 0
+        private var thrown = 0
+        private var skipPostcommitCollector = false
+
+        var injectedFailures: Int { lock.withLock { thrown } }
+        var pendingFailures: Int { lock.withLock { failures } }
+
+        init(root: URL, noteID: UUID) {
+            self.root = root
+            checkpoint = root.appendingPathComponent("\(noteID.uuidString).json")
+            super.init()
+        }
+
+        func failNextInventory() {
+            lock.withLock {
+                failures += 1
+                // The writer makes a best-effort collection read after the
+                // atomic checkpoint write, before its throwing refresh.
+                skipPostcommitCollector = true
+            }
+        }
+
+        override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
+                                          options mask: FileManager.DirectoryEnumerationOptions = []) throws -> [URL] {
+            if url.standardizedFileURL == root.standardizedFileURL && super.fileExists(atPath: checkpoint.path) {
+                let fail = lock.withLock { () -> Bool in
+                    if skipPostcommitCollector {
+                        skipPostcommitCollector = false
+                        return false
+                    }
+                    guard failures > 0 else { return false }
+                    failures -= 1
+                    thrown += 1
+                    return true
+                }
+                if fail { throw CocoaError(.fileReadNoPermission) }
+            }
+            return try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+        }
+    }
+
+    private func ds8Entry(_ noteID: UUID, _ text: String, staged: StagedNoteAttachment) throws -> NoteDraftJournalEntry {
+        let document = NoteDocument(blocks: [.text(text),
+            .file(attachmentID: staged.id, filename: staged.filename,
+                  contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        return NoteDraftJournalEntry(noteID: noteID, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: staged.id, filename: staged.filename,
+                           contentTypeIdentifier: staged.contentTypeIdentifier,
+                           byteCount: staged.byteCount, digest: staged.digest)], savedAt: .now)
+    }
+
+    func testDS8PostcommitInventoryFailureStillReturnsClaimAndAllowsLaterCheckpoint() async throws {
+        let root = ownedTemporaryDirectory(prefix: "DS8Journal")
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let data = Data("kept recovery attachment".utf8)
+        let staged = StagedNoteAttachment(id: UUID(), filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+
+        fault.failNextInventory()
+        let first = try await journal.writeDurably(ds8Entry(noteID, "Older", staged: staged), staged: [staged])
+        XCTAssertEqual(fault.injectedFailures, 1)
+        XCTAssertEqual(fault.pendingFailures, 0)
+        let second = try await journal.writeDurably(ds8Entry(noteID, "Newer", staged: staged), staged: [staged], replacing: first)
+        let recovered = try await NoteDraftJournal(directory: root).entriesDurably()
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(try NoteContentCodec.decode(XCTUnwrap(recovered.first?.0.content)).document?.title, "Newer")
+        XCTAssertEqual(recovered.first?.1.first?.data, data)
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testDS8CancelledPendingCheckpointReturnsCommittedClaimDespiteFailedInventory() async throws {
+        let root = ownedTemporaryDirectory(prefix: "DS8Cancel")
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let data = Data("pending payload".utf8)
+        let staged = StagedNoteAttachment(id: UUID(), filename: "pending.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        let old = try await journal.writeDurably(ds8Entry(noteID, "Before cancellation", staged: staged), staged: [staged])
+        fault.failNextInventory()
+        let claimed = try await journal.cancelPendingDurably(ds8Entry(noteID, "Cancelled", staged: staged),
+                                                              staged: [staged], replacing: old)
+        XCTAssertEqual(fault.injectedFailures, 1)
+        XCTAssertEqual(fault.pendingFailures, 0)
+        _ = try await journal.writeDurably(ds8Entry(noteID, "After cancellation", staged: staged),
+                                           staged: [staged], replacing: claimed)
+        let recovered = try await NoteDraftJournal(directory: root).entriesDurably()
+        XCTAssertEqual(recovered.first?.0.content,
+                       try ds8Entry(noteID, "After cancellation", staged: staged).content)
+    }
+    #endif
+}

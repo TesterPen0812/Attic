@@ -846,13 +846,19 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()
         let claim = try await io.write(entry, staged: staged, replacing: replacing, live: snapshot)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        // The checkpoint has committed. Inventory publication is secondary:
+        // failing it must not strand the writer with a stale recovery claim.
+        if let entries = try? await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot) {
+            publish(entries, for: snapshot)
+        }
         return claim
     }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()
         let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true, live: snapshot)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        if let entries = try? await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot) {
+            publish(entries, for: snapshot)
+        }
         return updated
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
