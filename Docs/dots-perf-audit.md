@@ -42,8 +42,32 @@ Target: `phase-3/pd-batch17` at `d503231d6d33459e09b158d4e7f34d7ecbfd39cd`; comp
 4. DP-2 island native windows and glass/mask work: plausible additive cost, unmeasured.
 Fix/measure in that order, preserving geometry and visuals. Further trace Notes text reflow, Calendar geometry, AX frame propagation and floating-panel interaction before finalizing O-1. None of these suspects is assigned a percentage or independent millisecond cost.
 
-## O-2: task scrolling
-Not yet reviewed.
+## O-2: task scrolling — initial checkpoint
+
+Both Now/Later (`TasksPage.swift:1665–1693`) and Done (`TasksDonePage.swift:90–124`) use `ScrollView` with `LazyVStack`; they are not unconditionally constructing a simple eager VStack for every row. Lazy realization is not proof of a fixed number of native views: the framework may retain offscreen cells, and "Completed today" nests `ForEach(sections.done)` in a conditional inside the outer lazy stack (`TasksPage.swift:1755–1779`). Measure realized counts there rather than claiming it necessarily realizes all rows. Done initially pages 40 items and asks for more when its sentinel appears (`TasksPageModel.swift:582–586`; `TasksDonePage.swift:125–136`).
+
+### DP-5 (P1, suspect): Every realized row reports its moving frame while scrolling
+- `Attic/Tasks/TasksPage.swift:147–152, 1687–1693, 4548–4557, 4871–4877`; coordinate space established in `Attic/Tasks/TasksPager.swift:665–675`.
+- Every realized `TasksReorderCell` uses `onGeometryChange` to observe its frame in the fixed pager-slot coordinate space. As the scroll content moves relative to that slot, frame changes update `reports.frame`, `TasksPointer.localFrames` and `frameOwners`. Headers and Completed Today separately report frames (`TasksPage.swift:1713–1717, 1763–1766`). The dictionaries are deliberately outside observed view state, so do not claim each write triggers a SwiftUI redraw. Scroll-position preference writes are PF-7 and are not re-filed here.
+- Scaling: O(realized moving rows + visible/retained headers) geometry comparisons and potential dictionary writes per scroll layout update, not necessarily O(total database rows). The actual callback count and whether LazyVStack retains offscreen cells are framework-dependent.
+- Smallest fix: keep row frames in scroll-content coordinates and combine with a single current clip offset when queried, updating row geometry only when actual content layout changes. Preserve hit testing, drag/drop, reveal and simultaneous/retained-page identity; batch only if coordinate correctness is retained.
+- Confidence: high for registered observers and writes, medium that every scroll tick changes each reported frame and is a felt bottleneck.
+- Mac measurement: count row/header geometry actions and dictionary writes per clip-bounds change and per frame, realized cells, allocations and frame hitches for 100/1,000/10,000 tasks; compare the same scroll trace with a diagnostic content-coordinate implementation. Test: synthetic clip offsets alone must not rewrite every registered row; pointer lookup, context menu, drag/drop and reveal still resolve the right visible row at arbitrary offsets.
+
+### DP-6 (P1, suspect): Context-menu infrastructure mounts native anchors in each realized row
+- `Attic/Tasks/TasksPage.swift:1928–1953`; `Attic/DesignSystem/Components/AtticGlassMenu.swift:2338–2356, 2363–2388`; `Attic/DesignSystem/Components/AtticControls.swift:2320–2327`.
+- Each row's `atticContextMenu` mounts both an `AtticContextMenuAnchor` NSView and an `AtticMenuAnchor` NSView, even while its menu is closed. The context anchor registers in a process-wide weak table on window attachment. Each realized row also owns a `TasksCellReports`, observes `TasksCellUpdates`, carries a drag gesture and has row focus/AX actions (`TasksPage.swift:4455–4500`; `AtticTaskComponents.swift:1668–1686`). These are individually intentional, but native-view creation, attachment and accessibility/focus integration occur as rows are realized. The date/tag `atticDropdown` anchors are conditional on presentation (`AtticDropdown.swift:2444–2455`), so they are not extra native views at rest. H-01 is the separate known focus-responder issue.
+- Scaling: at least two menu-anchor NSViews per realized ordinary row, plus any tag-specific menus and row descendants; actual total and retention depend on SwiftUI realization. Per newly visible row it creates or attaches these objects; it does not necessarily recreate them on every scroll event. Right/Control-click also searches registered context anchors (see DP-7 under O-3 below, if validated).
+- Smallest fix: share a page-level context-menu router using the existing row geometry and a single accessibility menu anchor, keeping per-row VoiceOver Show Menu actions routed to the same item. Preserve nested tag menus and keyboard focus. Prove that realization counts fall before adopting the change.
+- Confidence: high for two unconditional representable backgrounds per rendered row; medium for measured effect under AX and actual reuse.
+- Mac measurement: instrument `makeNSView`, `viewDidMoveToWindow`, `dismantle`, active anchor count, Focus/AX registration and row-body evaluations; use Instruments' SwiftUI and Time Profiler while scrolling 100/1,000/10,000 rows with AX active. Guard test: an ordinary page with N realized rows has O(1) shared anchor views after the change, context/AX actions target the correct row and nested tag menu remains reachable. No wall-clock thresholds.
+
+### O-2 preliminary ranking and open questions
+1. Known H-01 focus-responder population and shared-host AX layout: already assigned, no new finding; impact on scroll needs an A/B trace.
+2. DP-6 row realization/native anchor/AX setup; DP-5 geometry callbacks per realized moving row. Order is unmeasured and may vary with scrolling velocity and retained-cell count.
+3. Known PF-7 scroll offset persistence. Do not double-count it as DP-5.
+Compare the input event → clip bounds → geometry callbacks → realized row construction → `panel_host_layout`/AX → frame delivery. Trace per-row tags, thumbnails, selection and drag when active; measure expandable Completed Today separately. No timing attribution is established.
+
 
 ## O-3: first clicks
 The `0261cd21` comparison was confirmed and its task row modifier changes `.focusable(enabled)` to `.focusable(enabled && (!focus.singleNativeResponder || focus.isFocused))` (`Attic/DesignSystem/Components/AtticTaskComponents.swift`, comparison branch around 413–425). This is H-01, already known and not re-filed. The branches differ in many unrelated changes, so a whole-branch diff cannot attribute any remaining timing to this change alone. Further review pending.
@@ -52,7 +76,7 @@ The `0261cd21` comparison was confirmed and its task row modifier changes `.focu
 Not yet reviewed. PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 4 static resize suspects; neither is measured on the owner's Mac.
-- O-2, O-3 and whole-app top 15 are not complete. No folder has been read fully file by file.
+- DP findings: 6 static suspects, four resize and two scroll; neither is measured on the owner's Mac.
+- O-2 remains under review; O-3 and whole-app top 15 are not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell, island, table and Draw tracing; remaining O-1 subpaths and all subsequent areas still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell, island, table and Draw tracing and O-2 list/row instrumentation review; remaining O-1 subpaths, O-2 interactions and O-3 onward still need review. Continue rather than treat this checkpoint as a final audit.
