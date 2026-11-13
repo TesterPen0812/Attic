@@ -434,6 +434,9 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Confidence: high for explicit work and actor isolation; impact and safe handoff design require Mac verification.
 - Mac measurement: signpost inventory, attachment fetch, bytes hashed, digest and commit revalidation; sample main-thread responsiveness for 1/100 entries and 1/100/1,000 MB including replicas, reporting hash bytes and wall intervals separately. Guard test: assert each replica is verified exactly once per unchanged proof, no synchronous digest runs on the main executor, and changed/replaced/missing payloads between hashing and commit refuse or retry safely.
 
+### Additional first-click check: key-window state is isolated, not a supported broad-invalidation finding
+`AtticPanelController.swift:2155–2177` defers publishing key status until a press ends, but `PanelUIState.swift:35–42, 309–311` holds that status in a separate `PanelKeyState`; the observed SwiftUI `PanelKeyStateLabel` at `AtticPanelView.swift:255–263, 1233–1244` is only mounted for UI-test diagnostics. The normal control material is not switched from this value in that panel view. Do not attribute the residual first-click delay to a whole-panel key-state redraw based on the historical comment alone. Record key transition and release timestamps during the existing O-3 trace to rule out scheduling effects; static code does not resolve the 100 ms ready-to-frame interval.
+
 ## Provisional top 15 and coverage checkpoint
 
 This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
