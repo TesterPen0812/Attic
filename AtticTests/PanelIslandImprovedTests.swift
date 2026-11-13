@@ -88,6 +88,21 @@ final class PanelIslandImprovedTests: XCTestCase {
         XCTAssertNil(island.labelPage, "a wait that was left never shows")
     }
 
+    /// Repeated hover callbacks must not restart the accepted 400 ms first
+    /// label delay or create one delayed closure per pointer sample.
+    func testRepeatedHoverKeepsFirstLabelDeadlineAndOnePendingTimer() {
+        let clock = Clock()
+        let island = model(clock)
+        island.point(at: .notes)
+        for _ in 0..<500 {
+            clock.advance(0.0001)
+            island.point(at: .notes)
+        }
+        XCTAssertEqual(clock.pending.count, 1, "500 identical hover events must coalesce")
+        clock.advance(0.36)
+        XCTAssertEqual(island.labelPage, .notes, "first label appears 400 ms after arrival, not after the final sample")
+    }
+
     // MARK: L12
 
     func testLyingFlatTheItemsAreWider() {
@@ -163,6 +178,24 @@ final class PanelIslandImprovedTests: XCTestCase {
         // A click wakes it.
         island.click(.notes)
         XCTAssertTrue(island.isAwake)
+    }
+
+    /// The 300 ms settle starts when the pointer leaves the wake zone.
+    /// Moving farther away must not postpone it or queue work per event.
+    func testRapidOffIslandPointerSamplesShareOneSettleDeadline() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+        island.track(pointer: CGPoint(x: 110, y: 120), rest: rest, awake: awake)
+        XCTAssertTrue(island.isAwake)
+        for step in 0..<500 {
+            island.track(pointer: CGPoint(x: 300 + step, y: 120), rest: rest, awake: awake)
+            clock.advance(0.0001)
+        }
+        XCTAssertEqual(clock.pending.count, 1, "500 away samples must coalesce to a single settle")
+        clock.advance(0.26)
+        XCTAssertFalse(island.isAwake, "the island settles 300 ms after exit even when input continues outside")
     }
 
     // MARK: I5, I6

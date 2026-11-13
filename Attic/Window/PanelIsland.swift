@@ -489,6 +489,7 @@ final class PanelIslandModel: ObservableObject {
     /// Bumped to cancel a scheduled label or settle.
     private var labelTurn = 0
     private var settleTurn = 0
+    private var settleScheduled = false
     private var labelHiddenAt: Date?
     /// Whether the pointer was within the wake zone at its last move.
     private var pointerNear = false
@@ -552,9 +553,10 @@ final class PanelIslandModel: ObservableObject {
 
     /// The pointer is over `item` (nil: over none).
     func point(atItem item: PanelIslandItem?) {
+        guard pointedItem != item else { return }
         if pointedItem == nil, let item { approaches.send(item) }
         if pointedItem != nil, item == nil { leaves.send() }
-        if pointedItem != item { pointedItem = item }
+        pointedItem = item
         labelTurn &+= 1
         guard let item else {
             if labelItem != nil {
@@ -600,7 +602,10 @@ final class PanelIslandModel: ObservableObject {
     // MARK: Resting and waking (D4)
 
     func wake() {
-        settleTurn &+= 1
+        if settleScheduled {
+            settleScheduled = false
+            settleTurn &+= 1
+        }
         if !isAwake { isAwake = true }
     }
 
@@ -620,11 +625,14 @@ final class PanelIslandModel: ObservableObject {
 
     /// Settles in 300 ms unless something holds it awake by then.
     private func settleIfAway() {
-        guard isAwake, !pointerNear, !isSnapTarget, !isPulling else { return }
+        guard isAwake, !pointerNear, !isSnapTarget, !isPulling, !settleScheduled else { return }
+        settleScheduled = true
         settleTurn &+= 1
         let turn = settleTurn
         schedule(PanelIslandLayout.settleDelay) { [weak self] in
-            guard let self, self.settleTurn == turn, !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
+            guard let self, self.settleTurn == turn else { return }
+            self.settleScheduled = false
+            guard !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
             self.settle()
         }
     }
@@ -632,6 +640,7 @@ final class PanelIslandModel: ObservableObject {
     /// At rest now (the panel hid, or the settle delay ran out).
     func settle() {
         settleTurn &+= 1
+        settleScheduled = false
         pointerNear = false
         if pointedItem != nil { point(atItem: nil) }
         if isAwake { isAwake = false }
