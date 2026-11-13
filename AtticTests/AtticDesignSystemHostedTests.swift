@@ -521,35 +521,138 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// AXShowMenu when that is what it offers) and waits on an expectation
     /// for the system menu to begin tracking, bounded, then closes it.
     /// Returns the items of every menu that opened.
+    private struct MenuOpening {
+        var titles: [String]?
+        var exceededWait = false
+    }
+
+    private func inspectMenuOpening(timeout: TimeInterval = 3,
+                                    notifications: NotificationCenter = .default,
+                                    press: () -> Void) -> MenuOpening {
+        var opening = MenuOpening()
+        let began = expectation(description: "menu began tracking")
+        began.assertForOverFulfill = false
+        var nativeMenu: NSMenu?
+        var nativeCancellation: Timer?
+        var pressReturned = false
+        // Register before AXPress: either the action itself or XCTWaiter's
+        // run-loop pump can enter tracking before wait(timeout:) returns.
+        let watchdog = Timer(timeInterval: timeout, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                let glass = AtticGlassMenu.current
+                opening.exceededWait = !pressReturned || glass?.isOpen == true || nativeMenu != nil
+                    || RunLoop.current.currentMode == .eventTracking
+                if opening.exceededWait {
+                    glass?.close(animated: false)
+                    nativeMenu?.cancelTrackingWithoutAnimation()
+                    // A native menu may never supply its notification/object.
+                    // Escape is delivered only to this test host's event loop.
+                    if glass == nil, let escape = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                        context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                        isARepeat: false, keyCode: 53) {
+                        NSApp.postEvent(escape, atStart: true)
+                    }
+                }
+                began.fulfill()
+            }
+        }
+        RunLoop.main.add(watchdog, forMode: .common)
+        RunLoop.main.add(watchdog, forMode: .eventTracking)
+        let observer = notifications.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+            MainActor.assumeIsolated {
+                guard let tracked = note.object as? NSMenu else { return }
+                let glass = tracked === AtticGlassMenu.trackingObject
+                opening.titles = glass ? AtticGlassMenu.current.map { AtticMenuCommand.titles(in: $0.commands) } ?? []
+                                       : tracked.items.map(\.title)
+                began.fulfill()
+                if glass {
+                    AtticGlassMenu.current?.close()
+                } else {
+                    nativeMenu = tracked
+                    // A main-queue block cannot re-enter the dispatch callback
+                    // that opened the menu. A tracking-mode timer can.
+                    let cancel = Timer(timeInterval: 0.001, repeats: false) { _ in
+                        MainActor.assumeIsolated { tracked.cancelTrackingWithoutAnimation() }
+                    }
+                    nativeCancellation = cancel
+                    RunLoop.main.add(cancel, forMode: .common)
+                    RunLoop.main.add(cancel, forMode: .eventTracking)
+                }
+            }
+        }
+        defer {
+            notifications.removeObserver(observer)
+            watchdog.invalidate()
+            nativeCancellation?.invalidate()
+        }
+        press()
+        pressReturned = true
+        _ = XCTWaiter().wait(for: [began], timeout: timeout)
+        return opening
+    }
+
     private func openMenus(_ menus: [AXItem]) -> [[String]] {
         var opened: [[String]] = []
         for menu in menus {
-            let began = expectation(description: "menu began tracking")
-            began.assertForOverFulfill = false
-            let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
-                MainActor.assumeIsolated {
-                    guard let tracked = note.object as? NSMenu else { return }
-                    let glass = tracked === AtticGlassMenu.trackingObject
-                    opened.append(glass ? AtticGlassMenu.current.map { AtticMenuCommand.titles(in: $0.commands) } ?? []
-                                        : tracked.items.map(\.title))
-                    began.fulfill()
-                    if glass {
-                        // Tracking enters a nested AppKit event loop: close
-                        // synchronously while this notification is delivered.
-                        AtticGlassMenu.current?.close()
-                    } else {
-                        DispatchQueue.main.async { tracked.cancelTracking() }
-                    }
-                }
+            let opening = inspectMenuOpening {
+                let action = menu.actions.contains("AXShowMenu") ? "AXShowMenu" : kAXPressAction as String
+                AXUIElementPerformAction(menu.element, action as CFString)
             }
-            let action = menu.actions.contains("AXShowMenu") ? "AXShowMenu" : kAXPressAction as String
-            AXUIElementPerformAction(menu.element, action as CFString)
-            let result = XCTWaiter().wait(for: [began], timeout: 3)
-            NotificationCenter.default.removeObserver(observer)
-            if result != .completed { continue }
+            XCTAssertFalse(opening.exceededWait, "A menu tracked beyond its bounded wait: \(menu.description)")
+            guard let titles = opening.titles else {
+                XCTContext.runActivity(named: "Menu did not open: \(menu.description) (\(ProcessInfo.processInfo.operatingSystemVersionString))") { _ in }
+                continue
+            }
+            opened.append(titles)
             spin(0.1)
         }
         return opened
+    }
+
+    /// VoiceOver/FKA can open a menu while the application is inactive;
+    /// Escape must leave its real event loop without needing a mouse-up.
+    func testInactiveMenuTrackingAcceptsEscapeWithoutAMouseUp() throws {
+        AtticGlassMenu.ordersCardsFront = false
+        defer { AtticGlassMenu.ordersCardsFront = true }
+        XCTAssertFalse(NSApp.isActive, "Exercise the inactive host")
+        let (window, hosting) = host(Text("Keyboard menu"), size: CGSize(width: 240, height: 120))
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [],
+                                                   timestamp: 1, windowNumber: window.windowNumber, context: nil,
+                                                   eventNumber: 1, clickCount: 1, pressure: 1))
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                   timestamp: 2, windowNumber: window.windowNumber, context: nil,
+                                                   characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                                   isARepeat: false, keyCode: 53))
+        let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
+            MainActor.assumeIsolated { NSApp.postEvent(escape, atStart: true) }
+        }
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        defer { timer.invalidate() }
+        let opening = inspectMenuOpening(timeout: 0.5, notifications: NotificationCenter()) {
+            AtticGlassMenu.popUp([AtticMenuCommand(verbatim: "Keyboard item") {}], in: hosting,
+                                 placement: .point(CGPoint(x: 20, y: 20)), opener: down)
+        }
+        XCTAssertFalse(opening.exceededWait, "Escape, not the watchdog, must end tracking")
+        XCTAssertNil(AtticGlassMenu.current)
+    }
+
+    /// A missing begin notification must cost one failed menu probe, even
+    /// when the action enters the real nested tracking loop synchronously.
+    func testMenuOpeningWatchdogClosesTrackingWithoutTheBeginNotification() throws {
+        print("CI7_MENU_WATCHDOG pid=\(getpid())")
+        AtticGlassMenu.ordersCardsFront = false
+        defer { AtticGlassMenu.ordersCardsFront = true }
+        let (_, hosting) = host(Text("Menu watchdog"), size: CGSize(width: 240, height: 120))
+        let start = Date()
+        let opening = inspectMenuOpening(timeout: 0.1, notifications: NotificationCenter()) {
+            AtticGlassMenu.popUp([AtticMenuCommand(verbatim: "Guarded item") {}], in: hosting,
+                                 placement: .point(CGPoint(x: 20, y: 20)), opener: nil)
+        }
+        XCTAssertTrue(opening.exceededWait, "An unobserved tracking loop must be reported as a failed probe")
+        XCTAssertNil(opening.titles, "No notification supplied menu items")
+        XCTAssertNil(AtticGlassMenu.current, "The watchdog closes the actual tracking menu")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "The nested loop cannot swallow the bounded wait")
     }
 
     private func perform(_ raw: String, on element: AXUIElement) {
