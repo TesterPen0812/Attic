@@ -226,9 +226,10 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
                        Path(roundedRect: card, cornerRadius: 18, style: .continuous),
                        "the card: the glass menu's continuous 18 pt corners")
-        let row = CGRect(x: 3, y: 3, width: 218, height: 32)
+        // Corners B (Accepted 2026-11-13): rows 6 pt in, 12 pt continuous.
+        let row = CGRect(x: 6, y: 6, width: 212, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       RoundedRectangle(cornerRadius: 13, style: .continuous).path(in: row), "a row: 13 pt continuous")
+                       RoundedRectangle(cornerRadius: 12, style: .continuous).path(in: row), "a row: 12 pt continuous")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)

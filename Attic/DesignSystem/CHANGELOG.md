@@ -1,3 +1,12 @@
+## 2026-11-13 · Corners round 2: the mini page and the picker cards
+
+The note thumbnail keeps the drawing's proportion: 7 pt continuous corners
+on the 24 × 30 pt mini page (10 read as a rounded blob), with its title and
+lines drawn inside 4 × 3.5 pt padding, clear of the corners. Picker cards
+(Date, Tags, the `/` list and the rest) are menu cards: 6 pt padding, 12 pt
+continuous highlights capped at half a row, and the field on the rows' 6 pt
+line at 12 pt, still centred in its 40 pt header. Their rows stay 32 pt.
+
 ## 2026-11-13 · Menu look picks
 
 The owner's picks from the menu-look sheet are now the permanent values, and
@@ -22,6 +31,7 @@ Today's Calendar card stays 24 and is continuous; its events are 17.5
 (24 − 6.5), and their fill and ring are continuous. Glass menu highlights stay
 12 and cap at half the row. The proposal notice and a dragged note block also
 use the row token, so they are now 16 (still squircles).
+
 ## 2026-11-13 · Brighten glass leaves the panel's control bands
 
 With Brighten glass on, the panel's lift fades out over its top and bottom
