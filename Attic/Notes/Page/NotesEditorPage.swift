@@ -601,8 +601,10 @@ struct NotesEditorPage: View {
     private var editorBar: some View {
         HStack(spacing: 0) {
             // Back to All notes, which sits to the note's left (the pages
-            // slide that way).
-            AtticRaisedButton(systemName: "chevron.left", label: "All notes", size: NotesBarMetrics.size,
+            // slide that way). Owner, 13 Nov: it wears the gallery's icon,
+            // not a back arrow: Notes' own symbol from the island's page
+            // switch (the gallery draws no icon of its own).
+            AtticRaisedButton(systemName: NotesBarMetrics.allNotesSymbol, label: "All notes", size: NotesBarMetrics.size,
                               help: String(localized: "All notes (⇧⌘L)"),
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
                 IdleLatencyTrace.controlDispatched(.noteLibrary)

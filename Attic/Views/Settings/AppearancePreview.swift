@@ -88,8 +88,8 @@ struct SettingsPanelMiniature: View {
             AtticControlGroup {
                 let flat = design.effectiveControls != .liquidGlass
                 HStack(spacing: 0) {
-                    AtticRaisedButton(systemName: "pin", label: "Pin",
-                                      glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true, flat: flat) {}
+                    // The top row's own pin, unpinned (13 Nov: the outline).
+                    AtticPanelPinButton(isPinned: false, flat: flat) {}
                     Spacer(minLength: AtticSpacing.betweenControls)
                     AtticPageButton(items: Self.pages, selection: .constant(0), pinnedOpen: false, flat: flat)
                 }

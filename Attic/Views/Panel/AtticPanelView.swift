@@ -710,7 +710,10 @@ struct AtticPanelView: View {
         }
         commands.append(AtticMenuCommand(
             uiState.isPanelPinned ? "Unpin Panel" : "Pin Panel",
-            systemImage: uiState.isPanelPinned ? "pin.slash" : "pin",
+            // An action's icon, as Apple's Pin Tab / Unpin Tab: the outline
+            // pin to pin (never a filled pin while unpinned, 13 Nov) and the
+            // slashed pin to unpin.
+            systemImage: uiState.isPanelPinned ? AtticRaisedButtonMetrics.unpinSymbol : AtticRaisedButtonMetrics.unpinnedSymbol,
             shortcut: KeyboardShortcut("p", modifiers: [.command, .shift]),
             startsSection: true
         ) { uiState.isPanelPinned.toggle() })

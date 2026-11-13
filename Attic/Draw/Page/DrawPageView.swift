@@ -58,12 +58,21 @@ struct DrawPageHost: View {
                 .animation(dimAnimation, value: model.isDrawingLive)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus),
+        // An open strip widens the tool capsule toward the bar's ✦; the ✦
+        // steps aside when it would reach it (owner, 13 Nov: they never
+        // overlap, they take turns in one place).
+        .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus,
+                                                          leadingReach: model.strip.map { DrawPageMetrics.capsuleWidth(strip: $0) }),
                         actions: PanelBottomBarActions(plus: { [weak model] in
                             guard let model else { return }
                             AtticSounds.play(.created, if: model.newCanvas())
                         }))
-        .onAppear { model.start() }
+        .onAppear {
+            model.start()
+            #if DEBUG
+            DrawStripCaptureSeam.openIfRequested(model)
+            #endif
+        }
         .onChange(of: isCurrent, initial: true) { _, _ in updateShown() }
         .onReceive(uiState.$hideCount.dropFirst()) { _ in panelHidden = true; updateShown() }
         .onReceive(uiState.$revealCount.dropFirst()) { _ in panelHidden = false; updateShown() }
@@ -373,3 +382,31 @@ struct DrawTitleField: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+/// Capture seam (UI testing only): `ATTIC_UI_TEST_DRAW_STRIP=colour`,
+/// `shape`, `pen` or `text` opens that strip of the tool capsule a moment
+/// after the Draw page first appears, the way its clicks would.
+@MainActor
+enum DrawStripCaptureSeam {
+    private static var didRun = false
+
+    static func openIfRequested(_ model: DrawPageModel) {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ATTIC_UI_TESTING"] == "1", let strip = environment["ATTIC_UI_TEST_DRAW_STRIP"], !didRun else { return }
+        didRun = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak model] in
+            guard let model else { return }
+            switch strip {
+            case "colour": model.clickSwatch()
+            case "shape": model.clickTool(.shape)
+            case "pen", "text":
+                let tool: DrawTool = strip == "pen" ? .pen : .text
+                model.clickTool(tool)
+                if model.strip == nil { model.clickTool(tool) }
+            default: break
+            }
+        }
+    }
+}
+#endif

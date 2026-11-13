@@ -104,6 +104,7 @@ struct AtticRaisedButton: View {
     let action: () -> Void
 
     @State private var probeID = UUID()
+    @Environment(\.atticDesign) private var design
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
@@ -147,9 +148,13 @@ struct AtticRaisedButton: View {
         let chip = isSelected && selectedSystemName == nil
         Button(action: action) {
             AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph,
-                                   onSystemName: isSelected ? selectedSystemName : nil,
-                                   onHoverSystemName: isSelected ? selectedHoverSystemName : nil)
+                                   isOn: isSelected,
+                                   onSystemName: selectedSystemName,
+                                   onHoverSystemName: selectedHoverSystemName)
                 .rotationEffect(.degrees(glyphRotation))
+                // The pin's lean turns with its cross-fade (13 Nov); Reduced
+                // keeps the fade and drops the turn.
+                .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: glyphRotation)
                 .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
@@ -186,13 +191,53 @@ extension AtticRaisedButtonMetrics {
         if let onHover, state == .hover || state == .pressed { return onHover }
         return on
     }
+
+    /// Every glyph a toggle can show, once each: off, on, on under the pointer.
+    nonisolated static func toggleSymbols(_ systemName: String, on: String?, onHover: String?) -> [String] {
+        var names: [String] = []
+        for name in [systemName, on, onHover].compactMap({ $0 }) where !names.contains(name) { names.append(name) }
+        return names
+    }
+}
+
+/// The panel's pin (Accepted 2026-11-13, "Pin"): an outline pin, leaning
+/// 30°, while the panel is not pinned; filled and upright only once it is.
+/// The change cross-fades and turns like the other icon swaps. Drawn by the
+/// top row, and by Settings' preview and the gallery so they agree.
+struct AtticPanelPinButton: View {
+    let isPinned: Bool
+    var flat = false
+    let action: () -> Void
+
+    private typealias M = AtticRaisedButtonMetrics
+
+    var body: some View {
+        AtticRaisedButton(
+            systemName: M.unpinnedSymbol,
+            label: isPinned ? "Unpin panel" : "Pin panel",
+            help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
+            isSelected: isPinned,
+            glyphOffsetY: M.pinGlyphOffsetY,
+            emphasisedGlyph: true,
+            flat: flat,
+            selectedSystemName: M.pinnedSymbol,
+            cornerRadius: AtticRadius.header,
+            glyphRotation: M.pinRotation(pinned: isPinned),
+            action: action
+        )
+        .accessibilityValue(M.pinAccessibilityValue(pinned: isPinned))
+    }
 }
 
 private struct AtticRaisedButtonLabel: View {
     let systemName: String?
     let title: String?
     var isSelected = false
-    /// A toggle that is on: its glyph, and the one under the pointer.
+    /// Whether the toggle is on. A toggle (one with an "on" glyph) always
+    /// lays its off and on glyphs on one centre, so turning it on or off
+    /// cross-fades (13 Nov: the pin's outline to its fill and back).
+    var isOn = false
+    /// A toggle's "on" glyph, and the one under the pointer while on.
     var onSystemName: String?
     var onHoverSystemName: String?
     @Environment(\.atticControlState) private var state
@@ -218,8 +263,10 @@ private struct AtticRaisedButtonLabel: View {
                 } else {
                     // Every glyph the toggle can show, laid on one centre and
                     // cross-faded (F/E), so a change never moves the button.
-                    let shown = AtticRaisedButtonMetrics.shownSymbol(systemName, on: onSystemName, onHover: onHoverSystemName, state: state)
-                    let names = [onSystemName, onHoverSystemName].compactMap { $0 }
+                    let shown = isOn
+                        ? AtticRaisedButtonMetrics.shownSymbol(systemName, on: onSystemName, onHover: onHoverSystemName, state: state)
+                        : systemName
+                    let names = AtticRaisedButtonMetrics.toggleSymbols(systemName, on: onSystemName, onHover: onHoverSystemName)
                     ZStack {
                         ForEach(names, id: \.self) { name in
                             AtticIcon(systemName: name, size: size, weight: weight, ink: glyph)
