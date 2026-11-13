@@ -101,6 +101,7 @@ final class AtticGlassMenu {
     private var graceTimer: Timer?
     private var lastPointer: NSPoint?
     private weak var source: NSWindow?
+    private var openingAnchor: NSRect?
     /// The window that opened the menu (the panel, mostly).
     var sourceWindow: NSWindow? { source }
     private var observers: [NSObjectProtocol] = []
@@ -222,6 +223,8 @@ final class AtticGlassMenu {
     func open(_ placement: ScreenPlacement, visible: NSRect, source: NSWindow?, container: NSRect? = nil, panel: NSRect? = nil) {
         self.visible = visible
         self.source = source
+        if case let .below(rect) = placement { openingAnchor = rect }
+        else { openingAnchor = nil }
         var minimum: CGFloat = 0
         if case let .below(rect) = placement { minimum = rect.width }
         let card = AtticGlassMenuCard(commands: commands, menu: self, level: 0, minimumWidth: minimum)
@@ -418,7 +421,8 @@ final class AtticGlassMenu {
                 // so a click on ⋯ while another menu tracked opened nothing.
                 // Only registered triggers get that press: ordinary controls
                 // must not act on the click used to dismiss a menu.
-                let opensMenu = AtticContextMenus.isMenuTrigger(for: event)
+                let pressesOpener = event.window === source && openingAnchor?.contains(Self.screenPoint(of: event)) == true
+                let opensMenu = !pressesOpener && AtticContextMenus.isMenuTrigger(for: event)
                 close()
                 if opensMenu {
                     NSApp.postEvent(event, atStart: true)

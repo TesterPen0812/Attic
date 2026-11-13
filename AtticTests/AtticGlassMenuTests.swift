@@ -379,6 +379,40 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
+    func testCatchupR9PressOnCurrentOpenerClosesWithoutReposting() throws {
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let holder = AtticMenuAnchor.Holder()
+        let trigger = AtticMenuAnchor.AnchorView(frame: NSRect(x: 20, y: 20, width: 32, height: 32))
+        trigger.holder = holder
+        window.contentView?.addSubview(trigger)
+        holder.remember(trigger)
+        let other = AtticMenuAnchor.AnchorView(frame: NSRect(x: 100, y: 20, width: 32, height: 32))
+        window.contentView?.addSubview(other)
+        for sameOpener in [true, false] {
+            let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: CGPoint(x: sameOpener ? 36 : 116, y: 36),
+                modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9900, clickCount: 1, pressure: 1))
+            var opened = 0
+            AtticGlassMenu.testDriver = { menu in
+                opened += 1
+                menu.handle(press)
+                XCTAssertFalse(menu.isOpen)
+                let replayed = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.02),
+                                              inMode: .default, dequeue: true)
+                XCTAssertEqual(replayed?.eventNumber, sameOpener ? nil : press.eventNumber,
+                               "only a different opener receives the switch press")
+            }
+            holder.open([AtticMenuCommand(verbatim: "Options") {}], event: nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+            XCTAssertEqual(opened, 1)
+            XCTAssertNil(AtticGlassMenu.current)
+        }
+    }
+
     func testCatchupR2OnlyVisibleMenuTriggersReceiveTheDismissingPress() throws {
         let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
                               styleMask: .borderless, backing: .buffered, defer: false)

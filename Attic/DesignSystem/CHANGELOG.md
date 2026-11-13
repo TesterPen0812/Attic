@@ -5,6 +5,11 @@ code-language and callout-icon slots, and file-card menus. Notes row, board,
 title and note-menu buttons register their visible trigger regions. Ordinary
 dismissing clicks remain consumed; menu geometry and motion stay unchanged.
 
+## 2026-11-13 · Current menu opener (catchup-2 R-9)
+
+Clicking the control that opened the current menu closes it. Only a different
+menu trigger receives the press to switch menus.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
