@@ -31,8 +31,8 @@ enum DrawPageMetrics {
     static let pillGap: CGFloat = 8
     /// The board's clear area keeps 12 px from the top row and the bar.
     static let clearGap: CGFloat = 6
-    /// The canvas menu's card starts 12 px under the title capsule.
-    static let menuGap: CGFloat = 6
+    /// Accepted menu placement: 8 pt from its title control.
+    static let menuGap: CGFloat = AtticMenuMetrics.anchorGap
 
     static func fold(_ reduceMotion: Bool) -> Animation { AtticPanelChromeMetrics.fold(reduceMotion: reduceMotion) }
 

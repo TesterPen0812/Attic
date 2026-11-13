@@ -110,19 +110,17 @@ struct DrawPageHost: View {
         .overlay(alignment: .top) {
             // D4: the title capsule owns the filter. Its menu contains only
             // canvases and actions, below the unchanged top-row controls.
-            if !model.isSearching && model.isFiltering {
+            AtticUnfoldPresence(value: !model.isSearching && model.isFiltering ? true : nil, fromTop: true) { _ in
                 DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
                     boardHeight: model.boardSize.height,
                     chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
                     chromeBottom: model.clearInsets.left), isActive: model.isFiltering)
-                    .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
                     // A hidden AppKit-backed field can remain in the native
                     // accessibility tree despite SwiftUI's hidden modifier.
                     // Remove the closed menu's subtree entirely.
-                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
+            .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
         }
-        .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
         .overlay(alignment: .top) {
             if model.isSearching {
                 DrawSearchResults(model: model.search)

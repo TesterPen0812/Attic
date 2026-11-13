@@ -223,9 +223,8 @@ struct AtticGroupDivider: View {
 }
 
 /// A label-over-value row (57 pt) with a ⌃⌄ pop-up for choices. The row is
-/// ours; the list is Attic's own opaque pop-over (round 13: the system
-/// menu's blur showed the Settings labels behind it, doubled, through the
-/// choices).
+/// ours; its choices open through the same system-glass menu as every
+/// other command picker (Accepted 2026-11-12 evening).
 struct AtticPopUpRow<Choice: Hashable>: View {
     let label: String
     let choices: [(value: Choice, title: String)]
@@ -234,14 +233,21 @@ struct AtticPopUpRow<Choice: Hashable>: View {
     var identifier: String?
 
     @Environment(\.atticCapture) private var capture
-    @State private var isOpen = false
+    @State private var menuAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let title = choices.first { $0.value == selection }?.title ?? ""
         if capture != nil {
             AtticPopUpRowFace(label: label, value: title)
         } else {
-            Button { isOpen = true } label: {
+            let commands = choices.map { choice in
+                AtticMenuCommand(verbatim: choice.title, state: choice.value == selection ? .on : nil) {
+                    selection = choice.value
+                }
+            }
+            Button {
+                menuAnchor.open(commands)
+            } label: {
                 // One element: the row is a single pop-up for VoiceOver
                 // (label "Surface", value "Solid"), not one per text line.
                 AtticPopUpRowFace(label: label, value: title)
@@ -253,10 +259,10 @@ struct AtticPopUpRow<Choice: Hashable>: View {
             .accessibilityLabel(label)
             .accessibilityValue(title)
             .atticIdentifier(identifier)
-            .atticPopover(isPresented: $isOpen, arrowEdge: .bottom) {
-                AtticPopUpChoices(label: label, choices: choices, selection: selection) { value in
-                    selection = value
-                    isOpen = false
+            .background(AtticMenuAnchor(holder: menuAnchor).accessibilityHidden(true))
+            .accessibilityRepresentation {
+                AtticMenuButtonAccessibility(label: label, value: title) { _ in
+                    menuAnchor.open(commands, event: nil)
                 }
             }
         }

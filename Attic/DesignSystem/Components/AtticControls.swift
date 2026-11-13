@@ -1943,8 +1943,7 @@ struct AtticCommandMenu<Label: View>: View {
         } else {
             // Draft C: the glass menu, under its label.
             Button {
-                guard let view = anchor.view else { return }
-                AtticNativeMenu.popUp(commands, in: view)
+                anchor.open(commands)
             } label: {
                 label
             }
@@ -1956,10 +1955,7 @@ struct AtticCommandMenu<Label: View>: View {
             // native menu's opener was: Press and Show Menu open it.
             .accessibilityRepresentation {
                 AtticMenuButtonAccessibility(label: accessibilityLabel) { _ in
-                    // SwiftUI can expose the AX representation without attaching
-                    // its AppKit view to the window. Open from the rendered anchor.
-                    guard let view = anchor.view else { return }
-                    AtticNativeMenu.popUp(commands, in: view)
+                    anchor.open(commands, event: nil)
                 }
                     .accessibilityLabel(accessibilityLabel)
             }
@@ -1971,10 +1967,12 @@ struct AtticCommandMenu<Label: View>: View {
 /// native pop-up menu's control has) whose Press and Show Menu open it.
 struct AtticMenuButtonAccessibility: NSViewRepresentable {
     let label: String
+    var value: String? = nil
     let open: (NSView) -> Void
 
     final class ButtonView: NSView {
         var menuLabel = ""
+        var menuValue: String?
         var open: ((NSView) -> Void)?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         // On macOS 27 the AX representation is a detached ButtonView. The
@@ -1984,6 +1982,7 @@ struct AtticMenuButtonAccessibility: NSViewRepresentable {
         override func accessibilityRole() -> NSAccessibility.Role? { .menuButton }
         override func accessibilityLabel() -> String? { menuLabel }
         override func accessibilityTitle() -> String? { menuLabel }
+        override func accessibilityValue() -> Any? { menuValue }
         override func accessibilityHelp() -> String? { String(localized: "Opens a menu") }
         override func accessibilityPerformPress() -> Bool {
             guard let open else { return false }
@@ -1997,14 +1996,14 @@ struct AtticMenuButtonAccessibility: NSViewRepresentable {
 
     func updateNSView(_ view: ButtonView, context: Context) {
         view.menuLabel = label
+        view.menuValue = value
         view.open = open
     }
 }
 
-/// The items of a native menu built from commands: sections separated by the
-/// system's own divider (or titled), each item with its symbol, its state
-/// and its shortcut shown (spec: right-click menus show shortcuts too);
-/// submenus nest. Used by `AtticCommandMenu` and inside `.contextMenu`.
+/// Compatibility rendering for command items in a native system menu.
+/// Attic's visible commands use `AtticGlassMenu`; these items are retained
+/// for the operating system's menu bar and native fallback paths.
 struct AtticMenuItems: View {
     private let build: () -> [AtticMenuCommand]
 
@@ -2324,19 +2323,68 @@ struct AtticMenuAnchor: NSViewRepresentable {
     @MainActor
     final class Holder {
         weak var view: NSView?
+        private weak var lastWindow: NSWindow?
+        private var lastRect: NSRect?
+
+        func remember(_ anchor: NSView) {
+            view = anchor
+            guard let window = anchor.window, let content = window.contentView else { return }
+            lastWindow = window
+            lastRect = anchor.convert(anchor.bounds, to: content)
+        }
+
+        /// A just-rebuilt SwiftUI button may receive its first click before
+        /// its NSViewRepresentable anchor is attached. Keep the last known
+        /// window location, or use the actual click in the source window,
+        /// instead of silently dropping the menu request. The normal path
+        /// still anchors precisely to the button's own view.
+        func open(_ commands: [AtticMenuCommand]) {
+            open(commands, event: NSApp.currentEvent)
+        }
+
+        func open(_ commands: [AtticMenuCommand], event: NSEvent?) {
+            guard !commands.isEmpty else { return }
+            if let view, view.window != nil {
+                remember(view)
+                AtticGlassMenu.popUpLater(commands, in: view, placement: .below(view.bounds), opener: event)
+                return
+            }
+            let clicked = event.map { [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp].contains($0.type) } ?? false
+            let window = (clicked ? event?.window : nil) ?? lastWindow ?? event?.window
+            guard let window, let content = window.contentView else { return }
+            let openingEvent = event?.window === window ? event : nil
+            let rect: NSRect
+            if let openingEvent, openingEvent.type == .leftMouseDown || openingEvent.type == .leftMouseUp || openingEvent.type == .rightMouseDown || openingEvent.type == .rightMouseUp {
+                let point = content.convert(openingEvent.locationInWindow, from: nil)
+                rect = NSRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32)
+            } else {
+                rect = lastRect ?? NSRect(x: content.bounds.midX - 16, y: content.bounds.midY - 16, width: 32, height: 32)
+            }
+            AtticGlassMenu.popUpLater(commands, in: content, placement: .below(rect), opener: openingEvent)
+        }
     }
 
     func makeNSView(context: Context) -> AnchorView {
         let view = AnchorView()
-        holder.view = view
+        view.holder = holder
+        holder.remember(view)
         return view
     }
 
-    func updateNSView(_ view: AnchorView, context: Context) { holder.view = view }
+    func updateNSView(_ view: AnchorView, context: Context) { holder.remember(view) }
 
     final class AnchorView: NSView {
+        weak var holder: Holder?
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { holder?.remember(self) }
+        }
+        override func layout() {
+            super.layout()
+            if window != nil { holder?.remember(self) }
+        }
     }
 }
 
@@ -2368,8 +2416,7 @@ struct AtticMenuButton: View {
     var body: some View {
         let anchor = holder ?? ownAnchor
         AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon, floating: floating) {
-            guard let view = anchor.view else { return }
-            AtticNativeMenu.popUp(commands(), in: view)
+            anchor.open(commands())
         }
         .overlay(alignment: .topTrailing) {
             if showsDot { AtticMenuButtonDot().allowsHitTesting(false) }
@@ -2377,6 +2424,11 @@ struct AtticMenuButton: View {
         .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
         .accessibilityHint(String(localized: "Opens a menu"))
         .accessibilityValue(value ?? "")
+        .accessibilityRepresentation {
+            AtticMenuButtonAccessibility(label: String(localized: label), value: value) { _ in
+                anchor.open(commands(), event: nil)
+            }
+        }
     }
 }
 

@@ -295,13 +295,56 @@ final class AtticDropdownTests: XCTestCase {
     }
 
 
+    /// Accepted 10 Nov replaces the old 184/224 pt menu widths; 13 Nov
+    /// picks a 200 pt minimum. Specialized picker rows keep their heights.
+    func testPickerAndCommandHoverUseTheSameInk() throws {
+        for mode in AtticDesignContext.Mode.allCases {
+            for surface in PanelSurfaceStyle.allCases {
+                for contrast in [false, true] {
+                    for reduced in [false, true] {
+                        let design = AtticDesignContext(mode: mode, surface: surface, increaseContrast: contrast,
+                                                        reduceTransparency: reduced)
+                        let style = AtticGlassMenuStyle(design: design)
+                        let command = try XCTUnwrap(style.highlight.usingColorSpace(.sRGB))
+                        let picker = try XCTUnwrap(design.tokens.dropdownHighlight.nsColor.usingColorSpace(.sRGB))
+                        for (actual, expected) in zip([picker.redComponent, picker.greenComponent, picker.blueComponent, picker.alphaComponent],
+                                                      [command.redComponent, command.greenComponent, command.blueComponent, command.alphaComponent]) {
+                            XCTAssertEqual(actual, expected, accuracy: 1e-6, "the same menu hover in \(mode)/\(surface)/contrast \(contrast)/reduced \(reduced)")
+                        }
+                    }
+                }
+            }
+            let design = AtticDesignContext(mode: mode, surface: .solid)
+            let row = AtticDropdownRow(title: "Choice", isHighlighted: true) {}
+                .frame(width: 200).atticDesign(design)
+            let renderer = ImageRenderer(content: row)
+            let image = try XCTUnwrap(renderer.cgImage)
+            let pixel = try XCTUnwrap(NSBitmapImageRep(cgImage: image).colorAt(x: 170, y: 16))
+            XCTAssertEqual(pixel.alphaComponent, AtticGlassMenuStyle(design: design).highlight.alphaComponent,
+                           accuracy: 1 / 255, "the rendered picker highlight uses the menu alpha")
+        }
+    }
+
+    func testPickerCardsUseThePicked200PointMinimum() {
+        let design = AtticDesignContext(mode: .light, surface: .solid)
+        let priority = NSHostingView(rootView: AtticDropdownCard {
+            TaskPriorityPickerView(current: .high, onPick: { _ in })
+        }.atticDesign(design))
+        let small = NSHostingView(rootView: AtticDropdownCard {
+            Color.clear.frame(width: 10, height: 10)
+        }.atticDesign(design))
+        XCTAssertEqual(priority.fittingSize.width, 200, accuracy: 0.5, "Priority no longer uses the superseded 184 pt card")
+        XCTAssertEqual(small.fittingSize.width, 200, accuracy: 0.5, "short picker lists use the same minimum")
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: 90, available: 296), 200)
+    }
+
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
-        // Draft C (owner, 2026-10-23): never under 150 pt (E1's was 144).
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: 90, available: available), 150, "never under 150 pt")
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: 165, available: available), 165, "fits its content")
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: 164.2, available: available), 165, "whole points")
+        // Accepted 13 Nov: menus and picker cards are at least 200 pt.
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: 90, available: available), 200, "the picked minimum")
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: 225, available: available), 225, "fits its content")
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: 224.2, available: available), 225, "whole points")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: 400, available: available), 296, "never past the 12 pt margin")
     }
 
@@ -314,7 +357,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(full, 139, accuracy: 4, "the nine rows fit Numbered List")
         XCTAssertTrue(all.contains { $0.kind == .mono }, "Mono is in the list")
         let date = AtticDropdownLayout.listWidth(titles: ["Date"], match: "da")
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 150, "“/da” leaves Date at the minimum")
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 200, "“/da” leaves Date at the minimum")
     }
 
     func testTheTagListKeepsItsHeightWhileFiltering() {
@@ -392,7 +435,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(tooTall.side, .above, "the roomier side when neither holds it")
         XCTAssertEqual(tooTall.heightLimit, anchor.minY - bounds.minY - AtticDropdownMetrics.anchorGap)
         // The width rule is the same one.
-        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 150)
+        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 200)
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 400, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 296)
     }
 
@@ -599,8 +642,8 @@ final class AtticDropdownTests: XCTestCase {
         let dark = AtticDesignContext(mode: .dark).tokens
         XCTAssertEqual(light.popoverFill, AtticRGBA(0xFEFEFE), "the opaque fallback")
         XCTAssertEqual(dark.popoverFill, AtticRGBA(0x363637))
-        XCTAssertEqual(light.dropdownHighlight, .black(0.05), "the hover fill: 5 % of the ink in Light")
-        XCTAssertEqual(dark.dropdownHighlight, .white(0.10), "10 % in Dark")
+        XCTAssertEqual(light.dropdownHighlight, light.ink(.body).withAlpha(0.08), "Accepted 10 Nov: 8 % title ink")
+        XCTAssertEqual(dark.dropdownHighlight, dark.ink(.body).withAlpha(0.08), "the same grey menu hover in Dark")
         XCTAssertEqual(light.dropdownSelected, .black(0.08), "the chosen day: 8 %")
         XCTAssertEqual(dark.dropdownSelected, .white(0.12), "12 %")
         XCTAssertEqual(light.dropdownRim, .white(0.5), "glass's light rim")
@@ -638,6 +681,127 @@ final class AtticDropdownTests: XCTestCase {
     /// Transparency give the opaque `popoverFill` card with no glass,
     /// whatever the controls setting. The glass's own colours are the OS's
     /// and are not pinned.
+    func testPickerGlassRequestsActiveAppearanceInANonKeyWindow() throws {
+        func flag(_ window: NSWindow, _ name: String) throws -> Bool {
+            let selector = NSSelectorFromString(name)
+            XCTAssertTrue(window.responds(to: selector))
+            typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+            let implementation = try XCTUnwrap(window.method(for: selector))
+            return unsafeBitCast(implementation, to: Getter.self)(window, selector)
+        }
+        let selectors = ["_hasActiveAppearanceIgnoringKeyFocus", "_hasActiveControls"]
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 240, height: 200),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: NSRect(x: -2_000_000, y: 400, width: 100, height: 100),
+                             styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        other.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 200))
+        window.contentView = root
+        defer { window.orderOut(nil); window.contentView = nil; window.close(); other.close() }
+        let before = try selectors.map { try flag(window, $0) }
+        let otherBefore = try selectors.map { try flag(other, $0) }
+        XCTAssertEqual(before, [false, false], "the source fixture starts inactive")
+        XCTAssertEqual(otherBefore, [false, false], "the second fixture starts inactive")
+        let key = NSApp.keyWindow
+        let first = AtticMenuLook.glass(frame: root.bounds, cornerRadius: 18)
+        let nested = AtticMenuLook.glass(frame: root.bounds, cornerRadius: 18)
+        root.addSubview(first)
+        root.addSubview(nested)
+        window.orderFront(nil)
+        root.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, [true, true], "a non-key picker has the menu window's active appearance")
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, otherBefore, "other windows retain AppKit's policy")
+        XCTAssertFalse(window.isKeyWindow)
+        XCTAssertTrue(NSApp.keyWindow === key, "appearance never takes the keyboard")
+        first.removeFromSuperview()
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, [true, true], "a nested picker keeps the lease")
+        try XCTUnwrap(other.contentView).addSubview(nested)
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, before, "reparenting releases the old window")
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, [true, true], "reparenting acquires the new window")
+        other.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, otherBefore, "replacing the content root releases the last picker")
+        XCTAssertTrue(NSApp.keyWindow === key)
+    }
+
+    /// A picker list has the command menu's cascade, rather than all
+    /// rows becoming visible with the card's first frame.
+    private final class PickerExitProbe: ObservableObject {
+        @Published var closing = false
+    }
+
+    private struct PickerExitProbeView: View {
+        @ObservedObject var model: PickerExitProbe
+        var body: some View {
+            VStack(spacing: 0) {
+                ForEach(0..<10) { index in
+                    AtticDropdownRow(title: "Choice", isHighlighted: true,
+                                     position: index + 1, itemCount: 10) {}
+                }
+            }
+            .frame(width: 200)
+            .modifier(AtticUnfoldCard(cornerRadius: 18))
+            .modifier(AtticUnfoldEffect(clock: model.closing ? 0.5 : 0.12,
+                                        closing: model.closing, fromTop: true))
+            .atticDesign(AtticDesignContext(mode: .light, surface: .solid))
+        }
+    }
+
+    func testClosingPickerDoesNotFlashUnarrivedRows() throws {
+        let model = PickerExitProbe()
+        let host = NSHostingView(rootView: PickerExitProbeView(model: model))
+        let window = NSWindow(contentRect: CGRect(x: -7000, y: -7000, width: 200, height: 320),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        func alpha(at y: CGFloat) throws -> CGFloat {
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+            return try XCTUnwrap(bitmap.colorAt(x: Int(150 * scale), y: Int(y * scale))).alphaComponent
+        }
+        spin(0.05)
+        XCTAssertGreaterThan(try alpha(at: 16), 0.002, "the early row is drawing")
+        XCTAssertLessThan(try alpha(at: 170), 0.005, "the middle rows have not arrived")
+        model.closing = true
+        spin(0.05)
+        XCTAssertGreaterThan(try alpha(at: 16), 0.002, "the card is still fading away")
+        XCTAssertLessThan(try alpha(at: 170), 0.005, "closing never flashes rows that were still hidden")
+    }
+
+    func testPickerRowsArriveInTheMenusCappedCascade() throws {
+        func pixels(reduced: Bool) throws -> NSBitmapImageRep {
+            let view = VStack(spacing: 0) {
+                ForEach(0..<10) { index in
+                    AtticDropdownRow(title: "Choice", isHighlighted: true,
+                                     position: index + 1, itemCount: 10) {}
+                }
+            }
+            .frame(width: 200)
+            .modifier(AtticUnfoldCard(cornerRadius: AtticDropdownMetrics.cornerRadius))
+            .modifier(AtticUnfoldEffect(clock: 0.22, closing: false, fromTop: true, reduced: reduced))
+            .atticDesign(AtticDesignContext(mode: .light, surface: .solid, reduceMotion: reduced))
+            let renderer = ImageRenderer(content: view)
+            return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+        }
+        let lively = try pixels(reduced: false)
+        let first = try XCTUnwrap(lively.colorAt(x: 150, y: 16))
+        let last = try XCTUnwrap(lively.colorAt(x: 150, y: 7 * 32 + 16))
+        XCTAssertGreaterThan(first.alphaComponent, 0.01, "the first row has begun arriving")
+        XCTAssertLessThan(last.alphaComponent, first.alphaComponent / 4,
+                          "later rows wait for their 30 ms slot, capped at 240 ms")
+        let reduced = try pixels(reduced: true)
+        XCTAssertEqual(try XCTUnwrap(reduced.colorAt(x: 150, y: 16)).alphaComponent,
+                       try XCTUnwrap(reduced.colorAt(x: 150, y: 7 * 32 + 16)).alphaComponent,
+                       accuracy: 0.005, "Reduced fades as one card with no stagger")
+    }
+
     func testAPickerCardWearsTheMenusGlassOrTheOpaqueCard() throws {
         func glassViews(in view: NSView) -> [NSGlassEffectView] {
             (view as? NSGlassEffectView).map { [$0] } ?? view.subviews.flatMap(glassViews)
@@ -664,6 +828,7 @@ final class AtticDropdownTests: XCTestCase {
                 if seeThrough {
                     XCTAssertEqual(glass.count, 1, "one system glass: \(label)")
                     let face = try XCTUnwrap(glass.first, label)
+                    XCTAssertTrue(face is AtticActiveMenuGlassView, "picker glass leases active menu appearance: \(label)")
                     XCTAssertEqual(face.style, .regular, label)
                     XCTAssertNil(face.tintColor, "untinted: \(label)")
                     XCTAssertEqual(face.cornerRadius, AtticDropdownMetrics.cornerRadius, label)
@@ -687,23 +852,29 @@ final class AtticDropdownTests: XCTestCase {
                 let image = try XCTUnwrap(renderer.cgImage)
                 let bitmap = NSBitmapImageRep(cgImage: image)
                 let height = CGFloat(image.height) / 2
-                let samples = try [margin + 1.5, height - margin - 1.5].map { y in
-                    try XCTUnwrap(bitmap.colorAt(x: Int((margin + cardWidth / 2) * 2), y: Int(y * 2))?.usingColorSpace(.sRGB), label)
+                // ImageRenderer emits sRGB bytes. On macOS 26 colorAt
+                // returns those values tagged as calibrated RGB; converting
+                // that NSColor to sRGB applies a second transfer function
+                // (#363637 becomes #464647). Read the encoded pixels directly.
+                XCTAssertEqual(image.colorSpace?.name, CGColorSpace.sRGB)
+                let samples = [margin + 1.5, height - margin - 1.5].map { y in
+                    var pixel = [UInt](repeating: 0, count: bitmap.samplesPerPixel)
+                    let sampleX = Int((margin + cardWidth / 2) * 2)
+                    let sampleY = Int(y * 2)
+                    bitmap.getPixel(&pixel, atX: sampleX, y: sampleY)
+                    return NSColor(srgbRed: CGFloat(pixel[0]) / 255, green: CGFloat(pixel[1]) / 255,
+                                   blue: CGFloat(pixel[2]) / 255, alpha: CGFloat(pixel[3]) / 255)
                 }
                 for c in samples {
                     XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "opaque: \(label)")
                     XCTAssertEqual(Double(c.redComponent), Double(samples[0].redComponent), accuracy: 0.01, "one even face: \(label)")
                     XCTAssertEqual(Double(c.greenComponent), Double(c.redComponent), accuracy: 0.02, "grey, nothing shows through: \(label)")
                 }
-                if mode == .light {
-                    let fill = try XCTUnwrap(design.tokens.popoverFill.nsColor.usingColorSpace(.sRGB), label)
-                    XCTAssertEqual(Double(samples[0].redComponent), Double(fill.redComponent), accuracy: 0.02, "popoverFill: \(label)")
-                    XCTAssertEqual(Double(samples[0].greenComponent), Double(fill.greenComponent), accuracy: 0.02, "popoverFill: \(label)")
-                    XCTAssertEqual(Double(samples[0].blueComponent), Double(fill.blueComponent), accuracy: 0.02, "popoverFill: \(label)")
-                } else {
-                    // Dark draws #464647 here against popoverFill's #363637
-                    // (reported 13 Nov for the menus-conform job): pin a dark card only.
-                    XCTAssertLessThan(Double(samples[0].redComponent), 0.35, "a dark card: \(label)")
+                let fill = try XCTUnwrap(design.tokens.popoverFill.nsColor.usingColorSpace(.sRGB), label)
+                for sample in samples {
+                    XCTAssertEqual(Double(sample.redComponent), Double(fill.redComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
+                    XCTAssertEqual(Double(sample.greenComponent), Double(fill.greenComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
+                    XCTAssertEqual(Double(sample.blueComponent), Double(fill.blueComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
                 }
             }
         }
@@ -2510,8 +2681,9 @@ final class AtticDateCardTests: XCTestCase {
                        "typed text that matches nothing picks nothing")
     }
 
-    /// Draft C (owner, 2026-10-23: "the menus look good") supersedes E1's
-    /// Compact size (2026-10-05): the Craft spec sized for the panel.
+    /// Picker contents retain their own metrics. Accepted 13 Nov replaces
+    /// the old card geometry with 18/6/12 pt corners/inset/highlight and a
+    /// 200 pt minimum; it does not change the date grid or 32 pt rows.
     func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
@@ -2526,7 +2698,7 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
         XCTAssertEqual(m.inset + m.fieldInset, 6, "the field shares the Accepted 6 pt card inset")
-        XCTAssertEqual(m.minWidth, 150)
+        XCTAssertEqual(m.minWidth, 200, "menus-conform: picker cards share the 200 pt menu minimum")
         XCTAssertEqual(m.panelMargin, 12)
         XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.dropdownHeading.spec.size, 13)
@@ -2601,6 +2773,21 @@ extension AtticDropdownTests {
     /// and fading in on a spring of 0.30 s, bounce 0.28 (sampled on a
     /// linear clock over its settling time); it closes with an ease-in
     /// 0.12 s fade and shrink back toward the anchor. No travel, no blur.
+    func testPickerSamplesTheSameSpringAsCommandMenus() {
+        for (duration, bounce) in [(0.30, 0.28), (0.34, 0.12), (0.20, 0.0)] {
+            let system = Spring(duration: duration, bounce: bounce)
+            let command = CASpringAnimation(perceptualDuration: duration, bounce: CGFloat(bounce))
+            XCTAssertEqual(system.mass, command.mass, accuracy: 1e-9)
+            XCTAssertEqual(system.stiffness, command.stiffness, accuracy: 1e-9)
+            XCTAssertEqual(system.damping, command.damping, accuracy: 1e-9)
+            for time in [0.0, 0.03, 0.07, 0.12, 0.20, 0.30] {
+                let expected: Double = system.value(target: 1.0, time: time)
+                XCTAssertEqual(AtticDropdownReveal.spring(at: time, duration: duration, bounce: bounce), expected,
+                               accuracy: 1e-6, "same platform spring at \(time), duration \(duration), bounce \(bounce)")
+            }
+        }
+    }
+
     func testR13TheCardGrowsFromItsCornerOnTheSpringAndShrinksBackEasingIn() {
         let r = AtticDropdownReveal.self
         XCTAssertEqual(r.closeDuration, 0.12, accuracy: 1e-9)

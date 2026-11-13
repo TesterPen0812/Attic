@@ -796,7 +796,7 @@ enum NoteFormatCaptureScene {
                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                                  clickCount: 1, pressure: 1),
                   let menu = textView.menu(for: event) else { return }
-            menu.popUp(positioning: nil, at: NSPoint(x: rect.midX, y: rect.maxY), in: textView)
+            NoteGlassContextMenu.open(menu, in: textView, event: event)
         case "formatmenu":
             let target = range(of: "most people", in: textView)
             textView.setSelectedRange(target)

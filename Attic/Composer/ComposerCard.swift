@@ -802,8 +802,7 @@ struct ComposerCard: View {
 
 /// The card's pickers (date, tags, an event's length and calendar): each
 /// opens from the whole card, above it, so it never covers the card it
-/// edits, and stays solid while it opens and goes (Accepted 2026-11-04,
-/// #4 and #5).
+/// edits. Its open/close motion is the shared menu spring and fade.
 private struct ComposerPickers<Picker: View>: ViewModifier {
     @Binding var open: ComposerCard.Chip?
     let label: String
@@ -825,7 +824,7 @@ private struct ComposerPickers<Picker: View>: ViewModifier {
 
         func body(content: Content) -> some View {
             content.atticDropdown(isPresented: Binding(get: { open == chip }, set: { if !$0, open == chip { open = nil } }),
-                                  prefer: .above, label: label, opaqueMotion: true) {
+                                  prefer: .above, label: label) {
                 picker(chip)
             }
         }

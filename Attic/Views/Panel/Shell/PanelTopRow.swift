@@ -548,13 +548,17 @@ struct PanelTopRowMoreButton: View {
             dotted(AtticRaisedButton(systemName: "ellipsis.circle", label: "Options", size: CGSize(width: side, height: side),
                                      help: String(localized: "Options"), emphasisedGlyph: true,
                                      flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
-                guard let view = anchor.view else { return }
-                AtticNativeMenu.popUp(commands(), in: view)
+                anchor.open(commands())
             })
             .atticDesignCorners()
             .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
             .accessibilityHint(String(localized: "Opens a menu"))
-            .accessibilityValue(filtered ? String(localized: "Filters on") : "")
+            .accessibilityRepresentation {
+                AtticMenuButtonAccessibility(label: String(localized: "Options"),
+                                             value: filtered ? String(localized: "Filters on") : nil) { _ in
+                    anchor.open(commands(), event: nil)
+                }
+            }
             .accessibilityIdentifier("panel-more-button")
         }
     }

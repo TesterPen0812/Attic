@@ -127,6 +127,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// and title menus) are the system's own AppKit controls when hosted,
     /// and what they draw meets the same rule as Attic's own ink.
     func testNativeControlsAreHostedAsTheSystemsOwn() throws {
+        // Glass menus requested through AX are exercised with their real
+        // AppKit layout but without ordering a floating window onto the
+        // owner's display from the invisible test host.
+        AtticGlassMenu.ordersCardsFront = false
+        defer { AtticGlassMenu.ordersCardsFront = true }
         // The Craft-style controls: a cached display cannot draw Liquid
         // Glass, so the bar's face must be drawn for its placeholder to be
         // read from pixels (the read ink is then judged on the glass too).
@@ -165,12 +170,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             perform(kAXIncrementAction as String, on: slider.element)
             XCTAssertGreaterThan(tint, before, "\(context.caption): the slider's increment moves Tint length")
 
-            // The title menu is a native menu button: VoiceOver sees a menu
-            // button that can be pressed. The pop-up row is a plain button
-            // that opens Attic's own opaque list (round 13), so it is not
-            // a menu button; its list is covered by TasksRound13Tests.
+            // Both the title menu and the Settings pop-up open through
+            // Attic's glass menu. VoiceOver sees each as a menu button,
+            // which can be pressed or asked to Show Menu.
             let menus = items.filter { $0.role == kAXPopUpButtonRole as String || $0.role == kAXMenuButtonRole as String }
-            XCTAssertGreaterThanOrEqual(menus.count, 1, "\(context.caption): the title menu is not a menu button: \(items.map(\.role))")
+            XCTAssertGreaterThanOrEqual(menus.count, 2, "\(context.caption): a menu control is missing its AX menu role: \(items.map(\.role))")
             for menu in menus {
                 XCTAssertTrue(menu.actions.contains(kAXPressAction as String) || menu.actions.contains("AXShowMenu"),
                               "\(context.caption): a menu button VoiceOver cannot press: \(menu.actions)")
@@ -188,7 +192,8 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(menus.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
             if !opened.isEmpty {
                 let titles = opened.flatMap { $0 }
-                XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): a menu opened without its items: \(opened)")
+                XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): title menu missing its items: \(opened)")
+                XCTAssertTrue(titles.contains("Solid"), "\(context.caption): Settings choices missing: \(opened)")
             } else {
                 XCTContext.runActivity(named: "Menus did not open in the inactive unit-test host (\(ProcessInfo.processInfo.operatingSystemVersionString)); AtticNativeMenuUITests covers opening") { _ in }
             }
@@ -522,10 +527,20 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             let began = expectation(description: "menu began tracking")
             began.assertForOverFulfill = false
             let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
-                guard let tracked = note.object as? NSMenu else { return }
-                opened.append(tracked.items.map(\.title))
-                began.fulfill()
-                DispatchQueue.main.async { tracked.cancelTracking() }
+                MainActor.assumeIsolated {
+                    guard let tracked = note.object as? NSMenu else { return }
+                    let glass = tracked === AtticGlassMenu.trackingObject
+                    opened.append(glass ? AtticGlassMenu.current.map { AtticMenuCommand.titles(in: $0.commands) } ?? []
+                                        : tracked.items.map(\.title))
+                    began.fulfill()
+                    if glass {
+                        // Tracking enters a nested AppKit event loop: close
+                        // synchronously while this notification is delivered.
+                        AtticGlassMenu.current?.close()
+                    } else {
+                        DispatchQueue.main.async { tracked.cancelTracking() }
+                    }
+                }
             }
             let action = menu.actions.contains("AXShowMenu") ? "AXShowMenu" : kAXPressAction as String
             AXUIElementPerformAction(menu.element, action as CFString)

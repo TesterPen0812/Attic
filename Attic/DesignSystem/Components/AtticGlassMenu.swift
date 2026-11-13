@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ObjectiveC
 
 // MARK: - Glass menus (Loam's, Accepted 2026-11-10)
 //
@@ -10,7 +11,7 @@ import SwiftUI
 /// Attic's command menus on glass: the right-click menus, ⋯ and ⇧⌘I, and
 /// every other menu built from `AtticMenuCommand`s, in Loam's glass menu
 /// (Accepted 2026-11-10). Each level is its own floating card of real
-/// system glass with 18 pt corners, 6 pt padding, 32 pt rows, a 20 pt icon
+/// system glass with 18 pt corners, 6 pt padding, 28 pt rows, a 20 pt icon
 /// column, a shortcut or value at the trailing edge and a highlight that
 /// slides from row to row; a submenu is a separate card beside its row.
 /// A card comes out of the control that opened it (leading or trailing
@@ -52,6 +53,11 @@ final class AtticGlassMenu {
 
     /// The menu tracking now (one at a time, as with `NSMenu`).
     private(set) static var current: AtticGlassMenu?
+    /// An accessibility action or a second trigger can request a menu while
+    /// the previous one's nested tracking loop is still unwinding. Keep the
+    /// last request so its click cannot silently disappear.
+    private static var pendingRequest: Request?
+    private static var requestScheduled = false
     /// The design the cards draw with, kept current by the panel's design
     /// context (`atticDesignFromSystem`); the mode follows the source
     /// window's appearance.
@@ -108,28 +114,20 @@ final class AtticGlassMenu {
 
     // MARK: Opening
 
-    /// Opens the menu and tracks it until it closes, then runs the chosen
-    /// command (as a menu choice, `AtticTextInput.choosing`). Returns the
-    /// command chosen, if any.
-    @discardableResult
-    static func popUp(_ commands: [AtticMenuCommand], in view: NSView, placement: Placement,
-                      opener: NSEvent? = NSApp.currentEvent) -> AtticMenuCommand? {
-        guard current == nil, let window = view.window, !commands.isEmpty else { return nil }
-        // Quick look (owner, 12 Nov: "proper liquid glass and proper
-        // shadows and outline or whatever goes into a proper menu"): the
-        // system's own menu, which macOS draws in Liquid Glass with its own
-        // shadow and outline. Its items run their commands themselves.
-        if AtticMenuLook.native {
-            let menu = AtticNativeMenu.makeContextMenu(commands, appearance: window.effectiveAppearance)
-            let location: NSPoint
-            switch placement {
-            case let .point(point): location = point
-            case let .below(rect):
-                location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + AtticMenuLook.gap : rect.minY - AtticMenuLook.gap)
-            }
-            menu.popUp(positioning: nil, at: location, in: view)
-            return nil
-        }
+    /// Snapshot the source window and trigger geometry *before* deferring.
+    /// SwiftUI can replace the anchor during the click that requests a menu;
+    /// looking up `view.window` on the next turn silently lost that click.
+    private struct Request {
+        let commands: [AtticMenuCommand]
+        let screen: ScreenPlacement
+        let window: NSWindow
+        let appearance: NSAppearance
+        let opener: NSEvent?
+    }
+
+    private static func request(_ commands: [AtticMenuCommand], in view: NSView,
+                                placement: Placement, opener: NSEvent?) -> Request? {
+        guard let window = view.window, !commands.isEmpty else { return nil }
         let screen: ScreenPlacement
         switch placement {
         case let .point(point):
@@ -138,13 +136,37 @@ final class AtticGlassMenu {
         case let .below(rect):
             screen = .below(window.convertToScreen(view.convert(rect, to: nil)))
         }
-        let menu = AtticGlassMenu(commands, appearance: window.effectiveAppearance, opener: opener)
+        return Request(commands: commands, screen: screen, window: window,
+                       appearance: window.effectiveAppearance, opener: opener)
+    }
+
+    /// Opens the menu and tracks it until it closes, then runs the chosen
+    /// command (as a menu choice, `AtticTextInput.choosing`). Returns the
+    /// command chosen, if any.
+    @discardableResult
+    static func popUp(_ commands: [AtticMenuCommand], in view: NSView, placement: Placement,
+                      opener: NSEvent? = NSApp.currentEvent) -> AtticMenuCommand? {
+        guard let request = request(commands, in: view, placement: placement, opener: opener) else { return nil }
+        return popUp(request)
+    }
+
+    @discardableResult
+    private static func popUp(_ request: Request) -> AtticMenuCommand? {
+        guard request.window.contentView != nil else { return nil }
+        if let current {
+            pendingRequest = request
+            current.close()
+            return nil
+        }
+        pendingRequest = nil
+        let window = request.window
+        let menu = AtticGlassMenu(request.commands, appearance: request.appearance, opener: request.opener)
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
         // Kept inside the panel when it fits (Menu look picks, placement B).
         let panel = (window as? AtticPanel)?.visibleContentFrame
-        menu.open(screen, visible: visible, source: window, container: window.frame, panel: panel)
+        menu.open(request.screen, visible: visible, source: window, container: window.frame, panel: panel)
         current = menu
-        let info: [AnyHashable: Any]? = opener.map { [openerKey: $0] }
+        let info: [AnyHashable: Any]? = request.opener.map { [openerKey: $0] }
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackingObject, userInfo: info)
         #if DEBUG
         if let testDriver {
@@ -158,18 +180,33 @@ final class AtticGlassMenu {
         #endif
         current = nil
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackingObject, userInfo: info)
+        // Tracking has returned to the normal event loop. Open the newest
+        // request on its next turn so the previous card can finish closing.
+        schedulePendingRequest()
         guard let chosen = menu.chosen else { return nil }
         AtticTextInput.choosing(chosen.menuShortcut, chosen.action)
         return chosen
     }
 
-    /// Opens on the next turn of the run loop, so the caller's own event
-    /// finishes first (a button's click, a right-click's press).
+    /// Opens on the next turn of the run loop, after the caller's own event.
+    /// Use the snapshotted window and placement even when SwiftUI has already
+    /// detached the specific anchor that was under the pointer.
     static func popUpLater(_ commands: [AtticMenuCommand], in view: NSView, placement: Placement,
                            opener: NSEvent? = NSApp.currentEvent) {
+        guard let request = request(commands, in: view, placement: placement, opener: opener) else { return }
+        pendingRequest = request
+        if let current { current.close() }
+        else { schedulePendingRequest() }
+    }
+
+    private static func schedulePendingRequest() {
+        guard pendingRequest != nil, !requestScheduled else { return }
+        requestScheduled = true
         DispatchQueue.main.async {
-            guard view.window != nil else { return }
-            popUp(commands, in: view, placement: placement, opener: opener)
+            requestScheduled = false
+            guard current == nil, let next = pendingRequest else { return }
+            pendingRequest = nil
+            popUp(next)
         }
     }
 
@@ -370,9 +407,14 @@ final class AtticGlassMenu {
             pointerMoved(to: Self.screenPoint(of: event))
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if locate(Self.screenPoint(of: event)) == nil, cardIndex(at: Self.screenPoint(of: event)) == nil {
-                // A click outside closes the menu and goes nowhere else,
-                // as a native menu's does.
+                // Give a click on a second menu trigger to that trigger.
+                // Swallowing its down event left only a mouse-up for SwiftUI,
+                // so a click on ⋯ while another menu tracked opened nothing.
+                // After closing, its event is handled by the normal app loop.
                 close()
+                if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                    NSApp.postEvent(event, atStart: true)
+                }
             }
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             release(at: Self.screenPoint(of: event), timestamp: event.timestamp)
@@ -773,10 +815,9 @@ struct AtticGlassMenuStyle {
 
     var dark: Bool { design.mode == .dark }
     var reduceMotion: Bool { design.reduceMotion }
-    /// The card wears the panel's own material (owner, 12 Nov: "the same
-    /// material as the panel"), so it is see-through exactly when the panel
-    /// is: Glass or Frosted, not Solid, not made solid by Reduce
-    /// Transparency. The controls setting no longer changes the card.
+    /// The active system menu's glass (Accepted 12 Nov evening) on Glass
+    /// and Frosted; the opaque fallback on Solid or Reduce Transparency.
+    /// The controls setting does not change a menu card.
     var isSeeThrough: Bool { AtticSurfaceInk.seeThrough(tokens) }
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
@@ -802,7 +843,7 @@ struct AtticGlassMenuStyle {
     }
     /// The highlight: 8 % ink (16 % under Increase Contrast).
     var highlight: NSColor {
-        return title.withAlphaComponent(design.increaseContrast ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha)
+        tokens.dropdownHighlight.nsColor
     }
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var rim: NSColor {
@@ -812,8 +853,8 @@ struct AtticGlassMenuStyle {
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
     var shadow: NSColor { tokens.dropdownShadow.nsColor }
 
-    /// The card is the panel's material, so its greys are the panel's
-    /// (see-through on Glass and Frosted, opaque and floored on Solid).
+    /// The menu keeps the panel's ink policy: see-through on Glass and
+    /// Frosted, opaque and floored on Solid.
     private func secondary(_ tone: AtticPanelTone) -> NSColor {
         AtticSurfaceInk.toneInk(tone, tokens: tokens).nsColor
     }
@@ -975,10 +1016,9 @@ final class AtticGlassMenuCard {
         let hasIcons: Bool
     }
 
-    /// Loam's 32 pt rows inside 6 pt of padding; an 11 pt band with a
-    /// hairline before each new section; a 26 pt title for a titled
-    /// section. As wide as `minimum` (the control that opened it) and at
-    /// least 216 pt, or `width` when the menu names one; wider when its
+    /// The picked 28 pt rows inside 6 pt of padding, with compact ruled
+    /// groups and their headings. As wide as `minimum` (the control that
+    /// opened it) and at least 200 pt, or `width` when named; wider when its
     /// rows need it, up to 280 pt, past which a row is cut short.
     static func layout(_ commands: [AtticMenuCommand], width declared: CGFloat? = nil, minimum: CGFloat = 0) -> Layout {
         let m = AtticMenuMetrics.self
@@ -1125,6 +1165,7 @@ final class AtticGlassMenuCard {
     /// on the spring while its rows arrive one after another; under Reduce
     /// Motion it only fades.
     func show(animated: Bool, from corner: AtticGlassMenu.Corner) {
+        let animated = animated && (!menu.style.reduceMotion || AtticReducedMotionStyle.current == .fade)
         self.corner = corner
         window.alphaValue = 1
         #if DEBUG
@@ -1160,6 +1201,7 @@ final class AtticGlassMenuCard {
     /// corner it grew from (a fade only under Reduce Motion); at once when
     /// not `animated`.
     func hide(animated: Bool) {
+        let animated = animated && (!menu.style.reduceMotion || AtticReducedMotionStyle.current == .fade)
         guard !isHidden else { return }
         isHidden = true
         let window = self.window
@@ -1433,7 +1475,7 @@ enum AtticMenuLook {
     /// and the white wash used to match the menu's brightness over light
     /// backgrounds hid the glass (owner: "but are they glass?").
     static func glass(frame: NSRect, cornerRadius: CGFloat) -> NSGlassEffectView {
-        let glass = NSGlassEffectView(frame: frame)
+        let glass = AtticActiveMenuGlassView(frame: frame)
         glass.style = .regular
         glass.cornerRadius = cornerRadius
         return glass
@@ -1441,6 +1483,81 @@ enum AtticMenuLook {
 
     /// Nothing over the glass.
     static func lift(dark: Bool) -> AtticRGBA { .white(0) }
+}
+
+/// AppKit asks the *window* about activity, even for a glass view embedded
+/// in SwiftUI. Lease that appearance while a picker is attached, without
+/// making its window key or changing the panel's first-mouse policy.
+final class AtticActiveMenuGlassView: NSGlassEffectView {
+    private weak var leasedWindow: NSWindow?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if leasedWindow !== newWindow {
+            if let leasedWindow { AtticMenuGlassActivity.release(leasedWindow) }
+            leasedWindow = nil
+            if let newWindow, !(newWindow is AtticGlassMenuWindow) {
+                AtticMenuGlassActivity.acquire(newWindow)
+                leasedWindow = newWindow
+            }
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+}
+
+/// These are the same private AppKit queries that NSPopupMenuWindow and
+/// AtticGlassMenuWindow answer. The intercept forwards to AppKit unchanged
+/// for every unleased window; a weak, counted lease covers nested pickers.
+/// Keeping the forwarding on NSWindow also covers Settings and mini windows.
+@MainActor
+private enum AtticMenuGlassActivity {
+    private static let leases = NSMapTable<NSWindow, NSNumber>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+    private static let installed: Bool = {
+        let pairs = [("_hasActiveAppearanceIgnoringKeyFocus", "attic_menuHasActiveAppearance"),
+                     ("_hasActiveControls", "attic_menuHasActiveControls")]
+        let methods = pairs.compactMap { original, replacement -> (Method, Method)? in
+            guard let first = class_getInstanceMethod(NSWindow.self, NSSelectorFromString(original)),
+                  let second = class_getInstanceMethod(NSWindow.self, NSSelectorFromString(replacement)) else { return nil }
+            return (first, second)
+        }
+        guard methods.count == pairs.count else { return false }
+        for (first, second) in methods { method_exchangeImplementations(first, second) }
+        return true
+    }()
+
+    static func contains(_ window: NSWindow) -> Bool { (leases.object(forKey: window)?.intValue ?? 0) > 0 }
+
+    static func acquire(_ window: NSWindow) {
+        guard installed else { return }
+        let count = leases.object(forKey: window)?.intValue ?? 0
+        leases.setObject(NSNumber(value: count + 1), forKey: window)
+        if count == 0 { refresh(window) }
+    }
+
+    static func release(_ window: NSWindow) {
+        let count = leases.object(forKey: window)?.intValue ?? 0
+        guard count > 0 else { return }
+        if count == 1 { leases.removeObject(forKey: window); refresh(window) }
+        else { leases.setObject(NSNumber(value: count - 1), forKey: window) }
+    }
+
+    private static func refresh(_ window: NSWindow) {
+        // Joining/leaving a hierarchy can happen in SwiftUI's layout pass.
+        // Ask for the native appearance refresh after that pass has ended.
+        DispatchQueue.main.async { [weak window] in
+            let selector = NSSelectorFromString("_sendForcedWindowChangedKeyState")
+            if let window, window.responds(to: selector) { _ = window.perform(selector) }
+        }
+    }
+}
+
+extension NSWindow {
+    @objc dynamic fileprivate func attic_menuHasActiveAppearance() -> Bool {
+        AtticMenuGlassActivity.contains(self) || attic_menuHasActiveAppearance()
+    }
+
+    @objc dynamic fileprivate func attic_menuHasActiveControls() -> Bool {
+        AtticMenuGlassActivity.contains(self) || attic_menuHasActiveControls()
+    }
 }
 
 /// The system menu's glass in SwiftUI (the picker cards).
@@ -2161,8 +2278,9 @@ enum AtticContextMenus {
         // outside the card, which closes it (keeping its draft) first.
         for shield in activeShields(for: event) { shield.onOutsidePress() }
         let location = event.locationInWindow
+        let build = anchor.build
         DispatchQueue.main.async {
-            guard let content = anchor.window?.contentView, let commands = anchor.build?(), !commands.isEmpty else { return }
+            guard let content = window.contentView, let commands = build?(), !commands.isEmpty else { return }
             AtticGlassMenu.popUp(commands, in: content, placement: .point(content.convert(location, from: nil)), opener: event)
         }
         guard event.type == .leftMouseDown else { return event }
@@ -2267,8 +2385,7 @@ private struct AtticContextMenuModifier: ViewModifier {
             .background(AtticContextMenuAnchor(build: build).accessibilityHidden(true))
             .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
             .accessibilityAction(.showMenu) {
-                guard let view = anchor.view else { return }
-                AtticGlassMenu.popUpLater(build(), in: view, placement: .below(view.bounds), opener: nil)
+                anchor.open(build(), event: nil)
             }
     }
 }

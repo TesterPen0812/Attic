@@ -351,12 +351,19 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(try store.library().count, 1)
     }
 
+    func testLibraryCommandsUseThePickedMenuRowHeight() {
+        let fixture = seed()
+        let model = menu(fixture, open: fixture.kitchen)
+        XCTAssertEqual(DrawLibraryMetrics.height(of: model.rows[0]), 28)
+        XCTAssertEqual(DrawPageMetrics.menuGap, 8, "the menu opens 8 pt from its title control")
+    }
+
     func testTheMenuIsTheMenusWideCardWithItsRows() {
         let seed = seed()
         let model = menu(seed, open: seed.kitchen)
         // 3 canvases + New canvas + 7 commands, one rule.
         let list = DrawLibraryMetrics.listHeight(model.rows)
-        XCTAssertEqual(list, 11 * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.separatorHeight)
+        XCTAssertEqual(list, 11 * AtticMenuMetrics.rowHeight + AtticDropdownMetrics.separatorHeight)
         func size(_ view: DrawLibraryMenu) -> CGSize {
             let host = NSHostingView(rootView: view.atticDesign(AtticDesignContext()))
             host.layout()
@@ -366,8 +373,8 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(roomy.width, AtticMenuMetrics.wideWidth, accuracy: 0.5)
         XCTAssertEqual(roomy.height, list + AtticGlassMenuShape.inset * 2, accuracy: 0.5)
         let capped = size(DrawLibraryMenu(model: model))
-        XCTAssertEqual(capped.height, DrawLibraryMetrics.maxListHeight + AtticGlassMenuShape.inset * 2, accuracy: 0.5,
-                       "past its room the list scrolls")
+        XCTAssertEqual(capped.height, min(list, DrawLibraryMetrics.maxListHeight) + AtticGlassMenuShape.inset * 2, accuracy: 0.5,
+                       "the picked 28 pt rows fit; longer lists still scroll")
     }
 
     // MARK: Search

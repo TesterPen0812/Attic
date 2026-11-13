@@ -998,7 +998,8 @@ struct AtticColorTokens: Equatable, Sendable {
 
         // Compact dropdown text is tuned after the normal ladder and surfaces,
         // keeping the helper ladder and coverage recipe unchanged.
-        let dropdownHighlight = dark ? AtticRGBA.white(ic ? 0.18 : 0.10) : AtticRGBA.black(ic ? 0.12 : 0.05)
+        // One hover for command menus and picker cards (Accepted 10 Nov).
+        let dropdownHighlight = inks[.body]!.withAlpha(Double(ic ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha))
         inks[.dropdownSmallText] = inks[.helper]!.tuned(
             toContrast: textTarget,
             against: [popoverFill, dropdownHighlight.over(popoverFill)],

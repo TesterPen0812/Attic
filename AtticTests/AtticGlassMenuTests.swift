@@ -60,6 +60,224 @@ final class AtticGlassMenuTests: XCTestCase {
         return menu
     }
 
+    /// A page can replace its SwiftUI anchor in the same turn as the click
+    /// (a first click after reveal or a menu switch). The deferred request
+    /// belongs to the source window, even if that particular view leaves.
+    func testDeferredOpenSurvivesTheAnchorBeingRebuilt() {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 280))
+        window.contentView = root
+        let anchor = NSView(frame: NSRect(x: 210, y: 220, width: 32, height: 32))
+        root.addSubview(anchor)
+        var opened = 0
+        AtticGlassMenu.testDriver = { _ in opened += 1 }
+        AtticGlassMenu.popUpLater([AtticMenuCommand(verbatim: "Options") {}], in: anchor,
+                                 placement: .below(anchor.bounds), opener: nil)
+        anchor.removeFromSuperview() // SwiftUI replaced the button during its own action.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(opened, 1, "a menu request does not vanish with its presenting view")
+        window.contentView = nil
+        window.close()
+    }
+
+    func testContextRequestSurvivesItsAnchorBeingRebuilt() throws {
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let anchor = AtticContextMenuAnchor.AnchorView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        anchor.build = { [AtticMenuCommand(verbatim: "Context options") {}] }
+        window.contentView?.addSubview(anchor)
+        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 40, y: 40),
+            modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 720, clickCount: 1, pressure: 1))
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { opened.append($0.commands[0].title) }
+        _ = AtticContextMenus.route(press)
+        anchor.removeFromSuperview()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(opened, ["Context options"], "the native context press keeps its window and producer")
+    }
+
+    /// The first press after a panel/layout rebuild must still open when
+    /// SwiftUI has detached the represented anchor before dispatching it.
+    /// This is shared by the top-row ⋯ and the menu buttons in other pages.
+    func testDetachedMenuButtonAnchorOpensUsingItsLastWindowLocation() {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 280))
+        window.contentView = root
+        let holder = AtticMenuAnchor.Holder()
+        let anchor = AtticMenuAnchor.AnchorView(frame: NSRect(x: 210, y: 220, width: 32, height: 32))
+        anchor.holder = holder
+        root.addSubview(anchor)
+        holder.remember(anchor)
+        anchor.removeFromSuperview()
+        XCTAssertNil(anchor.window)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { opened.append($0.commands[0].title) }
+        holder.open([AtticMenuCommand(verbatim: "⋯ options") {}], event: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(opened, ["⋯ options"], "the click survives the represented NSView being removed")
+    }
+
+    /// A first click can arrive before SwiftUI attaches the represented
+    /// anchor to the newly shown panel; that click itself names the window.
+    func testFirstMenuClickBeforeAnchorAttachesUsesTheClickWindow() throws {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 280))
+        let holder = AtticMenuAnchor.Holder()
+        XCTAssertNil(holder.view)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp,
+            location: CGPoint(x: 260, y: 250), modifierFlags: [], timestamp: 52,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 813, clickCount: 1, pressure: 1))
+        var opened = 0
+        AtticGlassMenu.testDriver = { _ in opened += 1 }
+        holder.open([AtticMenuCommand(verbatim: "First-click options") {}], event: click)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(opened, 1, "a fresh panel's first menu click does not require a prior layout pass")
+    }
+
+    /// Only the newest pending menu should win if a second trigger is
+    /// clicked repeatedly before a first menu's tracking has unwound.
+    func testRapidMenuRequestsDuringTrackingAlwaysShowTheLatestClick() {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 30, y: 40, width: 32, height: 32))
+        window.contentView?.addSubview(anchor)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { menu in
+            opened.append(menu.commands[0].title)
+            if opened.count == 1 {
+                for count in 0..<12 {
+                    AtticGlassMenu.popUpLater([AtticMenuCommand(verbatim: "Rapid \(count)") {}], in: anchor,
+                                             placement: .below(anchor.bounds), opener: nil)
+                }
+            }
+        }
+        AtticGlassMenu.popUp([AtticMenuCommand(verbatim: "First") {}], in: anchor,
+                             placement: .below(anchor.bounds), opener: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+        XCTAssertEqual(opened, ["First", "Rapid 11"], "repeated clicks never leave the menu control inert")
+    }
+
+    func testRapidRequestsBeforeTrackingCoalesceToTheLatestMenu() {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 30, y: 40, width: 32, height: 32))
+        window.contentView?.addSubview(anchor)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { opened.append($0.commands[0].title) }
+        for index in 0..<12 {
+            AtticGlassMenu.popUpLater([AtticMenuCommand(verbatim: "Rapid \(index)") {}], in: anchor,
+                                     placement: .below(anchor.bounds), opener: nil)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+        XCTAssertEqual(opened, ["Rapid 11"], "obsolete requests never reopen over the newest menu")
+    }
+
+    /// An AX menu action or another command can request a menu while one is
+    /// still tracking. The latest request must open after tracking ends.
+    func testMenuRequestedDuringAnotherMenusTrackingIsNotDropped() {
+        let window = NSWindow(contentRect: NSRect(x: -7000, y: -7000, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 40, y: 40, width: 32, height: 32))
+        window.contentView?.addSubview(anchor)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { menu in
+            opened.append(menu.commands[0].title)
+            if menu.commands[0].title == "First" {
+                AtticGlassMenu.popUpLater([AtticMenuCommand(verbatim: "Second") {}], in: anchor,
+                                         placement: .below(anchor.bounds), opener: nil)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.04))
+            }
+        }
+        AtticGlassMenu.popUp([AtticMenuCommand(verbatim: "First") {}], in: anchor,
+                            placement: .below(anchor.bounds), opener: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+        XCTAssertEqual(opened, ["First", "Second"])
+    }
+
+    /// Settings' choice rows and the other menu controls share the
+    /// macOS 27 AXMenuButton implementation, preserving the selected value
+    /// as well as the visible name and both keyboard/VoiceOver actions.
+    func testMenuButtonAccessibilityKeepsItsNameValueAndActions() {
+        let button = AtticMenuButtonAccessibility.ButtonView(frame: .zero)
+        button.menuLabel = "Surface"
+        button.menuValue = "Solid"
+        var presses = 0
+        button.open = { _ in presses += 1 }
+        XCTAssertTrue(button.isAccessibilityElement())
+        XCTAssertEqual(button.accessibilityRole(), .menuButton)
+        XCTAssertEqual(button.accessibilityLabel(), "Surface")
+        XCTAssertEqual(button.accessibilityTitle(), "Surface")
+        XCTAssertEqual(button.accessibilityValue() as? String, "Solid")
+        XCTAssertTrue(button.accessibilityPerformPress())
+        XCTAssertTrue(button.accessibilityPerformShowMenu())
+        XCTAssertEqual(presses, 2)
+    }
+
+    /// A second ⋯ is a new click, even while the first menu's nested event
+    /// loop is running. Losing the mouse-down left its SwiftUI button with a
+    /// mouse-up alone, so nothing opened.
+    func testOutsideClickReachesTheNextMenuTrigger() throws {
+        let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "First") {}])
+        defer { menu.close(animated: false) }
+        let window = NSWindow(contentRect: NSRect(x: -8000, y: -8000, width: 200, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 24, y: 24),
+            modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 9013, clickCount: 1, pressure: 1))
+        menu.handle(down)
+        XCTAssertFalse(menu.isOpen, "the old menu closes before the new control gets the click")
+        let delivered = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.05),
+                                        inMode: .default, dequeue: true)
+        XCTAssertEqual(delivered?.eventNumber, down.eventNumber, "the new ⋯ receives its entire press")
+    }
+
+    /// Seeded interaction sequences pin the state invariants across rapid
+    /// keyboard navigation, submenu opening, closing and reopening.
+    func testSeededMenuOpeningAndNavigationSequences() {
+        let keys: [UInt16] = [125, 126, 124, 123, 53, 36, 49, 115, 119]
+        for seed in [UInt64(0xB17), 0x130B, 0xC0DE, 0xF150, 0xCAFE] {
+            var state = seed
+            var menu = openForAccessibilityGeometry(commands())
+            for step in 0..<440 {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                if !menu.isOpen { menu = openForAccessibilityGeometry(commands()) }
+                menu.handle(key(keys[Int((state >> 32) % UInt64(keys.count))], time: Double(step)))
+                guard menu.isOpen else { continue }
+                XCTAssertFalse(menu.cards.isEmpty, "seed \(seed), step \(step)")
+                XCTAssertTrue(menu.cards.indices.contains(menu.focus), "seed \(seed), step \(step)")
+                XCTAssertLessThanOrEqual(menu.cards.count, 3, "seed \(seed), step \(step)")
+                for card in menu.cards {
+                    if let selected = card.highlighted {
+                        XCTAssertTrue(card.selectableIndices.contains(selected), "seed \(seed), step \(step)")
+                    }
+                    XCTAssertGreaterThanOrEqual(card.frame.width, AtticMenuMetrics.minWidth,
+                                                "seed \(seed), step \(step)")
+                }
+            }
+            menu.close(animated: false)
+        }
+    }
+
     private func key(_ keyCode: UInt16, _ characters: String = "", flags: NSEvent.ModifierFlags = [], time: TimeInterval = 1) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: time, windowNumber: 0, context: nil,
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
@@ -506,7 +724,9 @@ final class AtticGlassMenuTests: XCTestCase {
     /// only, with no growth and no cascade.
     func testTheCardGrowsAndItsRowsCascadeButReduceMotionOnlyFades() throws {
         let saved = AtticGlassMenu.design
-        defer { AtticGlassMenu.design = saved }
+        let savedStyle = AtticReducedMotionStyle.current
+        AtticReducedMotionStyle.current = .fade
+        defer { AtticGlassMenu.design = saved; AtticReducedMotionStyle.current = savedStyle }
         // GitHub's macOS runners can enable system Reduce Motion. This case
         // exercises both explicit branches regardless of the runner setting.
         var animated = saved
@@ -539,6 +759,21 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertNotNil(calmLift.animation(forKey: "attic.open.fade"), "a fade only")
         let calmRows = calm.cards[0].view.subviews.first?.subviews.compactMap { $0 as? AtticGlassMenuEntryView } ?? []
         XCTAssertTrue(calmRows.allSatisfy { $0.layer?.animation(forKey: "attic.row.slide") == nil }, "no cascade")
+    }
+
+    func testReducedInstantMenuOpensWithoutAnimation() throws {
+        let saved = AtticGlassMenu.design
+        let savedStyle = AtticReducedMotionStyle.current
+        defer { AtticGlassMenu.design = saved; AtticReducedMotionStyle.current = savedStyle }
+        var design = saved
+        design.reduceMotion = true
+        AtticGlassMenu.design = design
+        AtticReducedMotionStyle.current = .instant
+        let menu = open(commands())
+        defer { menu.close(animated: false) }
+        let lift = try XCTUnwrap(menu.cards[0].window.lift.layer)
+        XCTAssertNil(lift.animation(forKey: "attic.open.fade"), "Reduced Instant opens immediately")
+        XCTAssertNil(lift.animation(forKey: "attic.open.grow"))
     }
 
     /// Accepted 2026-11-12 (evening) · Menus: version 3 on the system
