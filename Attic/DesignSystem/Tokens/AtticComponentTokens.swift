@@ -1214,20 +1214,18 @@ enum AtticPickerMetrics {
 
 /// A task row as the owner's panel design draws it (drawn at 2×; points
 /// here): 7 above and below 15 pt lines, a 1.5 gap before the meta line,
-/// files as 28 pt tiles 4 below it; the row is its own highlight, 16 pt on
-/// Apple's continuous curve, capped at half the row's height (Corners,
-/// Accepted 2026-11-13). The circle's centre (`AtticLayout.circleX` plus
-/// half the 15 pt circle) is 15.5 in from the highlight's leading edge and
-/// 15.5 down: the centre of the one-line row's rounded end.
+/// files as 28 pt tiles 4 below it; the row is its own highlight, 9.5 pt on
+/// Apple's continuous curve at any height (Corners C, Accepted 2026-11-13,
+/// measured fix). The circle's centre (`AtticLayout.circleX` plus half the
+/// 15 pt circle) is 15.5 in from the highlight's leading edge and 15.5
+/// down: square in the one-line row's end, 8 pt clear of its sides.
 enum TasksRowDesign {
     /// 8 (Accepted 2026-11-05, rows "get room to read"; was 7).
     static let paddingY: CGFloat = 8
     static let paddingX: CGFloat = 9
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5
-    static let radius: CGFloat = AtticRadius.row
-    /// The highlight's radius on a row this tall (15.5 on a one-line row).
-    static func radius(height: CGFloat) -> CGFloat { AtticRadius.row(height: height) }
+    static let radius: CGFloat = AtticRadius.taskRow
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1

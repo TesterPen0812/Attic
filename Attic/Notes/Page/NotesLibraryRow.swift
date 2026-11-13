@@ -7,7 +7,7 @@ enum NotesLibraryRowMetrics {
     /// curve: Corners, Accepted 2026-11-13); rows 4 px apart, no dividers.
     static let paddingY: CGFloat = 6
     static let paddingX: CGFloat = 8
-    static let radius: CGFloat = AtticRadius.row
+    static let radius: CGFloat = AtticRadius.noteRow
     /// The thumbnail sits as far in from the row's leading edge as from its
     /// top and bottom: 6 pt (Corners C).
     static let thumbnailInset: CGFloat = paddingY

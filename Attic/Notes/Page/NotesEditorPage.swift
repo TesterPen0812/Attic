@@ -1674,7 +1674,7 @@ struct NoteProposalInPlaceReview: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .atticGlassControl(in: Squircle(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent),
+                    .atticGlassControl(in: Squircle(cornerRadius: AtticRadius.noteRow, exponent: AtticShape.surfaceExponent),
                                        interactive: false)
                     .padding(.horizontal, columnInset)
                     .padding(.bottom, bottomInset + 6)

@@ -68,12 +68,14 @@ enum AtticRadius {
     /// Cards: 48 px (the design's Card radius slider; owner, 2026-10-31,
     /// up from 36). Calendar day cards and Notes board cards both use it.
     static let card: CGFloat = 24
-    /// Rows: 16 pt on Apple's continuous curve (Corners, Accepted
-    /// 2026-11-13: C for task and note rows; was 12 pt on the squircle).
-    static let row: CGFloat = 16
-    /// A row is never rounder than half its height (14 on a 28 pt row,
-    /// 15.5 on a 31 pt task row).
-    static func row(height: CGFloat) -> CGFloat { min(row, height / 2) }
+    /// Task rows: 9.5 pt on Apple's continuous curve (Corners C, Accepted
+    /// 2026-11-13, measured fix: the sheet's 28 pt C row drew its corner in
+    /// a 14 pt box, which 9.5 continuous matches). The corner comes from the
+    /// drawing, so it stays 9.5 at any row height.
+    static let taskRow: CGFloat = 9.5
+    /// Note rows: 16 pt on Apple's continuous curve (Corners C, Accepted
+    /// 2026-11-13; was 12 pt on the squircle).
+    static let noteRow: CGFloat = 16
     /// Menus and popovers: 32 px (owner, 2026-10-31: "back to what it
     /// was", the 16 pt of b74eee51), with 6 px padding; rows concentric,
     /// 32 − 6 = 26 px.
