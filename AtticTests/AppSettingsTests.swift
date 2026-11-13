@@ -84,6 +84,71 @@ final class AppSettingsTests: XCTestCase {
     }
 
     @MainActor
+    func testR10FailedTaskSaveVetoesBeforeAwaitedCalendarAndLeavesItsDraftOpen() async throws {
+        let root = ownedTemporaryDirectory(prefix: "CatchupR10")
+        let suite = "CatchupR10.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        var reject = false
+        let store = TaskStore(container: container, persist: { context in
+            if reject { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        })
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        let task = try XCTUnwrap(store.commit([TaskDraft(title: "Unsaved tick")])?.first)
+        let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        await rows.toggle(writer.event)
+        rows.title = "Keep editing this event"
+        writer.hold = true
+        CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+        var settled: CommandOutcome?
+        page.completeAcknowledged(task.id) { settled = $0 }
+        reject = true
+        var ready: Bool?
+        let quit = Task { @MainActor in ready = await coordinator.prepareForTerminationDurably() }
+        for _ in 0..<200 where writer.gate == nil && ready == nil { await Task.yield() }
+        // On the broken ordering Calendar holds quit while the task timer fails.
+        if writer.gate != nil {
+            for _ in 0..<200 where settled == nil { try await Task.sleep(for: .milliseconds(5)) }
+            XCTAssertNotNil(settled)
+            writer.gate?.resume(); writer.gate = nil
+        }
+        writer.hold = false
+        await quit.value
+        XCTAssertEqual(ready, false, "a save failure during awaited preparation must veto quit")
+        XCTAssertEqual(settled?.isApplied, false)
+        let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(saved.first { $0.id == task.id }?.status, .todo, "the failed completion rolls back")
+        XCTAssertEqual(writer.editCalls, 0, "a Tasks veto must precede other pages ending live editing")
+        XCTAssertNotNil(rows.rowID, "the Calendar draft stays open for a quit that did not happen")
+        writer.hold = false
+        _ = await rows.close()
+        print("CATCHUP_R10 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
+    @MainActor
+    func testR13GoneAcknowledgedCommandsDoNotVetoQuit() throws {
+        for completing in [false, true] {
+            let store = try makeTestStore()
+            let page = TasksPageModel(library: AtticLibrary(tasks: store))
+            page.services.acknowledgementDelay = .seconds(3_600)
+            let task = try XCTUnwrap(store.commit([TaskDraft(title: "Removed elsewhere")])?.first)
+            var outcome: CommandOutcome?
+            if completing { page.completeAcknowledged(task.id) { outcome = $0 } }
+            else { page.deleteAcknowledged([task.id]) { outcome = $0 } }
+            XCTAssertTrue(store.delete(taskIDs: [task.id]))
+            XCTAssertTrue(TasksPageModel.prepareForTermination(in: store), "a gone target is not an unsaved edit")
+            XCTAssertNotNil(outcome)
+            XCTAssertTrue(TasksPageModel.prepareForTermination(in: store), "the obsolete command is drained once")
+        }
+    }
+
+    @MainActor
     func testFix18RepeatedQuitCommandDoesNotBypassPendingPreparation() throws {
         var terminationCalls = 0
         let commands = MenuBarCommands.commands(

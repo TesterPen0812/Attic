@@ -1841,6 +1841,7 @@ final class TasksPageModel: ObservableObject {
             acknowledgedDeleted = []
             acknowledgementRevision &+= 1
             if !outcome.isApplied { ids.forEach(cancelHold) }
+            recordAcknowledgementFailure(outcome)
             settled(outcome)
             return outcome.isApplied
         }
@@ -1855,9 +1856,13 @@ final class TasksPageModel: ObservableObject {
         guard let command = acknowledgedTaskCommand else { return false }
         acknowledgedTaskCommand = nil
         acknowledgedTaskToken = nil
-        let applied = command()
-        if !applied { acknowledgementFailures &+= 1 }
-        return applied
+        return command()
+    }
+
+    private func recordAcknowledgementFailure(_ outcome: CommandOutcome) {
+        if case let .failed(failure) = outcome, failure != .taskGone {
+            acknowledgementFailures &+= 1
+        }
     }
 
     func setStatusAcknowledged(_ status: TaskStatus, for ids: [UUID],
@@ -1982,6 +1987,7 @@ final class TasksPageModel: ObservableObject {
             let created = save(id)
             acknowledgedCreated = []
             acknowledgementRevision &+= 1
+            if created == nil { acknowledgementFailures &+= 1 }
             settled(created)
             return created != nil
         }
@@ -2091,7 +2097,7 @@ final class TasksPageModel: ObservableObject {
             let next = completingAfterAcknowledgement.removeFirst()
             let outcome = finishCompletion(next.id)
             savedAny = savedAny || outcome.isApplied
-            if !outcome.isApplied { acknowledgementFailures &+= 1 }
+            recordAcknowledgementFailure(outcome)
             next.settled(outcome)
             if next.id == id { break }
         }
