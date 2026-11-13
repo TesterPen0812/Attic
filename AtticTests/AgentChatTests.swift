@@ -133,6 +133,22 @@ final class AgentChatTests: XCTestCase {
         titles.map { AgentTarget(page: .tasks, itemID: UUID(), title: $0) }
     }
 
+    func testR1ConnectingSavedHistoryMarksAllRowsShownBeforeRealization() {
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: (0..<160).flatMap { index in
+            [AgentThreadEntry(id: UUID(), role: "user", text: "Saved question \(index)"),
+             AgentThreadEntry(id: UUID(), role: "assistant", text: "Saved reply \(index)")]
+        }, events: [], isRunning: false)
+        model.connect(runner)
+        XCTAssertEqual(model.entries.count, 320)
+        let unseen = model.entries.filter { !model.wasShown($0.id) }.count
+        print("R1 restoredRows=\(model.entries.count) unseenBeforeRealization=\(unseen)")
+        XCTAssertEqual(unseen, 0, "Saved rows must start settled even before lazy history realizes them")
+        model.open()
+        XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
+    }
+
+
     func testReconnectingLiveRunnerRestoresHistoryAndReplaysInFlightStepsOnce() async {
         let reading = step(.read, targets: tasks(["Real task"]), title: "Reading 1 task")
         runner.retainsThread = true

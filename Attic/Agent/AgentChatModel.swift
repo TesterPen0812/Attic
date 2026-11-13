@@ -598,6 +598,7 @@ final class AgentChatModel: ObservableObject {
             : nil
         let archived = activeStart.map { Array(snapshot.entries[..<$0]) } ?? snapshot.entries
         restore(archived)
+        presented = Set(entries.map(\.id))
         refreshHistory()
         guard snapshot.isRunning else { return }
         if let activeStart { entries.append(AgentChatEntry(.asked(snapshot.entries[activeStart].text))) }
