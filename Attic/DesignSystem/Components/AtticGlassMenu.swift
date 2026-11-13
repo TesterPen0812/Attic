@@ -2055,6 +2055,14 @@ enum AtticContextMenus {
         if let hit = hitView(for: event, in: window) {
             if let text = hit as? NSTextView, text.isEditable || text.isSelectable { return event }
             if let field = hit as? NSTextField, field.isEditable { return event }
+            // A table's canvas owns its cell commands, including when the
+            // pointer is over a non-editing cell. The enclosing panel anchor
+            // must not replace them with the panel's page-switch commands.
+            var view: NSView? = hit
+            while let current = view {
+                if current is NoteTableCanvas || current is NoteTableView { return event }
+                view = current.superview
+            }
         }
         // A row's menu outside an open card: the press is also a click
         // outside the card, which closes it (keeping its draft) first.
