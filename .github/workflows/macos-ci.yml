@@ -436,8 +436,9 @@ jobs:
           continuation_skips=()
           while IFS= read -r selector; do continuation_skips+=("$selector"); done < "$RUNNER_TEMP/AtticUnitContinuation.skips"
           test "${#continuation_skips[@]}" -gt 0
-          # 43338111674: O14 max 233.731 s; main max 103.990 s. Allow 600 s
-          # per test, then restart the host and continue with the next test.
+          # 43338111674: main max 103.990 s. Allow 240 s per test (2.3x; a runner
+          # up to 22 % slower still fits), then restart the host and continue, so
+          # several hangs still fit inside the step's 60 minutes.
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
@@ -446,8 +447,8 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
             -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
             -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 600 \
-            -maximum-test-execution-time-allowance 600 \
+            -default-test-execution-time-allowance 240 \
+            -maximum-test-execution-time-allowance 240 \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
             -only-testing:AtticTests \
             -skip-testing:AtticTests/DoneSearchCostTests \
@@ -557,6 +558,9 @@ jobs:
 
       - name: Print macOS unit-test summary
         if: always()
+        # Reports only. The gate fails unit tests through steps.unit_tests.outcome;
+        # a red summary must not skip the performance UI, analyzer and final-worktree steps.
+        continue-on-error: true
         run: |
           if [ -d "$RUNNER_TEMP/AtticUnitTests.xcresult" ]; then
             xcrun xcresulttool get test-results summary \
@@ -688,18 +692,24 @@ jobs:
           continuation_only=()
           while IFS= read -r selector; do continuation_only+=("$selector"); done < "$RUNNER_TEMP/AtticUnitContinuation.only"
           test "${#continuation_only[@]}" -gt 0
+          # 43338111674: O14 max 233.731 s. Allow 360 s per test (1.5x), then
+          # restart the host and continue with the next test.
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
             -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUnitContinuation" \
             -resultBundlePath "$RUNNER_TEMP/AtticUnitContinuation.xcresult" \
             -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 600 \
-            -maximum-test-execution-time-allowance 600 \
+            -default-test-execution-time-allowance 360 \
+            -maximum-test-execution-time-allowance 360 \
             CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
             "${continuation_only[@]}"
       - name: Print continuation unit-test summary
         if: always()
         run: |
+          if [ ! -d "$RUNNER_TEMP/AtticUnitContinuation.xcresult" ]; then
+            echo "No continuation result bundle: the host build or the run step failed before tests ran." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           xcrun xcresulttool get test-results summary \
             --path "$RUNNER_TEMP/AtticUnitContinuation.xcresult" --format json > "$RUNNER_TEMP/unit-continuation-summary.json"
           python3 Scripts/ci_required_checks.py --test-summary "$RUNNER_TEMP/unit-continuation-summary.json"

@@ -298,19 +298,25 @@ class RequiredChecksTests(unittest.TestCase):
         workflow = (root / '.github/workflows/macos-ci.yml').read_text()
         main = workflow.split('      - name: Run macOS unit tests', 1)[1].split('      - name: Run native dropdown timing gates', 1)[0]
         continuation = workflow.split('  unit-continuation:', 1)[1].split('\n  required:', 1)[0]
+        # Only the test-without-building invocation counts: flags on build-for-testing do nothing.
+        main_run = main.split('Scripts/xcodebuild_locked.sh \\\n', 1)[1].split('test-without-building', 1)[0]
+        continuation_run = continuation.split('Scripts/xcodebuild_locked.sh test-without-building', 1)[1].split('\n      - name:', 1)[0]
         # 43338111674's xcresults: O14 233.730779 s; main maximum 103.989512 s.
-        for shard in [main, continuation]:
-            with self.subTest(shard='main' if shard == main else 'continuation'):
-                self.assertIn('-test-timeouts-enabled YES', shard)
-                self.assertIn('-default-test-execution-time-allowance 600', shard)
-                self.assertIn('-maximum-test-execution-time-allowance 600', shard)
+        for name, run, allowance in [('main', main_run, 240), ('continuation', continuation_run, 360)]:
+            with self.subTest(shard=name):
+                self.assertIn('-test-timeouts-enabled YES', run)
+                self.assertIn(f'-default-test-execution-time-allowance {allowance}', run)
+                self.assertIn(f'-maximum-test-execution-time-allowance {allowance}', run)
         self.assertIn('timeout-minutes: 60', main)
         self.assertIn('timeout-minutes: 55', continuation)
         summary = workflow.split('      - name: Print macOS unit-test summary', 1)[1].split('      - name: Upload macOS unit-test results', 1)[0]
         self.assertIn('if: always()', summary)
+        # A red summary reports; it must not skip the steps after it. The gate reads unit_tests.outcome.
+        self.assertIn('continue-on-error: true', summary)
         self.assertIn('ci_required_checks.py --test-summary', summary)
-        summary = continuation.split('      - name: Print continuation unit-test summary', 1)[1]
+        summary = continuation.split('      - name: Print continuation unit-test summary', 1)[1].split('      - name: Upload continuation XCTest result', 1)[0]
         self.assertIn('if: always()', summary)
+        self.assertIn('[ ! -d "$RUNNER_TEMP/AtticUnitContinuation.xcresult" ]', summary)
         self.assertIn('ci_required_checks.py --test-summary', summary)
 
     def test_timeout_failure_is_named_in_the_step_summary_with_completed_tests(self):
