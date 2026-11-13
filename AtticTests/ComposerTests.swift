@@ -78,6 +78,47 @@ final class ComposerTests: XCTestCase {
 
     private func liveTasks() -> [TaskItem] { tasks.tasks.filter { $0.deletedAt == nil } }
 
+    func testCatchupR4AbandonedFilterTagsDoNotTagTheNextTask() async throws {
+        for atOnce in [false, true] {
+            model.startTags(["work", "home"])
+            model.open(on: .notes)
+            XCTAssertEqual(page.addBar.picked.tags, ["work", "home"])
+            XCTAssertFalse(model.hasDraft)
+            model.close(atOnce: atOnce)
+            XCTAssertTrue(page.addBar.picked.tags.isEmpty, "An empty dismissal ends its filter context")
+            model.open(on: .tasks(.now))
+            type("Buy milk")
+            await XCTAssertTrueAsync(await model.create())
+            XCTAssertTrue(try XCTUnwrap(liveTasks().last).tags.isEmpty)
+            model.close()
+        }
+        model.startTags(["fresh"])
+        model.open(on: .notes)
+        XCTAssertEqual(page.addBar.picked.tags, ["fresh"], "An empty card can seed the next filter")
+        model.clearDraft()
+        model.close()
+    }
+
+    func testCatchupR4FilterTagsStayWithAKeptWritingDraftAndExplicitPicks() {
+        model.startTags(["work"])
+        model.open(on: .notes)
+        model.writing = "Keep this writing"
+        model.close()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar.picked.tags, ["work"])
+        XCTAssertEqual(model.writing, "Keep this writing")
+        model.clearDraft()
+        model.close()
+        model.startTags(["work"])
+        model.open(on: .tasks(.now))
+        page.addBar.picked.tags = ["chosen"]
+        model.close()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar.picked.tags, ["chosen"], "Explicit picks remain part of the kept draft")
+        model.clearDraft()
+        model.close()
+    }
+
     func testBG7ConsecutiveCalendarEventsKeepTheSelectedDay() async throws {
         let selected = day(3)
         model.open(on: .calendar(selected: selected))

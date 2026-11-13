@@ -203,6 +203,23 @@ final class NotesChromeTests: XCTestCase {
         }
     }
 
+    func testCatchupR4OpenNotePlusDoesNotInheritHiddenLibraryTags() throws {
+        try withPanel { host, state, tasksState, store, draft, library in
+            state.selectSection(.notes)
+            spin(1)
+            try XCTUnwrap(library()).tagPicks = TagPicks(["launch"])
+            draft.pages.dismissLibrary()
+            spin(1)
+            XCTAssertFalse(draft.pages.isLibraryPresented)
+            let plus = try XCTUnwrap(element("notes-new-note", in: host))
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(1)
+            XCTAssertNotNil(element("composer-title", in: host))
+            XCTAssertTrue(tasksState.model(for: store, toasts: nil).addBar.picked.tags.isEmpty,
+                          "The open note's + has no library filter to inherit")
+        }
+    }
+
     func testNotesSharesTheTopRowAndTheBarsAndTasksKeepsItsState() throws {
         try withPanel { host, state, tasksState, store, draft, library in
             // Tasks: the search button in the shared row's place.

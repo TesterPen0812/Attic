@@ -955,7 +955,7 @@ struct NotesEditorPage: View {
     private func newNoteFromPlus() {
         if let panelComposer {
             // A note made while tags are picked starts with them (13 Nov).
-            panelComposer.startTags(library.tagPicks.tags)
+            if controller.isLibraryPresented { panelComposer.startTags(library.tagPicks.tags) }
             panelComposer.open(on: .notes)
         } else {
             newNote()

@@ -163,6 +163,7 @@ final class ComposerModel: ObservableObject {
     private var draftGeneration = 0
     private var failedEventDrafts: [ComposerDraftStore.FailedEvent] = []
     private var recoveringFailedEvent: ComposerDraftStore.FailedEvent?
+    private var seededTags: [String]?
 
     static let lengths = [30, 60, 90, 120]
 
@@ -207,6 +208,7 @@ final class ComposerModel: ObservableObject {
     func startTags(_ tags: [String]) {
         guard !tags.isEmpty, tasks.addBar == TaskAddBarText(), writing.isEmpty else { return }
         tasks.addBar.picked.tags = tags
+        seededTags = tags
     }
 
     /// "+" opens on the page's own kind unless a note draft was kept; ⇧⌘N
@@ -259,6 +261,12 @@ final class ComposerModel: ObservableObject {
         draftGeneration += 1
         closedAtOnce = atOnce
         isOpen = false
+        // A filter's defaults belong to this opening unless there is writing
+        // to keep. Explicitly changed picks remain the person's draft.
+        if !hasDraft {
+            if tasks.addBar.picked.tags == seededTags { tasks.addBar.picked.tags = [] }
+            seededTags = nil
+        }
         restoreFocus()
         saveKeptDraft()
     }
@@ -656,6 +664,7 @@ final class ComposerModel: ObservableObject {
     /// length and calendar stay as the person last chose them.
     func clearDraft() {
         title.clearDraft()
+        seededTags = nil
         writing = ""
         pinned = false
         recoveringFailedEvent = nil
