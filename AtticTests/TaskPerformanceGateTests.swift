@@ -8,6 +8,147 @@ import XCTest
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
 
+    func testR04BulkAcknowledgementsRollBackEveryReplicaAndPreserveOneUndoStep() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R04BulkAck-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("tasks.store"), cloudKitDatabase: .none))
+        let seed = ModelContext(container)
+        let first = UUID(), second = UUID()
+        seed.insert(TaskItem(id: first, title: "Older", updatedAt: .distantPast))
+        seed.insert(TaskItem(id: first, title: "Shown", updatedAt: .now))
+        seed.insert(TaskItem(id: second, title: "Second"))
+        try seed.save()
+        var fail = false
+        var writes = 0
+        let store = TaskStore(container: container, persist: { context in
+            writes += 1
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        let library = AtticLibrary(tasks: store)
+        let page = TasksPageModel(library: library)
+        _ = page.sections(for: .now)
+        writes = 0
+
+        fail = true
+        var settled: CommandOutcome?
+        page.setPriorityAcknowledged(.high, for: [first, second]) { settled = $0 }
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == first }?.model.priority, .high)
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == second }?.model.priority, .high)
+        XCTAssertEqual(store.task(withID: first)?.priority, .some(.none))
+        await withCheckedContinuation { (next: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { next.resume() }
+        }
+        XCTAssertEqual(writes, 0, "Paint both rows before entering the writer")
+        XCTAssertNil(settled)
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(settled?.isApplied, false)
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == first }?.model.priority, .some(.none))
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == second }?.model.priority, .some(.none))
+        let failedReplicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(failedReplicas.filter { $0.id == first }.count, 2)
+        XCTAssertTrue(failedReplicas.allSatisfy { $0.priority == .none })
+        XCTAssertFalse(library.undo.canUndo(in: .tasks), "A rejected transaction adds no Undo step")
+
+        fail = false
+        settled = nil
+        page.setPriorityAcknowledged(.high, for: [first, second]) { settled = $0 }
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertTrue(settled?.isApplied == true)
+        let savedReplicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(savedReplicas.allSatisfy { $0.priority == .high }, "Every physical UUID replica is edited")
+        XCTAssertTrue(page.undo().isApplied, "One Undo returns both logical rows to the original priority")
+        let undone = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(undone.allSatisfy { $0.priority == .none })
+
+        fail = true
+        settled = nil
+        page.deleteAcknowledged([first, second]) { settled = $0 }
+        XCTAssertFalse(page.rows(for: .now).contains { $0.id == first || $0.id == second })
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(settled?.isApplied ?? true)
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == first })
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == second })
+        let afterFailedDelete = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertTrue(afterFailedDelete.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testR04TitleDateTagAndComposerAcknowledgeWithFailedWrites() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R04DraftAck-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("tasks.store"), cloudKitDatabase: .none))
+        let seed = ModelContext(container)
+        let original = TaskItem(title: "Existing")
+        seed.insert(original)
+        try seed.save()
+        var fail = false
+        let store = TaskStore(container: container, persist: { context in
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        let composer = ComposerModel(tasks: page)
+        _ = page.sections(for: .now)
+        fail = true
+
+        page.beginEditingTitle(original.id)
+        page.titleEdit = TaskAddBarText(text: "Renamed")
+        var titleSettled: Bool?
+        XCTAssertTrue(page.commitTitleAcknowledged { titleSettled = $0 })
+        XCTAssertNil(page.editingTitleID)
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == original.id }?.model.title, "Renamed")
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertEqual(titleSettled, false)
+        XCTAssertEqual(page.editingTitleID, original.id)
+        XCTAssertEqual(page.editingTitle, "Renamed")
+        XCTAssertEqual(page.failedSave, .title(original.id))
+        XCTAssertEqual(store.task(withID: original.id)?.title, "Existing")
+        page.cancelEditing()
+
+        let day = DueDay(date: Date(), calendar: .current)
+        var fieldResult: CommandOutcome?
+        page.setDueDayAcknowledged(day, for: [original.id]) { fieldResult = $0 }
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == original.id }?.due, day)
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(fieldResult?.isApplied ?? true)
+        XCTAssertNil(store.task(withID: original.id)?.dueDay)
+
+        fieldResult = nil
+        page.toggleTagAcknowledged("home", for: [original.id]) { fieldResult = $0 }
+        XCTAssertEqual(page.rows(for: .now).first { $0.id == original.id }?.model.tags, ["home"])
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(fieldResult?.isApplied ?? true)
+        XCTAssertEqual(store.task(withID: original.id)?.tags, [])
+
+        composer.open(on: .tasks(.now))
+        page.addBar = TaskAddBarText(text: "Create me #home")
+        composer.submit()
+        XCTAssertTrue(page.rows(for: .now).contains { $0.model.title == "Create me" })
+        XCTAssertEqual(page.addBar.text, "")
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(composer.isCreating)
+        XCTAssertTrue(composer.failed)
+        XCTAssertFalse(page.rows(for: .now).contains { $0.model.title == "Create me" })
+        XCTAssertEqual(page.addBar.text, "Create me #home", "Failed creation returns the exact typed draft")
+        XCTAssertEqual(store.tasks.filter { $0.title == "Create me" }.count, 0)
+
+        fail = false
+        composer.submit()
+        XCTAssertEqual(page.addBar.text, "")
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(composer.failed)
+        XCTAssertEqual(store.tasks.filter { $0.title == "Create me" }.count, 1)
+        XCTAssertTrue(page.undo().isApplied, "Creation stays a single undoable command")
+        XCTAssertFalse(store.tasks.contains { $0.title == "Create me" })
+    }
+
     func testR04TwoPendingTicksUndoInInputOrder() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
@@ -262,6 +403,88 @@ final class TaskPerformanceGateTests: XCTestCase {
             let measured = results[delay]!
             let missedFrames = max(0, Int(((measured - baseline) / (1_000.0 / 60.0)).rounded(.down)))
             print("ACK_R04_SUMMARY delay_ms=\(delay) input_to_candidate_ms=\(measured) extra_frames_60hz=\(missedFrames)")
+        }
+    }
+
+    /// Disk-backed command-to-next-main-queue measurements. Each path gets
+    /// fresh targets and three samples at each injected save delay.
+    func testR04RemainingPathsWriteDelayToFrameCandidate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R04Paths-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("tasks.store"), cloudKitDatabase: .none))
+        let seed = ModelContext(container)
+        let ids = (0..<180).map { index -> UUID in
+            let task = TaskItem(title: "Ack path \(index)")
+            seed.insert(task)
+            return task.id
+        }
+        try seed.save()
+        var delayMS = 0
+        let store = TaskStore(container: container, persist: { context in
+            #if ATTIC_OPERATION_CRASH_TESTS
+            if delayMS > 0 { Thread.sleep(forTimeInterval: Double(delayMS) / 1_000) }
+            #endif
+            try context.save()
+        })
+        let library = AtticLibrary(tasks: store)
+        let page = TasksPageModel(library: library)
+        let composer = ComposerModel(tasks: page)
+        _ = page.sections(for: .now)
+
+        let paths = ["bulk-status", "bulk-priority", "bulk-delete", "title-edit", "date-edit", "tag-edit", "composer-create"]
+        for (pathIndex, path) in paths.enumerated() {
+            var results: [Int: Double] = [:]
+            for (delayIndex, delay) in [0, 20, 100].enumerated() {
+                delayMS = delay
+                var samples: [Double] = []
+                for sample in 0..<3 {
+                    let offset = pathIndex * 24 + delayIndex * 6 + sample * 2
+                    let a = ids[offset], b = ids[offset + 1]
+                    if path == "title-edit" {
+                        page.beginEditingTitle(a)
+                        page.titleEdit = TaskAddBarText(text: "Edited \(offset)")
+                    }
+                    if path == "composer-create" {
+                        composer.open(on: .tasks(.now))
+                        page.addBar = TaskAddBarText(text: "New \(offset)")
+                    }
+                    let started = DispatchTime.now().uptimeNanoseconds
+                    var settled: CommandOutcome?
+                    switch path {
+                    case "bulk-status": page.setStatusAcknowledged(.inProgress, for: [a, b]) { settled = $0 }
+                    case "bulk-priority": page.setPriorityAcknowledged(.high, for: [a, b]) { settled = $0 }
+                    case "bulk-delete": page.deleteAcknowledged([a, b]) { settled = $0 }
+                    case "title-edit": XCTAssertTrue(page.commitTitleAcknowledged { settled = $0 ? .applied : .failed(.taskGone) })
+                    case "date-edit": page.setDueDayAcknowledged(DueDay(date: Date(), calendar: .current), for: [a, b]) { settled = $0 }
+                    case "tag-edit": page.toggleTagAcknowledged("ack", for: [a, b]) { settled = $0 }
+                    case "composer-create": composer.submit()
+                    default: XCTFail("Unexpected path")
+                    }
+                    let frame = await withCheckedContinuation { (continuation: CheckedContinuation<UInt64, Never>) in
+                        DispatchQueue.main.async { continuation.resume(returning: DispatchTime.now().uptimeNanoseconds) }
+                    }
+                    samples.append(Double(frame - started) / 1_000_000)
+                    XCTAssertNil(settled, "The first frame candidate must precede persistence for \(path)")
+                    if path == "composer-create" { XCTAssertTrue(composer.isCreating) }
+                    for _ in 0..<60 {
+                        if path == "composer-create" ? !composer.isCreating : settled != nil { break }
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    if path == "composer-create" { XCTAssertFalse(composer.isCreating) }
+                    else { XCTAssertEqual(settled?.isApplied, true, "Every \(path) edit reaches disk") }
+                }
+                let median = samples.sorted()[1]
+                results[delay] = median
+                print("ACK_R04_PATH path=\(path) delay_ms=\(delay) samples_ms=\(samples) median_ms=\(median)")
+            }
+            let base = results[0]!
+            for delay in [0, 20, 100] {
+                let measured = results[delay]!
+                let missed = max(0, Int(((measured - base) / (1_000.0 / 60.0)).rounded(.down)))
+                print("ACK_R04_PATH_SUMMARY path=\(path) delay_ms=\(delay) input_to_candidate_ms=\(measured) extra_frames_60hz=\(missed)")
+            }
         }
     }
 

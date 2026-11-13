@@ -536,21 +536,34 @@ final class ComposerTests: XCTestCase {
     /// stays open, empty, its title asked for the keyboard again; ⌘Return
     /// opens the task's page, so the card folds.
     func testReturnAddsTheTaskAndTheCardStaysOpenEmptyForTheNextOne() async throws {
+        func awaitDurableCreation() async throws {
+            for _ in 0..<60 {
+                if !model.isCreating { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTFail("Task creation did not finish its durable transaction")
+        }
         model.open(on: .tasks(.now))
         type("Call Sam")
         let asked = model.focusRequest
         model.submit()
+        XCTAssertTrue(page.rows(for: .now).contains { $0.model.title == "Call Sam" }, "Row appears before disk write")
+        XCTAssertTrue(model.isCreating)
+        try await awaitDurableCreation()
         XCTAssertEqual(liveTasks().map(\.title), ["Call Sam"])
         XCTAssertTrue(model.isOpen)
         XCTAssertEqual(page.addBar.text, "")
         XCTAssertNotEqual(model.focusRequest, asked, "the title takes the keyboard for the next one")
         type("Call Ann")
         model.submit()
+        XCTAssertTrue(page.rows(for: .now).contains { $0.model.title == "Call Ann" })
+        try await awaitDurableCreation()
         XCTAssertEqual(Set(liveTasks().map(\.title)), ["Call Sam", "Call Ann"])
         XCTAssertTrue(model.isOpen)
         type("Open it")
         model.submit(openingPage: true)
         XCTAssertFalse(model.isOpen, "⌘Return opens the page and the card folds")
+        try await awaitDurableCreation()
         XCTAssertEqual(opened.count, 1)
     }
 

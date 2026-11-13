@@ -95,6 +95,10 @@ final class DrawPersistenceTests: XCTestCase {
             model.pointerDown(at: CGPoint(x: 20, y: 60), pressure: 0.3)
             model.pointerDragged(to: CGPoint(x: 50, y: 80), pressure: 0.7)
             model.pointerUp(at: CGPoint(x: 90, y: 60), pressure: 1)
+            XCTAssertEqual(model.objects.count, 1, "Completed ink is visible on mouse-up")
+            // A crash before the queued checkpoint can lose this stroke.
+            // Explicitly settle it to test a crash after the durable boundary.
+            model.flushAcknowledgedDraw()
             completed = try store.open(canvasID).objects
             XCTAssertEqual(completed.count, 1)
             XCTAssertFalse(store.hasUnsettledEdits)

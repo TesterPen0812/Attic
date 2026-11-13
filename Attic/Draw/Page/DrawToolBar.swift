@@ -251,7 +251,7 @@ struct DrawToolBar: View {
             if model.isUndoShown {
                 DrawCell(help: String(localized: "Undo"), identifier: "draw-undo", action: {
                     IdleLatencyTrace.controlDispatched(.drawUndo)
-                    model.undo()
+                    model.undoAcknowledged()
                 }) {
                     icon("arrow.uturn.backward")
                 }

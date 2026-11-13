@@ -521,6 +521,14 @@ class DrawStore: DrawStoreProtocol {
         return execute(step, action: .redo)
     }
 
+    /// Read-only copies of the sparse history used to preview several rapid
+    /// Undo/Redo actions. The page cannot change these store-owned stacks;
+    /// every action still executes through the durable engine in FIFO order.
+    func historyChanges(on id: UUID) -> (undo: [DrawChange], redo: [DrawChange])? {
+        guard pending[id] == nil, recoveryIssue == nil else { return nil }
+        return (histories[id]?.undo.map(\.change) ?? [], histories[id]?.redo.map(\.change) ?? [])
+    }
+
     func duplicate(_ id: UUID, name: String? = nil) throws -> DrawCanvas? {
         let source = try open(id)
         guard pending[id] == nil, source.canvas.deletedAt == nil else { throw DrawStoreError.pendingEdit }

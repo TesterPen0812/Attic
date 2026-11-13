@@ -1856,9 +1856,9 @@ struct TasksPage: View {
                 TasksDoneDetailView(detail: detail, store: store, restore: {
                     // The details close only once the restore saved; a
                     // failure shows under the row with Retry (round 4).
-                    if model.report(model.restoreToNow(id), on: id, retry: { [weak model] in model?.restoreToNow(id) ?? .failed(.taskGone) }).isApplied {
-                        model.doneDetailID = nil
-                    }
+                    reportAcknowledged(on: id, retry: { [weak model] in model?.restoreToNow(id) ?? .failed(.taskGone) },
+                                       start: { done in model.restoreToNowAcknowledged([id], settled: done) },
+                                       onSaved: { model.doneDetailID = nil })
                 })
                 .padding(.leading, TasksDesignMetrics.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
@@ -1960,7 +1960,7 @@ struct TasksPage: View {
         AtticTitleEditing(
             text: $model.editingTitle,
             commit: {
-                let saved = model.commitTitle()
+                let saved = model.commitTitleAcknowledged()
                 if saved { setFocus(id) }
                 return saved
             },
@@ -2031,10 +2031,14 @@ struct TasksPage: View {
                 choices: model.dateChoices,
                 selected: model.commonDueDay(targets),
                 onPick: { day in
-                    if model.pickerChange(on: id, { model.setDueDay(day, for: targets) }) { metaPopover = nil }
+                    model.setDueDayAcknowledged(day, for: targets) { outcome in
+                        if model.pickerResult(outcome, on: id, retry: { model.setDueDay(day, for: targets) }) { metaPopover = nil }
+                    }
                 },
                 onRemove: {
-                    if model.pickerChange(on: id, { model.setDueDay(nil, for: targets) }) { metaPopover = nil }
+                    model.setDueDayAcknowledged(nil, for: targets) { outcome in
+                        if model.pickerResult(outcome, on: id, retry: { model.setDueDay(nil, for: targets) }) { metaPopover = nil }
+                    }
                 }
             )
             TasksPickerFailureLine(model: model, id: id) { metaPopover = nil }
@@ -2048,9 +2052,18 @@ struct TasksPage: View {
             TaskTagPickerView(
                 allTags: model.tagChoices(for: targets),
                 state: { model.tagState($0, for: targets) },
-                onToggle: { tag in model.pickerChange(on: id) { model.toggleTag(tag, for: targets) } },
+                onToggle: { tag in
+                    model.toggleTagAcknowledged(tag, for: targets) { outcome in
+                        _ = model.pickerResult(outcome, on: id, retry: { model.toggleTag(tag, for: targets) })
+                    }
+                },
                 onCreate: { tag, completed in
-                    model.pickerChange(on: id, onSaved: completed) { model.toggleTag(tag, for: targets) }
+                    model.toggleTagAcknowledged(tag, for: targets) { outcome in
+                        if model.pickerResult(outcome, on: id, onSaved: completed,
+                                              retry: { model.toggleTag(tag, for: targets) }) { completed() }
+                    }
+                    // Keep the entered tag until the deferred save completes.
+                    return false
                 },
                 focusField: true
             )
@@ -2086,6 +2099,17 @@ struct TasksPage: View {
         AtticHaptics.tick(enabled: design.hapticsEnabled)
     }
 
+    /// A row may paint a value copy while its existing atomic command is
+    /// queued. Report failures and run focus/haptic effects only on settlement.
+    private func reportAcknowledged(on id: UUID, retry: @escaping () -> CommandOutcome,
+                                    start: (@escaping (CommandOutcome) -> Void) -> Void,
+                                    onSaved: (() -> Void)? = nil) {
+        start { [weak model] outcome in
+            guard let model else { return }
+            if model.report(outcome, on: id, retry: retry).isApplied { onSaved?() }
+        }
+    }
+
     /// The one scope rule (review 5): a pointer on a row's own control acts
     /// on that row; the keyboard and menus act on the selection the row is
     /// part of.
@@ -2102,7 +2126,8 @@ struct TasksPage: View {
                 toggleDone: {
                     IdleLatencyTrace.controlDispatched(.rowTick)
                     let targets = commandTargets(for: id)
-                    model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
+                    reportAcknowledged(on: id, retry: { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) },
+                                       start: { done in model.toggleDoneAcknowledged(targets, settled: done) })
                 },
                 // ⇧⌘I and a double-click open the task's page, as on Now and
                 // Later (the design's goOn); its details stay in the menu.
@@ -2116,7 +2141,8 @@ struct TasksPage: View {
                 },
                 restoreToNow: {
                     let targets = model.targets(for: id)
-                    model.report(model.restoreToNow(targets), on: id) { [weak model] in model?.restoreToNow(targets) ?? .failed(.taskGone) }
+                    reportAcknowledged(on: id, retry: { [weak model] in model?.restoreToNow(targets) ?? .failed(.taskGone) },
+                                       start: { done in model.restoreToNowAcknowledged(targets, settled: done) })
                 },
                 copy: { model.copy(model.targets(for: id)) },
                 duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
@@ -2143,17 +2169,17 @@ struct TasksPage: View {
                         completionFeedback(reported, targets)
                     }
                 } else {
-                    let outcome = model.report(model.toggleDone(targets), on: id) { [weak model] in
-                        model?.toggleDone(targets) ?? .failed(.taskGone)
-                    }
-                    completionFeedback(outcome, targets)
+                    reportAcknowledged(on: id, retry: { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) },
+                                       start: { done in model.toggleDoneAcknowledged(targets, settled: done) },
+                                       onSaved: { completionFeedback(.applied, targets) })
                 }
             },
             // ⇧Space (and VoiceOver): start or stop working, with the same
             // failure line and Retry the menu's command shows (round 5, F5).
             toggleWorking: {
                 let targets = model.targets(for: id)
-                model.report(model.toggleWorking(targets), on: id) { [weak model] in model?.toggleWorking(targets) ?? .failed(.taskGone) }
+                reportAcknowledged(on: id, retry: { [weak model] in model?.toggleWorking(targets) ?? .failed(.taskGone) },
+                                   start: { done in model.toggleWorkingAcknowledged(targets, settled: done) })
             },
             openPage: { opensTaskNotes ? openTaskNote(id) : model.openPage(id) },
             // ⌘B: to Later, or back to Now from Later, reported the same way.
@@ -2164,7 +2190,10 @@ struct TasksPage: View {
                     guard let model else { return CommandOutcome.failed(.taskGone) }
                     return onLater ? model.moveToNow(targets) : model.moveToBacklog(targets)
                 }
-                model.report(move(), on: id, retry: move)
+                reportAcknowledged(on: id, retry: move, start: { done in
+                    if onLater { model.moveToNowAcknowledged(targets, settled: done) }
+                    else { model.moveToBacklogAcknowledged(targets, settled: done) }
+                })
             },
             delete: { deleteAndMoveFocus(model.targets(for: id)) },
             // Return: the title in place.
@@ -2239,9 +2268,13 @@ struct TasksPage: View {
         }
         // Focus moves only once the delete saved (Astra 6); a failure shows
         // under the row the command came from.
-        guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { [weak model] in model?.delete(ids) ?? .failed(.taskGone) }).isApplied else { return }
-        setFocus(next)
-        if let next { model.selectOnly(next) }
+        guard let first = ids.first else { return }
+        reportAcknowledged(on: first, retry: { [weak model] in model?.delete(ids) ?? .failed(.taskGone) },
+                           start: { done in model.deleteAcknowledged(ids, settled: done) },
+                           onSaved: {
+                               setFocus(next)
+                               if let next { model.selectOnly(next) }
+                           })
     }
 
     // MARK: - Right-click menu
@@ -3445,14 +3478,18 @@ struct TasksPage: View {
         // Later and Now go through the moves, which clear it and confirm
         // with an Undo toast.
         // A failure shows under the first selected row, with Retry.
-        let run: (@escaping () -> CommandOutcome) -> Void = { command in
-            guard let first else { return }
-            model.report(command(), on: first, retry: command)
-        }
         let move: (TaskStatus) -> Void = { status in
-            if status == .backlog, model.tab != .backlog { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }
-            else if status == .todo, model.tab == .backlog { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } }
-            else { run { [weak model] in model?.setStatus(status, for: ids) ?? .failed(.taskGone) } }
+            guard let first else { return }
+            if status == .backlog, model.tab != .backlog {
+                reportAcknowledged(on: first, retry: { model.moveToBacklog(ids) },
+                                   start: { done in model.moveToBacklogAcknowledged(ids, settled: done) })
+            } else if status == .todo, model.tab == .backlog {
+                reportAcknowledged(on: first, retry: { model.moveToNow(ids) },
+                                   start: { done in model.moveToNowAcknowledged(ids, settled: done) })
+            } else {
+                reportAcknowledged(on: first, retry: { model.setStatus(status, for: ids) },
+                                   start: { done in model.setStatusAcknowledged(status, for: ids, settled: done) })
+            }
         }
         // Each button says what it does and to how many (tooltip and
         // VoiceOver, review UX 4). Its choices are read as the menu opens.
@@ -3468,7 +3505,9 @@ struct TasksPage: View {
                 // Ticked when every selected task has it, as the tags are.
                 return TaskPriority.choices.map { priority in
                     AtticMenuCommand.priorityChoice(priority, isOn: priorities == [priority]) {
-                        run { [weak model] in model?.setPriority(priority, for: ids) ?? .failed(.taskGone) }
+                        guard let first else { return }
+                        reportAcknowledged(on: first, retry: { model.setPriority(priority, for: ids) },
+                                           start: { done in model.setPriorityAcknowledged(priority, for: ids, settled: done) })
                     }
                 }
             }),
@@ -3483,8 +3522,16 @@ struct TasksPage: View {
                       AnyView(selectionTagPicker(ids))
                   })),
             model.tab == .backlog
-                ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } })
-                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Backlog", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
+                ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: {
+                    guard let first else { return }
+                    reportAcknowledged(on: first, retry: { model.moveToNow(ids) },
+                                       start: { done in model.moveToNowAcknowledged(ids, settled: done) })
+                })
+                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Backlog", handler: {
+                    guard let first else { return }
+                    reportAcknowledged(on: first, retry: { model.moveToBacklog(ids) },
+                                       start: { done in model.moveToBacklogAcknowledged(ids, settled: done) })
+                }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
         ], summary: selectionSummary(ids), inBar: true, filterTag: model.tagFilter(on: model.tab).map { tag in
             (TasksPanelDesign.tagChipTitle(tag),
@@ -3510,10 +3557,14 @@ struct TasksPage: View {
                 choices: model.dateChoices,
                 selected: model.commonDueDay(ids),
                 onPick: { day in
-                    if model.pickerChange(on: anchor, { model.setDueDay(day, for: ids) }) { selectionPicker = nil }
+                    model.setDueDayAcknowledged(day, for: ids) { outcome in
+                        if model.pickerResult(outcome, on: anchor, retry: { model.setDueDay(day, for: ids) }) { selectionPicker = nil }
+                    }
                 },
                 onRemove: {
-                    if model.pickerChange(on: anchor, { model.setDueDay(nil, for: ids) }) { selectionPicker = nil }
+                    model.setDueDayAcknowledged(nil, for: ids) { outcome in
+                        if model.pickerResult(outcome, on: anchor, retry: { model.setDueDay(nil, for: ids) }) { selectionPicker = nil }
+                    }
                 }
             )
             TasksPickerFailureLine(model: model, id: anchor) { selectionPicker = nil }
@@ -3527,9 +3578,17 @@ struct TasksPage: View {
             TaskTagPickerView(
                 allTags: model.tagChoices(for: ids),
                 state: { model.tagState($0, for: ids) },
-                onToggle: { tag in model.pickerChange(on: anchor) { model.toggleTag(tag, for: ids) } },
+                onToggle: { tag in
+                    model.toggleTagAcknowledged(tag, for: ids) { outcome in
+                        _ = model.pickerResult(outcome, on: anchor, retry: { model.toggleTag(tag, for: ids) })
+                    }
+                },
                 onCreate: { tag, completed in
-                    model.pickerChange(on: anchor, onSaved: completed) { model.toggleTag(tag, for: ids) }
+                    model.toggleTagAcknowledged(tag, for: ids) { outcome in
+                        if model.pickerResult(outcome, on: anchor, onSaved: completed,
+                                              retry: { model.toggleTag(tag, for: ids) }) { completed() }
+                    }
+                    return false
                 },
                 focusField: true
             )

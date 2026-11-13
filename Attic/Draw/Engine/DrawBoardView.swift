@@ -687,8 +687,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         return true
     }
 
-    @objc func undo(_ sender: Any?) { model.undo() }
-    @objc func redo(_ sender: Any?) { model.redo() }
+    @objc func undo(_ sender: Any?) { model.undoAcknowledged() }
+    @objc func redo(_ sender: Any?) { model.redoAcknowledged() }
     @objc override func selectAll(_ sender: Any?) { model.selectAll() }
     @objc func copy(_ sender: Any?) { model.copySelection() }
     @objc func cut(_ sender: Any?) { model.cutSelection() }
@@ -1368,14 +1368,14 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
         guard window?.firstResponder === self, let owner else { return super.performKeyEquivalent(with: event) }
         let key = DrawBoardView.key(event)
         if key.command, key.characters == "z", !key.option, !key.control {
-            key.shift ? owner.model.redo() : owner.model.undo()
+            key.shift ? owner.model.redoAcknowledged() : owner.model.undoAcknowledged()
             return true
         }
         return super.performKeyEquivalent(with: event)
     }
 
-    @objc func undo(_ sender: Any?) { owner?.model.undo() }
-    @objc func redo(_ sender: Any?) { owner?.model.redo() }
+    @objc func undo(_ sender: Any?) { owner?.model.undoAcknowledged() }
+    @objc func redo(_ sender: Any?) { owner?.model.redoAcknowledged() }
 
     override func cancelOperation(_ sender: Any?) { owner?.model.endEditing() }
 
