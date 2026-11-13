@@ -171,12 +171,20 @@ final class WorkspaceOperationCoordinator {
             self.launchPruningError = nil
             do { try await self.prepareLaunchReceiptPruneCandidates() }
             catch { self.launchPruningError = error.localizedDescription }
+            // Stop as soon as a batch cannot make progress: reconciliation can
+            // be lost during a yield (journal adoption, a failed reconcile),
+            // and `prunePublishedReceipts` then returns 0 without moving the
+            // cursor. The candidates are dropped below; the next launch or
+            // sweep re-snapshots and finishes, so no receipt is lost.
             while self.launchPruningError == nil,
+                  self.startupReconciled,
                   self.receiptPruneCursor < (self.receiptPruneCandidateIDs?.count ?? 0),
                   !Task.isCancelled {
+                let cursor = self.receiptPruneCursor
                 do {
                     let count = try self.prunePublishedReceipts(limit: 64)
                     if count > 0 { self.launchPruneBatches.append(count) }
+                    guard self.receiptPruneCursor > cursor else { break }
                 } catch {
                     // Reconciled checkpoint offers do not depend on successful
                     // collection. Retain receipts and retry at the next sweep.
@@ -188,9 +196,11 @@ final class WorkspaceOperationCoordinator {
             self.receiptPruneCandidateIDs = nil
             self.receiptPruneCursor = 0
             self.receiptPruneEnvelopeIDs.removeAll()
-            try Task.checkCancellation()
+            // Release on every exit, cancellation included; a launch whose
+            // reconciliation was lost is not finished and will run again.
             self.launchHold?.release(); self.launchHold = nil
-            self.launchFinished = self.launchPruningError == nil
+            try Task.checkCancellation()
+            self.launchFinished = self.launchPruningError == nil && self.startupReconciled
         }
         launchWork = work
         do { try await work.value; launchWork = nil }

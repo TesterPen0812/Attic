@@ -98,7 +98,8 @@ enum TaskNotePurge {
             let root = item.root
             if report.removedTaskIDs.contains(root) || (circleMembers.contains(root) && !circleRoots.contains(root)) { continue }
             var ids = Set((deletedByRoot[root] ?? []).map(\.id))
-            var own = ownNotes(of: ids, in: coordinator.freshContext())
+            let firstIDs = ids
+            var own = ownNotes(of: firstIDs, in: coordinator.freshContext())
             if let group = item.group { own.formUnion((notesByGroup[group] ?? []).map(\.id)) }
             let dependent = Set(own.flatMap { (associationsByNote[$0] ?? []).compactMap(\.detachedPreservationID) })
             let relevantRecords = (recordsByRoot[root] ?? []) + dependent.flatMap { recordsByID[$0] ?? [] }
@@ -108,7 +109,9 @@ enum TaskNotePurge {
                     ids.formUnion(snapshot.members.map(\.id))
                 }
             }
-            own.formUnion(ownNotes(of: ids, in: coordinator.freshContext()))
+            // `ids` only grew: the first result already covers `firstIDs`.
+            let addedIDs = ids.subtracting(firstIDs)
+            if !addedIDs.isEmpty { own.formUnion(ownNotes(of: addedIDs, in: coordinator.freshContext())) }
             let grouped = groupedRootIDs.contains(root)
             guard item.group != nil || grouped || (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == true else { continue }
             guard let reservations = notes.reserveTaskNoteInput(own) else {
@@ -180,22 +183,19 @@ enum TaskNotePurge {
 
     private static func ownNotes(of taskIDs: Set<UUID>, in context: ModelContext) -> Set<UUID> {
         guard !taskIDs.isEmpty else { return [] }
-        // A single expiring task should not fetch every other task's live
-        // writing on each of its two ownership checks. Query all physical
-        // rows for each member UUID, retaining the original broad fallback
-        // if SwiftData cannot evaluate a scoped predicate.
+        // Neither `taskID` column is indexed, so every fetch is a table scan:
+        // use one predicate per entity for all member UUIDs, matching every
+        // physical row. The broad fallback below stays if SwiftData cannot
+        // evaluate the scoped predicate.
         do {
-            var owned = Set<UUID>()
-            for taskID in taskIDs {
-                ownNotesFetchCount += 2
-                let noteRows = try context.fetch(FetchDescriptor<NoteItem>(
-                    predicate: #Predicate { $0.taskID == taskID }))
-                let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(
-                    predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil }))
-                owned.formUnion(noteRows.map(\.id))
-                owned.formUnion(links.map(\.noteID))
-            }
-            return owned
+            ownNotesFetchCount += 2
+            let owners = taskIDs.map(Optional.some)
+            let noteRows = try context.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { owners.contains($0.taskID) }))
+            let ids = Array(taskIDs)
+            let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(
+                predicate: #Predicate { ids.contains($0.taskID) && $0.detachedAt == nil }))
+            return Set(noteRows.map(\.id)).union(links.map(\.noteID))
         } catch { /* Preserve the existing conservative broad read. */ }
         ownNotesFetchCount += 2
         let notes = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID != nil }))) ?? []
