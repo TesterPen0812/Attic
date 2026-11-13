@@ -96,8 +96,7 @@ struct NoteHistoryPage: View {
                         .accessibilityLabel("Older version")
                         .accessibilityIdentifier("notes-history-older")
                     Button {
-                        guard let view = menuAnchor.view else { return }
-                        AtticNativeMenu.popUp(versionCommands, in: view)
+                        menuAnchor.open(versionCommands)
                     } label: {
                         Text(browser.selected?.createdAt.formatted(.dateTime.hour().minute()) ?? "—")
                             .monospacedDigit()
@@ -107,6 +106,11 @@ struct NoteHistoryPage: View {
                     .onKeyPress(.leftArrow) { step(1); return .handled }
                     .onKeyPress(.rightArrow) { step(-1); return .handled }
                     .accessibilityLabel("Versions")
+                    .accessibilityRepresentation {
+                        AtticMenuButtonAccessibility(label: String(localized: "Versions")) { _ in
+                            menuAnchor.open(versionCommands, event: nil)
+                        }
+                    }
                     .accessibilityIdentifier("notes-history-versions")
                     Button { step(-1) } label: { Image(systemName: "chevron.right").frame(width: 24, height: 32) }
                         .disabled(browser.selectedIndex == 0 || browser.isRestoring)

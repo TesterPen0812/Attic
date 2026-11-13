@@ -665,8 +665,7 @@ struct TaskNoteMenuLink: View {
 
     var body: some View {
         Button {
-            guard let view = anchor.view else { return }
-            AtticNativeMenu.popUp(commands(), in: view)
+            anchor.open(commands())
         } label: {
             Text(title)
                 .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
@@ -680,8 +679,7 @@ struct TaskNoteMenuLink: View {
             AtticMenuButtonAccessibility(label: title) { _ in
                 // The accessibility representation's AppKit view can be
                 // detached; the rendered label's anchor is in the window.
-                guard let view = anchor.view else { return }
-                AtticNativeMenu.popUp(commands(), in: view)
+                anchor.open(commands(), event: nil)
             }
         }
     }

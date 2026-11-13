@@ -984,13 +984,13 @@ struct TasksPage: View {
 
     /// ⌥⌘V, or a click on the button: the menu under the button.
     private func openViewOptions() {
-        guard model.tab != .done, let anchor = viewOptionsAnchor.view, anchor.window != nil else { return }
+        guard model.tab != .done else { return }
         swipe.cancel()
-        if let open = pointer.openViewOptions {
+        if let anchor = viewOptionsAnchor.view, anchor.window != nil, let open = pointer.openViewOptions {
             open(anchor)
             return
         }
-        AtticNativeMenu.popUp(viewCommands(for: model.tab), in: anchor)
+        viewOptionsAnchor.open(viewCommands(for: model.tab))
     }
 
     /// ⌥⌘V on Now or Later while this page is shown in its key window,
