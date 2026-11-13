@@ -41,6 +41,48 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    func testVisibleFindNavigationDoesNotResolveTheWholePrefixOnEveryStep() throws {
+        // With the two targets inside one warm viewport, navigating a deep
+        // note should not walk all 5,000 preceding paragraphs on each ⌘G.
+        let filler = (0..<5_000).map { NoteBlock.text("Unrelated paragraph \($0) with wrapping words.") }
+        let matches: [NoteBlock] = [.text("needle first"), .text("needle second")]
+        for nearEnd in [false, true] {
+            let (engine, view) = editor([.text("Title")] + (nearEnd ? filler + matches : matches + filler))
+            let scroll = try XCTUnwrap(view.enclosingScrollView)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 600),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            scroll.frame = window.contentView!.bounds
+            window.contentView = scroll
+            defer { engine.find.close(); engine.detachView(); window.close() }
+            scroll.layoutSubtreeIfNeeded()
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            engine.find.inTopRow = true
+            engine.find.show()
+            engine.find.query = "needle"
+            scroll.layoutSubtreeIfNeeded()
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            XCTAssertEqual(engine.find.matches.count, 2)
+            let visible = view.convert(scroll.contentView.bounds, from: scroll.contentView)
+            for match in engine.find.matches {
+                XCTAssertTrue(try XCTUnwrap(engine.rect(for: match.noteRange)).intersects(visible),
+                              "both targets should already be in the laid-out viewport")
+            }
+            let before = view.prefixLayoutRequestCount
+            var samples: [Double] = []
+            for _ in 0..<60 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                engine.find.next()
+                engine.find.next(backward: true)
+                samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            samples.sort()
+            print("NOTES_FIND_VISIBLE_NAV position=\(nearEnd ? "tail" : "head") paragraphs=5000 pairs=60 median_ms=\(samples[30]) p95_ms=\(samples[57]) prefix_requests=\(view.prefixLayoutRequestCount - before)")
+            XCTAssertEqual(view.prefixLayoutRequestCount, before,
+                           "visible Find matches must reuse viewport layout without walking the prefix")
+        }
+    }
+
     func testE01FirstDistantFindRevealsWrappedMatch() throws {
         for width in [CGFloat(340), CGFloat(420)] {
             let blocks: [NoteBlock] = [.text("Title")] + (0..<5_000).map { number in
