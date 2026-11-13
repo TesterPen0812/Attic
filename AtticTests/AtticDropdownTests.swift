@@ -687,23 +687,29 @@ final class AtticDropdownTests: XCTestCase {
                 let image = try XCTUnwrap(renderer.cgImage)
                 let bitmap = NSBitmapImageRep(cgImage: image)
                 let height = CGFloat(image.height) / 2
-                let samples = try [margin + 1.5, height - margin - 1.5].map { y in
-                    try XCTUnwrap(bitmap.colorAt(x: Int((margin + cardWidth / 2) * 2), y: Int(y * 2))?.usingColorSpace(.sRGB), label)
+                // ImageRenderer emits sRGB bytes. On macOS 26 colorAt
+                // returns those values tagged as calibrated RGB; converting
+                // that NSColor to sRGB applies a second transfer function
+                // (#363637 becomes #464647). Read the encoded pixels directly.
+                XCTAssertEqual(image.colorSpace?.name, CGColorSpace.sRGB)
+                let samples = [margin + 1.5, height - margin - 1.5].map { y in
+                    var pixel = [UInt](repeating: 0, count: bitmap.samplesPerPixel)
+                    let sampleX = Int((margin + cardWidth / 2) * 2)
+                    let sampleY = Int(y * 2)
+                    bitmap.getPixel(&pixel, atX: sampleX, y: sampleY)
+                    return NSColor(srgbRed: CGFloat(pixel[0]) / 255, green: CGFloat(pixel[1]) / 255,
+                                   blue: CGFloat(pixel[2]) / 255, alpha: CGFloat(pixel[3]) / 255)
                 }
                 for c in samples {
                     XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "opaque: \(label)")
                     XCTAssertEqual(Double(c.redComponent), Double(samples[0].redComponent), accuracy: 0.01, "one even face: \(label)")
                     XCTAssertEqual(Double(c.greenComponent), Double(c.redComponent), accuracy: 0.02, "grey, nothing shows through: \(label)")
                 }
-                if mode == .light {
-                    let fill = try XCTUnwrap(design.tokens.popoverFill.nsColor.usingColorSpace(.sRGB), label)
-                    XCTAssertEqual(Double(samples[0].redComponent), Double(fill.redComponent), accuracy: 0.02, "popoverFill: \(label)")
-                    XCTAssertEqual(Double(samples[0].greenComponent), Double(fill.greenComponent), accuracy: 0.02, "popoverFill: \(label)")
-                    XCTAssertEqual(Double(samples[0].blueComponent), Double(fill.blueComponent), accuracy: 0.02, "popoverFill: \(label)")
-                } else {
-                    // Dark draws #464647 here against popoverFill's #363637
-                    // (reported 13 Nov for the menus-conform job): pin a dark card only.
-                    XCTAssertLessThan(Double(samples[0].redComponent), 0.35, "a dark card: \(label)")
+                let fill = try XCTUnwrap(design.tokens.popoverFill.nsColor.usingColorSpace(.sRGB), label)
+                for sample in samples {
+                    XCTAssertEqual(Double(sample.redComponent), Double(fill.redComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
+                    XCTAssertEqual(Double(sample.greenComponent), Double(fill.greenComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
+                    XCTAssertEqual(Double(sample.blueComponent), Double(fill.blueComponent), accuracy: 0.5 / 255, "exact popoverFill: \(label)")
                 }
             }
         }
