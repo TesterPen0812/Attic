@@ -109,8 +109,8 @@ The current `PageSwitch` signpost ends through an async main-queue callback from
 
 ### O-3 preliminary ranking
 1. Known H-01 and retained-page hosting cost, with owner-provided measurements; not a new finding.
-2. DP-8 if approach warmup overlaps input, and Notes responder/anchor population for the relevant page; both unmeasured.
-3. DP-7 for context clicks only, not ordinary tabs. Cold menu construction remains to investigate. The page-ready-to-frame gap is a measurement interval, not a demonstrated root cause.
+2. DP-38 for task-row selection, DP-75 for cold page-switch publications, and DP-8 if approach warmup overlaps input; all residual contributions are unmeasured.
+3. Notes responder/anchor population (DP-16) and Calendar hit-testing/focus registration (DP-30/DP-33) under their respective triggers; DP-7 is context clicks only. The page-ready-to-frame gap is a measurement interval, not a demonstrated root cause.
 
 
 ## Whole-app review — Notes and MCP checkpoint
@@ -561,7 +561,7 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 
 Close contenders depend on usage: DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
 
-**O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
+**O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-75 for page switches, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
 ### Mac measurement plan
 - Reproduce with the optimized preview build, the same AX clients, same panel size/data and a clean A/B on the target commit plus only the specific diagnostic patch. Record client state, counts, percentiles and outliers. Do not conflate the two substantially different branches with a single patch.
