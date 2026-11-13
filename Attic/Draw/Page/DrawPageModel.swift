@@ -1306,10 +1306,12 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func prepareAcknowledgedHistory(on id: UUID) {
-        guard acknowledgedUndoChanges == nil,
-              let history = (store as? DrawStore)?.historyChanges(on: id) else { return }
-        acknowledgedUndoChanges = history.undo
-        acknowledgedRedoChanges = history.redo
+        // Only queued actions own a projection. A no-op or empty Undo/Redo
+        // must not leave a cached baseline for the next input or canvas.
+        guard acknowledgedDraw.isEmpty else { return }
+        let history = (store as? DrawStore)?.historyChanges(on: id)
+        acknowledgedUndoChanges = history?.undo
+        acknowledgedRedoChanges = history?.redo ?? []
     }
 
     private func scheduleAcknowledgedDraw() {
@@ -1327,11 +1329,11 @@ final class DrawPageModel: ObservableObject {
     func flushAcknowledgedDraw() {
         acknowledgedDrawTimer?.cancel()
         acknowledgedDrawTimer = nil
+        acknowledgedUndoChanges = nil
+        acknowledgedRedoChanges = []
         guard !acknowledgedDraw.isEmpty else { return }
         let entries = acknowledgedDraw
         acknowledgedDraw = []
-        acknowledgedUndoChanges = nil
-        acknowledgedRedoChanges = []
         for entry in entries {
             let result: DrawSaveResult
             switch entry.action {

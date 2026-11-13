@@ -30,6 +30,57 @@ final class DrawDataSafetyTests: XCTestCase {
         return try XCTUnwrap((response["objects"] as? [[String: Any]])?.first)
     }
 
+    func testCatchupR1EmptyAcknowledgementCannotCarryHistoryAcrossCanvasAndTyping() throws {
+        for emptyAction in ["put", "redo", "undo"] {
+            let store = try persistent()
+            let page = DrawPageModel(store: store)
+            page.start()
+            let first = try XCTUnwrap(page.canvasID)
+            let box = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 100, height: 50), content: .shape(.rectangle))
+            if emptyAction != "undo" {
+                XCTAssertTrue(page.perform(.put([box])).isSaved)
+                var moved = box
+                moved.frame.x += 30
+                page.performAcknowledged(.put([moved]))
+                page.flushAcknowledgedDraw()
+                if emptyAction == "put" { page.performAcknowledged(.put([moved])) }
+                else { page.redoAcknowledged() }
+            } else { page.undoAcknowledged() }
+            let firstObjects = try store.open(first).objects
+            XCTAssertTrue(page.newCanvas(name: "Second"))
+            let second = try XCTUnwrap(page.canvasID)
+            page.beginText(at: CGPoint(x: 150, y: 150))
+            page.typed("Second canvas writing")
+            page.endEditing()
+            XCTAssertEqual(try store.open(second).objects.count, 1)
+            page.undoAcknowledged()
+            page.flushAcknowledgedDraw()
+            XCTAssertTrue(page.objects.isEmpty, emptyAction)
+            XCTAssertEqual(page.objects, try store.open(second).objects, emptyAction)
+            XCTAssertEqual(try store.open(first).objects, firstObjects, emptyAction)
+        }
+    }
+
+    func testCatchupR1NoOpProjectionRefreshesAfterExternalEdit() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let canvas = try XCTUnwrap(page.canvasID)
+        let box = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 100, height: 50), content: .shape(.rectangle))
+        XCTAssertTrue(page.perform(.put([box])).isSaved)
+        var moved = box
+        moved.frame.x += 30
+        page.performAcknowledged(.put([moved]))
+        page.flushAcknowledgedDraw()
+        page.performAcknowledged(.put([moved])) // No-op, followed by an external history change with no flush boundary.
+        let text = DrawObject(content: .text("Agent addition"))
+        XCTAssertTrue(store.perform(.put([text]), on: canvas).isSaved)
+        page.undoAcknowledged()
+        page.flushAcknowledgedDraw()
+        XCTAssertEqual(page.objects, [moved])
+        XCTAssertEqual(page.objects, try store.open(canvas).objects)
+    }
+
     func testDS6PendingTypingFlushesBeforeAgentSnapshotAndValidation() throws {
         let store = try persistent()
         let page = DrawPageModel(store: store)
