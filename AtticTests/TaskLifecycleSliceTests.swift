@@ -2843,9 +2843,13 @@ final class TaskLifecycleSliceTests: XCTestCase {
                                     noteStore: notes.store, design: .default, uiState: PanelUIState())
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
-        for _ in 0..<100 where original.menus.earlierFiles().first(where: { $0.identifier == "task-note-earlier-move" }) == nil {
-            await Task.yield()
+        for _ in 0..<200 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            if original.host.scrollView.window === window,
+               original.menus.earlierFiles().contains(where: { $0.identifier == "task-note-earlier-move" }) { break }
+            try await Task.sleep(for: .milliseconds(10))
         }
+        XCTAssertTrue(original.host.scrollView.window === window, "the original page must mount in its native window")
         let move = try XCTUnwrap(original.menus.earlierFiles().first { $0.identifier == "task-note-earlier-move" },
                                  "the visible window must install its Earlier Files menu")
         XCTAssertFalse(move.isDisabled)
@@ -2857,7 +2861,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
         XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id),
                        "the window action migrated the earlier file into the note")
-        for _ in 0..<100 where TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes) == nil {
+        for _ in 0..<200 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            if let current = TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes),
+               current.engine.textView?.window === window { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         let remounted = try XCTUnwrap(TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes),
@@ -2866,6 +2873,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(remounted.usesWorkspaceBinding)
         XCTAssertTrue(remounted.engine.textView?.isEditable == true,
                       "the replacement lease must restore an editable window, not only the stored note")
+        XCTAssertTrue(remounted.engine.textView?.window === window,
+                      "the new editor must be mounted in the original native window")
         XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
     }
 
