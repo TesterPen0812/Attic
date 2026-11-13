@@ -72,11 +72,37 @@ Compare the input event → clip bounds → geometry callbacks → realized row 
 ## O-3: first clicks
 The `0261cd21` comparison was confirmed and its task row modifier changes `.focusable(enabled)` to `.focusable(enabled && (!focus.singleNativeResponder || focus.isFocused))` (`Attic/DesignSystem/Components/AtticTaskComponents.swift`, comparison branch around 413–425). This is H-01, already known and not re-filed. The branches differ in many unrelated changes, so a whole-branch diff cannot attribute any remaining timing to this change alone. Further review pending.
 
+### DP-7 (P1, context-click suspect): The context-menu router scans registered anchors and their view ancestry
+- `Attic/DesignSystem/Components/AtticGlassMenu.swift:2172–2202, 2208–2230, 2245–2266, 2338–2356`; row registration at `Attic/Tasks/TasksPage.swift:1952–1953` and Notes `Attic/Notes/Page/NotesLibraryView.swift:446–475, 556–571`.
+- Trigger: a right-click or Control-click on a page with many realized context-menu anchors. The shared local event monitor calls `target`, which hit-tests the content, enumerates the weak anchor table, filters by window, traverses ancestors to test visibility/hosting ownership, converts coordinates and picks the smallest match. The router then hit-tests again for editable controls before building the selected commands. Ordinary left clicks return before this scan, so this does **not** explain all 220–240 ms tab clicks.
+- Scaling: O(A × H) in the number A of currently live registered anchors and ancestor depth H, plus AppKit hit testing. A depends on actual retained/realized rows and nested tag anchors, not total stored tasks. Cold menu presentation cost is separate.
+- Smallest fix: narrow candidate anchors by window and spatial region, or route directly from the existing page hit/row geometry while preserving innermost-menu precedence, shields, editable text and VoiceOver Show Menu. Avoid per-click whole-table enumeration.
+- Confidence: high for scan/hit-test path, medium for latency contribution; no timing measured.
+- Mac measurement: signpost route, first hit test, anchor scan, second hit test, command construction, pop-up construction and first presented frame; count anchors examined, ancestor hops, retained rows and menu items for 20/100/1,000 live anchors with AX active. Guard test: use overlapping nested anchors, shield, hidden page and editable text; compare selected target and count examined candidates, requiring bounded local lookup rather than time thresholds.
+
+### DP-8 (P1, first-touch suspect): Approach warmup can run synchronous layout/display/flush immediately ahead of input
+- `Attic/Window/AtticPanelController.swift:183–203, 2192–2229, 2233–2250`; `Attic/Services/CornerHoverMonitor.swift:414`.
+- A corner or island approach schedules a main-queue block; if still inside, `warmFirstTouchPresentation` can prepare a page, call `layoutSubtreeIfNeeded` on the content and host, display their layers and `CATransaction.flush` before returning. It guards active motion and an already-pressing panel, but a click arriving just after this work starts cannot preempt it. The cost depends on cold/built pages, active accessibility, view count and any previous backlog. A separate delayed kept-page warmer checks recent key/scroll input (`2295–2335`); do not conflate the two.
+- Smallest fix: instrument first, then make warming cancellable/cooperatively staged between bounded main-run-loop slices and abandon remaining work when input is queued; use previously prepared layers without forcing extra synchronous display/flush on the critical input path. Preserve first-click correctness, page readiness and visible transitions; never change the accepted appearance.
+- Confidence: high for synchronous operations on the queued approach path; medium for how often they overlap the owner's first click or explain any measured latency. Existing warmup may improve other cases, so removing it blindly could regress cold clicks.
+- Mac measurement: correlate `warmup_begin`, `warmup_model`, `warmup_layout`, `warmup_layers`, `warmup_end`, physical event timestamps, `panel_host_layout`, AX focus work, CA transaction/commit and WindowServer presentation; A/B cold/warm and AX on/off. Guard test: queue approach then simulated input before the first staged slice and assert it cancels/deprioritizes remaining warmup; first click still reaches its target and page state remains correct.
+
+### O-3: Notes focus and first-frame gap, not yet assigned causes
+`NotesLibraryRow.swift:158–175` constructs a focused actions button and native row anchor even when opacity hides the button; Notes list/board rows use lazy stacks and context menus (`NotesLibraryView.swift:446–475, 556–571`). This is a testable AX population suspect, not proof that Notes recreates H-01 or that invisible controls are registered as native responders. Count actual focus responders and AX nodes with Notes row counts and compare a targeted diagnostic variant.
+
+The current `PageSwitch` signpost ends through an async main-queue callback from `AtticPanelView.swift:643–653`, not at display scan-out. `IdleLatencyTrace.firstFrameOpportunity` schedules a separate main-queue `commit_handoff` and starts a view display link (`PerformanceSignposts.swift:606–619, 656–672`); the first callback is a frame opportunity, not proof of presentation. The observed ~100 ms gap can include run-loop scheduling, layout, AX, CA commit and WindowServer work. These markers alone cannot identify which; use a unified clock and trace before claiming the cause.
+
+### O-3 preliminary ranking
+1. Known H-01 and retained-page hosting cost, with owner-provided measurements; not a new finding.
+2. DP-8 if approach warmup overlaps input, and Notes responder/anchor population for the relevant page; both unmeasured.
+3. DP-7 for context clicks only, not ordinary tabs. Cold menu construction remains to investigate. The page-ready-to-frame gap is a measurement interval, not a demonstrated root cause.
+
+
 ## Whole-app review
 Not yet reviewed. PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 6 static suspects, four resize and two scroll; neither is measured on the owner's Mac.
-- O-2 remains under review; O-3 and whole-app top 15 are not complete. No folder has been read fully file by file.
+- DP findings: 8 static suspects, four resize, two scroll and two first-touch/context-click; neither is measured on the owner's Mac.
+- O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell, island, table and Draw tracing and O-2 list/row instrumentation review; remaining O-1 subpaths, O-2 interactions and O-3 onward still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell, island, table and Draw tracing and O-2 list/row instrumentation review; remaining O-1 subpaths, O-2 interactions, O-3 remaining pages and whole-app review still need review. Continue rather than treat this checkpoint as a final audit.
