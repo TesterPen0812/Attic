@@ -41,7 +41,7 @@ Target: `phase-3/pd-batch17` at `d503231d6d33459e09b158d4e7f34d7ecbfd39cd`; comp
 1. Known single-host layout across retained pages: already assigned; no new DP finding. It is likely a major contributor but no resize measurement isolates it.
 2. DP-1 root size publication/invalidation, coupled with actual reflow: likely material, unmeasured.
 3. DP-3 table remeasurement when a large table is mounted; DP-4 Draw coverage when a large scene is mounted. Relative order depends on page and data, unmeasured.
-4. DP-2 island native windows and glass/mask work: plausible additive cost, unmeasured.
+4. DP-2 island native windows and glass/mask work, and DP-63 auto-hide samples scheduled by broad panel-state publications: plausible additive costs, unmeasured.
 Fix/measure in that order, preserving geometry and visuals. Further trace Notes text reflow, Calendar geometry, AX frame propagation and floating-panel interaction before finalizing O-1. None of these suspects is assigned a percentage or independent millisecond cost.
 
 ## O-2: task scrolling — initial checkpoint
@@ -473,7 +473,7 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 14. **DP-43:** Notes summary cache retains source data for every visited live note.
 15. **DP-24:** a task revision reconstructs all due-task Calendar presentations.
 
-**O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
+**O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
 ### Mac measurement plan
 - Reproduce with the optimized preview build, the same AX clients, same panel size/data and a clean A/B on the target commit plus only the specific diagnostic patch. Record client state, counts, percentiles and outliers. Do not conflate the two substantially different branches with a single patch.
