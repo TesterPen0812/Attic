@@ -2,6 +2,8 @@
 
 Target: `phase-3/pd-batch17` at `d503231d6d33459e09b158d4e7f34d7ecbfd39cd`; comparison `phase-3/hosting-layout` at `0261cd2186091f42a9d12758d542afc0d9d97f9b`. Static Linux review only. No macOS build, run, profiling, or timing in this audit. The owner-supplied AX-on click measurements are baseline observations, not measurements made here. No app code changed. `AGENTS.md`, `README.md`, and `Docs/README.md` read. Dormant mobile and CloudKit are outside scope.
 
+**Triage, not a change list:** DP IDs are source-backed opportunities, not 203 confirmed user-visible bugs or 203 instructions to change code. Related IDs may share one cause. Measure the three reported interactions first; separately prioritize per-keystroke, per-scroll and per-frame work that grows with data. Leave low-frequency, low-impact opportunities alone unless measurement or adjacent work justifies their risk. Protect the existing appearance, accessibility and behavior in every experiment.
+
 ## O-1: resize — initial checkpoint
 
 ### DP-1 (P1, suspect): Every changed size publishes through the shell as well as AppKit layout
