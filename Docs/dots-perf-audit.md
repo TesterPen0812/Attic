@@ -115,10 +115,18 @@ The current `PageSwitch` signpost ends through an async main-queue callback from
 - Confidence: high for the wakeup pattern, low/medium for real battery or perceptible impact absent measurement.
 - Mac measurement: count approval wait resumptions, simultaneous waits, main-actor time and energy/wakeups over a full 20-second unanswered prompt and during active UI work; compare event-driven version. Guard test: zero periodic polls while pending, one completion on each outcome, prompt retry/idempotence preserved, cancellation and timeout tested with a controllable clock.
 
+### DP-11 (P2, large streamed tool-input suspect): Claude JSON fragments are accumulated through copied value state on the main actor
+- `Attic/Agent/Run/AgentRunEngine.swift:273–274, 578–592` → `Attic/Agent/Run/AgentCLIStreamDecoder.swift:23–32, 112–135`.
+- Every helper line extracts a value copy of the decoder, mutates it and stores it back. For Claude `input_json_delta`, it also extracts a tuple from `claudeInputs`, appends the fragment to its growing `String`, then assigns the tuple back. At block end it converts the whole accumulated string to UTF-8 and parses JSON. The old dictionary/decoder value remains referenced during these operations, so Swift copy-on-write may copy dictionary storage and the accumulated string repeatedly. This is streamed **tool argument** JSON, distinct from PF-30's repeated parsing of the assistant's reply text. Actual optimizer and allocator behavior needs measurement; do not assert quadratic copies as an established measured fact.
+- Scaling: number of streamed fragments, size of accumulated argument and active decoder maps; final conversion/JSON parse is O(argument bytes). Large documents passed as tool arguments and many small deltas are the stress case. The decoder runs on the main actor.
+- Smallest fix: maintain per-block fragment buffers in uniquely owned reference storage or an efficient chunk/byte accumulator and parse once on completion off the main actor where safe; preserve event ordering, error behavior and permission handling. Avoid exposing tool arguments in diagnostics.
+- Confidence: high for control flow and main-actor placement, medium for copy-on-write cost in an optimized build.
+- Mac measurement: feed identical 10 KB/1 MB argument payloads in 1, 100 and 10,000 deltas, instrument `accept` count/duration, cumulative bytes appended/copied and allocations, main-thread frame hitches and final decode; no content logging. Guard test: resulting decoded arguments and step sequence match for all fragmentations and counted bytes copied/concatenated are linear, not dependent on fragment count squared.
+
 Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 10 static suspects, including four resize, two scroll, two first-touch/context-click and two Notes/MCP; neither is measured on the owner's Mac.
+- DP findings: 11 static suspects, including four resize, two scroll, two first-touch/context-click and three Notes/MCP/agent; neither is measured on the owner's Mac.
 - O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings/MCP approval polling. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling and agent tool-input streaming. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
