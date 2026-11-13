@@ -531,6 +531,10 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var linkSuggestionIndex = 0
     var noteCandidates: (() -> [NoteLinkCandidate])?
     var onLinkSuggestionsChange: (() -> Void)?
+    /// A title is only the editable label; an existing link keeps its exact
+    /// destination until the person edits or explicitly picks a suggestion.
+    private var openedLink: (url: String, text: String)?
+    private var navigatedLinkSuggestions = false
 
     func refreshLinkSuggestions() {
         let query = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -550,7 +554,9 @@ final class NoteFormatCardModel: ObservableObject {
 
     func moveLinkSuggestion(by delta: Int) {
         guard !linkSuggestions.isEmpty else { return }
-        linkSuggestionIndex = min(max(linkSuggestionIndex + delta, 0), linkSuggestions.count - 1)
+        let next = min(max(linkSuggestionIndex + delta, 0), linkSuggestions.count - 1)
+        if next != linkSuggestionIndex { navigatedLinkSuggestions = true }
+        linkSuggestionIndex = next
     }
 
     func chooseNote(_ index: Int) {
@@ -607,6 +613,8 @@ final class NoteFormatCardModel: ObservableObject {
         if let noteID {
             linkText = noteCandidates?().first(where: { $0.id == noteID })?.title ?? ""
         } else { linkText = url ?? "" }
+        openedLink = url.map { (url: $0, text: linkText) }
+        navigatedLinkSuggestions = false
         linkError = nil
         card = .link(hasLink: url != nil)
         refreshLinkSuggestions()
@@ -616,6 +624,11 @@ final class NoteFormatCardModel: ObservableObject {
     }
 
     func submitLink() {
+        if let openedLink, linkText == openedLink.text, !navigatedLinkSuggestions {
+            if onCommitLink?(openedLink.url) == true { return }
+            linkError = String(localized: "This link could not be updated.")
+            return
+        }
         if !linkSuggestions.isEmpty { chooseNote(linkSuggestionIndex); return }
         let url = Self.normalizedURL(linkText)
         if onCommitLink?(url) == true { return }
