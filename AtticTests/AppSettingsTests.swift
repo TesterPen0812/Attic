@@ -1,10 +1,86 @@
 import AppKit
 import Foundation
 import SwiftUI
+import SwiftData
 import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    @MainActor
+    func testR8QuitDrainsAllMatchingModelsVetoesFailureAndLeavesOtherStoresAlone() async throws {
+        struct Rejected: Error {}
+        let root = ownedTemporaryDirectory(prefix: "Catchup1QuitFailure")
+        let suite = "Catchup1QuitFailure.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+                                            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        var reject = false
+        let failingStore = TaskStore(container: container, persist: { context in
+            if reject { throw Rejected() }
+            try context.save()
+        })
+        let normal = TasksPageModel(library: coordinator.library)
+        let failing = TasksPageModel(library: AtticLibrary(tasks: failingStore))
+        let unrelatedStore = try makeTestStore()
+        let unrelated = TasksPageModel(library: AtticLibrary(tasks: unrelatedStore))
+        let deleted = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Delete")])?.first)
+        let ticked = try XCTUnwrap(failingStore.commit([TaskDraft(title: "Complete")])?.first)
+        let untouched = try XCTUnwrap(unrelatedStore.commit([TaskDraft(title: "Other store")])?.first)
+        var callbacks = 0, unrelatedCallbacks = 0
+        normal.deleteAcknowledged([deleted.id]) { outcome in
+            XCTAssertTrue(outcome.isApplied)
+            callbacks += 1
+        }
+        failing.completeAcknowledged(ticked.id) { outcome in
+            XCTAssertFalse(outcome.isApplied)
+            callbacks += 1
+        }
+        unrelated.deleteAcknowledged([untouched.id]) { _ in unrelatedCallbacks += 1 }
+        reject = true
+        let ready = await coordinator.prepareForTerminationDurably()
+        XCTAssertFalse(ready, "a failed acknowledged save must veto quit")
+        XCTAssertEqual(callbacks, 2, "every model over the quitting store is drained")
+        XCTAssertEqual(unrelatedCallbacks, 0, "quitting one container must not drain another")
+        let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertNotNil(saved.first { $0.id == deleted.id }?.deletedAt)
+        XCTAssertEqual(saved.first { $0.id == ticked.id }?.status, .todo, "the failed tick rolls back")
+        XCTAssertNotNil(unrelatedStore.listedTask(withID: untouched.id))
+        unrelated.settlePendingCompletionAcknowledgements()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(callbacks, 2, "the old scheduled tasks must not replay settled commands")
+        XCTAssertEqual(unrelatedCallbacks, 1)
+    }
+
+    @MainActor
+    func testR8QuitSavesAcknowledgedTaskDeletionBeforeApproving() async throws {
+        let root = ownedTemporaryDirectory(prefix: "Catchup1Quit")
+        let suite = "Catchup1Quit.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+                                            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        let page = TasksPageModel(library: coordinator.library)
+        for durable in [false, true] {
+            let task = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Quit immediately")])?.first)
+            var settled: CommandOutcome?
+            page.deleteAcknowledged([task.id]) { settled = $0 }
+            XCTAssertFalse(page.rows(for: .now).contains { $0.id == task.id }, "the deletion is already visible")
+            XCTAssertNil(settled, "the save has not run yet")
+            let ready = durable ? await coordinator.prepareForTerminationDurably() : coordinator.prepareForTermination()
+            XCTAssertTrue(ready)
+            let replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).filter { $0.id == task.id }
+            XCTAssertTrue(replicas.allSatisfy { $0.deletedAt != nil }, "quit must save the deletion before approval (durable=\(durable))")
+            XCTAssertEqual(settled?.isApplied, true, "the acknowledged command settles before approval")
+            page.settlePendingCompletionAcknowledgements()
+        }
+        print("CATCHUP_R8 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
     @MainActor
     func testFix18RepeatedQuitCommandDoesNotBypassPendingPreparation() throws {
         var terminationCalls = 0

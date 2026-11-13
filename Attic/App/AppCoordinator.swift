@@ -1327,11 +1327,11 @@ final class AppCoordinator: ObservableObject {
                 hoverMonitor.revealProgrammatically(section: .canvas)
                 return false
             }
-            return true
+        } else {
+            canvasSession.cancelActiveInteraction()
+            canvasSession.flushViewState()
         }
-        canvasSession.cancelActiveInteraction()
-        canvasSession.flushViewState()
-        return true
+        return prepareTaskAcknowledgementsForQuit()
     }
 
     func prepareForTermination() -> Bool {
@@ -1357,6 +1357,14 @@ final class AppCoordinator: ObservableObject {
                 hoverMonitor.revealProgrammatically(section: .canvas)
                 return false
             }
+        }
+        return prepareTaskAcknowledgementsForQuit()
+    }
+
+    private func prepareTaskAcknowledgementsForQuit() -> Bool {
+        guard TasksPageModel.prepareForTermination(in: store) else {
+            hoverMonitor.revealProgrammatically(section: .tasks)
+            return false
         }
         return true
     }
