@@ -45,6 +45,6 @@ Initial force-unwrap and HTTP parser searches are leads only, not findings.
 ## Summary at this checkpoint
 - Dead code confirmed: 0. Removed: 0. No removal branch created.
 - Lightness opportunities: 2; LT-1 and LT-2 are preliminary, not a ranked top 10.
-- Bugs: 1 static finding (DB-1); runtime effect remains unmeasured. This is not a complete bug inventory.
+- Bugs: 2 static findings (DB-1 and DB-2); runtime effect remains unmeasured. This is not a complete bug inventory.
 - Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading and Calendar search before and after any proposed change, and DB-1 with a deliberately slow EventKit source.
 - Remaining: exhaustive symbol and dynamic-reference analysis; assets/scripts/tests/CI; launch and lifetime review; the full bug hunt across all requested areas. In particular, no folder has been read fully file by file.
