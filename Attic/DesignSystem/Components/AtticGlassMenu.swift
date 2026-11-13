@@ -730,7 +730,13 @@ struct AtticGlassMenuStyle {
     /// Lighter headers, as the system menu draws them (owner, 12 Nov:
     /// version 3 of menu-versions-drafts.html); Increase Contrast keeps the token.
     var header: NSColor { design.increaseContrast ? secondary(.groupHeader) : title.withAlphaComponent(0.45) }
-    var disabled: NSColor { secondary(.meta) }
+    /// A disabled row (title, icon, chevron, shortcut): the title's ink at
+    /// 30 %, 50 % under Increase Contrast (menu review #6, 12 Nov). Always
+    /// lighter than the 45 % headers, never the shortcuts' grey, in both
+    /// appearances, as the system orders them (tertiary under secondary).
+    var disabled: NSColor {
+        title.withAlphaComponent(title.alphaComponent * (design.increaseContrast ? 0.5 : 0.3))
+    }
     var destructive: NSColor { colourInk(tokens.ink(.dueText)).nsColor }
     /// The highlight: 8 % ink (16 % under Increase Contrast).
     var highlight: NSColor {

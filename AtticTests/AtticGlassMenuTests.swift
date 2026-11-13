@@ -165,7 +165,9 @@ final class AtticGlassMenuTests: XCTestCase {
                             XCTAssertEqual(style.isSeeThrough, surface != .solid && !reduced, "\(surface), \(controls), RT=\(reduced)")
                             guard !style.isSeeThrough else { continue } // Real glass is an on-screen gate.
                             let floor = contrast ? 4.5 : 3.0
-                            for ink in [style.detail, style.header, style.disabled] {
+                            // Disabled rows are the title at 30 % (review #6), below any
+                            // floor by design: `testDisabledInkIsTheTitleAtThirtyPercent`.
+                            for ink in [style.detail, style.header] {
                                 let colour = try XCTUnwrap(ink.usingColorSpace(.sRGB))
                                 let rgba = AtticRGBA(red: colour.redComponent, green: colour.greenComponent,
                                     blue: colour.blueComponent, alpha: colour.alphaComponent)
@@ -284,6 +286,27 @@ final class AtticGlassMenuTests: XCTestCase {
             XCTAssertEqual(rect.midY, band.midY, accuracy: 0.5 / scale + 0.0001, "still centred on its band")
             XCTAssertEqual(rect.minX, AtticMenuMetrics.separatorInset)
             XCTAssertEqual(rect.maxX, band.width - AtticMenuMetrics.separatorInset)
+        }
+    }
+
+    /// Review #6 (12 Nov): a disabled row is the title's ink at 30 % (50 %
+    /// under Increase Contrast), always lighter than the 45 % headers and
+    /// never the shortcuts' grey.
+    func testDisabledInkIsTheTitleAtThirtyPercent() throws {
+        for mode in AtticDesignContext.Mode.allCases {
+            for surface in [PanelSurfaceStyle.glass, .frosted, .solid] {
+                for contrast in [false, true] {
+                    let style = AtticGlassMenuStyle(design: AtticDesignContext(mode: mode, surface: surface, increaseContrast: contrast))
+                    let disabled = try XCTUnwrap(style.disabled.usingColorSpace(.sRGB))
+                    let title = try XCTUnwrap(style.title.usingColorSpace(.sRGB))
+                    XCTAssertEqual(disabled.redComponent, title.redComponent, accuracy: 0.002, "\(mode) \(surface)")
+                    XCTAssertEqual(disabled.greenComponent, title.greenComponent, accuracy: 0.002)
+                    XCTAssertEqual(disabled.blueComponent, title.blueComponent, accuracy: 0.002)
+                    XCTAssertEqual(disabled.alphaComponent, title.alphaComponent * (contrast ? 0.5 : 0.3), accuracy: 0.002,
+                                   "\(mode) \(surface) IC=\(contrast)")
+                    XCTAssertNotEqual(style.disabled, style.detail, "not the shortcuts' grey")
+                }
+            }
         }
     }
 
