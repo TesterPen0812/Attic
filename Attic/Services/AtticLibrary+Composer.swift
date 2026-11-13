@@ -9,16 +9,16 @@ extension AtticLibrary {
     /// Recently Deleted; Redo brings both back. With no writing it is
     /// `createTasks` exactly.
     @discardableResult
-    func createTask(_ draft: TaskDraft, writing: String, in history: UndoHistoryID) -> TaskItem? {
+    func createTask(_ draft: TaskDraft, writing: String, in history: UndoHistoryID, id: UUID? = nil) -> TaskItem? {
         let body = writing.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty, let notes else { return createTasks([draft], in: history)?.first }
+        let taskID = id ?? UUID()
+        guard !body.isEmpty, let notes else { return createTasks([draft], in: history, ids: [taskID])?.first }
         var created: TaskItem?
         let serial = tasks.errorSerial
         defer { if created == nil { _ = taskOutcome(false, since: serial, ids: []) } }
         undo.perform(in: history) {
             // One save for the task, its writing and their association: a
             // failed save leaves no rows, no Recently Deleted entry and no step.
-            let taskID = UUID()
             guard let document = try? NoteAgentTextParser.document(title: draft.title, body: body, base: .blank)
                     .taskSnapshot(title: draft.title),
                   case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)

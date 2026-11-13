@@ -78,10 +78,22 @@ extension TasksPageModel {
     /// The new task takes the bar's files (O17-06): one import, the same
     /// one a drop on its row runs. The task exists already, so a failed
     /// import keeps it and says why; what arrived shows as its tiles.
-    func attachComposerFiles(to id: UUID) {
+    func takeComposerFiles() -> [TasksComposerFiles] {
         let files = addBarState.files
-        guard !files.isEmpty else { return }
         addBarState.files = []
+        return files
+    }
+
+    func restoreComposerFiles(_ files: [TasksComposerFiles]) {
+        addBarState.files.insert(contentsOf: files, at: 0)
+    }
+
+    func attachComposerFiles(to id: UUID) {
+        attachComposerFiles(takeComposerFiles(), to: id)
+    }
+
+    func attachComposerFiles(_ files: [TasksComposerFiles], to id: UUID) {
+        guard !files.isEmpty else { return }
         let staging = TaskAttachmentStaging(merging: files.map(\.staging))
         Task { @MainActor [weak self] in
             guard let self else { staging.discard(); return }

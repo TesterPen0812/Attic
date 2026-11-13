@@ -451,7 +451,64 @@ final class ComposerModel: ObservableObject {
                 _ = await self.create(openingPage: openingPage)
             }
         }
+        else if kind == .task { submitTaskAcknowledged(openingPage: openingPage) }
         else { _ = createImmediately(openingPage: openingPage) }
+    }
+
+    /// Tasks draw their new row before the library's atomic task+writing
+    /// transaction starts. Keep the exact draft until the write succeeds;
+    /// a failure removes the row and restores its text to this card.
+    private func submitTaskAcknowledged(openingPage: Bool) {
+        guard isOpen, canCreate else { return }
+        var finished = tasks.addBar
+        finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
+        let day = finished.parts(parser: tasks.parser).dueDay
+        let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog : .todo
+        guard let draft = finished.draft(parser: tasks.parser, status: status) else { return }
+        let submittedWriting = writing, submittedPage = page
+        // A file dropped into the next draft while the first saves belongs
+        // to the next draft, even if the first save finishes afterwards.
+        let submittedFiles = tasks.takeComposerFiles()
+        isCreating = true
+        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
+            library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
+        }, settled: { [weak self] created in
+            guard let self else { return }
+            self.isCreating = false
+            guard let created else {
+                self.failed = true
+                AtticSounds.play(.failed)
+                self.tasks.restoreComposerFiles(submittedFiles)
+                // Another submission can have its own text already. Never
+                // overwrite it with a failed older draft.
+                if self.tasks.addBar.text.isEmpty && self.writing.isEmpty {
+                    self.tasks.addBar = finished
+                    self.writing = submittedWriting
+                }
+                self.isOpen = true
+                self.focusRequest &+= 1
+                self.saveKeptDraft()
+                return
+            }
+            self.failed = false
+            // Only retire a kept draft after the task's family write commits.
+            // Until then an earlier backup remains available after a crash.
+            self.saveKeptDraft()
+            AtticSounds.play(.created)
+            self.tasks.attachComposerFiles(submittedFiles, to: created.id)
+            if openingPage {
+                self.services.openTaskPage(created.id)
+            } else if case let .tasks(tab) = submittedPage {
+                if tab == .done || (tab == .backlog && status == .todo) {
+                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
+                } else {
+                    self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
+                }
+            }
+        })
+        clearDraft()
+        if openingPage { isOpen = false }
+        else { focusRequest &+= 1 }
     }
 
     private func createImmediately(openingPage: Bool) -> Bool {
