@@ -532,12 +532,13 @@ enum AtticMenuMetrics {
     /// System glass, 18 pt continuous corners, 6 pt padding.
     static let cardRadius: CGFloat = 18
     static let cardPadding: CGFloat = 6
-    /// 32 pt rows, 10 pt in; a 20 pt icon column and a 10 pt gap.
+    /// 32 pt rows, 10 pt in; a 20 pt icon column and an 8 pt gap (menu
+    /// review #7, 12 Nov: the icon belongs to its title).
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
     static let iconSlot: CGFloat = 20
     static let iconSize: CGFloat = 14
-    static let columnGap: CGFloat = 10
+    static let columnGap: CGFloat = 8
     /// 13 pt medium titles; 11 pt values and shortcuts; 11.5 pt semibold
     /// section titles on a 26 pt band.
     static let titleSize: CGFloat = 13

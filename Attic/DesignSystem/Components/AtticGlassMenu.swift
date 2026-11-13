@@ -765,6 +765,9 @@ struct AtticGlassMenuStyle {
     static let titleFont = NSFont.systemFont(ofSize: AtticMenuMetrics.titleSize, weight: .regular)
     static let detailFont = NSFont.systemFont(ofSize: AtticMenuMetrics.detailSize)
     static let headerFont = NSFont.systemFont(ofSize: AtticMenuMetrics.headerSize, weight: .semibold)
+    /// The rows' icons: regular, as the titles (menu review #7, 12 Nov;
+    /// medium icons were the heaviest ink on a quiet row).
+    static let iconWeight: NSFont.Weight = .regular
 
     /// An SF Symbol in one colour, cached.
     @MainActor static func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor) -> NSImage? {
@@ -1780,9 +1783,9 @@ final class AtticGlassMenuView: NSView {
         if card.hasIcons {
             let slot = NSRect(x: x, y: frame.midY - m.iconSlot / 2, width: m.iconSlot, height: m.iconSlot)
             if command.state == .mixed, command.systemImage != nil {
-                drawImage(AtticGlassMenuStyle.symbol("minus", size: m.iconSize, weight: .medium, color: iconInk), centeredIn: slot)
+                drawImage(AtticGlassMenuStyle.symbol("minus", size: m.iconSize, weight: AtticGlassMenuStyle.iconWeight, color: iconInk), centeredIn: slot)
             } else if let name = AtticMenuSymbols.symbol(for: command) {
-                drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, weight: .medium, color: iconInk), centeredIn: slot)
+                drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, weight: AtticGlassMenuStyle.iconWeight, color: iconInk), centeredIn: slot)
             } else if let image = command.image {
                 drawImage(image, centeredIn: slot)
             } else if let priority = command.priority {

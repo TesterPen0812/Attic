@@ -310,6 +310,15 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
+    /// Review #7 (12 Nov): icons in the titles' regular weight, 8 pt before
+    /// the title.
+    func testIconsAreRegularWeightAndEightPointsFromTheTitle() {
+        XCTAssertEqual(AtticGlassMenuStyle.iconWeight, .regular)
+        XCTAssertEqual(AtticMenuMetrics.columnGap, 8)
+        XCTAssertEqual(AtticMenuMetrics.iconSize, 14, "the size stays")
+        XCTAssertEqual(AtticMenuMetrics.iconSlot, 20, "the column stays")
+    }
+
     func testMenusAreAtLeast216AndAsWideAsTheirControl() {
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 216)
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}], minimum: 300).size.width, 300, "as wide as the control")
