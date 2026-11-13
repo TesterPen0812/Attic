@@ -2724,9 +2724,19 @@ final class TaskStore: ObservableObject {
     // Extra item terms are copied on publication, never fetched per key.
     // A root remains one result even when its writing or a child matches.
     private var itemTaskParts: [UUID: (root: UUID, text: String)] = [:]
+    private var itemTaskPartIDsByRoot: [UUID: Set<UUID>] = [:]
     private var itemTaskTerms: [UUID: NSString] = [:]
     private var itemWritingTerms: [UUID: NSString] = [:]
     private var itemWritingObservation: AnyCancellable?
+    #if DEBUG
+    private(set) var itemSearchIndexPartVisits = 0
+    private(set) var doneSearchMembershipVisits = 0
+
+    func resetSearchIndexVisitCounters() {
+        itemSearchIndexPartVisits = 0
+        doneSearchMembershipVisits = 0
+    }
+    #endif
 
     func observeItemWriting(_ notes: NoteStore) {
         refreshItemWriting(notes)
@@ -2758,25 +2768,41 @@ final class TaskStore: ObservableObject {
     private func indexItemTasks(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         var changed = Set<UUID>()
         if let ids {
-            for id in ids { if let old = itemTaskParts.removeValue(forKey: id) { changed.insert(old.root) } }
+            for id in ids {
+                guard let old = itemTaskParts.removeValue(forKey: id) else { continue }
+                changed.insert(old.root)
+                itemTaskPartIDsByRoot[old.root]?.remove(id)
+                if itemTaskPartIDsByRoot[old.root]?.isEmpty == true {
+                    itemTaskPartIDsByRoot.removeValue(forKey: old.root)
+                }
+            }
         } else {
             itemTaskParts.removeAll(keepingCapacity: true)
+            itemTaskPartIDsByRoot.removeAll(keepingCapacity: true)
             itemTaskTerms.removeAll(keepingCapacity: true)
         }
         for task in winners where task.deletedAt == nil {
             let root = task.parentID ?? task.id
             let text = ([task.parentID == nil ? "" : task.title, task.tagsRaw] + task.attachments.map(\.filename))
                 .filter { !$0.isEmpty }.joined(separator: "\n")
-            if !text.isEmpty { itemTaskParts[task.id] = (root, text); changed.insert(root) }
+            if !text.isEmpty {
+                itemTaskParts[task.id] = (root, text)
+                itemTaskPartIDsByRoot[root, default: []].insert(task.id)
+                changed.insert(root)
+            }
         }
-        var grouped: [UUID: [String]] = [:]
-        // Only the affected roots need ordering after an incremental edit.
-        // Sorting the entire index made every single-row save scale with all tasks.
-        let affectedParts = itemTaskParts.filter { ids == nil || changed.contains($0.value.root) }
-        for (_, part) in affectedParts.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
-            grouped[part.root, default: []].append(part.text)
+        // The reverse index lets an edit assemble only its affected family.
+        // Retain the UUID ordering used by the original full-index scan.
+        for root in changed {
+            let partIDs = (itemTaskPartIDsByRoot[root] ?? []).sorted { $0.uuidString < $1.uuidString }
+            let texts = partIDs.compactMap { id -> String? in
+                #if DEBUG
+                itemSearchIndexPartVisits += 1
+                #endif
+                return itemTaskParts[id]?.text
+            }
+            itemTaskTerms[root] = texts.isEmpty ? nil : texts.joined(separator: "\n") as NSString
         }
-        for root in changed { itemTaskTerms[root] = grouped[root].map { $0.joined(separator: "\n") as NSString } }
     }
 
     func matchesItemSearch(_ task: TaskItem, query: String) -> Bool {
@@ -2795,6 +2821,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var doneSearchEntries: [DoneSearchEntry] = []
+    private var doneSearchEntryIDs = Set<UUID>()
     private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
@@ -2806,11 +2833,20 @@ final class TaskStore: ObservableObject {
 
     private func updateDoneSearch(_ entries: [DoneSearchEntry], replacing ids: Set<UUID>? = nil) {
         if let ids {
-            guard !entries.isEmpty || doneSearchEntries.contains(where: { ids.contains($0.id) }) else { return }
+            guard !entries.isEmpty || ids.contains(where: { id in
+                #if DEBUG
+                doneSearchMembershipVisits += 1
+                #endif
+                return doneSearchEntryIDs.contains(id)
+            }) else { return }
             doneSearchEntries.removeAll { ids.contains($0.id) }
+            doneSearchEntryIDs.subtract(ids)
+        } else {
+            doneSearchEntries.removeAll(keepingCapacity: true)
+            doneSearchEntryIDs.removeAll(keepingCapacity: true)
         }
-        else { doneSearchEntries.removeAll(keepingCapacity: true) }
         doneSearchEntries += entries
+        doneSearchEntryIDs.formUnion(entries.map(\.id))
         doneSearchEntries.sort {
             if $0.completed != $1.completed { return $0.completed > $1.completed }
             if $0.created != $1.created { return $0.created > $1.created }
