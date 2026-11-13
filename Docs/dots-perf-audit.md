@@ -490,8 +490,10 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 11. **DP-40:** each table-cell edit searches earlier document attachment runs.
 12. **DP-19:** Draw text edits can rebuild the full AX navigation graph.
 13. **DP-35:** expanded quick-look command generation is quadratic in sibling count.
-14. **DP-43:** Notes summary cache retains source data for every visited live note.
-15. **DP-24:** a task revision reconstructs all due-task Calendar presentations.
+14. **DP-65:** the chat item picker can redo full fuzzy search on hover and model updates.
+15. **DP-66:** batch imports repeatedly verify their growing staged recovery payload.
+
+Close contenders depend on usage: DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
