@@ -4170,7 +4170,7 @@ final class TasksLiftedCard: ObservableObject {
         /// The card's top in the page.
         var y: CGFloat
         var horizontalTranslation: CGFloat = 0
-        /// Shared by the lifted presentation and native drag image.
+        /// Native drag-out image position, preserving the original grip.
         var x: CGFloat { origin.minX + horizontalTranslation }
         /// Dropped: the card settles back to its size as it lands.
         var landed = false
@@ -4275,7 +4275,7 @@ struct TasksLiftedCardLayer<Card: View>: View {
                     .frame(width: current.origin.width, alignment: .topLeading)
                     .modifier(AtticReorderLiftModifier(lifted: true))
                     .scaleEffect(Self.scale(raised: raised, landed: false, reduceMotion: design.reduceMotion))
-                    .offset(x: current.x, y: current.y)
+                    .offset(x: current.origin.minX, y: current.y)
             }
         }
         .onChange(of: lift.lift?.id, initial: true) { _, id in

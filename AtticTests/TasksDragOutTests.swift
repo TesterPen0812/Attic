@@ -217,6 +217,39 @@ final class TasksDragOutCardTests: XCTestCase {
         try exerciseG09Drag(hosted, out: true)
     }
 
+    func testR6InListLiftKeepsItsHorizontalOrigin() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let card = TasksLiftedCard()
+        let origin = CGRect(x: 12, y: 100, width: 300, height: 34)
+        card.begin(id: UUID(), tab: .now, origin: origin)
+        var drawn = CGRect.zero
+        let content = TasksLiftedCardLayer(lift: card) { _ in
+            Text("Reorder this task").frame(height: 34).background(Color.gray.opacity(0.15))
+                .background(GeometryReader { geometry in
+                    let frame = geometry.frame(in: .named("r6-page"))
+                    Color.clear.onAppear { drawn = frame }.onChange(of: frame) { _, now in drawn = now }
+                })
+        }.frame(width: 420, height: 240, alignment: .topLeading).coordinateSpace(name: "r6-page")
+            .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
+        let host = NSHostingView(rootView: content)
+        let window = NSWindow(contentRect: CGRect(x: -8_000, y: -8_000, width: 420, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        for dx: CGFloat in [40, -40, 100, 0] {
+            card.follow(10, horizontal: dx)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertEqual(drawn.minX, origin.minX, accuracy: 0.01, "an in-list reorder stays at its original x")
+            XCTAssertEqual(drawn.minY, origin.minY + 10, accuracy: 0.01)
+            if dx == 40 { try captureCatchupView(host, name: "in-list-lift") }
+        }
+    }
+
     func testThePanelsCardStaysUntilTheSystemsImageIsUp() {
         let card = TasksLiftedCard()
         card.begin(id: UUID(), tab: .now, origin: CGRect(x: 8, y: 100, width: 300, height: 34))
