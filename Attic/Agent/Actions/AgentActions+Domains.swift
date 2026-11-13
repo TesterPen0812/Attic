@@ -319,6 +319,7 @@ extension AgentActions {
 
     func drawAction(_ name: String, _ args: [String: Any], beforeMutation: () throws -> Void) throws -> (String, AgentStep, DrawSnapshot?) {
         guard let draw else { throw AgentActionsError.invalid("Draw store unavailable.") }
+        DrawLibraryHub.flushLiveInput(for: draw)
         if name == "draw_list_canvases" {
             let canvases = try draw.library(deleted: false)
             let text = try Self.json(["canvases": canvases.map { ["id": $0.id.uuidString, "name": $0.name] },

@@ -225,11 +225,17 @@ enum DrawRaster {
             side = full
         } else {
             let device = rect.applying(context.userSpaceToDeviceSpaceTransform)
-            let wanted = Int(max(abs(device.width), abs(device.height)).rounded(.up))
+            let extent = max(abs(device.width), abs(device.height))
+            // A finite stored frame can overflow after the device transform.
+            // Never convert that extent to Int: decoding cannot need more
+            // pixels than the original, even at extreme zoom or geometry.
+            let wanted = extent.isFinite ? min(extent, CGFloat(full)) : CGFloat(full)
             // Power-of-two steps, so a zoom or a resize reuses the copy.
-            var step = 64
-            while step < wanted { step *= 2 }
-            side = min(step, full)
+            var step = min(64, full)
+            while CGFloat(step) < wanted && step < full {
+                step = step > full / 2 ? full : step * 2
+            }
+            side = step
         }
         if let decoded = decoded(image, id: id, side: side) {
             context.translateBy(x: rect.minX, y: rect.maxY)

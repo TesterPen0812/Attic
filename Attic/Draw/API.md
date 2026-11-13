@@ -67,8 +67,8 @@ requires `reconcile(on:)`. History stays unchanged until a save is confirmed.
 Do not release the session or allow quit with unsettled edits. Commands on a
 canvas with an unsaved edit still work: each shows at once and waits, in
 order, behind it (`pendingEdits[id].count` says how many). `retry`,
-`reconcile` and each later command try them again in order (a held one is
-reconciled, never overwritten), stopping at the first that still fails; Undo
+`reconcile` and each later command try them again in order (a submitted held
+save is reconciled, never overwritten), stopping at the first that still fails; Undo
 and Redo stay off until all are saved, then step back through each. Other
 canvases remain available. `reload` reads fresh durable values after external
 imports and clears only that canvas's old history; it refuses unsettled drafts.
@@ -86,6 +86,10 @@ Image write the whole file to a staging folder, swap it in atomically, and only
 then move the old file to the Trash; a failure leaves the old file as it was and
 shows in `saveNotice` (without Retry). An image drop or paste lands on the
 canvas it was made on, even after a switch (`DrawPageModel.perform(_:on:)`).
+An import keeps successfully saved peers and names failed inputs in the existing
+notice; its success sound requires a confirmed save. An asynchronous image copy
+writes only while its original pasteboard change count and copy generation still
+match, so a later Copy, Cut or external clipboard change wins.
 
 For durable storage, use `DrawPersistentStore(container: appContainer)` behind
 the same protocol. It accepts an existing container; it never opens a default
@@ -105,7 +109,10 @@ SwiftData store holds pending changes (including original image bytes), queued
 edits and a physical before/after proof before each attempted database commit.
 On launch, the store reads fresh physical rows and reconciles the first pending
 save; a proven commit is retired, a proven noncommit can Retry, and an ambiguous
-outcome remains held. Recovered drafts are reachable from `library`, even if
+outcome remains held. A checkpoint failure before repository submission retains
+an unattempted marker: reconciliation first checkpoints and submits that edit,
+rather than asking the repository to reconcile an attempt it never received.
+The marker survives a successful republish and relaunch. Recovered drafts are reachable from `library`, even if
 their first save never created a database row. An unreadable checkpoint is
 preserved and blocks edits, permanent deletion, and normal Quit until it can be inspected. The checkpoint
 does not persist ordinary session Undo history. In-memory stores have no sidecar.
@@ -121,6 +128,12 @@ the stroke in progress, gives in-flight image imports a bounded chance to finish
 retries or reconciles unsettled edits and returns false while any import or edit
 is still outstanding. Thumbnail generation is a regenerable cache and does not
 block quit after the bound. Undo survives session switches, not app relaunch.
+
+Agent Draw snapshots, token checks and Draw Undo guards first settle live input
+on pages using that exact store (gestures, acknowledged commands and typing).
+The editor stays open with its latest text; a failed flush remains an unsettled
+store edit and prevents an agent mutation. Raster image decoding bounds its
+requested pixel size before integer arithmetic, without rewriting stored frames.
 
 
 The page can receive identity-scoped `resumeDefaults`; without them it is fully

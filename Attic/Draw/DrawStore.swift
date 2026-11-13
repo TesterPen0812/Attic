@@ -28,6 +28,9 @@ class DrawStore: DrawStoreProtocol {
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
     @ObservationIgnored private var pending: [UUID: [Pending]] = [:]
+    /// A failed checkpoint can leave no journal record at all. Remember
+    /// that this head has never entered the repository, independently of disk.
+    @ObservationIgnored private var unsubmittedHeads = Set<UUID>()
     /// If a burst failed, Retry must publish the original per-key Undo chain.
     /// Crash recovery is session-scoped and reopens the merged durable draft.
     @ObservationIgnored private var typingStepsPending: [UUID: [UUID: [Step]]] = [:]
@@ -82,6 +85,7 @@ class DrawStore: DrawStoreProtocol {
                                objects: objects, persisted: saved != nil || first.step.beforePersisted)
             for edit in record.edits { show(edit.step) }
             pending[id] = record.edits
+            if record.unattempted { unsubmittedHeads.insert(id) }
             recoveredCanvasIDs.insert(id)
             let result: DrawWriteOutcome = record.unattempted
                 ? .retry("The recovered next edit has not been saved. Retry when ready.")
@@ -93,6 +97,7 @@ class DrawStore: DrawStoreProtocol {
                     pending[id] = nil
                     recoveredCanvasIDs.remove(id)
                 } else {
+                    unsubmittedHeads.insert(id)
                     let next = pending[id]!
                     pendingEdits[id] = DrawPendingEdit(
                         canvas: next.last!.step.after, objects: states[id]?.snapshot.objects ?? [],
@@ -305,6 +310,7 @@ class DrawStore: DrawStoreProtocol {
             }
             typingStepsPending[id, default: [:]][merged.id] = steps
             if let recovery {
+                unsubmittedHeads.insert(id)
                 do {
                     try recovery.update(id, edits: [Pending(step: merged, action: .edit)], proof: nil, unattempted: true)
                 } catch {
@@ -312,6 +318,7 @@ class DrawStore: DrawStoreProtocol {
                     return publishPending(id, outcome: .held("The text cannot be saved until its recovery checkpoint is written: \(error.localizedDescription)"))
                 }
             }
+            unsubmittedHeads.remove(id)
             let outcome = write(merged)
             switch outcome {
             case .committed:
@@ -645,6 +652,7 @@ class DrawStore: DrawStoreProtocol {
     private func execute(_ step: Step, action: Action) -> DrawSaveResult {
         let step = stamped(step)
         if let recovery, step.change.before != nil || step.change.after != nil {
+            unsubmittedHeads.insert(step.change.canvasID)
             do {
                 try IdleLatencyTrace.span("draw_store_recovery") {
                     try recovery.update(step.change.canvasID, edits: [Pending(step: step, action: action)],
@@ -658,6 +666,7 @@ class DrawStore: DrawStoreProtocol {
                 ))
             }
         }
+        unsubmittedHeads.remove(step.change.canvasID)
         let outcome = IdleLatencyTrace.span("draw_store_write") { write(step) }
         show(step)
         switch outcome {
@@ -687,13 +696,14 @@ class DrawStore: DrawStoreProtocol {
             case .write: reconcileFirst = false
             case .auto: if first, case .held = pendingEdits[id]?.outcome { reconcileFirst = true } else { reconcileFirst = false }
             }
-            if reconcileFirst {
+            if reconcileFirst && !unsubmittedHeads.contains(id) {
                 // A held save is read back, never overwritten.
                 outcome = repository.reconcile(edit.step.change)
             } else {
                 edit.step = stamped(edit.step)
                 pending[id]?[0] = edit
                 if let recovery {
+                    unsubmittedHeads.insert(id)
                     do {
                         try recovery.update(id, edits: pending[id], proof: repository.recoveryProof(for: id),
                                             unattempted: true)
@@ -703,12 +713,14 @@ class DrawStore: DrawStoreProtocol {
                         ))
                     }
                 }
+                unsubmittedHeads.remove(id)
                 outcome = write(edit.step)
             }
             first = false
             switch outcome {
             case .committed:
                 pending[id]?.removeFirst()
+                if pending[id]?.isEmpty == false { unsubmittedHeads.insert(id) }
                 if pending[id]?.isEmpty == true {
                     pending[id] = nil
                     pendingEdits[id] = nil
@@ -785,7 +797,7 @@ class DrawStore: DrawStoreProtocol {
         if let recovery {
             do {
                 try recovery.update(id, edits: edits, proof: repository.recoveryProof(for: id),
-                                    unattempted: recovery.records[id]?.unattempted ?? false)
+                                    unattempted: unsubmittedHeads.contains(id))
             }
             catch {
                 published = .held("The drawing is held because its crash-recovery checkpoint could not be written: \(error.localizedDescription)")

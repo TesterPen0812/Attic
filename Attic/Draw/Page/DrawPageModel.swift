@@ -267,6 +267,7 @@ final class DrawPageModel: ObservableObject {
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.appearanceChanged() } }
         }
         DrawLibraryHub.register(store)
+        DrawLibraryHub.register(self)
         imageSeam = images
     }
 
@@ -1061,6 +1062,14 @@ final class DrawPageModel: ObservableObject {
         if self.canvasID == canvasID { apply(result) }
     }
 
+    /// Settle owner input before an agent reads its baseline or validates a
+    /// token. Keep the text editor open; failed saves remain pending in store.
+    func flushLiveInput() {
+        finishLiveInput()
+        flushAcknowledgedDraw()
+        flushTyping()
+    }
+
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
         syncExternalChanges()
         guard var edit = editing else { return }
@@ -1330,7 +1339,7 @@ final class DrawPageModel: ObservableObject {
             case .undo: result = store.undo(on: entry.canvas)
             case .redo: result = store.redo(on: entry.canvas)
             }
-            if canvasID == entry.canvas { apply(result, replacingEditorText: true) }
+            if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
         }
         if externalSyncDeferred { syncExternalChanges() }
     }
