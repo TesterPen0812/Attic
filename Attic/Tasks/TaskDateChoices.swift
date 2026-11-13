@@ -92,11 +92,11 @@ struct TaskDateChoices {
     // MARK: - The date card
 
     /// The calendar the date card lays its month out in: the stored days'
-    /// calendar, with the locale's first weekday and the locale's names.
+    /// calendar, with the user's explicit week start and the locale's names.
     var cardCalendar: Calendar {
         var cal = calendar
-        cal.firstWeekday = parser.calendar.firstWeekday
         cal.locale = parser.locale
+        cal.firstWeekday = parser.calendar.firstWeekday
         return cal
     }
 }
