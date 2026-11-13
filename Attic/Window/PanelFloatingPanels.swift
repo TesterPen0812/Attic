@@ -107,11 +107,13 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self else { return }
             AtticPanelController.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                openTaskNoteID: AtticPanelController.displayedTaskNoteID(in: self.uiState),
                 store: self.store, notes: self.noteDraft.pages)
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
             guard let self else { return false }
             return AtticPanelController.canPerformUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                openTaskNoteID: AtticPanelController.displayedTaskNoteID(in: self.uiState),
                 store: self.store, notes: self.noteDraft.pages)
         }
         hostingView.onWindowDragBegan = { [weak self] in
