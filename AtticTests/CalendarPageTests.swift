@@ -30,14 +30,14 @@ final class CalendarPageTests: XCTestCase {
             id == saved.occurrenceID ? saved : nil
         }
         func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
-        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent {
             await withCheckedContinuation { gate = $0 }
             if fail { throw CalendarEventWriteError.saveFailed("Fake failure") }
             saved.draft = draft
             commits += 1
             return saved
         }
-        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws { throw CalendarEventWriteError.notOwned }
         func openInCalendar(_ id: String) async throws { throw CalendarEventWriteError.openFailed }
     }
 

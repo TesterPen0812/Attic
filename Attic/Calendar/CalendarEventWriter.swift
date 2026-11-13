@@ -94,8 +94,9 @@ protocol CalendarEventWriter: AnyObject {
     func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent?
     func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent?
     func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
-    func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
-    func delete(_ id: UUID) async throws
+    /// A displayed/approved baseline is checked inside the serialized command.
+    func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft?) async throws -> CalendarOwnedEvent
+    func delete(_ id: UUID, expecting: CalendarEventDraft?) async throws
     /// Reapply an agent's sealed inverse after relaunch. The writer verifies
     /// owned identity and the exact last saved draft before touching EventKit.
     func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,

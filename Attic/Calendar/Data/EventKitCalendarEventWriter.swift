@@ -63,18 +63,18 @@ private enum CalendarEventCommands {
             redo: { _ = try $0.insert(id, draft: made.draft) })
     }
 
-    static func edit(_ id: UUID, draft: CalendarEventDraft,
+    static func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft?,
                      in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<CalendarOwnedEvent> {
         let before = try core.current(id).draft
-        let edited = try core.update(id, draft: draft, expecting: before)
+        let edited = try core.update(id, draft: draft, expecting: expecting ?? before)
         return CalendarEventCommandPlan(name: "Edit Event", value: edited,
             undo: { _ = try $0.update(id, draft: before, expecting: edited.draft) },
             redo: { _ = try $0.update(id, draft: edited.draft, expecting: before) })
     }
 
-    static func delete(_ id: UUID, in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<Void> {
+    static func delete(_ id: UUID, expecting: CalendarEventDraft?, in core: CalendarEventTransactions) throws -> CalendarEventCommandPlan<Void> {
         let before = try core.current(id).draft
-        try core.remove(id, expecting: before)
+        try core.remove(id, expecting: expecting ?? before)
         return CalendarEventCommandPlan(name: "Delete Event", value: (),
             undo: { _ = try $0.insert(id, draft: before) },
             redo: { try $0.remove(id, expecting: before) })
@@ -144,19 +144,27 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
     }
 
     func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+        try await edit(id, draft: draft, expecting: nil)
+    }
+
+    func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft?) async throws -> CalendarOwnedEvent {
         await CalendarEventCommandGate.shared.enter()
         defer { CalendarEventCommandGate.shared.leave() }
         let route = try history()
-        let plan = try await reporting { try CalendarEventCommands.edit(id, draft: draft, in: $0) }
+        let plan = try await reporting { try CalendarEventCommands.edit(id, draft: draft, expecting: expecting, in: $0) }
         record(plan, route: route)
         return plan.value
     }
 
     func delete(_ id: UUID) async throws {
+        try await delete(id, expecting: nil)
+    }
+
+    func delete(_ id: UUID, expecting: CalendarEventDraft?) async throws {
         await CalendarEventCommandGate.shared.enter()
         defer { CalendarEventCommandGate.shared.leave() }
         let route = try history()
-        let plan = try await reporting { try CalendarEventCommands.delete(id, in: $0) }
+        let plan = try await reporting { try CalendarEventCommands.delete(id, expecting: expecting, in: $0) }
         record(plan, route: route)
     }
 
@@ -271,18 +279,26 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
     }
 
     func edit(_ id: UUID, draft: CalendarEventDraft) throws -> CalendarOwnedEvent {
+        try edit(id, draft: draft, expecting: nil)
+    }
+
+    func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft?) throws -> CalendarOwnedEvent {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
-            let plan = try CalendarEventCommands.edit(id, draft: draft, in: core)
+            let plan = try CalendarEventCommands.edit(id, draft: draft, expecting: expecting, in: core)
             record(plan, route: undoRoute)
             return plan.value
         }
     }
 
     func delete(_ id: UUID) throws {
+        try delete(id, expecting: nil)
+    }
+
+    func delete(_ id: UUID, expecting: CalendarEventDraft?) throws {
         try reporting {
             guard let undoRoute else { throw CalendarEventWriteError.undoUnavailable }
-            let plan = try CalendarEventCommands.delete(id, in: core)
+            let plan = try CalendarEventCommands.delete(id, expecting: expecting, in: core)
             record(plan, route: undoRoute)
         }
     }
@@ -474,7 +490,8 @@ final class CalendarEventTransactions {
     func update(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft) throws -> CalendarOwnedEvent {
         try begin(write: true)
         let previous = try editable(id)
-        guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
+        guard previous.draft.hasSameOwnedValues(as: expecting),
+              (previous.draft.notes ?? "") == (expecting.notes ?? "") else { throw CalendarEventWriteError.eventChanged }
         // Only newly created events use minute rounding. An edit may retain
         // existing seconds or fractions, including during Undo and Redo.
         try validate(draft)
@@ -486,7 +503,8 @@ final class CalendarEventTransactions {
     func remove(_ id: UUID, expecting: CalendarEventDraft) throws {
         try begin(write: true)
         let previous = try editable(id)
-        guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
+        guard previous.draft.hasSameOwnedValues(as: expecting),
+              (previous.draft.notes ?? "") == (expecting.notes ?? "") else { throw CalendarEventWriteError.eventChanged }
         try transaction(id, before: previous) {
             try store.stageDelete(previous)
             return nil

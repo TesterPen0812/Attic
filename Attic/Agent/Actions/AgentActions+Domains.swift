@@ -284,9 +284,9 @@ extension AgentActions {
                 saved = try await writer.create(draft)
             }
             else {
-                try await verifyCalendarBaseline(args, using: writer)
+                let expected = try await verifyCalendarBaseline(args, using: writer)
                 try guardMode(name, requestID: requestID)
-                saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft)
+                saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft, expecting: expected)
             }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
                                      externalID: saved.occurrenceID)
@@ -294,9 +294,9 @@ extension AgentActions {
         case "calendar_delete":
             guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
             let id = try Self.uuid(args["id"], "id")
-            try await verifyCalendarBaseline(args, using: writer)
+            let expected = try await verifyCalendarBaseline(args, using: writer)
             try guardMode(name, requestID: requestID)
-            try await writer.delete(id)
+            try await writer.delete(id, expecting: expected)
             return try result(Self.json(["deleted": id.uuidString, "status": "deleted",
                                          "title": args["_resolved_title"] ?? "",
                                          "occurrence_id": args["occurrence_id"] ?? ""]), .delete,
@@ -307,14 +307,17 @@ extension AgentActions {
         }
     }
 
-    private func verifyCalendarBaseline(_ args: [String: Any], using writer: any CalendarEventWriter) async throws {
+    private func verifyCalendarBaseline(_ args: [String: Any], using writer: any CalendarEventWriter) async throws -> CalendarEventDraft {
         guard let encoded = args["_expected_draft"] as? String,
               let data = Data(base64Encoded: encoded),
               let expected = try? JSONDecoder().decode(CalendarEventDraft.self, from: data),
-              let occurrence = args["occurrence_id"] as? String else { return }
+              let occurrence = args["occurrence_id"] as? String else {
+            throw AgentActionsError.invalid("An approved Calendar baseline is required.")
+        }
         guard let current = try await writer.ownedEvent(matching: occurrence), current.draft == expected else {
             throw AgentActionsError.invalid("This event changed while approval was pending. Call calendar_search to get its current occurrence_id, then retry the change.")
         }
+        return expected
     }
 
     func drawAction(_ name: String, _ args: [String: Any], beforeMutation: () throws -> Void) throws -> (String, AgentStep, DrawSnapshot?) {
