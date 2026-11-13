@@ -2319,6 +2319,19 @@ final class AtticMenuTarget: NSObject {
 /// (round 10). Click-through; reports itself to its holder.
 struct AtticMenuAnchor: NSViewRepresentable {
     let holder: AtticMenuAnchor.Holder
+    /// Context-menu and keyboard-only anchors do not handle ordinary clicks.
+    var isMenuTrigger = true
+    private static let triggers = NSHashTable<AnchorView>.weakObjects()
+
+    static func containsTrigger(for event: NSEvent) -> Bool {
+        guard let window = event.window, let content = window.contentView else { return false }
+        let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+        return triggers.allObjects.contains { view in
+            view.isMenuTrigger && view.window === window && AtticContextMenus.isShown(view)
+                && view.bounds.contains(view.convert(event.locationInWindow, from: nil))
+                && (hit.map { AtticContextMenus.shares($0, with: view) } ?? true)
+        }
+    }
 
     @MainActor
     final class Holder {
@@ -2367,19 +2380,28 @@ struct AtticMenuAnchor: NSViewRepresentable {
     func makeNSView(context: Context) -> AnchorView {
         let view = AnchorView()
         view.holder = holder
+        view.isMenuTrigger = isMenuTrigger
         holder.remember(view)
         return view
     }
 
-    func updateNSView(_ view: AnchorView, context: Context) { holder.remember(view) }
+    func updateNSView(_ view: AnchorView, context: Context) {
+        view.isMenuTrigger = isMenuTrigger
+        if isMenuTrigger, view.window != nil { Self.triggers.add(view) }
+        holder.remember(view)
+    }
 
     final class AnchorView: NSView {
         weak var holder: Holder?
+        var isMenuTrigger = true
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if window != nil { holder?.remember(self) }
+            if window != nil {
+                holder?.remember(self)
+                if isMenuTrigger { AtticMenuAnchor.triggers.add(self) }
+            }
         }
         override func layout() {
             super.layout()

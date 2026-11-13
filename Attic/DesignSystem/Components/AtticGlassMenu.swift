@@ -410,9 +410,11 @@ final class AtticGlassMenu {
                 // Give a click on a second menu trigger to that trigger.
                 // Swallowing its down event left only a mouse-up for SwiftUI,
                 // so a click on ⋯ while another menu tracked opened nothing.
-                // After closing, its event is handled by the normal app loop.
+                // Only registered triggers get that press: ordinary controls
+                // must not act on the click used to dismiss a menu.
+                let opensMenu = AtticContextMenus.isMenuTrigger(for: event)
                 close()
-                if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                if opensMenu {
                     NSApp.postEvent(event, atStart: true)
                 }
             }
@@ -2248,6 +2250,27 @@ enum AtticContextMenus {
         return anchor(for: event)
     }
 
+    static func isMenuTrigger(for event: NSEvent) -> Bool {
+        if activeShields(for: event).contains(where: { $0.contains(event) }) { return false }
+        if isContextPress(event) { return routedTarget(for: event) != nil }
+        return event.type == .leftMouseDown && AtticMenuAnchor.containsTrigger(for: event)
+    }
+
+    /// Native text and table controls are not triggers for this router.
+    private static func routedTarget(for event: NSEvent) -> AtticContextMenuAnchor.AnchorView? {
+        guard let window = event.window, let anchor = target(for: event) else { return nil }
+        if let hit = hitView(for: event, in: window) {
+            if let text = hit as? NSTextView, text.isEditable || text.isSelectable { return nil }
+            if let field = hit as? NSTextField, field.isEditable { return nil }
+            var view: NSView? = hit
+            while let current = view {
+                if current is NoteTableCanvas || current is NoteTableView { return nil }
+                view = current.superview
+            }
+        }
+        return anchor
+    }
+
     /// The open cards (the "+" card) that shield what is under them.
     private static let shields = NSHashTable<AtticPressShield>.weakObjects()
 
@@ -2258,21 +2281,7 @@ enum AtticContextMenus {
     /// One press, as the monitor sees it (tests call it in its place).
     static func route(_ event: NSEvent) -> NSEvent? {
         guard isContextPress(event), AtticGlassMenu.current == nil, let window = event.window,
-              let anchor = self.target(for: event) else { return event }
-        // An editable or selectable text view keeps its own menu (Cut, Copy,
-        // Paste, Spelling).
-        if let hit = hitView(for: event, in: window) {
-            if let text = hit as? NSTextView, text.isEditable || text.isSelectable { return event }
-            if let field = hit as? NSTextField, field.isEditable { return event }
-            // A table's canvas owns its cell commands, including when the
-            // pointer is over a non-editing cell. The enclosing panel anchor
-            // must not replace them with the panel's page-switch commands.
-            var view: NSView? = hit
-            while let current = view {
-                if current is NoteTableCanvas || current is NoteTableView { return event }
-                view = current.superview
-            }
-        }
+              let anchor = routedTarget(for: event) else { return event }
         // A row's menu outside an open card: the press is also a click
         // outside the card, which closes it (keeping its draft) first.
         for shield in activeShields(for: event) { shield.onOutsidePress() }
@@ -2382,7 +2391,7 @@ private struct AtticContextMenuModifier: ViewModifier {
     private func anchored(_ content: Content) -> some View {
         content
             .background(AtticContextMenuAnchor(build: build).accessibilityHidden(true))
-            .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
+            .background(AtticMenuAnchor(holder: anchor, isMenuTrigger: false).accessibilityHidden(true))
             .accessibilityAction(.showMenu) {
                 anchor.open(build(), event: nil)
             }

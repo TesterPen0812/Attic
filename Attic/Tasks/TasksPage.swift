@@ -932,7 +932,7 @@ struct TasksPage: View {
             }
             // ⌥⌘V's anchor where ••• sits, mounted whatever the row shows.
             .overlay(alignment: .topTrailing) {
-                AtticMenuAnchor(holder: viewOptionsAnchor)
+                AtticMenuAnchor(holder: viewOptionsAnchor, isMenuTrigger: false)
                     .frame(width: control, height: control)
                     .padding(.top, chrome.top)
                     .padding(.trailing, chrome.trailing + control + PanelTopRowLayout.gap)

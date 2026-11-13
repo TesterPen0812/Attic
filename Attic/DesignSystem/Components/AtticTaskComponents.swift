@@ -2375,7 +2375,7 @@ struct AtticSubtaskRow: View {
             }
         }
         .background(alignment: .bottomLeading) {
-            if managed { AtticMenuAnchor(holder: anchor).frame(width: 1, height: 1).accessibilityHidden(true) }
+            if managed { AtticMenuAnchor(holder: anchor, isMenuTrigger: false).frame(width: 1, height: 1).accessibilityHidden(true) }
         }
         .contentShape(Rectangle())
         .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused,

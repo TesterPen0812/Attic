@@ -1,3 +1,9 @@
+## 2026-11-13 · Menu dismissal (catchup-2 R-2)
+
+A dismissing click is consumed over ordinary controls. Switching to another
+registered menu trigger still forwards its full press; context-menu and
+keyboard-only anchors do not make an ordinary row click a menu trigger.
+
 ## 2026-11-13 · Corners: the measured fix
 
 The sheet drew the continuous corner as a CSS superellipse that clamps to

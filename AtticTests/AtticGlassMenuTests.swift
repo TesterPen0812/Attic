@@ -241,6 +241,10 @@ final class AtticGlassMenuTests: XCTestCase {
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
+        let holder = AtticMenuAnchor.Holder()
+        let trigger = AtticMenuAnchor.AnchorView(frame: NSRect(x: 8, y: 8, width: 32, height: 32))
+        trigger.holder = holder
+        window.contentView?.addSubview(trigger)
         let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 24, y: 24),
             modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
             eventNumber: 9013, clickCount: 1, pressure: 1))
@@ -249,6 +253,63 @@ final class AtticGlassMenuTests: XCTestCase {
         let delivered = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.05),
                                         inMode: .default, dequeue: true)
         XCTAssertEqual(delivered?.eventNumber, down.eventNumber, "the new ⋯ receives its entire press")
+    }
+
+    func testCatchupR2DismissingClickDoesNotReplayToAnOrdinaryButton() throws {
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let button = NSButton(frame: NSRect(x: 20, y: 20, width: 80, height: 32))
+        window.contentView?.addSubview(button)
+        for (index, kind) in [NSEvent.EventType.leftMouseDown, .rightMouseDown].enumerated() {
+            let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "Options") {}])
+            defer { menu.close(animated: false) }
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: kind, location: CGPoint(x: 40, y: 30),
+                modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9020 + index, clickCount: 1, pressure: 1))
+            menu.handle(down)
+            XCTAssertFalse(menu.isOpen)
+            let replayed = NSApp.nextEvent(matching: kind == .leftMouseDown ? .leftMouseDown : .rightMouseDown,
+                until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true)
+            XCTAssertNil(replayed, "The click that dismisses a menu must not activate an ordinary control")
+        }
+    }
+
+    func testCatchupR2OnlyVisibleMenuTriggersReceiveTheDismissingPress() throws {
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let trigger = AtticMenuAnchor.AnchorView(frame: NSRect(x: 20, y: 20, width: 32, height: 32))
+        window.contentView?.addSubview(trigger)
+        let context = AtticContextMenuAnchor.AnchorView(frame: trigger.frame)
+        context.build = { [AtticMenuCommand(verbatim: "Context") {}] }
+        window.contentView?.addSubview(context)
+        for (index, mode) in ["button", "hidden", "context-only", "secondary", "control-click", "native-text"].enumerated() {
+            trigger.isHidden = mode == "hidden"
+            trigger.isMenuTrigger = mode == "button" || mode == "hidden"
+            var text: NSTextView?
+            if mode == "native-text" {
+                let editor = NSTextView(frame: trigger.frame)
+                editor.isEditable = true
+                window.contentView?.addSubview(editor)
+                text = editor
+            }
+            defer { text?.removeFromSuperview() }
+            let secondary = mode == "secondary" || mode == "native-text"
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: secondary ? .rightMouseDown : .leftMouseDown,
+                location: CGPoint(x: 30, y: 30), modifierFlags: mode == "control-click" ? .control : [],
+                timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9040 + index, clickCount: 1, pressure: 1))
+            let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "First") {}])
+            menu.handle(down)
+            XCTAssertFalse(menu.isOpen)
+            let delivered = NSApp.nextEvent(matching: secondary ? .rightMouseDown : .leftMouseDown,
+                until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true)
+            let opensMenu = ["button", "secondary", "control-click"].contains(mode)
+            XCTAssertEqual(delivered?.eventNumber, opensMenu ? down.eventNumber : nil, mode)
+        }
     }
 
     /// Seeded interaction sequences pin the state invariants across rapid
