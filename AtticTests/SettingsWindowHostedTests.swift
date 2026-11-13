@@ -345,6 +345,10 @@ final class SettingsWindowHostedTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             spin(0.2)
             host.layoutSubtreeIfNeeded()
+            // The native hierarchy is created by the hosted draw as well as
+            // layout; on CI the initial layout can complete before SwiftUI
+            // has handed its ScrollView to AppKit.
+            window.displayIfNeeded()
             // On a slower hosted runner the NSHostingView can publish its
             // first native ScrollView after the initial layout pass.
             let deadline = Date().addingTimeInterval(2)
@@ -352,6 +356,7 @@ final class SettingsWindowHostedTests: XCTestCase {
             while candidate == nil && Date() < deadline {
                 spin(0.05)
                 host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
                 candidate = scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 }
             }
             let scroll = try XCTUnwrap(candidate,
