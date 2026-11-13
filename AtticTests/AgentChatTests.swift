@@ -1543,6 +1543,25 @@ final class AgentChatFXTests: XCTestCase {
         spin(0.01)
     }
 
+    func testPF41CompletedFlightReleasesCallbackAndRetainsReversibleGeometry() {
+        final class Lifetime {}
+        let fx = AgentChatFX()
+        let step = UUID()
+        weak var held: Lifetime?
+        do {
+            let lifetime = Lifetime()
+            held = lifetime
+            fx.fly(step: step, [(title: "Move", row: CGRect(x: 10, y: 10, width: 150, height: 30),
+                                 to: CGPoint(x: 150, y: 180), onLand: { _ = lifetime })])
+        }
+        run(fx, seconds: 3)
+        XCTAssertEqual(fx.retainedHistoryCount, 1)
+        print("PF41 completed retainedCallbackAlive=\(held == nil ? 0 : 1)")
+        XCTAssertNil(held, "The completed flight releases captures once it lands")
+        fx.undo(steps: [step])
+        XCTAssertGreaterThan(fx.liveCount, 0, "The retained geometry still flies home")
+    }
+
     func testAnOpenChatAtRestGoesIdleAndAnEffectWakesIt() {
         let fx = AgentChatFX()
         fx.emptyThread = false
