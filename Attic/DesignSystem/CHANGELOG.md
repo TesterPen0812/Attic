@@ -48,6 +48,12 @@ without animation, while Fade keeps the 0.12 s opacity change. Chat's inline
 attachment chooser uses the picker card and menu-item roles. The Dark opaque
 card's sRGB pixels were already #363637: its test no longer applies a second
 colour conversion to NSBitmapImageRep's calibrated colour result.
+## 2026-11-13 · Tag picker large-list performance
+
+The tag picker now mounts rows lazily within its existing six-row viewport,
+using stable tag names for highlighted-row scrolling and keeping the original
+row height, width, focus, checks and card motion. The fixed-width rule no
+longer allocates thousands of tag names and details on each body evaluation.
 
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 

@@ -1080,6 +1080,32 @@ final class TaskLifecycleSliceTests: XCTestCase {
     }
 
     @discardableResult
+    /// PF-49 review R-2: ownership discovery is two table scans per member
+    /// task ID, run twice per work item, on the main actor.
+    func testPF49PurgeOwnershipFetchesStayBoundedForALargeFamily() async throws {
+        let context = ModelContext(container)
+        let rootID = UUID()
+        for index in 0..<300 {
+            let task = TaskItem(id: index == 0 ? rootID : UUID(), title: "Member \(index)")
+            task.deletedAt = Date(timeIntervalSince1970: 1)
+            task.deletionRootID = rootID
+            task.deletionMembersRaw = task.id.uuidString
+            context.insert(task)
+            let note = NoteItem(id: UUID())
+            note.taskID = task.id
+            context.insert(note)
+            context.insert(TaskNoteAssociation(taskID: task.id, noteID: note.id))
+        }
+        try context.save()
+        makeStores()
+        let before = TaskNotePurge.ownNotesFetchCount
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let fetches = TaskNotePurge.ownNotesFetchCount - before
+        XCTAssertGreaterThan(fetches, 0, "the family must reach ownership discovery")
+        // One NoteItem and one association fetch per call, two calls at most.
+        XCTAssertLessThanOrEqual(fetches, 4, "ownership fetches must not scale with the family size")
+    }
+
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
         makeStores()
