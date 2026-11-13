@@ -2827,6 +2827,48 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id))
     }
 
+    func testBG20WindowMoveIntoNoteRemountsTheVisiblePageAfterReleasingItsLease() async throws {
+        let id = try seed(.boundary)
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("AtticBG20-\(UUID()).txt")
+        try Data("BG20 earlier file".utf8).write(to: input)
+        defer { try? FileManager.default.removeItem(at: input) }
+        let references = try await tasks.taskImageFiles.importAttachments([input], existing: [])
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = try JSONEncoder().encode(references)
+        }
+        try context.save(); tasks.refresh(); await notes.startAndWait()
+        let original = try open(id), session = try XCTUnwrap(original.session)
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes,
+                                    noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
+        for _ in 0..<100 where original.menus.earlierFiles().first(where: { $0.identifier == "task-note-earlier-move" }) == nil {
+            await Task.yield()
+        }
+        let move = try XCTUnwrap(original.menus.earlierFiles().first { $0.identifier == "task-note-earlier-move" },
+                                 "the visible window must install its Earlier Files menu")
+        XCTAssertFalse(move.isDisabled)
+        move.action()
+
+        for _ in 0..<200 {
+            if (try? storedDocument(session.noteID).attachmentIDs) == references.map(\.id) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id),
+                       "the window action migrated the earlier file into the note")
+        for _ in 0..<100 where TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let remounted = try XCTUnwrap(TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes),
+                                     "the same window must have an editable leased page after Move into Note")
+        XCTAssertEqual(window.frame, frame)
+        XCTAssertTrue(remounted.usesWorkspaceBinding)
+        XCTAssertTrue(remounted.engine.textView?.isEditable == true,
+                      "the replacement lease must restore an editable window, not only the stored note")
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+    }
+
     func testBAddPreservesLiteralTitleAndFailureRollsBack() async throws {
         makeStores(); let id = UUID(), title = "Plan  tomorrow !high #literal"
         let original = NoteDocument(blocks: [.text(title), .text("Writing")])
