@@ -1550,6 +1550,60 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.launchPruneBatches, [64, 64, 2])
     }
 
+    /// PF-50 review R-1: reconciliation lost during a launch prune (a journal
+    /// adoption, or a failed reconcile) used to leave the batch loop spinning
+    /// on a zero-progress batch, with the launch hold never released.
+    func testPF50LaunchPruningEndsAndReleasesTheHoldWhenReconciliationIsLostMidLaunch() async throws {
+        let context = coordinator.freshContext()
+        for _ in 0..<200 {
+            let receipt = OperationReceipt(id: UUID(), envelopeDigest: "released", affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true; receipt.handoffProof = Data(); receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+        let directory = coordinator.journal.directory
+        var flipped = false
+        // The first batch's save commits, then reconciliation is lost, exactly
+        // as an adoption during the loop's yield would leave it.
+        coordinator.save = { saving in
+            let pruning = saving.deletedModelsArray.contains { $0 is OperationReceipt }
+            try saving.save()
+            if pruning && !flipped {
+                flipped = true
+                try self.coordinator.adoptJournal(NoteDraftJournal(directory: directory))
+            }
+        }
+        coordinator.beginLaunchRegistration()
+        final class Done: @unchecked Sendable { var value = false }
+        let done = Done()
+        let launch = Task { @MainActor in
+            try await self.coordinator.finishLaunch()
+            done.value = true
+        }
+        // Count yields, not time: a correct launch needs a handful.
+        var yields = 0
+        while !done.value && yields < 2_000 { await Task.yield(); yields += 1 }
+        let ended = done.value
+        if !ended {
+            // Let the spinning loop finish so it cannot outlive this test.
+            try await coordinator.reconcileStartup()
+        }
+        try await launch.value
+        XCTAssertTrue(flipped, "the fixture must lose reconciliation after the first batch")
+        XCTAssertTrue(ended, "launch pruning must stop when a batch cannot make progress")
+        XCTAssertFalse(coordinator.startupReconciled)
+        XCTAssertEqual(coordinator.launchPruneBatches, [64])
+        let lease = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection),
+                                  "the launch hold must be released on every exit path")
+        lease.release()
+        // The retained receipts stay for a later reconcile and launch to finish.
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 136)
+        coordinator.save = { try $0.save() }
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.startupReconciled)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
     /// PF-50: retained logical IDs at the head of a large archive must not
     /// force full-archive materialization for every collection batch.
     func testPF50LaunchPruningReadsBoundedPagesEvenBehindRetainedReceipts() async throws {

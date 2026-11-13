@@ -175,6 +175,9 @@ enum TaskNotePurge {
         return report
     }
 
+    /// Each is a table scan on the main actor, so tests bound the count.
+    private(set) static var ownNotesFetchCount = 0
+
     private static func ownNotes(of taskIDs: Set<UUID>, in context: ModelContext) -> Set<UUID> {
         guard !taskIDs.isEmpty else { return [] }
         // A single expiring task should not fetch every other task's live
@@ -184,6 +187,7 @@ enum TaskNotePurge {
         do {
             var owned = Set<UUID>()
             for taskID in taskIDs {
+                ownNotesFetchCount += 2
                 let noteRows = try context.fetch(FetchDescriptor<NoteItem>(
                     predicate: #Predicate { $0.taskID == taskID }))
                 let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(
@@ -193,6 +197,7 @@ enum TaskNotePurge {
             }
             return owned
         } catch { /* Preserve the existing conservative broad read. */ }
+        ownNotesFetchCount += 2
         let notes = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID != nil }))) ?? []
         let links = (try? context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.detachedAt == nil }))) ?? []
         return Set(notes.filter { $0.taskID.map(taskIDs.contains) == true }.map(\.id))
