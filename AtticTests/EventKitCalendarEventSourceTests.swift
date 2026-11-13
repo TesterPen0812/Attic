@@ -67,12 +67,14 @@ private final class HeldCalendarSearchSource: CalendarEventSource, AsyncCalendar
     var accessState: CalendarAccessState = .granted
     var onChange: (@MainActor () -> Void)?
     var streams: [AsyncStream<[CalendarEvent]>.Continuation] = []
+    private(set) var queries: [String] = []
     private(set) var terminated = 0
     func requestAccess() async -> CalendarAccessState { accessState }
     func events(in interval: DateInterval) -> [CalendarEvent] { [] }
     func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { XCTFail("streaming search used sync I/O"); return [] }
     func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
-        AsyncStream { continuation in
+        queries.append(query)
+        return AsyncStream { continuation in
             streams.append(continuation)
             continuation.onTermination = { [weak self] _ in Task { @MainActor in self?.terminated += 1 } }
         }
@@ -535,6 +537,57 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertEqual(matches.sortedForAgenda().map(\.title), ["Audit old", "Audit cross", "Audit future"])
         XCTAssertEqual(Set(matches.map(\.id)).count, 3)
         XCTAssertTrue(backend.queries.allSatisfy { $0.duration <= 4 * 365 * 86400 })
+    }
+
+    func testPF37HiddenCalendarCancelsSearchAndDebounceThenResumesOnReveal() async throws {
+        let backend = HeldCalendarSearchSource()
+        defer { backend.finish() }
+        let model = CalendarPageModel(store: try makeTestStore(), source: backend,
+                                      now: { self.date(2026, 10, 29) })
+        model.setVisible(true)
+        model.setQuery("audit"); model.commitSearch()
+        let opened = await waitUntil { backend.streams.count == 1 }
+        XCTAssertTrue(opened)
+        model.setVisible(false)
+        let stopped = await waitUntil { backend.terminated == 1 }
+        model.setQuery("second"); model.commitSearch()
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(stopped, "hidden Calendar must stop its active source scan")
+        XCTAssertEqual(backend.streams.count, 1, "hidden edits must not start a new scan")
+        model.setVisible(true)
+        let restarted = await waitUntil { backend.streams.count == 2 }
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(backend.queries, ["audit", "second"])
+        backend.streams[1].finish()
+        await model.waitForEventReadsForTesting()
+        model.setVisible(false)
+        XCTAssertEqual(model.searchText, "second")
+        XCTAssertEqual(model.snapshot.query, "second")
+        let completedScans = backend.streams.count
+        let completedRebuilds = model.rebuildCount
+        for step in 0..<128 {
+            model.setVisible(true)
+            model.setVisible(false)
+            XCTAssertEqual(backend.streams.count, completedScans,
+                           "a completed search must not rescan on hide/reveal cycle \(step)")
+            XCTAssertEqual(model.rebuildCount, completedRebuilds,
+                           "a cached search must not rebuild on hide/reveal cycle \(step)")
+        }
+        model.setVisible(true)
+        model.setQuery("debounced")
+        let debounceStarted = await waitUntil { backend.streams.count == 3 }
+        XCTAssertTrue(debounceStarted)
+        backend.streams[2].finish()
+        await model.waitForEventReadsForTesting()
+        model.setVisible(false)
+        let afterDebounce = model.rebuildCount
+        for step in 0..<128 {
+            model.setVisible(true)
+            model.setVisible(false)
+            XCTAssertEqual(model.rebuildCount, afterDebounce,
+                           "a completed debounce must not rebuild on hide/reveal cycle \(step)")
+            XCTAssertEqual(backend.streams.count, 3)
+        }
     }
 
     func testAuditA9CanceledPartialSearchRestartsWhenItsQueryReturns() async throws {
