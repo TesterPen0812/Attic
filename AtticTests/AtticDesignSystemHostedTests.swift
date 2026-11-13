@@ -170,12 +170,15 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             perform(kAXIncrementAction as String, on: slider.element)
             XCTAssertGreaterThan(tint, before, "\(context.caption): the slider's increment moves Tint length")
 
-            // Both the title menu and the Settings pop-up open through
-            // Attic's glass menu. VoiceOver sees each as a menu button,
-            // which can be pressed or asked to Show Menu.
+            // Both controls open Attic's glass menu. The Settings row
+            // keeps its one real VoiceOver button, with its live value;
+            // only the title trigger has a menu-button role.
+            let popUp = try XCTUnwrap(items.first { $0.description == "Surface" }, "Settings has a named Surface row")
+            XCTAssertEqual(popUp.role, kAXButtonRole as String)
             let menus = items.filter { $0.role == kAXPopUpButtonRole as String || $0.role == kAXMenuButtonRole as String }
-            XCTAssertGreaterThanOrEqual(menus.count, 2, "\(context.caption): a menu control is missing its AX menu role: \(items.map(\.role))")
-            for menu in menus {
+            XCTAssertGreaterThanOrEqual(menus.count, 1, "\(context.caption): the title is missing its AX menu role: \(items.map(\.role))")
+            let openers = menus + [popUp]
+            for menu in openers {
                 XCTAssertTrue(menu.actions.contains(kAXPressAction as String) || menu.actions.contains("AXShowMenu"),
                               "\(context.caption): a menu button VoiceOver cannot press: \(menu.actions)")
             }
@@ -187,9 +190,9 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             // right. Opening a menu and choosing an item is proved in the
             // running, activated app by AtticNativeMenuUITests on every
             // supported macOS.
-            let opened = openMenus(menus)
+            let opened = openMenus(openers)
             // CI diagnostic: how many menus opened in this host on this OS.
-            print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(menus.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
+            print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(openers.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
             if !opened.isEmpty {
                 let titles = opened.flatMap { $0 }
                 XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): title menu missing its items: \(opened)")
