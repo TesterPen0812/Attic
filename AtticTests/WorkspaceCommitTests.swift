@@ -1550,6 +1550,109 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.launchPruneBatches, [64, 64, 2])
     }
 
+    /// PF-50: retained logical IDs at the head of a large archive must not
+    /// force full-archive materialization for every collection batch.
+    func testPF50LaunchPruningReadsBoundedPagesEvenBehindRetainedReceipts() async throws {
+        let context = coordinator.freshContext()
+        let retained = Set((0..<130).compactMap { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", $0)) })
+        for index in 0..<260 {
+            let id = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index)))
+            let receipt = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true
+            receipt.handoffProof = Data()
+            receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+        coordinator.historyReferences = { retained }
+        try await coordinator.finishLaunch()
+        let survivors = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        XCTAssertEqual(Set(survivors.map(\.id)), retained,
+                       "retained first-page receipts must not starve later collectable receipts")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneDiscoveryCounts.max() ?? 0, 64,
+                                 "one launch maintenance turn must read a bounded candidate page")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneDiscoveryCounts.reduce(0, +), 260,
+                                 "a sweep should discover each of 260 physical rows once")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneFamilyRowsRead, 130,
+                                 "each of 130 unowned families should need at most one complete proof fetch")
+    }
+
+    /// Candidate pages identify UUIDs, never individual physical replicas.
+    /// A contradictory replica must veto collection of the entire family.
+    func testPF50PruningKeepsDivergentPhysicalReceiptFamily() async throws {
+        // Reconcile a clean launch first. Divergent receipts deliberately
+        // violate reconciliation's evidence contract, so insert them only
+        // when testing the collector's separate family-level veto.
+        try await coordinator.reconcileStartup()
+        let context = coordinator.freshContext()
+        let duplicatedID = UUID()
+        let safeID = UUID()
+        for (id, digest) in [(duplicatedID, "first"), (duplicatedID, "different"), (safeID, "safe")] {
+            let receipt = OperationReceipt(id: id, envelopeDigest: digest, affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true
+            receipt.handoffProof = Data()
+            receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 64), 1)
+        let survivors = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        XCTAssertEqual(survivors.filter { $0.id == duplicatedID }.count, 2,
+                       "divergent physical copies must remain together")
+        XCTAssertFalse(survivors.contains { $0.id == safeID }, "an unrelated eligible family can be collected")
+        XCTAssertGreaterThanOrEqual(coordinator.receiptPruneMaxFamilyRows, 2,
+                                    "candidate discovery must prove all physical copies")
+    }
+
+    /// A receipt may gain a new on-disk owner after the discovery snapshot.
+    /// The next batch must recheck current ownership before collecting it.
+    func testPF50EnvelopeCreatedAfterSnapshotPreventsPruning() async throws {
+        try await coordinator.reconcileStartup()
+        let first = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let second = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
+        let context = coordinator.freshContext()
+        for (id, offset) in [(first, 0.0), (second, 1.0)] {
+            let row = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+            row.createdAt = Date(timeIntervalSince1970: 1_000 + offset)
+            row.publicationComplete = true
+            row.handoffProof = Data()
+            row.envelopeReleased = true
+            context.insert(row)
+        }
+        try context.save()
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 1)
+
+        let envelope = root.appendingPathComponent("NoteDrafts/operations", isDirectory: true)
+            .appendingPathComponent(second.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: envelope, withIntermediateDirectories: true)
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 0,
+                       "an owner arriving after snapshot must veto the second receipt")
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>()).map(\.id), [second])
+    }
+
+    /// A durable save can report a failure after persisting the delete.
+    /// Reconciliation must prove only the affected family has disappeared.
+    func testPF50SaveThenThrowReconcilesCommittedReceiptPrune() async throws {
+        try await coordinator.reconcileStartup()
+        let id = UUID()
+        let context = coordinator.freshContext()
+        let row = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+        row.publicationComplete = true
+        row.handoffProof = Data()
+        row.envelopeReleased = true
+        context.insert(row)
+        try context.save()
+        coordinator.save = { context in
+            try context.save()
+            throw WorkspaceFoundationError.unknown
+        }
+        defer { coordinator.save = { try $0.save() } }
+
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 1)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
     func testR2DamagedCheckpointHoldsOnlyItsPublicationAndIndependentOffersContinue() async throws {
         let pre = try recoveryDraft("pre-copy")
         let claim = try await coordinator.journal.writeDurably(pre, staged: [])
