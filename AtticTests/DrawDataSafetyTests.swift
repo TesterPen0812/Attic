@@ -204,6 +204,60 @@ final class DrawDataSafetyTests: XCTestCase {
         }
     }
 
+    func testDS9ImportNamesEveryFailedFileAndKeepsSuccessfulPeersOnOriginalCanvas() async throws {
+        for validPeer in [false, true] {
+            let root = try directory()
+            let valid = root.appendingPathComponent("kept.png")
+            let broken = root.appendingPathComponent("broken.png")
+            let missing = root.appendingPathComponent("missing.png")
+            try Draw3Images.encoded(width: 20, height: 10).write(to: valid)
+            try Data("corrupt".utf8).write(to: broken)
+            let page = DrawPageModel(store: try persistent())
+            page.start()
+            let original = try XCTUnwrap(page.canvasID)
+            let gate = Draw3Gate()
+            DrawPageModel.importLoadHook = { _ in await gate.wait() }
+            defer { DrawPageModel.importLoadHook = nil }
+            let pb = NSPasteboard(name: .init("DrawImport-\(UUID())"))
+            pb.writeObjects((validPeer ? [valid, broken, missing] : [broken, missing]).map { $0 as NSURL })
+            let task = try XCTUnwrap(page.importImages(from: pb, at: .zero))
+            page.newCanvas(name: "Other")
+            gate.open()
+            await task.value
+            XCTAssertEqual(try page.store.open(original).objects.count, validPeer ? 1 : 0)
+            XCTAssertTrue(page.objects.isEmpty)
+            let notice = try XCTUnwrap(page.saveNotice)
+            XCTAssertTrue(notice.message.contains("broken.png"))
+            XCTAssertTrue(notice.message.contains("missing.png"))
+            if validPeer { XCTAssertFalse(notice.message.contains("kept.png")) }
+            pb.releaseGlobally()
+        }
+    }
+
+    func testDS9FailedModelSaveNeverPlaysImportSuccess() async throws {
+        struct Failure: Error {}
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
+            ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        let page = DrawPageModel(store: DrawPersistentStore(container: container, save: { _ in throw Failure() }))
+        page.start()
+        let pb = NSPasteboard(name: .init("DrawFailedImport-\(UUID())"))
+        defer { pb.releaseGlobally() }
+        pb.setData(Draw3Images.encoded(width: 20, height: 10), forType: .png)
+        var cues: [AtticSounds.Cue] = []
+        let sounds = AtticSounds.shared
+        sounds.lastPlayed = -.infinity
+        sounds.settingEnabled = { true }; sounds.systemAllows = { true }
+        sounds.clock = { 20_000 + Double(cues.count) }; sounds.output = { cues.append($0) }
+        defer {
+            sounds.settingEnabled = nil; sounds.output = nil; sounds.systemAllows = { true }
+            sounds.clock = { ProcessInfo.processInfo.systemUptime }; sounds.lastPlayed = -.infinity
+        }
+        await page.importImages(from: pb, at: .zero)?.value
+        XCTAssertFalse(cues.contains(.attached))
+        XCTAssertNotNil(page.saveNotice)
+        XCTAssertTrue(page.store.hasUnsettledEdits)
+    }
+
     func testSeededDrawOwnerAgentRoundTripsKeepEveryAcceptedEditAndUndo() throws {
         for seed: UInt64 in [16, 613, 20261113] {
             var random = seed

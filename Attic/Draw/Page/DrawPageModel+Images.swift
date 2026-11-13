@@ -43,6 +43,11 @@ private enum DrawImageSource: Sendable {
         if case .file(let url) = self { [url.lastPathComponent] } else { [] }
     }
 
+    var name: String {
+        if case .file(let url) = self { url.lastPathComponent }
+        else { String(localized: "Pasted image") }
+    }
+
     nonisolated func load() -> DrawImageImport? {
         switch self {
         case .data(let data): DrawImageImport.inspect(data)
@@ -111,8 +116,21 @@ extension DrawPageModel {
             #if DEBUG
             await Self.importLoadHook?(sources.flatMap(\.names))
             #endif
-            let imports = await Task.detached(priority: .userInitiated) { sources.compactMap { $0.load() } }.value
-            self?.place(imports, at: drop)
+            let results = await Task.detached(priority: .userInitiated) {
+                sources.map { (name: $0.name, image: $0.load()) }
+            }.value
+            let outcome = self?.place(results.compactMap(\.image), at: drop)
+            let failed = results.filter { $0.image == nil }.map(\.name)
+            if !failed.isEmpty {
+                var message = String(localized: "The following images couldn’t be added: \(failed.joined(separator: ", "))")
+                if let outcome {
+                    switch outcome {
+                    case .retry(let detail), .held(let detail): message += "\n" + detail
+                    case .saved, .unchanged: break
+                    }
+                }
+                self?.report(message)
+            }
             self?.importFinished(token)
         }
         importStarted(token, task)
@@ -122,8 +140,8 @@ extension DrawPageModel {
     /// Natural size, scaled down to fit comfortably in the view, aspect
     /// kept, centred on the point; several cascade. One Undo step, on the
     /// canvas the images were dropped on.
-    private func place(_ imports: [DrawImageImport], at drop: DrawImageDrop) {
-        guard !imports.isEmpty else { return }
+    private func place(_ imports: [DrawImageImport], at drop: DrawImageDrop) -> DrawSaveResult? {
+        guard !imports.isEmpty else { return nil }
         let room = drop.room, step = drop.step, centre = drop.centre
         var z = drop.canvas == canvasID ? topZ : (try? store.open(drop.canvas).objects.map(\.zIndex).max()) ?? 0
         let placed = imports.enumerated().map { index, item -> DrawObject in
@@ -136,8 +154,9 @@ extension DrawPageModel {
                                                width: width, height: height),
                               zIndex: z, content: .image(item.image))
         }
-        perform(.put(placed), on: drop.canvas)
-        AtticSounds.play(.attached)
+        let result = perform(.put(placed), on: drop.canvas)
+        AtticSounds.play(.attached, if: result.isSaved)
+        return result
     }
 }
 
