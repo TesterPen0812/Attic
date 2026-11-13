@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Attic
 
@@ -9,6 +10,137 @@ import XCTest
 /// mounted on their own. Event writes go to a fake store only.
 @MainActor
 final class ComposerTests: XCTestCase {
+    func testR1PendingTaskExplainsBothSubmitRoutesAndKeepsCreateEnabled() async throws {
+        print("REVIEW_HOST_PID \(ProcessInfo.processInfo.processIdentifier)")
+        model.open(on: .tasks(.now))
+        type("Pending task")
+        page.addBarState.stagingFiles = 1
+        try renderPendingComposerIfRequested("waiting")
+        XCTAssertTrue(model.canCreate, "Create must remain reachable so it can explain why the draft is waiting")
+        model.submit()
+        try renderPendingComposerIfRequested("submitted")
+        XCTAssertEqual(page.toasts.current?.message, "Preparing files · try again in a moment")
+        page.toasts.dismiss()
+        let created = await model.create()
+        XCTAssertFalse(created)
+        XCTAssertEqual(page.toasts.current?.message, "Preparing files · try again in a moment")
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(page.addBar.text, "Pending task")
+    }
+
+    func testR2PendingTaskFilesDoNotBlockNoteOrFakeEventCreation() async {
+        model.open(on: .calendar(selected: today), as: .note)
+        type("Independent note")
+        page.addBarState.stagingFiles = 1
+        let noteCreated = await model.create()
+        XCTAssertTrue(noteCreated)
+        model.choose(.event)
+        await model.loadCalendars()
+        type("Independent event")
+        let eventCreated = await model.create()
+        XCTAssertTrue(eventCreated)
+        XCTAssertEqual(events.events.count, 1)
+        XCTAssertEqual(page.addBarState.stagingFiles, 1, "neither kind consumes Task files")
+    }
+
+    private final class HeldFileProvider: @unchecked Sendable {
+        private let lock = NSLock()
+        private var completion: (@Sendable (URL?, Bool, Error?) -> Void)?
+        let provider = NSItemProvider()
+
+        init(started: XCTestExpectation, name: String) {
+            provider.suggestedName = name
+            provider.registerFileRepresentation(forTypeIdentifier: UTType.pdf.identifier,
+                fileOptions: [], visibility: .all) { [weak self] completion in
+                guard let self else { completion(nil, false, CocoaError(.userCancelled)); return nil }
+                self.lock.withLock { self.completion = completion }
+                started.fulfill()
+                return nil
+            }
+        }
+
+        func finish(_ url: URL) {
+            let callback = lock.withLock { let value = completion; completion = nil; return value }
+            callback?(url, false, nil)
+        }
+    }
+
+    func testR8RealProvidersStayWithTheirSubmittedDraftAcrossClearDraft() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ComposerProviders")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let firstURL = root.appendingPathComponent("first.pdf")
+        let secondURL = root.appendingPathComponent("second.pdf")
+        try Data("first payload".utf8).write(to: firstURL)
+        try Data("second payload".utf8).write(to: secondURL)
+        let firstStarted = expectation(description: "first provider requested")
+        let first = HeldFileProvider(started: firstStarted, name: "first.pdf")
+        model.open(on: .tasks(.now))
+        type("Task A")
+        page.addComposerFiles([first.provider])
+        await fulfillment(of: [firstStarted], timeout: 5)
+        model.submit()
+        XCTAssertEqual(page.toasts.current?.message, "Preparing files · try again in a moment")
+        XCTAssertTrue(liveTasks().isEmpty)
+        first.finish(firstURL)
+        try await waitForComposer { self.page.addBarState.stagingFiles == 0 }
+        model.submit() // acknowledged submission synchronously calls clearDraft
+        XCTAssertTrue(page.addBar.text.isEmpty)
+        type("Task B")
+        let secondStarted = expectation(description: "second provider requested")
+        let second = HeldFileProvider(started: secondStarted, name: "second.pdf")
+        page.addComposerFiles([second.provider])
+        await fulfillment(of: [secondStarted], timeout: 5)
+        try await waitForComposer { !self.model.isCreating }
+        second.finish(secondURL) // completion after A's clearDraft and durable save
+        try await waitForComposer { self.page.addBarState.stagingFiles == 0 }
+        model.submit()
+        try await waitForComposer {
+            self.liveTasks().count == 2 && self.liveTasks().allSatisfy { $0.attachments.count == 1 }
+        }
+        XCTAssertEqual(liveTasks().first { $0.title == "Task A" }?.attachments.map(\.filename), ["first.pdf"])
+        XCTAssertEqual(liveTasks().first { $0.title == "Task B" }?.attachments.map(\.filename), ["second.pdf"])
+        let reopened = TaskStore(container: container, taskImageFiles: tasks.taskImageFiles)
+        for (title, payload) in [("Task A", "first payload"), ("Task B", "second payload")] {
+            let reference = try XCTUnwrap(reopened.tasks.first { $0.title == title }?.attachments.first)
+            let url = try await tasks.taskImageFiles.verifiedURL(for: reference)
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), Data(payload.utf8), title)
+        }
+    }
+
+    private func waitForComposer(_ ready: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(ready(), "provider/submission must settle")
+    }
+
+    private func renderPendingComposerIfRequested(_ state: String) throws {
+        guard let phase = ProcessInfo.processInfo.environment["ATTIC_REVIEW_RENDER"] else { return }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DNMReviewRenders")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let toast = page.toasts.current
+        let view = NSHostingView(rootView: VStack(spacing: 16) {
+            if let toast {
+                AtticUndoToast(message: toast.message, actionTitle: toast.actionTitle, onUndo: {})
+            }
+            ComposerCard(model: model)
+        }.padding(20).frame(width: 420, height: 220).background(Color(nsColor: .windowBackgroundColor))
+            .atticDesign(AtticDesignContext(mode: .light, reduceTransparency: true)))
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 420, height: 220),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        windows.append(window)
+        view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 840, pixelsHigh: 440,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            .write(to: root.appendingPathComponent("\(phase)-\(state).png"))
+        print("R1_RENDERS \(root.path)")
+    }
+
     func testComposerCannotSubmitWhileFirstDraftFileProviderIsStillStaging() async throws {
         model.open(on: .tasks(.now))
         type("Task A with a pending file")
@@ -52,7 +184,8 @@ final class ComposerTests: XCTestCase {
         container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
-        tasks = TaskStore(container: container, now: { fixed })
+        tasks = TaskStore(container: container, now: { fixed },
+            taskImageFiles: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "ComposerTaskFiles")))
         let failing = saveFailure
         notes = NoteStore(container: container, now: { fixed }, persist: { context in
             if failing.on { throw CocoaError(.fileWriteUnknown) }

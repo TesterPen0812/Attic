@@ -2603,7 +2603,7 @@ final class TasksPageModel: ObservableObject {
 
     /// Preparing a provider cannot consume this draft yet. Keep the choice
     /// explicit: a later file callback must never submit a changed draft.
-    private func composerFilesReadyForSubmission() -> Bool {
+    func composerFilesReadyForSubmission() -> Bool {
         guard addBarState.stagingFiles > 0 else { return true }
         toasts.show(String(localized: "Preparing files · try again in a moment"),
                     actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
