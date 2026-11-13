@@ -2,6 +2,19 @@ import Foundation
 import XCTest
 @testable import Attic
 
+private final class PF29OneShot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func take() -> Bool {
+        lock.withLock {
+            guard !taken else { return false }
+            taken = true
+            return true
+        }
+    }
+}
+
 @MainActor
 final class AgentRunHostedTests: XCTestCase {
     /// Explicit Air-only integration gate: the real signed-in Codex process
@@ -122,6 +135,91 @@ final class AgentRunHostedTests: XCTestCase {
     private static func session(_ id: String) -> String { #"{"type":"system","subtype":"init","session_id":""# + id + #""}"# }
     private static func text(_ text: String) -> String {
         #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""# + text + #""}}}"#
+    }
+
+    func testPF29FirstDeltaIsDeliveredBeforeBlockedCheckpointCompletes() async throws {
+        final class Result: @unchecked Sendable {
+            private let lock = NSLock()
+            private var received = false
+            func set(_ value: Bool) { lock.withLock { received = value } }
+            var value: Bool { lock.withLock { received } }
+        }
+        let gateEntered = DispatchSemaphore(value: 0)
+        let gateRelease = DispatchSemaphore(value: 0)
+        let delivered = DispatchSemaphore(value: 0)
+        let firstGate = PF29OneShot()
+        let result = Result()
+        defer { gateRelease.signal() }
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journalURL(),
+                                    checkpointGate: {
+            if firstGate.take() {
+                gateEntered.signal()
+                _ = gateRelease.wait(timeout: .now() + 12)
+            }
+        })
+        let stream = runner.send("Verify provisional delivery", watching: true)
+        let observing = Task.detached {
+            for await event in stream {
+                if case .textDelta = event { delivered.signal(); return }
+            }
+        }
+        defer { observing.cancel() }
+        await wait { !helper.inputs.isEmpty }
+        DispatchQueue.global(qos: .userInitiated).async {
+            if gateEntered.wait(timeout: .now() + 12) == .success {
+                result.set(delivered.wait(timeout: .now() + 5) == .success)
+            }
+            gateRelease.signal()
+        }
+        helper.emitLine(Self.text(String(repeating: "x", count: 256)))
+        await wait { runner.threadSnapshot().events.contains { if case .textDelta = $0 { true } else { false } } }
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        print("PF29 firstDeltaBeforeCheckpointCompletion=\(result.value ? 1 : 0)")
+        XCTAssertTrue(result.value, "Provisional subscriber delivery cannot depend on checkpoint I/O")
+    }
+
+    func testPF29StreamingPublishesWhileCheckpointBlockedAndCoalescesPendingSnapshots() async throws {
+        let url = journalURL()
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let firstCheckpoint = PF29OneShot()
+        defer { release.signal() }
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: url,
+                                    checkpointGate: {
+            if firstCheckpoint.take() {
+                entered.signal()
+                release.wait()
+            }
+        })
+        _ = runner.send("Stream without blocking the panel", watching: true)
+        await wait { !helper.inputs.isEmpty }
+        let chunk = String(repeating: "x", count: 256)
+        helper.emitLine(Self.text(chunk))
+        await wait { runner.threadSnapshot().entries.last?.text == chunk }
+        await wait { entered.wait(timeout: .now()) == .success }
+
+        for _ in 0..<100 { helper.emitLine(Self.text(chunk)) }
+        let expected = String(repeating: chunk, count: 101)
+        await wait { runner.threadSnapshot().entries.last?.text == expected }
+        XCTAssertEqual(runner.threadSnapshot().events.filter {
+            if case .textDelta = $0 { return true }
+            return false
+        }.count, 101, "All provisional text must arrive while persistence is held")
+        XCTAssertLessThanOrEqual(runner.checkpointDiagnostics.maximumBuffered, 2,
+                                 "The checkpoint writer keeps only one active and one pending snapshot")
+        XCTAssertEqual(runner.checkpointDiagnostics.writes, 1, "No blocked checkpoint writes have completed")
+
+        release.signal()
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let disk = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let rows = try XCTUnwrap(disk?["entries"] as? [[String: Any]])
+        XCTAssertEqual(rows.first { $0["role"] as? String == "assistant" }?["text"] as? String, expected)
+        XCTAssertGreaterThan(runner.checkpointDiagnostics.writes, 1,
+                             "Required final save must commit after pending checkpoints")
     }
 
     func testFailedFirstThreadSaveRollsBackAndNextSaveCannotResurrectMessage() async throws {
