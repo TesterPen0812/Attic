@@ -183,8 +183,8 @@ final class UndoRoute: ObservableObject {
     }
 
     /// Undoes the history's last step. Returns whether it applied; a step
-    /// that failed stays, one that can never apply again is dropped (and the
-    /// next undo reaches the step before it).
+    /// that failed stays; obsolete entries are skipped within this same
+    /// command so the next valid step is reached without another shortcut.
     @discardableResult
     func undo(in history: UndoHistoryID) -> Bool {
         undoStep(in: history) == .applied
@@ -199,50 +199,60 @@ final class UndoRoute: ObservableObject {
     @discardableResult
     func undoStep(in history: UndoHistoryID) -> UndoOutcome? {
         let history = resolved(history)
-        guard !replaying.contains(history), var entry = histories[history], let step = entry.undo.last, step.replay == nil else { return nil }
-        let outcome = step.undo()
-        switch outcome {
-        case .failed:
-            break
-        case .obsolete:
-            entry.undo.removeLast()
-            histories[history] = entry
-            revision &+= 1
-        onOwnershipChanged?()
-        case .applied:
-            entry.undo.removeLast()
-            entry.redo.append(step)
-            histories[history] = entry
-            touch(history)
-            revision &+= 1
-        onOwnershipChanged?()
+        guard !replaying.contains(history), var entry = histories[history] else { return nil }
+        var discardedObsolete = false
+        while let step = entry.undo.last, step.replay == nil {
+            let outcome = step.undo()
+            switch outcome {
+            case .failed:
+                return .failed
+            case .obsolete:
+                entry.undo.removeLast()
+                histories[history] = entry
+                revision &+= 1
+                onOwnershipChanged?()
+                discardedObsolete = true
+            case .applied:
+                entry.undo.removeLast()
+                entry.redo.append(step)
+                histories[history] = entry
+                touch(history)
+                revision &+= 1
+                onOwnershipChanged?()
+                return .applied
+            }
         }
-        return outcome
+        return discardedObsolete ? .obsolete : nil
     }
 
     /// `redo(in:)` with what happened: nil when there was nothing to redo.
     @discardableResult
     func redoStep(in history: UndoHistoryID) -> UndoOutcome? {
         let history = resolved(history)
-        guard !replaying.contains(history), var entry = histories[history], let step = entry.redo.last, step.replay == nil else { return nil }
-        let outcome = step.redo()
-        switch outcome {
-        case .failed:
-            break
-        case .obsolete:
-            entry.redo.removeLast()
-            histories[history] = entry
-            revision &+= 1
-        onOwnershipChanged?()
-        case .applied:
-            entry.redo.removeLast()
-            entry.undo.append(step)
-            histories[history] = entry
-            touch(history)
-            revision &+= 1
-        onOwnershipChanged?()
+        guard !replaying.contains(history), var entry = histories[history] else { return nil }
+        var discardedObsolete = false
+        while let step = entry.redo.last, step.replay == nil {
+            let outcome = step.redo()
+            switch outcome {
+            case .failed:
+                return .failed
+            case .obsolete:
+                entry.redo.removeLast()
+                histories[history] = entry
+                revision &+= 1
+                onOwnershipChanged?()
+                discardedObsolete = true
+            case .applied:
+                entry.redo.removeLast()
+                entry.undo.append(step)
+                histories[history] = entry
+                touch(history)
+                revision &+= 1
+                onOwnershipChanged?()
+                return .applied
+            }
         }
-        return outcome
+        return discardedObsolete ? .obsolete : nil
     }
 
     func canUndo(in history: UndoHistoryID) -> Bool {
@@ -382,6 +392,22 @@ final class UndoRoute: ObservableObject {
     /// pending gate refuses a second inverse; retry runs publication only.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+        // A stale asynchronous step must not eat ⌘Z either. Snapshot the
+        // eligible entries so a command recorded while replay awaits cannot
+        // become the next action reversed by this same key press.
+        let key = resolved(history)
+        let eligibleIDs = Set((redo ? histories[key]?.redo : histories[key]?.undo)?.map(\.id) ?? [])
+        var discardedObsolete = false
+        while let step = (redo ? histories[key]?.redo : histories[key]?.undo)?.last {
+            guard eligibleIDs.contains(step.id) else { return discardedObsolete ? .obsolete : nil }
+            let outcome = await replayTop(in: key, redo: redo)
+            guard outcome == .obsolete else { return outcome }
+            discardedObsolete = true
+        }
+        return discardedObsolete ? .obsolete : nil
+    }
+
+    private func replayTop(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
         let key = resolved(history)
         guard !replaying.contains(key), let entry = histories[key],
               let step = (redo ? entry.redo : entry.undo).last else { return nil }

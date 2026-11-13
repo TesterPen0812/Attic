@@ -9,6 +9,154 @@ import XCTest
 /// that can never apply again no longer blocks the steps before it.
 @MainActor
 final class UndoInterleavingTests: XCTestCase {
+    /// Generated cross-page actions use a fresh SwiftData context as the
+    /// oracle after every step. Each history owns a different physical item,
+    /// so undoing one page must leave the other three unchanged.
+    func testSeededCrossPageUndoRedoMatchesPersistedStateAtEveryStep() throws {
+        struct Generator {
+            var state: UInt64
+            mutating func choose(_ bound: Int) -> Int {
+                state ^= state << 13
+                state ^= state >> 7
+                state ^= state << 17
+                return Int(state % UInt64(bound))
+            }
+        }
+
+        for seed in [UInt64(0x12_11_2026), UInt64(0xBADC_0DE)] {
+            var random = Generator(state: seed)
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let library = AtticLibrary(
+                tasks: TaskStore(container: container),
+                notes: trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())),
+                canvases: CanvasStore(container: container)
+            )
+            let task = try XCTUnwrap(library.tasks.create(title: "Root"))
+            let note = try XCTUnwrap(library.notes?.create(title: "Writing"))
+            let settingsNote = try XCTUnwrap(library.notes?.create(title: "Library tags"))
+            // Deletion of the last visible canvas is intentionally refused.
+            // Keep an untouched anchor so generated deletes target a valid board.
+            _ = try XCTUnwrap(library.canvases?.createCanvas(name: "Anchor"))
+            let canvas = try XCTUnwrap(library.canvases?.createCanvas(name: "Board"))
+            let refs: [AtticItemRef] = [
+                AtticItemRef(.task, task.id), AtticItemRef(.note, note.id),
+                AtticItemRef(.canvas, canvas.id), AtticItemRef(.note, settingsNote.id)
+            ]
+            let histories: [UndoHistoryID] = [.tasks, .note(note.id), .canvas(canvas.id), .library]
+
+            func storedSignatures() throws -> [String] {
+                let fresh = ModelContext(container)
+                let tasks = try fresh.fetch(FetchDescriptor<TaskItem>())
+                let notes = try fresh.fetch(FetchDescriptor<NoteItem>())
+                let boards = try fresh.fetch(FetchDescriptor<CanvasBoardItem>())
+                let t = try XCTUnwrap(tasks.first(where: { $0.id == task.id }))
+                let n = try XCTUnwrap(notes.first(where: { $0.id == note.id }))
+                let b = try XCTUnwrap(boards.first(where: { $0.id == canvas.id }))
+                let l = try XCTUnwrap(notes.first(where: { $0.id == settingsNote.id }))
+                return [
+                    "\(t.title)|\(t.statusRaw)|\(t.priorityRaw)|\(t.tagsRaw)|\(t.dueDayRaw ?? "")|\(t.deletedAt != nil)",
+                    "\(n.title)|\(n.tagsRaw)|\(n.deletedAt != nil)|\(n.contentFingerprint ?? "")",
+                    "\(b.name)|\(b.tagsRaw)|\(b.deletedAt != nil)|\(b.tombstoned)",
+                    "\(l.title)|\(l.tagsRaw)|\(l.deletedAt != nil)|\(l.contentFingerprint ?? "")"
+                ]
+            }
+
+            let baseline = try storedSignatures()
+            var checkpoints = baseline.map { [$0] }
+            var cursor = Array(repeating: 0, count: 4)
+
+            for index in 0..<330 {
+                let page = random.choose(4)
+                let history = histories[page]
+                let label = "seed=\(seed) step=\(index) page=\(page)"
+                let choice = random.choose(100)
+
+                if choice < 63 {
+                    let beforeCount = library.undo.undoCount(in: history)
+                    let choice = random.choose(5)
+                    var success = false
+                    switch page {
+                    case 0:
+                        switch choice {
+                        case 0: success = library.updateTask(task.id, title: "Task \(index)").isApplied
+                        case 1: success = library.updateTask(task.id, priority: [.none, .low, .medium, .high][random.choose(4)]).isApplied
+                        case 2: success = library.updateTask(task.id, status: random.choose(2) == 0 ? .todo : .backlog).isApplied
+                        case 3: success = library.updateTask(task.id, dueDay: .some(random.choose(2) == 0 ? nil : DueDay(year: 2026, month: 11, day: 12 + random.choose(7)))).isApplied
+                        default: success = library.setTags(["task\(random.choose(4))"], on: refs[page])
+                        }
+                    default:
+                        let ref = refs[page]
+                        if choice == 0 {
+                            success = library.state(of: ref) == .live
+                                ? library.delete(ref, in: history)
+                                : library.restore(ref, in: history)
+                        } else if library.state(of: ref) == .live {
+                            success = library.setTags(["tag\(random.choose(5))"], on: ref, in: history)
+                        } else {
+                            success = library.restore(ref, in: history)
+                        }
+                    }
+                    XCTAssertTrue(success, label + " save")
+                    let after = try storedSignatures()
+                    if library.undo.undoCount(in: history) > beforeCount {
+                        checkpoints[page] = Array(checkpoints[page].prefix(cursor[page] + 1))
+                        checkpoints[page].append(after[page])
+                        cursor[page] += 1
+                    }
+                } else if choice < 82 {
+                    if library.undo.canUndo(in: history) {
+                        XCTAssertTrue(library.undo.undo(in: history), label + " undo")
+                        cursor[page] -= 1
+                    }
+                } else if library.undo.canRedo(in: history) {
+                    XCTAssertTrue(library.undo.redo(in: history), label + " redo")
+                    cursor[page] += 1
+                }
+
+                let actual = try storedSignatures()
+                for other in 0..<4 {
+                    XCTAssertEqual(actual[other], checkpoints[other][cursor[other]], label + " persisted state for page \(other)")
+                }
+                // Rebuilding every store projection cannot disagree with the
+                // fresh persisted rows just inspected.
+                library.refreshItemStores()
+                if library.state(of: refs[0]) == .live {
+                    XCTAssertEqual(library.tasks.task(withID: task.id)?.title, actual[0].components(separatedBy: "|").first, label)
+                }
+            }
+
+            // Random interleaving may finish with redo entries still pending.
+            // Advance each independent page to its tip before taking the
+            // expected end state for the complete undo/redo round trip.
+            for page in 0..<4 {
+                while library.undo.canRedo(in: histories[page]) {
+                    XCTAssertTrue(library.undo.redo(in: histories[page]), "seed=\(seed) finish pending redo page=\(page)")
+                    cursor[page] += 1
+                }
+            }
+            let finish = try storedSignatures()
+            for page in 0..<4 {
+                XCTAssertEqual(finish[page], checkpoints[page][cursor[page]], "seed=\(seed) tip state page=\(page)")
+            }
+            for page in 0..<4 {
+                while library.undo.canUndo(in: histories[page]) {
+                    XCTAssertTrue(library.undo.undo(in: histories[page]), "seed=\(seed) full undo page=\(page)")
+                    cursor[page] -= 1
+                }
+                XCTAssertEqual(cursor[page], 0, "seed=\(seed) reached original cursor")
+            }
+            XCTAssertEqual(try storedSignatures(), baseline, "seed=\(seed) full undo reached the original persisted store")
+            for page in 0..<4 {
+                while library.undo.canRedo(in: histories[page]) {
+                    XCTAssertTrue(library.undo.redo(in: histories[page]), "seed=\(seed) full redo page=\(page)")
+                    cursor[page] += 1
+                }
+            }
+            XCTAssertEqual(try storedSignatures(), finish, "seed=\(seed) full redo reached the later persisted store")
+            print("UNDO_HUNT_SEED seed=\(seed) steps=330 histories=4")
+        }
+    }
+
     func testU17PurgeRemovesOnlyThePurgedTasksHistory() throws {
         let library = try makeLibrary()
         let first = try XCTUnwrap(library.tasks.create(title: "Private"))
@@ -161,10 +309,9 @@ final class UndoInterleavingTests: XCTestCase {
         XCTAssertTrue(library.tasks.rename(task, to: "Other"), "changed outside the route")
         XCTAssertEqual(library.undo.undoCount(in: .tasks), 2)
 
-        XCTAssertFalse(library.undo.undo(in: .tasks), "the title step can't apply: the title changed since")
+        XCTAssertTrue(library.undo.undo(in: .tasks), "one shortcut skips the stale title and undoes the date")
         XCTAssertEqual(task.title, "Other", "the newer value is kept")
-        XCTAssertEqual(library.undo.undoCount(in: .tasks), 1, "the stale step no longer blocks the history")
-        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 0, "the stale step and earlier valid step are both consumed")
         XCTAssertNil(task.dueDay)
         XCTAssertEqual(task.title, "Other")
     }
@@ -177,9 +324,8 @@ final class UndoInterleavingTests: XCTestCase {
         XCTAssertTrue(library.updateTask(second.id, title: "Second edited").isApplied)
         XCTAssertTrue(library.tasks.delete(second), "deleted outside the route")
 
-        XCTAssertFalse(library.undo.undo(in: .tasks))
-        XCTAssertEqual(library.undo.undoCount(in: .tasks), 1)
-        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertTrue(library.undo.undo(in: .tasks), "one shortcut skips the deleted target and undoes the earlier edit")
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 0)
         XCTAssertEqual(library.tasks.task(withID: first.id)?.title, "First")
         XCTAssertEqual(library.state(of: AtticItemRef(.task, second.id)), .deleted, "the deleted task is untouched")
     }
