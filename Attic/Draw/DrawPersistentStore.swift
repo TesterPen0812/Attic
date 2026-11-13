@@ -44,12 +44,14 @@ final class DrawRecoveryJournal {
     }
 
     private let fileURL: URL
+    private let writeData: (Data, URL) throws -> Void
     private var archive = Archive()
     private(set) var issue: String?
     var records: [UUID: Record] { archive.records }
 
-    init(fileURL: URL) {
+    init(fileURL: URL, writeData: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.fileURL = fileURL
+        self.writeData = writeData
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
             let decoded = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: fileURL))
@@ -73,7 +75,7 @@ final class DrawRecoveryJournal {
         }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: fileURL, options: .atomic)
+        try writeData(data, fileURL)
         archive = updated
     }
 }

@@ -128,6 +128,82 @@ final class DrawDataSafetyTests: XCTestCase {
         XCTAssertEqual(try store.open(canvas).objects.first?.text, "Agent")
     }
 
+    func testDS7CheckpointFailureBeforeWriteRetriesAndRecoversAcrossRelaunch() async throws {
+        for relaunch in [false, true] {
+            let root = try directory()
+            let store = try persistent(at: root)
+            let page = DrawPageModel(store: store)
+            page.start()
+            let canvas = try XCTUnwrap(page.canvasID)
+            let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
+            try FileManager.default.createDirectory(at: checkpoint, withIntermediateDirectories: false)
+            let object = DrawObject(content: .text("Exact unsaved draft"))
+            XCTAssertFalse(page.perform(.put([object])).isSaved)
+            XCTAssertEqual(store.metrics.saveAttempts, 0)
+            XCTAssertTrue(store.hasUnsettledEdits)
+            try FileManager.default.trashItem(at: checkpoint, resultingItemURL: nil)
+            if relaunch {
+                // Republish while the model writer still has no submitted attempt.
+                _ = store.reconcile(on: canvas)
+                let reopened = try persistent(at: root)
+                let recovery = DrawPageModel(store: reopened)
+                recovery.open(canvas)
+                recovery.retrySave()
+                XCTAssertFalse(reopened.hasUnsettledEdits)
+                XCTAssertEqual(try reopened.open(canvas).objects, [object])
+                let quit = await recovery.prepareToQuit()
+                XCTAssertTrue(quit)
+            } else {
+                page.retrySave()
+                XCTAssertFalse(store.hasUnsettledEdits)
+                XCTAssertEqual(store.metrics.saveAttempts, 1)
+                XCTAssertEqual(try persistent(at: root).open(canvas).objects, [object])
+                XCTAssertTrue(store.undo(on: canvas).isSaved)
+                XCTAssertTrue(try store.open(canvas).objects.isEmpty)
+                let quit = await page.prepareToQuit()
+                XCTAssertTrue(quit)
+            }
+        }
+    }
+
+    func testDS7UnsubmittedCheckpointMarkerSurvivesRelaunchBeforeRetry() async throws {
+        for typing in [false, true] {
+            struct Failure: Error {}
+            let root = try directory()
+            let container = try persistent(at: root).container
+            let url = root.appendingPathComponent("DrawRecovery-v1.json")
+            var checkpoints = 0
+            let journal = DrawRecoveryJournal(fileURL: url, writeData: { data, url in
+                checkpoints += 1
+                if checkpoints == 1 { throw Failure() }
+                try data.write(to: url, options: .atomic)
+            })
+            let metrics = DrawSaveMetrics()
+            let store = DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: metrics,
+                save: { try $0.save() }, recovery: journal), recovery: journal)
+            let canvas = store.create(name: "Checkpoint retry")
+            let object = DrawObject(content: .text("Preserved exact draft"))
+            let result = typing ? store.performTypingBurst([.put([object])], on: canvas.id)
+                : store.perform(.put([object]), on: canvas.id)
+            XCTAssertFalse(result.isSaved)
+            XCTAssertEqual(metrics.saveAttempts, 0)
+            XCTAssertEqual(journal.records[canvas.id]?.unattempted, true)
+            let recoveredJournal = DrawRecoveryJournal(fileURL: url)
+            let recoveredMetrics = DrawSaveMetrics()
+            let recovered = DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: recoveredMetrics,
+                save: { try $0.save() }, recovery: recoveredJournal), recovery: recoveredJournal)
+            XCTAssertTrue(recovered.retry(on: canvas.id).isSaved)
+            XCTAssertEqual(recoveredMetrics.saveAttempts, 1)
+            XCTAssertEqual(try recovered.open(canvas.id).objects, [object])
+            XCTAssertFalse(recovered.hasUnsettledEdits)
+            XCTAssertTrue(recoveredJournal.records.isEmpty)
+            let page = DrawPageModel(store: recovered)
+            page.open(canvas.id)
+            let quit = await page.prepareToQuit()
+            XCTAssertTrue(quit)
+        }
+    }
+
     func testSeededDrawOwnerAgentRoundTripsKeepEveryAcceptedEditAndUndo() throws {
         for seed: UInt64 in [16, 613, 20261113] {
             var random = seed
