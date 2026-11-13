@@ -164,7 +164,9 @@ final class NoteThumbnailCache {
         ]
         let text = wraps ? string : string.replacingOccurrences(of: "\n", with: " ")
         NSAttributedString(string: text, attributes: attributes)
-            .draw(with: rect, options: wraps ? [.usesLineFragmentOrigin] : [], context: nil)
+            // From the rect's top, so the one-line title sits in its own
+            // line, inside the padding, not on a baseline above it.
+            .draw(with: rect, options: [.usesLineFragmentOrigin], context: nil)
     }
 
     private static func drawStripes(in rect: CGRect, context: CGContext, colours: Colours) {
