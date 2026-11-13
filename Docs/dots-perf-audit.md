@@ -188,8 +188,35 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Smallest fix: incrementally update the changed object's accessible payload and maintain or selectively invalidate navigation order when its bounds really change; coalesce notifications at a frame boundary, retaining all children, ordering, focus and live accessible text. Confidence: high in chain and whole-graph work once activated; medium in impact.
 - Mac measurement: count `draw_accessibility_refresh` spans, objects whose bounds and `update` run, sort size, notifications and input-to-frame during sustained text typing with AX on/off, 10/1,000/10,000 objects. Guard test: after initial enumeration, K same-bounds text edits update only changed accessible elements and trigger bounded notifications, with full ordering/focus and VoiceOver text preserved; moving an object still updates navigation order.
 
-## Summary and coverage at this checkpoint
-- DP findings: 20 static suspects; none is measured on the owner's Mac.
-- O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
-- Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling agent tool-input streaming helper framing, Calendar month projections, shared tag-bar layout, Notes row anchors and conditional idle Genie capture, and workspace deletion staging, and Draw accessibility after text edits. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
+## Provisional top 15 and coverage checkpoint
+
+This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
+
+1. **DP-1** resize shell publications and reflow: every grip drag; compare with known shared host.
+2. **DP-5** scrolling geometry reports proportional to realized rows.
+3. **DP-6** native menu anchors per realized Tasks row under AX.
+4. **DP-8** synchronous approach warmup if it overlaps an input.
+5. **DP-19** whole Draw AX navigation rebuild during text edits on a large board.
+6. **DP-3** width-triggered Notes table remeasurement on large tables.
+7. **DP-16** Notes row anchors, focusable controls and global-revision invalidation.
+8. **DP-17** conditional Genie capture near first input, especially at larger panel sizes.
+9. **DP-18** bulk deletion staging scans of unrelated workspace data.
+10. **DP-15** duplicated eager shared-tag strip construction with many tags.
+11. **DP-2** separate island-window positioning and glass work during resize.
+12. **DP-4** Draw coverage traversal on each frame-size call for large scenes.
+13. **DP-12** full inline tag candidates in tag-heavy rows.
+14. **DP-9** folded-heading viewport work in long notes.
+15. **DP-14** repeated Calendar grid and agenda filtering in dense calendars.
+
+**O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-8 and DP-16/DP-17 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
+
+### Mac measurement plan
+- Reproduce with the optimized preview build, the same AX clients, same panel size/data and a clean A/B on the target commit plus only the specific diagnostic patch. Record client state, counts, percentiles and outliers. Do not conflate the two substantially different branches with a single patch.
+- Trace event timestamp → AppKit delivery → frame change or action → state publication → SwiftUI update → host and child layout → AX update → Core Animation commit → display-link callback and, separately, actual presentation where tools expose it. Correlate intervals on a common clock; callbacks are not proof of scanout.
+- Resize with no retained extra page, then each retained page, 10/1,000/10,000 rows, large table and Draw scene. Count host/AX layouts, geometry, table cell measures, coverage scans, island window moves, glass layers and frames dropped.
+- Scroll the same content/velocity through Now, Later, Done and Completed Today. Count realized/retained rows, native anchors, focus/AX nodes, row geometry callbacks, preference writes (PF-7), new row initialization and DP-20 style checks. A/B fixes one at a time.
+- First click after reveal and page switch: record approach warmup, Genie capture and cache hit/miss, ready marker, main-queue waits, host layout, focus responders, AX updates, CA commits and presentation. Separate ordinary left click, right click and keyboard. Check cold/warm, AX on/off and first versus steady; retain accepted visuals.
+- At scale count Draw AX object visits/sorts per keystroke; task deletion fetches and rows per root; tag-bar controls and candidate measurements; Calendar filter comparisons; long-note heading comparisons. Each finding above gives a non-wall-clock guard test.
+
+### Coverage and where to continue
+20 source-backed suspects; severity and order provisional. The three owner paths have initial call-chain and measurement plans, not exhaustive event-to-presentation traces. I inspected selected files in Window, Tasks, DesignSystem, Notes, Draw, Calendar, Agent, Services, Workspace, Composer and Settings. **No folder has been read fully file by file.** Remaining: the rest of these folders and every other app folder, helper and script; launch, wake/display changes, idle/lifetime retention, menus, all editor/table operations, Canvas/Draw interactions, all composer and Calendar flows, MCP method-by-method and helper lifecycle. Complete those areas before calling this an exhaustive audit. Dormant mobile/CloudKit intentionally excluded; no Mac build, profiling or app code changes. Continue checkpointing.
