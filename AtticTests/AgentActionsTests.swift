@@ -55,6 +55,37 @@ final class AgentActionsTests: XCTestCase {
 
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
+    func testPF28MutationUsesTwoDurableWritesAndNeverReencodesSettledInverses() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "PF28JournalCost").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journal)
+        for index in 0..<24 {
+            let request = actions.beginRequest(title: "Recorded change \(index)")
+            _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Task \(index)"],
+                                                 watching: false, requestID: request))
+            actions.sealRequest(request)
+        }
+        print("PF28 24 mutations journalWrites=\(actions.journalWrites) inverseConversions=\(actions.inverseConversions)")
+        XCTAssertEqual(actions.journalWrites, 48, "One required intent and one completed receipt per mutation")
+        XCTAssertEqual(actions.inverseConversions, 24, "Each immutable inverse must be converted only once")
+        XCTAssertEqual(actions.durableChangeSets().count, 24)
+    }
+
+    func testPF40SealedReadOnlyRequestsDoNotGrowResidentMetadata() throws {
+        let tasks = try makeTestStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: ownedTemporaryDirectory(prefix: "PF40").appendingPathComponent("undo.json"))
+        for index in 0..<1_000 {
+            let id = actions.beginRequest(title: "Read only \(index)")
+            actions.sealRequest(id)
+            XCTAssertThrowsError(try actions.setMode(.auto, for: id))
+        }
+        print("PF40 sealed=1000 retainedMetadata=\(actions.retainedRequestMetadataCount)")
+        XCTAssertEqual(actions.retainedRequestMetadataCount, 0,
+                       "A completed read-only run has neither a durable inverse nor remaining admission rights")
+    }
+
     /// Suspends a real fake-backed writer at the await boundary, so an owner
     /// command can commit independently before an agent call resumes.
     private final class HeldAgentCalendarWriter: CalendarEventWriter {
@@ -1217,6 +1248,48 @@ final class AgentActionsTests: XCTestCase {
         for item in created {
             XCTAssertEqual(relaunchedTasks.task(withID: item.id)?.priority, TaskPriority.none)
         }
+    }
+
+    func testR2UndecodableNoteInverseCannotRecoverUndoAfterRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let original = try XCTUnwrap(notes.create(title: "Original", body: "Before"))
+        let journal = ownedTemporaryDirectory(prefix: "AgentCorruptInverse").appendingPathComponent("undo.json")
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools, journalURL: journal)
+        let request = actions.beginRequest(title: "Edit note")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "id": original.id.uuidString, "base_revision": original.revisionToken, "body": "After"
+        ], watching: false, requestID: request))
+        var saved = try payload(String(decoding: Data(contentsOf: journal), as: UTF8.self))
+        var requests = try XCTUnwrap(saved["requests"] as? [[String: Any]])
+        var entries = try XCTUnwrap(requests[0]["entries"] as? [[String: Any]])
+        var inverse = try XCTUnwrap(entries[0]["updatedNote"] as? [String: Any])
+        inverse["document"] = Data("undecodable document".utf8).base64EncodedString()
+        entries[0]["updatedNote"] = inverse
+        requests[0]["entries"] = entries
+        saved["requests"] = requests
+        try JSONSerialization.data(withJSONObject: saved).write(to: journal, options: .atomic)
+
+        let restored = AgentActions(tasks: tools, journalURL: journal)
+        XCTAssertEqual(restored.changeSet(for: request)?.count, 1, "The receipt itself must remain reviewable")
+        print("R2 canRecoverUndecodableInverse=\(restored.canRecoverUndo(request))")
+        XCTAssertFalse(restored.canRecoverUndo(request), "Recovery must use the decoded inverse's availability")
+        let chatURL = journal.deletingLastPathComponent().appendingPathComponent("chat.json")
+        let thread = [AgentThreadEntry(id: UUID(), role: "user", text: "Edit note")]
+        let archive: [String: Any] = ["activeRun": request.uuidString,
+            "entries": try JSONSerialization.jsonObject(with: JSONEncoder().encode(thread))]
+        try JSONSerialization.data(withJSONObject: archive).write(to: chatURL)
+        let engine = AgentRunEngine(tools: { fatalError("No live run in a restore test") }, journalURL: chatURL,
+                                   recoverUndo: { restored.canRecoverUndo($0) },
+                                   recoveredChangeSets: { restored.durableChangeSets() })
+        let chat = AgentChatModel()
+        chat.connect(engine)
+        let receipt = chat.entries.compactMap { entry -> AgentChatChanges? in
+            if case let .changes(value) = entry.content { return value }; return nil
+        }.first
+        XCTAssertEqual(receipt?.state, .recovered, "An unavailable restored inverse must not offer Undo")
+        XCTAssertEqual(notes.note(withID: original.id)?.body, "After")
     }
 
     func testLegacyPlainTextNoteEditUndoSurvivesRelaunch() async throws {

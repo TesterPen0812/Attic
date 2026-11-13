@@ -175,7 +175,6 @@ final class AgentActions {
     private var approvals: [UUID: AwaitingApproval] = [:]
     private var requestModes: [UUID: AgentChatMode] = [:]
     private var activeCalls: [UUID: Int] = [:]
-    private var closedRequests = Set<UUID>()
     private var idleWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private let journalURL: URL?
     private var journalWritable = true
@@ -183,6 +182,14 @@ final class AgentActions {
     private var pendingActions: [UUID: PendingAction] = [:]
     private var undoInFlight: [UUID: UndoInFlight] = [:]
     private var reconciliationIssues: [UUID: String] = [:]
+    /// Immutable document bytes are prepared when an inverse changes, never
+    /// again for an unrelated journal checkpoint.
+    private var inverseCache: [UUID: [StoredInverse]] = [:]
+    #if DEBUG
+    private(set) var journalWrites = 0
+    private(set) var inverseConversions = 0
+    var retainedRequestMetadataCount: Int { journals.count + order.count + requestModes.count + inverseCache.count }
+    #endif
 
     init(tasks: AgentTaskTools, calendarSource: (any CalendarEventSource)? = nil,
          calendarWriter: (any CalendarEventWriter)? = nil,
@@ -205,8 +212,13 @@ final class AgentActions {
             for request in saved.requests {
                 let entries = request.entries.map(Self.restoreInverse)
                 journals[request.changeSet.id] = Journal(changeSet: request.changeSet, entries: entries)
+                // Keep the encoded cache consistent with decode failures, without
+                // re-encoding valid restored documents on subsequent saves.
+                inverseCache[request.changeSet.id] = zip(request.entries, entries).map { pair in
+                    if case let .unavailable(reason) = pair.1 { return .unavailable(reason) }
+                    return pair.0
+                }
                 order.append(request.changeSet.id)
-                closedRequests.insert(request.changeSet.id)
                 if let pending = request.pendingAction { pendingActions[request.changeSet.id] = pending }
                 if let checkpoint = request.undoInFlight { undoInFlight[request.changeSet.id] = checkpoint }
             }
@@ -277,17 +289,25 @@ final class AgentActions {
     private func saveJournal() throws {
         guard let journalURL else { return }
         guard journalWritable else { throw AgentActionsError.refused(journalIssue ?? "the Undo journal is unavailable") }
-        let requests = order.compactMap { id -> StoredRequest? in
+        let retained = order.filter { id in
+            guard let journal = journals[id] else { return false }
+            return !journal.entries.isEmpty || pendingActions[id] != nil || undoInFlight[id] != nil
+        }.suffix(100)
+        let requests = retained.compactMap { id -> StoredRequest? in
             guard let journal = journals[id],
                   !journal.entries.isEmpty || pendingActions[id] != nil || undoInFlight[id] != nil else { return nil }
+            let saved = cachedInverses(for: id, entries: journal.entries)
             return StoredRequest(changeSet: journal.changeSet,
-                                 entries: journal.entries.map(Self.storeInverse),
+                                 entries: saved,
                                  pendingAction: pendingActions[id], undoInFlight: undoInFlight[id])
         }
         do {
             try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(StoredUndo(version: 1, requests: Array(requests.suffix(100))))
+            try JSONEncoder().encode(StoredUndo(version: 1, requests: requests))
                 .write(to: journalURL, options: .atomic)
+            #if DEBUG
+            journalWrites += 1
+            #endif
         } catch {
             journalWritable = false
             journalIssue = error.localizedDescription
@@ -295,7 +315,57 @@ final class AgentActions {
         }
     }
 
-    private func requireDurableUndoBeforeMutation(checkpoint: Bool = true) throws {
+    private func cachedInverses(for id: UUID, entries: [UndoEntry]) -> [StoredInverse] {
+        if let cached = inverseCache[id], cached.count == entries.count { return cached }
+        let converted = entries.map(Self.storeInverse)
+        inverseCache[id] = converted
+        #if DEBUG
+        inverseConversions += converted.count
+        #endif
+        return converted
+    }
+
+    /// Undo drops the newest inverse and may refresh proofs on earlier ones.
+    /// Update only their small proof fields in the already encoded inverses:
+    /// re-encoding a historical NoteDocument here makes K-step Undo quadratic.
+    private func refreshCachedInverses(for id: UUID, entries: [UndoEntry],
+                                       taskProofs: [UUID: WorkspaceModelToken] = [:],
+                                       noteRevisions: [UUID: String] = [:],
+                                       noteMetadata: [UUID: String] = [:]) {
+        guard var saved = inverseCache[id], saved.count == entries.count || saved.count == entries.count + 1 else {
+            inverseCache[id] = nil
+            _ = cachedInverses(for: id, entries: entries)
+            return
+        }
+        if saved.count > entries.count { saved.removeLast() }
+        for index in saved.indices {
+            switch saved[index] {
+            case let .taskEdit(before, after, proof, name):
+                if let updated = taskProofs[after.id], updated != proof {
+                    saved[index] = .taskEdit(before: before, after: after, proof: updated, name: name)
+                }
+            case let .createdTask(id, state, proof, name):
+                if let updated = taskProofs[id], updated != proof {
+                    saved[index] = .createdTask(id: id, state: state, proof: updated, name: name)
+                }
+            case let .createdNote(id, revision, metadata, name):
+                if noteRevisions[id] != nil || noteMetadata[id] != nil {
+                    saved[index] = .createdNote(id: id, revision: noteRevisions[id] ?? revision,
+                                                metadata: noteMetadata[id] ?? metadata, name: name)
+                }
+            case let .updatedNote(id, bytes, title, body, revision, metadata, name):
+                if noteRevisions[id] != nil || noteMetadata[id] != nil {
+                    saved[index] = .updatedNote(id: id, document: bytes, title: title, body: body,
+                                                revision: noteRevisions[id] ?? revision,
+                                                metadata: noteMetadata[id] ?? metadata, name: name)
+                }
+            default: break
+            }
+        }
+        inverseCache[id] = saved
+    }
+
+    private func requireDurableUndoBeforeMutation() throws {
         guard journalURL != nil else { return }
         guard journalWritable else {
             throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? "journal unavailable")")
@@ -306,17 +376,15 @@ final class AgentActions {
         if let checkpoint = undoInFlight.values.first {
             throw AgentActionsError.refused("Attic can't safely record another change while Undo of \(checkpoint.name) is unfinished. Review that step first.")
         }
-        if !checkpoint { return }
-        do { try saveJournal() } catch {
-            throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
-        }
+        // Every mutating branch writes its intent through recordMutationIntent
+        // before the store can change. That write also tests journal writability.
     }
 
     private func recordMutationIntent(_ name: String, arguments: [String: Any], requestID: UUID) throws {
         guard journalURL != nil else { return }
         // Preparation may have awaited since admission. Recheck atomically
         // with installing the intent; its write provides the IO checkpoint.
-        try requireDurableUndoBeforeMutation(checkpoint: false)
+        try requireDurableUndoBeforeMutation()
         let target = (arguments["id"] as? String) ?? (arguments["canvas_id"] as? String)
         pendingActions[requestID] = PendingAction(name: name, targetID: target)
         do { try saveJournal() } catch {
@@ -387,9 +455,11 @@ final class AgentActions {
                     journal.entries.removeLast()
                     refreshRemainingProofs(&journal, taskProofs: [after.id: current.proof])
                     journal.changeSet.count = journal.entries.count
+                    refreshCachedInverses(for: id, entries: journal.entries, taskProofs: [after.id: current.proof])
                     if journal.entries.isEmpty {
                         journals[id] = nil
                         order.removeAll { $0 == id }
+                        inverseCache[id] = nil
                     } else { journals[id] = journal }
                     undoInFlight[id] = nil
                 } else {
@@ -411,8 +481,8 @@ final class AgentActions {
         guard latestUnfinishedRequest() == id, pendingActions[id] == nil, undoInFlight[id] == nil,
               reconciliationIssues[id] == nil,
               let journal = journals[id], !journal.entries.isEmpty, journalWritable else { return false }
-        return journal.entries.allSatisfy { entry in
-            if case .unavailable = Self.storeInverse(entry) { return false }
+        return cachedInverses(for: id, entries: journal.entries).allSatisfy { entry in
+            if case .unavailable = entry { return false }
             return true
         }
     }
@@ -464,6 +534,7 @@ final class AgentActions {
     @discardableResult
     func beginRequest(title: String, id: UUID = UUID()) -> UUID {
         journals[id] = Journal(changeSet: AgentChangeSet(id: id, title: title, pages: [], count: 0))
+        inverseCache[id] = nil
         requestModes[id] = .askFirst
         order.append(id)
         return id
@@ -506,7 +577,7 @@ final class AgentActions {
 
     /// Only the trusted UI/runner can resolve the opaque ID issued by call().
     func resolve(approval id: UUID, allow: Bool) async throws -> AgentActionResult? {
-        guard let pending = approvals[id], !closedRequests.contains(pending.requestID) else {
+        guard let pending = approvals[id], requestModes[pending.requestID] != nil else {
             throw AgentActionsError.invalid("Approval expired or unknown.")
         }
         approvals[id] = nil
@@ -527,9 +598,22 @@ final class AgentActions {
     /// entered an asynchronous store commit is allowed to finish journaling;
     /// its receipt is drained before the runner publishes a terminal event.
     func sealRequest(_ id: UUID) {
-        closedRequests.insert(id)
         cancelApprovals(for: id)
         requestModes[id] = nil
+        retireSealedEmptyRequest(id)
+    }
+
+    /// Empty sealed requests have no Undo rights, recovery intent or remaining
+    /// admission authority. Retire their in-memory metadata after the last
+    /// admitted call ends; nonempty durable history remains available for Undo.
+    private func retireSealedEmptyRequest(_ id: UUID) {
+        guard requestModes[id] == nil, activeCalls[id] == nil,
+              pendingActions[id] == nil, undoInFlight[id] == nil,
+              reconciliationIssues[id] == nil,
+              journals[id]?.entries.isEmpty == true else { return }
+        journals[id] = nil
+        order.removeAll { $0 == id }
+        inverseCache[id] = nil
     }
 
     func drainRequest(_ id: UUID) async -> AgentChangeSet? {
@@ -540,7 +624,7 @@ final class AgentActions {
     }
 
     private func checkOpen(_ id: UUID) throws {
-        guard journals[id] != nil, !closedRequests.contains(id) else {
+        guard journals[id] != nil, requestModes[id] != nil else {
             throw AgentActionsError.invalid("This agent run has ended.")
         }
     }
@@ -551,6 +635,7 @@ final class AgentActions {
         activeCalls[id] = nil
         let waiters = idleWaiters.removeValue(forKey: id) ?? []
         waiters.forEach { $0.resume() }
+        retireSealedEmptyRequest(id)
     }
 
     /// Failed calls keep previously committed steps in the same request.
@@ -796,6 +881,10 @@ final class AgentActions {
             journal.changeSet.count += entries.count
             journal.changeSet.pages.formUnion(step.targets.map(\.page))
             journals[requestID] = journal
+            inverseCache[requestID, default: []].append(contentsOf: entries.map(Self.storeInverse))
+            #if DEBUG
+            inverseConversions += entries.count
+            #endif
         }
         if Self.isMutation(name) { pendingActions[requestID] = nil }
         if !entries.isEmpty || (Self.isMutation(name) && journalURL != nil) { try saveJournal() }
@@ -855,8 +944,9 @@ final class AgentActions {
                 // New child tasks or task notes are also owner changes: do
                 // not allow their cascade deletion through a stale receipt.
                 let context = ModelContext(tasks.store.container)
-                let linkedNotes = (try? context.fetch(FetchDescriptor<NoteItem>()))?
-                    .contains(where: { $0.taskID == id && $0.deletedAt == nil }) ?? true
+                let linkedNotes = !((try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate {
+                    $0.taskID == id && $0.deletedAt == nil
+                })).isEmpty) ?? false)
                 if !linkedNotes, let current = taskSnapshot(id), current.state == expected,
                    current.proof == proof,
                    (try? tasks.store.liveSubtaskIDs(of: id).isEmpty) == true {
@@ -949,9 +1039,12 @@ final class AgentActions {
                     refreshRemainingProofs(&journal, taskProofs: taskProofs,
                                            noteRevisions: noteRevisions, noteMetadata: noteMetadata)
                     journal.changeSet.count = journal.entries.count
+                    refreshCachedInverses(for: id, entries: journal.entries,
+                                          taskProofs: taskProofs, noteRevisions: noteRevisions, noteMetadata: noteMetadata)
                     if journal.entries.isEmpty {
                         journals[id] = nil
                         order.removeAll { $0 == id }
+                        inverseCache[id] = nil
                     } else { journals[id] = journal }
                 }
                 undoInFlight[id] = nil
@@ -976,6 +1069,8 @@ final class AgentActions {
             return entry
         }
         journal.changeSet.count = journal.entries.count
+        inverseCache[id] = nil
+        if !journal.entries.isEmpty { _ = cachedInverses(for: id, entries: journal.entries) }
         if remaining.isEmpty {
             journals[id] = nil
             order.removeAll { $0 == id }

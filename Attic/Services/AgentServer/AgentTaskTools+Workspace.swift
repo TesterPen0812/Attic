@@ -6,6 +6,7 @@ import SwiftData
 struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
     #if DEBUG
     @MainActor static var captureCount = 0
+    @MainActor static var taskRowsExamined = 0
     #endif
     let taskID: UUID?
     let noteID: UUID?
@@ -20,8 +21,13 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
         var owners: Set<WorkspaceOwner> = []
         var noteIDs = Set<UUID>()
         if let taskID {
-            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
-            let family = Set(tasks.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id)).union([taskID])
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate {
+                $0.id == taskID || $0.parentID == taskID
+            }))
+            #if DEBUG
+            taskRowsExamined += tasks.count
+            #endif
+            let family = Set(tasks.map(\.id)).union([taskID])
             owners.formUnion(family.map { .init(entity: .task, id: $0) })
             for id in family { scopes.formUnion([.children(id), .taskNotes(id), .taskAssociations(id), .preservations(id)]) }
             noteIDs.formUnion(try WorkspaceItemLifecycle.writing(taskIDs: family, in: context).map(\.id))
@@ -29,11 +35,21 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
         if let noteID { noteIDs.insert(noteID); owners.insert(.init(entity: .note, id: noteID)) }
         owners.formUnion(noteIDs.map { .init(entity: .note, id: $0) })
         for id in noteIDs { scopes.formUnion([.attachments(id), .versions(id), .noteAssociations(id), .proposals(id)]) }
-        let scopeTokens = try scopes.map { try WorkspaceScopeToken.read($0, in: context) }
+        let scoped = try WorkspaceScopeToken.read(scopes: scopes, in: context)
+        let scopeTokens = scopes.compactMap { scoped[$0] }
             .sorted { String(describing: $0.scope) < String(describing: $1.scope) }
-        owners.formUnion(scopeTokens.flatMap(\.members).map(\.owner))
-        let tokens = try owners.sorted { ($0.entity.rawValue, $0.id.uuidString) < ($1.entity.rawValue, $1.id.uuidString) }
-            .map { try WorkspaceModelToken.read($0, in: context) }
+        // The batched scope read has already fingerprinted its member families.
+        // Reuse those exact replicas for the explicit owner proof as well.
+        var byOwner: [WorkspaceOwner: WorkspaceModelToken] = [:]
+        for member in scopeTokens.flatMap(\.members) {
+            if let earlier = byOwner[member.owner], earlier != member {
+                throw WorkspaceFoundationError.conflict
+            }
+            byOwner[member.owner] = member
+        }
+        let missingOwners = owners.subtracting(byOwner.keys)
+        byOwner.merge(try WorkspaceModelToken.read(owners: missingOwners, in: context)) { earlier, _ in earlier }
+        let tokens = byOwner.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         return Self(taskID: taskID, noteID: noteID, tokens: tokens, scopes: scopeTokens)
     }
     @MainActor func isCurrent(in context: ModelContext) throws -> Bool {

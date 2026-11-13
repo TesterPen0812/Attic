@@ -5,12 +5,40 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+/// Optional off-screen evidence using the same hosted window as the behavior tests.
+@MainActor
+func captureAgentReviewWindow(_ window: NSWindow, name: String) throws {
+    guard let directory = ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"],
+          let host = window.contentView else { return }
+    host.layoutSubtreeIfNeeded()
+    let size = host.bounds.size
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+        pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    bitmap.size = size
+    host.cacheDisplay(in: host.bounds, to: bitmap)
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent(
+        URL(fileURLWithPath: directory).lastPathComponent, isDirectory: true)
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let url = destination.appendingPathComponent("\(name).png")
+    let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    try png.write(to: url)
+    let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+    attachment.name = "Review-\(name)"
+    attachment.lifetime = .keepAlways
+    XCTContext.runActivity(named: "Review render \(name)") { $0.add(attachment) }
+    print("REVIEW_RENDER \(url.path)")
+}
+
 /// A run the test drives by hand, event by event.
 @MainActor
 private final class FakeRunner: AgentRunning {
     var continuation: AsyncStream<AgentEvent>.Continuation?
     var observedContinuation: AsyncStream<AgentEvent>.Continuation?
     var retainsThread = false
+    var recoveredUndo: (UUID) -> Bool = { _ in false }
+    func canUndoRecovered(_ id: UUID) -> Bool { recoveredUndo(id) }
     var snapshot = AgentThreadSnapshot(entries: [], events: [], isRunning: false)
     var forgotten = false
     var sent: [(text: String, watching: Bool)] = []
@@ -131,6 +159,46 @@ final class AgentChatTests: XCTestCase {
 
     private func tasks(_ titles: [String]) -> [AgentTarget] {
         titles.map { AgentTarget(page: .tasks, itemID: UUID(), title: $0) }
+    }
+
+    func testR1ConnectingSavedHistoryMarksAllRowsShownBeforeRealization() {
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: (0..<160).flatMap { index in
+            [AgentThreadEntry(id: UUID(), role: "user", text: "Saved question \(index)"),
+             AgentThreadEntry(id: UUID(), role: "assistant", text: "Saved reply \(index)")]
+        }, events: [], isRunning: false)
+        model.connect(runner)
+        XCTAssertEqual(model.entries.count, 320)
+        let unseen = model.entries.filter { !model.wasShown($0.id) }.count
+        print("R1 restoredRows=\(model.entries.count) unseenBeforeRealization=\(unseen)")
+        XCTAssertEqual(unseen, 0, "Saved rows must start settled even before lazy history realizes them")
+        model.open()
+        XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
+    }
+
+    func testR5OpenChatParsingMaterializesOnlyAppendedWords() {
+        model.open()
+        let count = 2_000
+        for index in 0..<count { model.apply(.textDelta("word\(index) ")) }
+        print("R5 openDeltas=\(count) materializedWords=\(model.replyParsingWordsMaterialized)")
+        XCTAssertLessThanOrEqual(model.replyParsingWordsMaterialized, count * 4,
+                                 "Open-chat snapshots must not copy every previous word on each delta")
+        XCTAssertEqual(replies.first?.wordTimes.count, count)
+        XCTAssertNotNil(replies.first?.parsed, "Exercise the visible streaming parse")
+    }
+
+    func testR5DiscardingThreadReleasesItsPresentation() {
+        model.open()
+        for finishes in [false, true] {
+            model.draft = "A reply to discard"
+            model.send()
+            model.apply(.textDelta("A visible reply"))
+            weak var presentation = replies.last?.parsed
+            XCTAssertNotNil(presentation)
+            if finishes { model.apply(.finished) }
+            model.newChat()
+            XCTAssertNil(presentation, "Discarding a completed or cancelled thread must release its text cache")
+        }
     }
 
     func testReconnectingLiveRunnerRestoresHistoryAndReplaysInFlightStepsOnce() async {
@@ -464,6 +532,43 @@ final class AgentChatTests: XCTestCase {
             XCTAssertEqual(replies.count, 1)
             XCTAssertEqual(AgentChatWords.paragraphs(replies[0].raw), whole)
             XCTAssertEqual(replies[0].wordTimes.count, whole[0].count, "Cut at \(cut)")
+        }
+    }
+
+    func testPF30LongReplyParsingWorkTracksOnlyAppendedCharacters() async {
+        await start()
+        let chunks = (0..<160).map { "word\($0) " }
+        for chunk in chunks {
+            await emit(.textDelta(chunk))
+        }
+        await emit(.finished)
+        let total = chunks.joined().utf16.count
+        print("PF30 textUTF16=\(total) parsedUTF16=\(model.replyParsingCharactersExamined)")
+        XCTAssertLessThanOrEqual(model.replyParsingCharactersExamined, total * 2,
+                                 "Incremental streaming must not rescan growing reply prefixes")
+        XCTAssertEqual(replies.first?.wordTimes.count, 160)
+    }
+
+    func testPF30StreamingWordParserMatchesReferenceAtEveryChunkBoundary() {
+        let examples = [
+            "Now on **Friday**, your first. In **two places**: soon",
+            "**a****b** c\n\nMore **words** that join**,** later",
+            "Split stars * and **bold** and ends with *",
+            "Re**do**ing it. A \n\n blank section.\n\n\n\nLast",
+            " Leading word*** after a mark; ** several*** adjacent stars",
+            "🌈👩🏽‍💻 café e\u{301} **世界** — spaces\u{00A0} and\tlines\n\nDone"
+        ]
+        for raw in examples {
+            for cut in 0...raw.count {
+                let parser = AgentChatWords.Stream()
+                let pivot = raw.index(raw.startIndex, offsetBy: cut)
+                let first = String(raw[..<pivot]); let second = String(raw[pivot...])
+                parser.append(first)
+                XCTAssertEqual(parser.paragraphs(), AgentChatWords.paragraphs(first), "Prefix at \(cut): \(raw)")
+                parser.append(second)
+                XCTAssertEqual(parser.paragraphs(), AgentChatWords.paragraphs(raw), "Combined at \(cut): \(raw)")
+                XCTAssertEqual(parser.charactersExamined, raw.utf16.count)
+            }
         }
     }
 
@@ -1096,6 +1201,97 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testReviewFixRenders() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil else {
+            throw XCTSkip("Offscreen review renders require ATTIC_FIX_RENDER_DIR")
+        }
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: (0..<160).flatMap { index in
+            [AgentThreadEntry(id: UUID(), role: "user", text: "Saved question \(index)"),
+             AgentThreadEntry(id: UUID(), role: "assistant", text: "Saved reply \(index)")]
+        }, events: [], isRunning: false)
+        model.connect(runner)
+        model.open()
+        spin(0.7)
+        let scroll = try XCTUnwrap(findScrollView(in: window.contentView))
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin(0.02)
+        try captureAgentReviewWindow(window, name: "R1")
+
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentReviewRender").appendingPathComponent("undo.json")
+        try FileManager.default.createDirectory(at: journal.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let change = AgentChangeSet(id: UUID(), title: "Edit note", pages: [.notes], count: 1)
+        let inverse: [String: Any] = ["updatedNote": ["id": UUID().uuidString,
+            "document": Data("undecodable document".utf8).base64EncodedString(),
+            "title": "Original", "body": "Before", "revision": "fixture", "metadata": "fixture", "name": "Edit note"]]
+        let request: [String: Any] = ["changeSet": try JSONSerialization.jsonObject(with: JSONEncoder().encode(change)),
+                                      "entries": [inverse]]
+        try JSONSerialization.data(withJSONObject: ["version": 1, "requests": [request]]).write(to: journal)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        runner.recoveredUndo = { actions.canRecoverUndo($0) }
+        runner.snapshot = AgentThreadSnapshot(entries: [
+            AgentThreadEntry(id: UUID(), role: "user", text: "Edit note"),
+            AgentThreadEntry(id: UUID(), role: "receipt", text: "", changeSet: change)
+        ], events: [], isRunning: false)
+        model.connect(runner)
+        spin(0.8)
+        try captureAgentReviewWindow(window, name: "R2")
+    }
+
+    func testR5VisibleStreamingBuildsTextOnlyForAppendedWords() throws {
+        model.now = { Date(timeIntervalSince1970: 0) }
+        model.open()
+        spin(0.5)
+        AgentChatThread.replyWordsBuilt = 0
+        let count = 200
+        for index in 0..<count {
+            model.apply(.textDelta("word\(index)" + (index % 16 == 15 ? "\n\n" : " ")))
+            spin(0.002)
+        }
+        spin(0.1)
+        print("R5 renderedDeltas=\(count) wordsBuilt=\(AgentChatThread.replyWordsBuilt)")
+        XCTAssertGreaterThan(AgentChatThread.replyWordsBuilt, 0, "The real reply view must have rendered")
+        XCTAssertLessThanOrEqual(AgentChatThread.replyWordsBuilt, count * 4,
+                                 "Visible streaming must reuse completed word text across deltas")
+        model.apply(.finished)
+        spin(0.1)
+        try captureAgentReviewWindow(window, name: "R5")
+    }
+
+    func testPF30AnimatingUnchangedReplyDoesNotRebuildStaticAttributedText() {
+        model.pacing = AgentChatPacing(word: 0.05)
+        model.open()
+        spin(0.45)
+        model.apply(.textDelta((0..<180).map { "word\($0)" }.joined(separator: " ")))
+        spin(0.2)
+        AgentChatThread.replyTextBuilds = 0
+        spin(0.45)
+        print("PF30 staticTextBuildsDuringUnchangedFrames=\(AgentChatThread.replyTextBuilds)")
+        XCTAssertLessThanOrEqual(AgentChatThread.replyTextBuilds, 2,
+                                 "Frame-clock changes must only change the renderer's time")
+    }
+
+    func testPF31LongHistoryRealizesOnlyRowsNearTheViewport() {
+        for index in 0..<160 {
+            model.seedExchangeForUITesting(asked: "Archived question \(index)", reply: "Archived reply \(index)")
+        }
+        AgentChatThread.archivedRowAppearances = 0
+        model.open()
+        spin(0.75)
+        let initial = AgentChatThread.archivedRowAppearances
+        print("PF31 archivedRows=318 initialAppearances=\(initial)")
+        XCTAssertLessThan(initial, 70, "Opening a long transcript must not realize every archived row")
+
+        let scroll = findScrollView(in: window.contentView)
+        scroll?.contentView.scroll(to: .zero)
+        scroll?.reflectScrolledClipView(scroll!.contentView)
+        spin(0.2)
+        XCTAssertGreaterThan(AgentChatThread.archivedRowAppearances, initial,
+                             "Older history remains accessible when scrolling back")
+    }
+
     func testA11yChatNamesControlsAndEscapeClosesOneLevel() throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
@@ -1187,6 +1383,8 @@ final class AgentChatHostedTests: XCTestCase {
         chrome = PanelSharedChrome()
         topRow = PanelTopRowState()
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let rendering = ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil
+        let context = rendering ? AtticDesignContext(mode: .light, reduceTransparency: true) : .default
         let root = ZStack(alignment: .bottom) {
             PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout, agentChat: model)
             AgentChatHost(bar: model.bar, room: PanelComposerRoom(), model: model, layout: layout, page: .tasks, chrome: chrome,
@@ -1195,9 +1393,10 @@ final class AgentChatHostedTests: XCTestCase {
         .frame(width: 340, height: 560)
         .environment(\.panelSharedChrome, chrome)
         .environment(\.panelTopRowState, topRow)
-        .atticDesign(.default)
+        .atticDesign(context)
         window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
                           styleMask: [.borderless], backing: .buffered, defer: false)
+        if rendering { window.appearance = NSAppearance(named: .aqua) }
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: root)
         window.orderFront(nil)
@@ -1366,6 +1565,65 @@ final class AgentChatHostedTests: XCTestCase {
         spin(0.6)
     }
 
+    func testR6TallPreviousTurnRemainsRealizedDuringSendSlide() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AgentChatThread.capturesRowGeometry = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AgentChatThread.capturesRowGeometry = false
+            AgentChatThread.measuredRows.removeAll()
+        }
+        model.open()
+        spin(0.3)
+        for cycle in 0..<6 {
+            model.newChat()
+            spin(0.05)
+            model.draft = "Tall exchange \(cycle)"
+            model.send()
+            spin(0.05)
+            for index in 0..<30 {
+                let item = AgentStep(id: UUID(), title: "Completed tool \(cycle)-\(index)", kind: .read,
+                                     targets: [], state: .done)
+                model.apply(.stepStarted(item))
+                model.apply(.stepFinished(item))
+            }
+            model.apply(.textDelta("All done."))
+            model.apply(.finished)
+            spin(0.8)
+            let viewport = AgentChatThread.measuredViewport
+            let before = Dictionary(uniqueKeysWithValues: model.entries.compactMap { entry -> (UUID, CGRect)? in
+                guard let frame = AgentChatThread.measuredRows[entry.id], frame.height > 0,
+                      frame.minY >= AgentChatThread.topInset,
+                      frame.maxY <= viewport - AgentChatThread.bottomInset else { return nil }
+                return (entry.id, frame)
+            })
+            XCTAssertGreaterThan(before.count, 5, "The tall turn must have several fully visible rows")
+            model.draft = "Next exchange \(cycle)"
+            let began = ProcessInfo.processInfo.systemUptime
+            model.send()
+            spin(0.02)
+            let travel = AgentChatThread.lastOutgoingTravel
+            XCTAssertGreaterThan(travel, 20, "Exercise the approved outgoing slide")
+            for sample in 0..<4 {
+                // The animation starts after send, so this bounds how far any
+                // old row could have moved. Check only rows still fully visible.
+                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                let shift = travel * CGFloat(AgentEase.curve(0.2, 0.8, 0.2, 1, elapsed / 0.56))
+                let bottom = min(viewport, AgentChatThread.measuredViewport) - AgentChatThread.bottomInset
+                let required = Set(before.filter {
+                    $0.value.minY - shift >= AgentChatThread.topInset && $0.value.maxY <= bottom
+                }.keys)
+                let missing = required.subtracting(AgentChatThread.realizedArchivedRows)
+                print("R6 cycle=\(cycle) sample=\(sample) before=\(before.count) checked=\(required.count) missing=\(missing.count)")
+                XCTAssertTrue(missing.isEmpty, "Visible rows must remain realized during the outgoing slide")
+                if cycle == 0, sample == 0 { try captureAgentReviewWindow(window, name: "R6") }
+                spin(0.015)
+            }
+            model.apply(.finished)
+            spin(0.6)
+        }
+    }
+
     func testTheSecondMessageLandsWhereTheFirstDid() {
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
@@ -1472,6 +1730,25 @@ final class AgentChatFXTests: XCTestCase {
             fx.advance(to: date)
         }
         spin(0.01)
+    }
+
+    func testPF41CompletedFlightReleasesCallbackAndRetainsReversibleGeometry() {
+        final class Lifetime {}
+        let fx = AgentChatFX()
+        let step = UUID()
+        weak var held: Lifetime?
+        do {
+            let lifetime = Lifetime()
+            held = lifetime
+            fx.fly(step: step, [(title: "Move", row: CGRect(x: 10, y: 10, width: 150, height: 30),
+                                 to: CGPoint(x: 150, y: 180), onLand: { _ = lifetime })])
+        }
+        run(fx, seconds: 3)
+        XCTAssertEqual(fx.retainedHistoryCount, 1)
+        print("PF41 completed retainedCallbackAlive=\(held == nil ? 0 : 1)")
+        XCTAssertNil(held, "The completed flight releases captures once it lands")
+        fx.undo(steps: [step])
+        XCTAssertGreaterThan(fx.liveCount, 0, "The retained geometry still flies home")
     }
 
     func testAnOpenChatAtRestGoesIdleAndAnEffectWakesIt() {
