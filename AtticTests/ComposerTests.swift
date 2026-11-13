@@ -11,14 +11,11 @@ import XCTest
 @MainActor
 final class ComposerTests: XCTestCase {
     func testR1PendingTaskExplainsBothSubmitRoutesAndKeepsCreateEnabled() async throws {
-        print("REVIEW_HOST_PID \(ProcessInfo.processInfo.processIdentifier)")
         model.open(on: .tasks(.now))
         type("Pending task")
         page.addBarState.stagingFiles = 1
-        try renderPendingComposerIfRequested("waiting")
         XCTAssertTrue(model.canCreate, "Create must remain reachable so it can explain why the draft is waiting")
         model.submit()
-        try renderPendingComposerIfRequested("submitted")
         XCTAssertEqual(page.toasts.current?.message, "Preparing files · try again in a moment")
         page.toasts.dismiss()
         let created = await model.create()
@@ -111,34 +108,6 @@ final class ComposerTests: XCTestCase {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(ready(), "provider/submission must settle")
-    }
-
-    private func renderPendingComposerIfRequested(_ state: String) throws {
-        guard let phase = ProcessInfo.processInfo.environment["ATTIC_REVIEW_RENDER"] else { return }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DNMReviewRenders")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let toast = page.toasts.current
-        let view = NSHostingView(rootView: VStack(spacing: 16) {
-            if let toast {
-                AtticUndoToast(message: toast.message, actionTitle: toast.actionTitle, onUndo: {})
-            }
-            ComposerCard(model: model)
-        }.padding(20).frame(width: 420, height: 220).background(Color(nsColor: .windowBackgroundColor))
-            .atticDesign(AtticDesignContext(mode: .light, reduceTransparency: true)))
-        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 420, height: 220),
-            styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-        windows.append(window)
-        view.layoutSubtreeIfNeeded()
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 840, pixelsHigh: 440,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-        bitmap.size = view.bounds.size
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            .write(to: root.appendingPathComponent("\(phase)-\(state).png"))
-        print("R1_RENDERS \(root.path)")
     }
 
     func testComposerCannotSubmitWhileFirstDraftFileProviderIsStillStaging() async throws {
