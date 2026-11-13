@@ -194,6 +194,12 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Smallest fix: retain a bounded set of dirty paragraph ranges and a prefix-sum/rope-style offset index, reproject only affected independent blocks; use full validated projection for genuinely structural edits. Preserve ordered blocks, rich formatting, attachment identities, fold metadata, composition/IME and exact durable snapshots. Confidence: high in the specified invalidation/fallback path; medium on its contribution to perceived typing lag.
 - Mac measurement: count full and incremental projections, UTF-16 visited, paragraph offsets touched and run-due-save main-thread span; type in the same versus two different paragraphs within a coalescing interval and compare 100/10,000 blocks, including structural edits and emoji. Guard test: K edits to K independent paragraphs before a save project only changed blocks and logarithmic offset updates, while the resulting document exactly matches full codec projection; explicitly test newlines, attachments and marked text.
 
+### DP-22 (P1 for very large code blocks): changing one character re-tokenizes the entire code block for rendering
+- Chain: `Attic/Notes/Engine/NoteEditorTextView.swift:229–261, 285–335` → `Attic/Notes/Engine/NoteEditorEngine.swift:4934–4942` → `Attic/Notes/Engine/NoteSyntaxHighlighter.swift:49–68, 169–185`. After character edits, the rendering validator identifies the block, obtains the whole block substring and asks a cache keyed by the entire text. A changed block has a new key, so the next validated code fragment scans the complete block on the main actor, then maps its tokens to document offsets. Memoization avoids rescanning the same unchanged block on every fragment, and the cache is byte/entry bounded; do not claim each visible fragment independently tokenizes it or that the cache is unbounded.
+- Scaling: O(code-block UTF-16 length + tokens) on a cache miss, potentially once per rendered edit; several blocks can invalidate the single last-block memo and require repeated mapping even if tokenization hits cache. TextKit controls the actual validation frequency. This is syntax rendering, not PF-12's paragraph-attribute rewrite or DP-21's saved document projection.
+- Smallest fix: incrementally lex from an edit to a stable lexical state, cache relative token ranges by block and preserve multiline string/comment state; keep a correct full-block fallback. Avoid mutating persisted text or Undo for presentation. Confidence: high in miss path, medium in real edit/validation frequency and latency.
+- Mac measurement: count cache hits/misses, UTF-16 scanned, token mappings, validator calls and input-to-frame for 1 KB/100 KB/1 MB code blocks while typing at beginning/middle/end, with multiline comments and several blocks. Guard test: a local edit in a long block without lexical-state change scans a bounded neighborhood, produces exactly the full scanner's tokens, and propagates correctly when a quote/comment delimiter changes.
+
 ## Provisional top 15 and coverage checkpoint
 
 This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
@@ -202,7 +208,8 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 2. **DP-5** scrolling geometry reports proportional to realized rows.
 3. **DP-6** native menu anchors per realized Tasks row under AX.
 4. **DP-8** synchronous approach warmup if it overlaps an input.
-5. **DP-19** whole Draw AX navigation rebuild during text edits on a large board.
+5. **DP-21/DP-22** long-note projection and large code-block tokenization (depending on content).
+6. **DP-19** whole Draw AX navigation rebuild during text edits on a large board.
 6. **DP-3** width-triggered Notes table remeasurement on large tables.
 7. **DP-16** Notes row anchors, focusable controls and global-revision invalidation.
 8. **DP-17** conditional Genie capture near first input, especially at larger panel sizes.
@@ -211,8 +218,7 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 11. **DP-2** separate island-window positioning and glass work during resize.
 12. **DP-4** Draw coverage traversal on each frame-size call for large scenes.
 13. **DP-12** full inline tag candidates in tag-heavy rows.
-14. **DP-9** folded-heading viewport work in long notes.
-15. **DP-14** repeated Calendar grid and agenda filtering in dense calendars.
+14. **DP-9/DP-14** folded-heading viewport work and dense Calendar filtering.
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-8 and DP-16/DP-17 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
@@ -225,4 +231,4 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 - At scale count Draw AX object visits/sorts per keystroke; task deletion fetches and rows per root; tag-bar controls and candidate measurements; Calendar filter comparisons; long-note heading comparisons. Each finding above gives a non-wall-clock guard test.
 
 ### Coverage and where to continue
-21 source-backed suspects; severity and order provisional. The three owner paths have initial call-chain and measurement plans, not exhaustive event-to-presentation traces. I inspected selected files in Window, Tasks, DesignSystem, Notes, Draw, Calendar, Agent, Services, Workspace, Composer and Settings. **No folder has been read fully file by file.** Remaining: the rest of these folders and every other app folder, helper and script; launch, wake/display changes, idle/lifetime retention, menus, all editor/table operations, Canvas/Draw interactions, all composer and Calendar flows, MCP method-by-method and helper lifecycle. Complete those areas before calling this an exhaustive audit. Dormant mobile/CloudKit intentionally excluded; no Mac build, profiling or app code changes. Continue checkpointing.
+22 source-backed suspects; severity and order provisional. The three owner paths have initial call-chain and measurement plans, not exhaustive event-to-presentation traces. I inspected selected files in Window, Tasks, DesignSystem, Notes, Draw, Calendar, Agent, Services, Workspace, Composer and Settings. **No folder has been read fully file by file.** Remaining: the rest of these folders and every other app folder, helper and script; launch, wake/display changes, idle/lifetime retention, menus, all editor/table operations, Canvas/Draw interactions, all composer and Calendar flows, MCP method-by-method and helper lifecycle. Complete those areas before calling this an exhaustive audit. Dormant mobile/CloudKit intentionally excluded; no Mac build, profiling or app code changes. Continue checkpointing.
