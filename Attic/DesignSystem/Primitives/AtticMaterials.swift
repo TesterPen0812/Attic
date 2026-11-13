@@ -679,12 +679,15 @@ struct AtticHighlight: View {
     var run: AtticSelectionRun = .single
     /// Half the gap between rows, covered where the run continues.
     var joinOverlap: CGFloat = (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2
+    /// Apple's continuous curve even under the panel design's corners: Task
+    /// and Notes rows (Corners, Accepted 2026-11-13).
+    var continuous = false
 
     @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
         Group {
-            if cornerExponent != nil {
+            if cornerExponent != nil, !continuous {
                 // The panel design's row: a surface, so a squircle
                 // (Shapes, Accepted 2026-10-30).
                 Squircle(cornerRadius: cornerRadius, exponent: AtticShape.surfaceExponent,
@@ -728,11 +731,13 @@ struct AtticRowHighlight: View {
     var body: some View {
         switch style {
         case let .fill(fill):
-            AtticHighlight(fill: fill, cornerRadius: cornerRadius, run: run, joinOverlap: joinOverlap)
+            AtticHighlight(fill: fill, cornerRadius: cornerRadius, run: run, joinOverlap: joinOverlap, continuous: true)
         case .raisedChip:
+            // Rows are on Apple's continuous curve (Corners, Accepted
+            // 2026-11-13), in the panel design as everywhere else.
             Color.clear
                 .atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false, edgeLight: true)
-                .environment(\.atticControlCornerExponent, cornerExponent == nil ? nil : AtticShape.surfaceExponent)
+                .environment(\.atticControlCornerExponent, nil)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
@@ -745,13 +750,16 @@ struct AtticFocusRing: View {
     let cornerRadius: CGFloat
     var gap: CGFloat = AtticRingMetrics.gap
     var width: CGFloat = AtticRingMetrics.width
+    /// Follows a shape on Apple's continuous curve (rows, Calendar events)
+    /// even under the panel design's corners.
+    var continuous = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
         let outset = gap + width
-        AtticControlShape.shape(cornerRadius: AtticRadius.ring(around: cornerRadius, offset: outset), exponent: cornerExponent)
+        AtticControlShape.shape(cornerRadius: AtticRadius.ring(around: cornerRadius, offset: outset), exponent: continuous ? nil : cornerExponent)
             .strokeBorder(design.tokens.focusRing.color, lineWidth: width)
             .padding(-outset)
             .allowsHitTesting(false)
@@ -761,9 +769,9 @@ struct AtticFocusRing: View {
 
 extension View {
     /// Draws the focus ring around this view when `visible`.
-    func atticFocusRing(_ visible: Bool, cornerRadius: CGFloat) -> some View {
+    func atticFocusRing(_ visible: Bool, cornerRadius: CGFloat, continuous: Bool = false) -> some View {
         overlay {
-            if visible { AtticFocusRing(cornerRadius: cornerRadius) }
+            if visible { AtticFocusRing(cornerRadius: cornerRadius, continuous: continuous) }
         }
     }
 }

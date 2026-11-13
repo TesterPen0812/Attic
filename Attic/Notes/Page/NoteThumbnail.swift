@@ -12,10 +12,13 @@ struct NoteThumbnailContent: Hashable, Sendable {
 
 /// The design's sizes, in points (the drawing is at 2×: px ÷ 2).
 enum NoteThumbnailMetrics {
-    /// The card: 48 × 60 px, a small object (Shapes: 12 px, squircle).
+    /// The card: 48 × 60 px, concentric with its row (Corners C, Accepted
+    /// 2026-11-13): the row's 16 pt less the 6 pt between them, on Apple's
+    /// continuous curve (nil exponent).
     static let size = CGSize(width: 24, height: 30)
-    static let radius: CGFloat = AtticRadius.small
-    static let cornerExponent: CGFloat = AtticShape.surfaceExponent
+    static let radius: CGFloat = AtticRadius.concentric(outer: NotesLibraryRowMetrics.radius, padding: NotesLibraryRowMetrics.thumbnailInset)
+    static let cornerExponent: CGFloat? = nil
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: radius, exponent: cornerExponent) }
     /// Padding 6 px top and bottom, 5 px at the sides; parts 2 px apart.
     static let paddingY: CGFloat = 3
     static let paddingX: CGFloat = 2.5
@@ -100,7 +103,7 @@ final class NoteThumbnailCache {
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: scale, y: -scale)
         let card = CGRect(origin: CGPoint(x: m.margin, y: m.margin), size: m.size)
-        let shape = Squircle(cornerRadius: m.radius, exponent: m.cornerExponent).path(in: card).cgPath
+        let shape = m.shape.path(in: card).cgPath
         let colours = Colours(dark: key.dark)
 
         // The card, its shadow and its 1 px edge.
@@ -139,8 +142,7 @@ final class NoteThumbnailCache {
         NSGraphicsContext.restoreGraphicsState()
         context.restoreGState()
 
-        context.addPath(Squircle(cornerRadius: m.radius, exponent: m.cornerExponent)
-            .path(in: card.insetBy(dx: 0.25, dy: 0.25)).cgPath)
+        context.addPath(m.shape.path(in: card.insetBy(dx: 0.25, dy: 0.25)).cgPath)
         context.setStrokeColor(colours.edge)
         context.setLineWidth(0.5)
         context.strokePath()

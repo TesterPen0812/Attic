@@ -2319,12 +2319,11 @@ struct TasksPage: View {
         // More › │ Remove from Tasks, Delete. Copy and Duplicate live in
         // More ›, with Add Files… and Move Up/Down; a selection, which has
         // no More ›, keeps them on the root.
-        // Option seam (menu review #8, `ATTIC_UI_TEST_MENU_GROUPING`; today
-        // in every other build): B moves Move to Backlog into Date, Tags,
-        // Priority and puts More with Delete; C also joins the open group
-        // to Complete's.
-        let regroup = single ? AtticMenuLookSeam.grouping : .today
-        var opensGroup = regroup != .c
+        // Four groups for one task (Menu look picks B, Accepted 2026-11-13):
+        // Move to Backlog (or Now) joins Date, Tags and Priority, and More
+        // joins Remove from Tasks and Delete. A selection keeps its groups.
+        let fourGroups = single
+        var opensGroup = true
         if single, opensTaskNotes {
             // Open Page (One item: owner answers, 2026-10-23, answer 3):
             // ⌘Return, a title click and VoiceOver open the same page.
@@ -2358,12 +2357,12 @@ struct TasksPage: View {
         list.append(.submenu(String(localized: "Priority"), priorityCommands(key, targets: targets)))
         if tab == .backlog {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later,
-                                         startsSection: regroup == .today) {
+                                         startsSection: !fourGroups) {
                 menuCommand(key) { [weak model] targets in model?.moveToNow(targets) ?? .failed(.taskGone) }
             })
         } else if tab == .now {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Backlog"), shortcut: AtticTaskShortcut.later,
-                                         startsSection: regroup == .today) {
+                                         startsSection: !fourGroups) {
                 menuCommand(key) { [weak model] targets in model?.moveToBacklog(targets) ?? .failed(.taskGone) }
             })
         }
@@ -2404,7 +2403,7 @@ struct TasksPage: View {
                 if !canMove(id, by: 1) { down = down.disabled(because: String(localized: "Already at the bottom")) }
                 more += [up, down]
             }
-            list.append(.submenu(String(localized: "More"), startsSection: (tab != .now && tab != .backlog) || regroup != .today, more))
+            list.append(.submenu(String(localized: "More"), startsSection: (tab != .now && tab != .backlog) || fourGroups, more))
         } else {
             list += [copy, duplicate]
         }
@@ -2416,11 +2415,11 @@ struct TasksPage: View {
             closing = TaskNoteConversion.commands(taskID: id, hasWriting: true,
                 isSubtask: store.listedTask(withID: id)?.parentID != nil, add: {}, remove: { remove(id) })
         }
-        if !closing.isEmpty { closing[0].startsSection = regroup == .today }
+        if !closing.isEmpty { closing[0].startsSection = !fourGroups }
         list += closing
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
                                      systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true,
-                                     startsSection: closing.isEmpty && regroup == .today) {
+                                     startsSection: closing.isEmpty && !fourGroups) {
             // A menu's Delete key equivalent never reaches past a field
             // that is typing (round 5, the owner's blocker).
             guard !AtticTextInput.ownsCurrentKey else { return }

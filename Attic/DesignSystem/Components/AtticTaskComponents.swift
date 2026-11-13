@@ -1382,7 +1382,9 @@ struct AtticJoinedSelectedRuns: View {
                 ForEach(Self.joined(pieces)) { group in
                     Color.clear
                         .frame(width: group.frame.width, height: group.frame.height)
-                        .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius, interactive: false, edgeLight: true)
+                        .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius(height: group.frame.height), interactive: false, edgeLight: true)
+                        // The rows' continuous curve (Corners, Accepted 2026-11-13).
+                        .environment(\.atticControlCornerExponent, nil)
                         .position(x: group.frame.midX, y: group.frame.midY)
                 }
             }
@@ -1535,7 +1537,7 @@ struct AtticTaskRow: View {
                         // horizontal seams and rounds their inner corners.
                         Color.clear.allowsHitTesting(false).accessibilityHidden(true)
                     } else {
-                        AtticRowHighlight(style: highlight, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
+                        AtticRowHighlight(style: highlight, cornerRadius: d.radius(height: highlightHeight), run: isSelected ? selectionRun : .single, joinOverlap: 0)
                     }
                 }
                 if dropLabel != nil {
@@ -1651,7 +1653,7 @@ struct AtticTaskRow: View {
             if showsFocusRing {
                 // L2: one 1 pt line on the highlight's own edge.
                 let line = AtticRingMetrics.rowLineWidth
-                AtticFocusRing(cornerRadius: d.radius - line, gap: 0, width: line)
+                AtticFocusRing(cornerRadius: d.radius(height: highlightHeight) - line, gap: 0, width: line, continuous: true)
                     .frame(height: highlightHeight - line * 2)
                     .padding(.horizontal, AtticLayout.rowHighlightInset + line)
                     .padding(.top, line)
@@ -1689,7 +1691,7 @@ struct AtticTaskRow: View {
         .coordinateSpace(Self.space)
         .atticControlProbe(
             twoLine ? "Task row (details)" : "Task row", id: probeID,
-            expectedSize: CGSize(width: 0, height: pitch), radius: TasksRowDesign.radius, expectedRadius: TasksRowDesign.radius
+            expectedSize: CGSize(width: 0, height: pitch), radius: d.radius(height: pitch), expectedRadius: AtticRadius.row(height: pitch)
         )
     }
 
@@ -2523,7 +2525,7 @@ struct AtticQuickLook: View {
                     } ?? 0)
                     .background {
                         if drag?.id == subtask.id {
-                            Squircle(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent).fill(design.tokens.recessed.color)
+                            AtticReorderLiftModifier.shape.fill(design.tokens.recessed.color)
                                 .offset(y: translation)
                         }
                     }

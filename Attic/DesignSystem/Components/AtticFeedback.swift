@@ -684,9 +684,10 @@ struct AtticReorderLiftModifier: ViewModifier {
 
     /// The lifted card's outline: the drag tile a task leaves as (in the
     /// panel, the image the drag carries and the card springing home).
-    /// A row's squircle (Shapes, Accepted 2026-10-30: rows 24 px), the
-    /// task row's own highlight (`TasksRowDesign.radius`).
-    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent) }
+    /// The task row's own highlight (`TasksRowDesign.radius`): 16 pt on
+    /// Apple's continuous curve (Corners, Accepted 2026-11-13), which caps
+    /// itself at half a short card's height.
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.row, exponent: nil) }
 
     /// The lifted card's fill: the panel's base colour, fully opaque.
     static func fill(design: AtticDesignContext) -> AtticRGBA {

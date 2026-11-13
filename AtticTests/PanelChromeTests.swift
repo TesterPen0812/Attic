@@ -73,9 +73,14 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(PanelCornerSize.defaultValue, 52, "104 px panel")
         XCTAssertEqual(AtticRadius.card, 24, "48 px cards (owner, 2026-10-31)")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card, "Calendar day cards use the card token")
-        XCTAssertEqual(AtticRadius.row, 12)
-        XCTAssertEqual(TasksRowDesign.radius, 12)
-        XCTAssertEqual(NotesLibraryRowMetrics.radius, 12)
+        // Corners (Accepted 2026-11-13): rows 16 on the continuous curve,
+        // never rounder than half their height.
+        XCTAssertEqual(AtticRadius.row, 16)
+        XCTAssertEqual(AtticRadius.row(height: 28), 14)
+        XCTAssertEqual(TasksRowDesign.radius, 16)
+        XCTAssertEqual(NotesLibraryRowMetrics.radius, 16)
+        XCTAssertEqual(NotesLibraryRowMetrics.thumbnailInset, 6)
+        XCTAssertEqual(CalendarDesign.eventRadius, 17.5, "24 − 6.5")
         XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
         XCTAssertEqual(AtticRadius.popover, 16)
         XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 18, "the picker cards: the glass menu's 18 pt (Accepted 2026-11-10)")
@@ -86,8 +91,8 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticRadius.noteBlock, 10)
         XCTAssertEqual(AtticNoteObjectMetrics.blockRadius, 10)
         XCTAssertEqual(AtticRadius.small, 6)
-        XCTAssertEqual(NoteThumbnailMetrics.radius, 6)
-        XCTAssertEqual(NoteThumbnailMetrics.cornerExponent, AtticShape.surfaceExponent)
+        XCTAssertEqual(NoteThumbnailMetrics.radius, 10, "concentric in its row: 16 − 6")
+        XCTAssertNil(NoteThumbnailMetrics.cornerExponent, "Apple's continuous curve")
         XCTAssertEqual(TasksDesignMetrics.tileRadius, 6)
         // Concentric nesting.
         XCTAssertEqual(AtticRadius.formatSheet, 19, "24 + 14 px")
@@ -748,6 +753,22 @@ final class PanelChromeTests: XCTestCase {
                        file: file, line: line)
     }
 
+    /// Apple's continuous rounded rectangle (Corners, Accepted 2026-11-13),
+    /// told apart from the surface squircle at the same radius.
+    private func assertContinuousOutline(_ shape: AtticControlOutline, in size: CGSize, radius: CGFloat,
+                                         _ name: String, file: StaticString = #filePath, line: UInt = #line) {
+        let rect = CGRect(origin: .zero, size: size)
+        let box = min(radius + 2, size.width / 2, size.height / 2)
+        let expected = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+        let squircle = Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: rect)
+        XCTAssertGreaterThan(cornerDifferences(expected, squircle, in: rect, box: box), 4, "\(name): the grid tells the two apart",
+                             file: file, line: line)
+        XCTAssertNil(shape.exponent, "\(name): continuous", file: file, line: line)
+        XCTAssertEqual(shape.cornerRadius, radius, "\(name): radius", file: file, line: line)
+        XCTAssertEqual(cornerDifferences(shape.path(in: rect), expected, in: rect, box: box), 0, "\(name): the shape",
+                       file: file, line: line)
+    }
+
     private func withSystemLooksStated(_ body: () throws -> Void) rethrows {
         // GitHub's runners turn both on; these shapes must not depend on them.
         AtticMotionPreference.systemReduceMotionOverride = false
@@ -795,15 +816,17 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
-    func testTheDragTilesAreRowSquircles() {
+    func testTheDragTilesAreTheRowsContinuousShape() {
         withSystemLooksStated {
             let surface = AtticShape.surfaceExponent
-            assertOutline(AtticReorderLiftModifier.shape, in: CGSize(width: 288, height: 36), radius: AtticRadius.row,
-                          exponent: surface, "the lifted task")
-            assertOutline(AtticCarryPreview.cardShape, in: CGSize(width: 200, height: 36), radius: AtticRadius.row,
-                          exponent: surface, "the carry card")
-            assertOutline(TasksDragOut.labelShape, in: CGSize(width: 140, height: 28), radius: AtticRadius.row,
-                          exponent: surface, "the drag label")
+            assertContinuousOutline(AtticReorderLiftModifier.shape, in: CGSize(width: 288, height: 36), radius: AtticRadius.row,
+                                    "the lifted task")
+            assertContinuousOutline(AtticCarryPreview.cardShape, in: CGSize(width: 200, height: 36), radius: AtticRadius.row,
+                                    "the carry card")
+            assertContinuousOutline(TasksDragOut.labelShape, in: CGSize(width: 140, height: 28), radius: AtticRadius.row,
+                                    "the drag label")
+            assertContinuousOutline(NoteThumbnailMetrics.shape, in: NoteThumbnailMetrics.size, radius: NoteThumbnailMetrics.radius,
+                                    "the note thumbnail")
             // A file dragged over a note carries the file card's look.
             assertOutline(AtticNoteObjectMetrics.cardShape,
                           in: CGSize(width: AtticNoteObjectMetrics.carryWidth, height: AtticNoteObjectMetrics.carryHeight),

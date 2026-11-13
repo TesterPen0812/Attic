@@ -140,7 +140,8 @@ final class AtticGlassMenu {
         }
         let menu = AtticGlassMenu(commands, appearance: window.effectiveAppearance, opener: opener)
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
-        let panel = AtticMenuLookSeam.keepsInsidePanel ? (window as? AtticPanel)?.visibleContentFrame : nil
+        // Kept inside the panel when it fits (Menu look picks, placement B).
+        let panel = (window as? AtticPanel)?.visibleContentFrame
         menu.open(screen, visible: visible, source: window, container: window.frame, panel: panel)
         current = menu
         let info: [AnyHashable: Any]? = opener.map { [openerKey: $0] }
@@ -251,14 +252,17 @@ final class AtticGlassMenu {
         return (NSRect(x: x, y: top - height, width: size.width, height: height), corner)
     }
 
-    /// Option seam (menu review #2, `ATTIC_UI_TEST_MENU_PLACEMENT=panel`):
-    /// the card kept inside the panel's visible surface, 8 pt in, when it
-    /// fits there. From a point it flips left and moves up; from a control
-    /// it stays on its side, or flips to the other side when only that
-    /// fits, never covering the control. Otherwise today's screen rule.
+    /// Placement B (Menu look picks, Accepted 2026-11-13): the card kept
+    /// inside the panel's visible surface, 8 pt in, when it fits there
+    /// without covering what opened it. From a point (a right-clicked row)
+    /// it flips left, and opens upward from the pointer when it can't fit
+    /// below; it never slides over the pointer's row. From a control it
+    /// stays on its side, or flips to the other side when only that fits,
+    /// never covering the control. Otherwise the screen rule, hanging past
+    /// the panel as before.
     static func keptInside(panel: NSRect, _ placed: (frame: NSRect, corner: Corner),
                            placement: ScreenPlacement) -> (frame: NSRect, corner: Corner) {
-        let inner = panel.insetBy(dx: AtticMenuLookSeam.panelInset, dy: AtticMenuLookSeam.panelInset)
+        let inner = panel.insetBy(dx: AtticMenuMetrics.panelInset, dy: AtticMenuMetrics.panelInset)
         var frame = placed.frame
         guard frame.height <= inner.height, frame.width <= inner.width else { return placed }
         var corner = placed.corner
@@ -266,10 +270,19 @@ final class AtticGlassMenu {
         switch placement {
         case let .point(point):
             if frame.maxX > inner.maxX { frame.origin.x = point.x - frame.width }
-            if frame.minY < inner.minY { frame.origin.y = inner.minY }
-            if frame.maxY > inner.maxY { frame.origin.y = inner.maxY - frame.height }
+            // Below the pointer, or above it; never over it (the owner
+            // turned down lifting the task menu over its own task).
+            let fitsBelow = point.y - frame.height >= inner.minY && point.y <= inner.maxY
+            let fitsAbove = point.y + frame.height <= inner.maxY && point.y >= inner.minY
+            if fitsBelow {
+                frame.origin.y = point.y - frame.height
+            } else if fitsAbove {
+                frame.origin.y = point.y
+            } else {
+                return placed
+            }
             let flipped = frame.minX < point.x - 0.5
-            let fromTop = frame.maxY >= point.y - 0.5
+            let fromTop = fitsBelow
             corner = fromTop ? (flipped ? .topTrailing : .topLeading) : (flipped ? .bottomTrailing : .bottomLeading)
         case let .below(rect):
             let gap = AtticMenuMetrics.anchorGap
@@ -779,19 +792,13 @@ struct AtticGlassMenuStyle {
         title.withAlphaComponent(title.alphaComponent * (design.increaseContrast ? 0.5 : 0.3))
     }
     var destructive: NSColor {
-        switch AtticMenuLookSeam.red {
-        case .today:
-            return colourInk(tokens.ink(.dueText)).nsColor
-        case .system:
-            var red = NSColor.systemRed
-            NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
-                red = NSColor.systemRed.usingColorSpace(.sRGB) ?? red
-            }
-            return red
-        case .menu:
-            return dark ? NSColor(srgbRed: 1, green: 0x6F / 255, blue: 0x61 / 255, alpha: 1)
-                        : NSColor(srgbRed: 0xC4 / 255, green: 0x2B / 255, blue: 0x1C / 255, alpha: 1)
+        // The system red in Light and Dark (Menu look picks B, Accepted
+        // 2026-11-13).
+        var red = NSColor.systemRed
+        NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            red = NSColor.systemRed.usingColorSpace(.sRGB) ?? red
         }
+        return red
     }
     /// The highlight: 8 % ink (16 % under Increase Contrast).
     var highlight: NSColor {
@@ -845,6 +852,10 @@ enum AtticGlassMenuShape {
     static let radius: CGFloat = AtticMenuMetrics.cardRadius
     static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowRadius: CGFloat = AtticMenuMetrics.highlightRadius
+    /// The highlight on a row this tall: 12 pt, or half the row when that
+    /// is smaller (Corners B, Accepted 2026-11-13), so a shorter row (the
+    /// DEBUG row-height seam) stays a capsule at most.
+    static func rowRadius(height: CGFloat) -> CGFloat { min(rowRadius, height / 2) }
     /// Loam's card: Apple's continuous rounded rectangle at 18 pt. Attic's
     /// surface squircle at 18 pt read as tight, ~8 pt corners (owner, 11 Nov).
     static var card: RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
@@ -979,7 +990,7 @@ final class AtticGlassMenuCard {
         var kinds: [Entry.Kind] = []
         for (index, command) in commands.enumerated() {
             if command.isHeader {
-                if index > 0, AtticMenuLookSeam.sections != .headerOnly { kinds.append(.separator) }
+                if index > 0 { kinds.append(.separator) }
                 kinds.append(.header(command.title))
                 widest = max(widest, m.rowPadding * 2 + ceil(measure(command.title, AtticGlassMenuStyle.headerFont)))
                 continue
@@ -992,12 +1003,12 @@ final class AtticGlassMenuCard {
         var y = AtticGlassMenuShape.inset
         var entries: [Entry] = []
         let fit = min(m.maxWidth, ceil(widest + AtticGlassMenuShape.inset * 2))
-        let width = max(AtticMenuLookSeam.minWidth, minimum.rounded(.up), declared ?? 0, fit)
+        let width = max(m.minWidth, minimum.rounded(.up), declared ?? 0, fit)
         for kind in kinds {
             let height: CGFloat
             switch kind {
-            case .item: height = AtticMenuLookSeam.rowHeight
-            case .header: height = AtticMenuLookSeam.headerHeight(first: entries.isEmpty)
+            case .item: height = m.rowHeight
+            case .header: height = m.headerHeight
             case .separator: height = m.separatorHeight
             }
             entries.append(Entry(kind: kind, frame: NSRect(x: AtticGlassMenuShape.inset, y: y, width: width - AtticGlassMenuShape.inset * 2, height: height)))
@@ -1463,71 +1474,6 @@ enum AtticMenuSurfaceSeam {
     nonisolated static var cardSizedGlass: Bool { flags.contains("cardsize") }
 }
 
-/// Option seams for the menu-look sheet (menu review, 12 Nov): one
-/// environment value per taste call, each changing one thing and
-/// defaulting to today's look (DEBUG, a preview identity with
-/// `ATTIC_UI_TESTING=1` only). Remove once the owner has picked.
-/// `ATTIC_UI_TEST_MENU_ROWS=32|28|26` (row height),
-/// `…_SECTIONS=a|b|c` (divider and header | header only, 30 pt after a
-/// group | both, 22 pt header), `…_WIDTH=216|200|184` (minimum width),
-/// `…_PLACEMENT=screen|panel`, `…_GROUPING=a|b|c` (the task row's menu),
-/// `…_RED=a|b|c` (dueText | systemRed | a menu-only red).
-enum AtticMenuLookSeam {
-    enum Sections { case today, headerOnly, tighter }
-    enum Grouping { case today, b, c }
-    enum Red { case today, system, menu }
-
-    #if DEBUG
-    nonisolated static let values: [String: String] = {
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier) else { return [:] }
-        return environment.filter { $0.key.hasPrefix("ATTIC_UI_TEST_MENU_") }
-    }()
-    #else
-    nonisolated static let values: [String: String] = [:]
-    #endif
-
-    nonisolated static var rowHeight: CGFloat { number("ATTIC_UI_TEST_MENU_ROWS") ?? AtticMenuMetrics.rowHeight }
-    nonisolated static var minWidth: CGFloat { number("ATTIC_UI_TEST_MENU_WIDTH") ?? AtticMenuMetrics.minWidth }
-    nonisolated static var sections: Sections {
-        switch values["ATTIC_UI_TEST_MENU_SECTIONS"] {
-        case "b": .headerOnly
-        case "c": .tighter
-        default: .today
-        }
-    }
-    /// B: the first header 24 pt, one after a group 30 pt (its extra room
-    /// does the separating); C: 22 pt; both with text 4 pt off the bottom.
-    nonisolated static func headerHeight(first: Bool) -> CGFloat {
-        switch sections {
-        case .today: AtticMenuMetrics.headerHeight
-        case .headerOnly: first ? 24 : 30
-        case .tighter: 22
-        }
-    }
-    nonisolated static var headerBottom: CGFloat { sections == .today ? AtticMenuMetrics.headerBottom : 4 }
-    nonisolated static var keepsInsidePanel: Bool { values["ATTIC_UI_TEST_MENU_PLACEMENT"] == "panel" }
-    nonisolated static let panelInset: CGFloat = 8
-    nonisolated static var grouping: Grouping {
-        switch values["ATTIC_UI_TEST_MENU_GROUPING"] {
-        case "b": .b
-        case "c": .c
-        default: .today
-        }
-    }
-    nonisolated static var red: Red {
-        switch values["ATTIC_UI_TEST_MENU_RED"] {
-        case "b": .system
-        case "c": .menu
-        default: .today
-        }
-    }
-
-    private nonisolated static func number(_ key: String) -> CGFloat? {
-        values[key].flatMap(Double.init).map { CGFloat($0) }
-    }
-}
-
 extension AtticGlassMenu {
     /// Closes the cards after `index` (the keyboard moved off a submenu's
     /// row).
@@ -1818,6 +1764,7 @@ final class AtticGlassMenuView: NSView {
             highlight.isHidden = true
             return
         }
+        highlight.layer?.cornerRadius = AtticGlassMenuShape.rowRadius(height: frame.height)
         guard let layer = highlight.layer, animated, !highlight.isHidden, highlight.frame != frame else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -1873,7 +1820,7 @@ final class AtticGlassMenuView: NSView {
             Self.separatorRect(in: frame, scale: window?.backingScaleFactor ?? layer?.contentsScale ?? 2).fill()
         case let .header(title):
             let font = AtticGlassMenuStyle.headerFont
-            let y = frame.maxY - AtticMenuLookSeam.headerBottom - (font.ascender - font.descender)
+            let y = frame.maxY - m.headerBottom - (font.ascender - font.descender)
             drawText(title, in: NSRect(x: frame.minX + m.rowPadding, y: y, width: frame.width - m.rowPadding * 2,
                                        height: font.ascender - font.descender), font: font, color: style.header)
         case let .item(command):

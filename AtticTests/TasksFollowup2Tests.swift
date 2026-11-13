@@ -90,9 +90,11 @@ final class TasksFollowup2Tests: XCTestCase {
         // Start Working │ Edit Title, Add Subtask │ Date ›, Tags ›, Priority ›
         // │ Move to Backlog, More › │ Delete (Open Page and Remove from Tasks
         // come with C2: 12 rows), with Copy and Duplicate inside More ›.
+        // Four groups (Menu look picks B, 2026-11-13): Move to Backlog joins
+        // Date, Tags and Priority; More joins Delete.
         let layout = AtticGlassMenuCard.layout(commands)
         XCTAssertEqual(Self.kinds(layout), ["Complete", "Start Working", "—", "Edit Title", "Add Subtask", "—",
-                                            "Date", "Tags", "Priority", "—", "Move to Backlog", "More", "—", "Delete"])
+                                            "Date", "Tags", "Priority", "Move to Backlog", "—", "More", "Delete"])
         XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "rule 1: 184 pt")
         XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(commands), [], "rule 2: an icon on every row")
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
