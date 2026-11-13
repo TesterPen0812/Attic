@@ -643,6 +643,9 @@ final class TaskStore: ObservableObject {
         if let familyIndexCache, familyIndexCache.revision == revision {
             return familyIndexCache
         }
+        #if DEBUG
+        familyIndexRebuilds += 1
+        #endif
         var byID: [UUID: TaskItem] = [:]
         var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
         var records: [(UUID, TaskItem)] = []
@@ -4314,6 +4317,11 @@ final class TaskStore: ObservableObject {
     private(set) var fullTaskReloadCount = 0
 
     func resetFullTaskReloadCount() { fullTaskReloadCount = 0 }
+
+    /// Full family-index rebuilds (the O(n) branch of `familyIndex`).
+    private(set) var familyIndexRebuilds = 0
+
+    func resetFamilyIndexRebuilds() { familyIndexRebuilds = 0 }
     #endif
 
     /// Plain saves can materialize a different instance of a physical row.

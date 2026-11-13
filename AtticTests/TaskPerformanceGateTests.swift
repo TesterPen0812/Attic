@@ -327,6 +327,68 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(allRows.contains { $0.id == task.id && $0.deletedAt != nil })
     }
 
+    /// Review R-1: a failed refresh must not make every later save that skips
+    /// `prepareTaskEdit` refuse. The staged edit saves, then the list recovers.
+    func testPF2RestoreDeletedStillSavesAfterFailedRefresh() throws {
+        let store = try makeTestStore()
+        let gone = try XCTUnwrap(store.create(title: "Gone"))
+        let kept = try XCTUnwrap(store.create(title: "Kept"))
+        XCTAssertTrue(store.delete(gone))
+        // The rename is durable; its publish read and the fallback refresh fail.
+        store.listRefreshFailures = 2
+        XCTAssertTrue(store.rename(kept, to: "Renamed"))
+        XCTAssertEqual(store.listRefreshFailures, 0)
+
+        XCTAssertTrue(store.restoreDeleted(taskID: gone.id), "A stale list must not refuse the restore")
+        XCTAssertNotNil(store.task(withID: gone.id))
+        XCTAssertEqual(store.task(withID: kept.id)?.title, "Renamed")
+        XCTAssertTrue(store.tasks.contains { $0.id == gone.id })
+        let goneID = gone.id
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == goneID }))
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil })
+        XCTAssertNotNil(store.create(title: "Follow-up"), "The list is fresh again")
+    }
+
+    /// Review R-1: the daily cleanup removes rows from `tasks` before saving;
+    /// a refused save would leave the list and the family index disagreeing.
+    func testPF2DoneLogCleanupStaysCoherentAfterFailedRefresh() throws {
+        let store = try makeTestStore()
+        let done = try XCTUnwrap(store.create(title: "Done long ago"))
+        let kept = try XCTUnwrap(store.create(title: "Kept"))
+        XCTAssertTrue(store.setStatus(.done, for: done))
+        store.listRefreshFailures = 2
+        XCTAssertTrue(store.rename(kept, to: "Renamed"))
+        XCTAssertEqual(store.listRefreshFailures, 0)
+
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: Date().addingTimeInterval(86_400)), 1)
+        XCTAssertFalse(store.tasks.contains { $0.id == done.id })
+        XCTAssertNil(store.task(withID: done.id), "List and family index must agree")
+        XCTAssertNotNil(store.task(withID: kept.id))
+    }
+
+    /// Review R-2: the incremental publish must leave the family index
+    /// usable by the synchronous `@Published` sinks, which read it in willSet
+    /// before `revision` advances. No full rebuild on the rebind fast path.
+    func testPF3RenameOnRebindFastPathDoesNotRebuildFamilyIndex() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        for index in 0..<250 { seed.insert(TaskItem(title: "Task \(index)")) }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let rows = model.rows(for: .now)
+        XCTAssertEqual(rows.count, 250)
+        let target = try XCTUnwrap(store.task(withID: rows[100].id))
+        store.resetFamilyIndexRebuilds()
+
+        XCTAssertTrue(store.rename(target, to: "Renamed"))
+        XCTAssertEqual(store.familyIndexRebuilds, 0, "A rebound edit must not rebuild the whole index")
+        XCTAssertEqual(store.task(withID: target.id)?.title, "Renamed")
+        XCTAssertEqual(store.familyIndexRebuilds, 0)
+        XCTAssertEqual(model.rows(for: .now).count, 250)
+        XCTAssertEqual(store.familyIndexRebuilds, 0)
+    }
+
     func testPF2ReparentUpdatesEveryPhysicalReplicaWithoutReload() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seed = ModelContext(container)
