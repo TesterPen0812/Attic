@@ -168,6 +168,9 @@ struct AgentChatWeek: Equatable {
 struct AgentChatReply: Equatable {
     var raw = ""
     var wordTimes: [Date] = []
+    /// A visible streaming reply's parsed snapshot. Saved replies can parse
+    /// once on reveal; hidden runs never have to rebuild their entire prefix.
+    var parsed: [[AgentChatWords.Word]]? = nil
     /// When the underlines start: set once the reply is complete.
     var marksStart: Date?
 }
@@ -280,6 +283,110 @@ enum AgentChatWords {
         /// Written straight after the word before, with no space: the comma in
         /// `**Friday**,` is a word of its own so the underline stops at Friday.
         var joinsPrevious = false
+    }
+
+    /// Parses appended text once while preserving the reference parser's
+    /// cross-chunk `**` marks, whitespace and paragraph boundaries.
+    final class Stream {
+        private(set) var words: [Word] = []
+        private var breaks: [Int] = []
+        private var currentWord: Int?
+        private var partHasCharacters = false
+        private var partFirstWhitespace = false
+        private var partLastWhitespace = false
+        private var partWords = 0
+        private var touching = false
+        private var inKey = false
+        private var key = 0
+        private var pendingStar = false
+        private var previousNewline = false
+        private(set) var charactersExamined = 0
+
+        var wordCount: Int { words.count + (pendingStar && currentWord == nil ? 1 : 0) }
+
+        func word(at index: Int) -> Word {
+            if index < words.count {
+                var result = words[index]
+                if pendingStar && currentWord == index { result.text += "*" }
+                return result
+            }
+            return Word(text: "*", key: inKey ? key : nil,
+                        joinsPrevious: partWords == 0 && touching && (!partHasCharacters || !partFirstWhitespace))
+        }
+
+        func append(_ text: String) {
+            charactersExamined += text.utf16.count
+            for character in text {
+                if character == "*" {
+                    previousNewline = false
+                    if pendingStar {
+                        pendingStar = false
+                        if partHasCharacters { touching = !partLastWhitespace }
+                        partHasCharacters = false
+                        partWords = 0
+                        currentWord = nil
+                        inKey.toggle()
+                        if inKey { key += 1 }
+                    } else {
+                        pendingStar = true
+                    }
+                    continue
+                }
+                if pendingStar {
+                    consume("*")
+                    pendingStar = false
+                }
+                if character == "\n", previousNewline {
+                    if words.count > (breaks.last ?? 0) { breaks.append(words.count) }
+                    partHasCharacters = false
+                    partWords = 0
+                    currentWord = nil
+                    touching = false
+                    previousNewline = false
+                } else {
+                    consume(character)
+                    previousNewline = character == "\n"
+                }
+            }
+        }
+
+        private func consume(_ character: Character) {
+            let whitespace = character.isWhitespace
+            if !partHasCharacters {
+                partHasCharacters = true
+                partFirstWhitespace = whitespace
+            }
+            partLastWhitespace = whitespace
+            if whitespace {
+                currentWord = nil
+            } else if let currentWord {
+                words[currentWord].text.append(character)
+            } else {
+                words.append(Word(text: String(character), key: inKey ? key : nil,
+                                  joinsPrevious: partWords == 0 && touching && !partFirstWhitespace))
+                partWords += 1
+                currentWord = words.count - 1
+            }
+        }
+
+        func paragraphs() -> [[Word]] {
+            var snapshot = words
+            if pendingStar {
+                if let currentWord {
+                    snapshot[currentWord].text += "*"
+                } else {
+                    snapshot.append(word(at: snapshot.count))
+                }
+            }
+            var paragraphs: [[Word]] = []
+            var start = 0
+            for end in breaks where end > start {
+                paragraphs.append(Array(snapshot[start..<end]))
+                start = end
+            }
+            if start < snapshot.count { paragraphs.append(Array(snapshot[start...])) }
+            return paragraphs
+        }
     }
 
     /// Paragraphs of words, in order. `**` marks a key phrase and never
@@ -456,6 +563,10 @@ final class AgentChatModel: ObservableObject {
     private var presented: Set<UUID> = []
     private var nextWordTime: Date?
     private var replyEnds: Date?
+    private var replyParser: AgentChatWords.Stream?
+    #if DEBUG
+    private(set) var replyParsingCharactersExamined = 0
+    #endif
     /// While a saved thread is put back: its words are already written.
     private var restoring = false
 
@@ -1341,16 +1452,23 @@ final class AgentChatModel: ObservableObject {
             reply = current
             id = last.id
         }
+        if id == nil { replyParser = AgentChatWords.Stream() }
+        let parser = replyParser ?? AgentChatWords.Stream()
+        replyParser = parser
         reply.raw += text
-        let words = AgentChatWords.paragraphs(reply.raw).flatMap { $0 }
+        parser.append(text)
+        #if DEBUG
+        replyParsingCharactersExamined += text.utf16.count
+        #endif
         // Closed, or with Reduce Motion: already written when it is next seen.
         let writes = isOpen && !reducesMotion() && !restoring
         var next = writes ? max(nextWordTime ?? time, time) : time
-        while reply.wordTimes.count < words.count {
-            let word = words[reply.wordTimes.count]
+        while reply.wordTimes.count < parser.wordCount {
+            let word = parser.word(at: reply.wordTimes.count)
             reply.wordTimes.append(writes ? next : .distantPast)
             next += AgentChatWords.gap(after: word.text, pacing: pacing)
         }
+        reply.parsed = isOpen && !restoring ? parser.paragraphs() : nil
         nextWordTime = next
         replyEnds = next.addingTimeInterval(pacing.settle)
         if let id {

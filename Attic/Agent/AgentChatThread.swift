@@ -153,6 +153,8 @@ struct AgentChatThread: View {
     #if DEBUG
     /// Test seam: the distance the last send asked the earlier rows to travel.
     static var lastOutgoingTravel: CGFloat = 0
+    static var archivedRowAppearances = 0
+    static var replyTextBuilds = 0
     #endif
 
     static let topInset: CGFloat = 52
@@ -173,8 +175,17 @@ struct AgentChatThread: View {
                     // Every row starts clear of the top controls, so even a
                     // short earlier exchange can be scrolled back into view.
                     Color.clear.frame(height: Self.topInset)
-                    ForEach(model.entries[..<turnStart]) { row($0, viewport: viewport) }
+                    if turnStart > 0 {
+                        LazyVStack(alignment: .leading, spacing: Self.gap) {
+                            ForEach(model.entries[..<turnStart]) { entry in
+                                row(entry, viewport: viewport)
+                                    #if DEBUG
+                                    .onAppear { Self.archivedRowAppearances += 1 }
+                                    #endif
+                            }
+                        }
                         .offset(y: outgoingSlide)
+                    }
                     if turnStart > 0 { Color.clear.frame(height: Self.gap) }
                     VStack(alignment: .leading, spacing: Self.gap) {
                         ForEach(model.entries[turnStart...]) { row($0, viewport: viewport) }
@@ -437,17 +448,18 @@ private struct AgentReplyView: View {
     private var settlesAt: Date? {
         guard let marksStart = reply.marksStart else { return nil }
         guard marksStart != .distantPast else { return .distantPast }
-        let keys = Set(AgentChatWords.paragraphs(reply.raw).flatMap { $0 }.compactMap(\.key)).count
+        let keys = Set((reply.parsed ?? AgentChatWords.paragraphs(reply.raw)).flatMap { $0 }.compactMap(\.key)).count
         return marksStart.addingTimeInterval(0.62 + 0.17 * Double(keys))
     }
 
     var body: some View {
-        let paragraphs = AgentChatWords.paragraphs(reply.raw)
+        let paragraphs = reply.parsed ?? AgentChatWords.paragraphs(reply.raw)
         let starts = paragraphs.reduce(into: [0]) { $0.append(($0.last ?? 0) + $1.count) }
+        let staticText = paragraphs.indices.map { text(paragraphs[$0], first: starts[$0]) }
         TimelineView(.animation(paused: settled)) { timeline in
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(paragraphs.indices, id: \.self) { index in
-                    text(paragraphs[index], first: starts[index])
+                    staticText[index]
                         .textRenderer(AgentWordRenderer(now: timeline.date, times: reply.wordTimes, marksStart: reply.marksStart,
                                                         paragraph: index, probe: fx.word, marks: marks))
                         .onContinuousHover { phase in
@@ -475,6 +487,9 @@ private struct AgentReplyView: View {
     }
 
     private func text(_ words: [AgentChatWords.Word], first: Int) -> Text {
+        #if DEBUG
+        AgentChatThread.replyTextBuilds += 1
+        #endif
         var text = Text("")
         for (index, word) in words.enumerated() {
             if index > 0, !word.joinsPrevious { text = text + Text(verbatim: " ") }

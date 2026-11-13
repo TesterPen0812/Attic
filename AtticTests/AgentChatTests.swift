@@ -467,6 +467,43 @@ final class AgentChatTests: XCTestCase {
         }
     }
 
+    func testPF30LongReplyParsingWorkTracksOnlyAppendedCharacters() async {
+        await start()
+        let chunks = (0..<160).map { "word\($0) " }
+        for chunk in chunks {
+            await emit(.textDelta(chunk))
+        }
+        await emit(.finished)
+        let total = chunks.joined().utf16.count
+        print("PF30 textUTF16=\(total) parsedUTF16=\(model.replyParsingCharactersExamined)")
+        XCTAssertLessThanOrEqual(model.replyParsingCharactersExamined, total * 2,
+                                 "Incremental streaming must not rescan growing reply prefixes")
+        XCTAssertEqual(replies.first?.wordTimes.count, 160)
+    }
+
+    func testPF30StreamingWordParserMatchesReferenceAtEveryChunkBoundary() {
+        let examples = [
+            "Now on **Friday**, your first. In **two places**: soon",
+            "**a****b** c\n\nMore **words** that join**,** later",
+            "Split stars * and **bold** and ends with *",
+            "Re**do**ing it. A \n\n blank section.\n\n\n\nLast",
+            " Leading word*** after a mark; ** several*** adjacent stars",
+            "🌈👩🏽‍💻 café e\u{301} **世界** — spaces\u{00A0} and\tlines\n\nDone"
+        ]
+        for raw in examples {
+            for cut in 0...raw.count {
+                let parser = AgentChatWords.Stream()
+                let pivot = raw.index(raw.startIndex, offsetBy: cut)
+                let first = String(raw[..<pivot]); let second = String(raw[pivot...])
+                parser.append(first)
+                XCTAssertEqual(parser.paragraphs(), AgentChatWords.paragraphs(first), "Prefix at \(cut): \(raw)")
+                parser.append(second)
+                XCTAssertEqual(parser.paragraphs(), AgentChatWords.paragraphs(raw), "Combined at \(cut): \(raw)")
+                XCTAssertEqual(parser.charactersExamined, raw.utf16.count)
+            }
+        }
+    }
+
     func testStoppingMarksRunningStepsAndClearsTheApproval() async {
         model.open()
         await start()
@@ -1095,6 +1132,38 @@ final class AgentChatHostedTests: XCTestCase {
     private var fx: AgentChatFX { AgentChatHost.lastFX! }
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    func testPF30AnimatingUnchangedReplyDoesNotRebuildStaticAttributedText() {
+        model.pacing = AgentChatPacing(word: 0.05)
+        model.open()
+        spin(0.45)
+        model.apply(.textDelta((0..<180).map { "word\($0)" }.joined(separator: " ")))
+        spin(0.2)
+        AgentChatThread.replyTextBuilds = 0
+        spin(0.45)
+        print("PF30 staticTextBuildsDuringUnchangedFrames=\(AgentChatThread.replyTextBuilds)")
+        XCTAssertLessThanOrEqual(AgentChatThread.replyTextBuilds, 2,
+                                 "Frame-clock changes must only change the renderer's time")
+    }
+
+    func testPF31LongHistoryRealizesOnlyRowsNearTheViewport() {
+        for index in 0..<160 {
+            model.seedExchangeForUITesting(asked: "Archived question \(index)", reply: "Archived reply \(index)")
+        }
+        AgentChatThread.archivedRowAppearances = 0
+        model.open()
+        spin(0.75)
+        let initial = AgentChatThread.archivedRowAppearances
+        print("PF31 archivedRows=318 initialAppearances=\(initial)")
+        XCTAssertLessThan(initial, 70, "Opening a long transcript must not realize every archived row")
+
+        let scroll = findScrollView(in: window.contentView)
+        scroll?.contentView.scroll(to: .zero)
+        scroll?.reflectScrolledClipView(scroll!.contentView)
+        spin(0.2)
+        XCTAssertGreaterThan(AgentChatThread.archivedRowAppearances, initial,
+                             "Older history remains accessible when scrolling back")
+    }
 
     func testA11yChatNamesControlsAndEscapeClosesOneLevel() throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
