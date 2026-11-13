@@ -20,6 +20,46 @@ final class NotesV2TablesTests: XCTestCase {
 
     // MARK: Harness
 
+    /// PF-10: content edits keep the structural AX graph, even when a
+    /// client queries it after every key. Full navigation stays available.
+    func testPF10ContentEditsKeepAXNodesAndClipVisibleElements() throws {
+        let attachment = NoteTableAttachment(table: NoteTable(texts: (0..<500).map { row in
+            (0..<30).map { "r\(row)c\($0)" }
+        }))
+        let view = attachment.tableView
+        view.frame = CGRect(x: 0, y: 0, width: 264, height: 120)
+        let row = try XCTUnwrap(view.accessibilityRows()?.first as? NoteTableAXRow)
+        let cell = try XCTUnwrap(view.axCell(.init(row: 0, column: 0)))
+        let before = NoteTableAXCell.creationCount
+        var replacements = 0
+        for step in 0..<100 {
+            attachment.table[.init(row: 0, column: 0)].text = step.isMultiple(of: 2) ? "x" : "y"
+            if view.axCell(.init(row: 0, column: 0)) !== cell { replacements += 1 }
+        }
+        print("PF10 edits=100 new_cells=\(NoteTableAXCell.creationCount - before) replacements=\(replacements)")
+        XCTAssertEqual(NoteTableAXCell.creationCount - before, 0)
+        XCTAssertEqual(replacements, 0)
+        XCTAssertTrue(view.accessibilityRows()?.first as AnyObject === row)
+        XCTAssertEqual(cell.accessibilityValue() as? String, "y")
+        XCTAssertEqual(view.accessibilityRows()?.count, 500)
+        XCTAssertEqual(view.accessibilityColumns()?.count, 30)
+        let visibleRows = try XCTUnwrap(view.accessibilityVisibleRows() as? [NoteTableAXRow])
+        let visibleColumns = try XCTUnwrap(view.accessibilityVisibleColumns() as? [NoteTableAXColumn])
+        XCTAssertGreaterThan(visibleRows.count, 0)
+        XCTAssertLessThan(visibleRows.count, 10)
+        XCTAssertLessThan(visibleColumns.count, 30)
+        view.setScrollOffset(200)
+        XCTAssertGreaterThan(try XCTUnwrap((view.accessibilityVisibleColumns() as? [NoteTableAXColumn])?.first).column, 0)
+        XCTAssertNotNil(view.accessibilityCell(forColumn: 29, row: 499))
+        attachment.table.rows.swapAt(0, 1)
+        XCTAssertEqual(view.axCell(.init(row: 0, column: 0))?.accessibilityValue() as? String, "r1c0")
+        XCTAssertFalse(view.axCell(.init(row: 0, column: 0)) === cell)
+        XCTAssertTrue(attachment.table.removeRow(at: 2))
+        XCTAssertEqual(view.accessibilityRows()?.count, 499)
+        attachment.table.insertRow(at: 2)
+        XCTAssertEqual(view.accessibilityRows()?.count, 500)
+    }
+
     /// An editor in the draft's 264 pt column (a 320 pt panel, 28 in).
     private func makeEngine(_ blocks: [NoteBlock], height: CGFloat = 520) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))

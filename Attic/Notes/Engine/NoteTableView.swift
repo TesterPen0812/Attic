@@ -343,6 +343,12 @@ final class NoteTableView: NSView {
 
     /// The model changed (typing, a structure change, an Undo, an agent).
     func modelDidChange(previousTable: NoteTable? = nil) {
+        let rowIDs = table.rows.map(\.id), columnIDs = table.columns.map(\.id)
+        let structureChanged = previousTable == nil
+            || previousTable?.rows.map(\.id) != rowIDs
+            || previousTable?.columns.map(\.id) != columnIDs
+            || previousTable?.headerRow != table.headerRow
+        if let axCache, axCache.rowIDs != rowIDs || axCache.columnIDs != columnIDs { self.axCache = nil }
         // A presentation echo may wait for composition. A model replacement
         // must win before any later input-client callback can write stale text.
         if hasEditor, let activeCell, let previousTable, !editor.isApplyingOwnEdit,
@@ -351,7 +357,7 @@ final class NoteTableView: NSView {
             || !table.contains(activeCell) || previousTable[activeCell] != table[activeCell] {
             editor.discardComposition()
         }
-        let heightBefore = grid.height
+        let gridBefore = grid
         if let activeCell, !table.contains(activeCell) { self.activeCell = nil }
         if let selection = cellSelection, !(table.contains(selection.anchor) && table.contains(selection.head)) {
             cellSelection = nil
@@ -363,8 +369,21 @@ final class NoteTableView: NSView {
             editor.load(cellString(activeCell), keepingSelection: true)
         }
         if hasEditor, activeCell == nil { editor.isHidden = true }
-        if abs(grid.height - heightBefore) > 0.25 { engine?.tableLayoutDidChange(self) }
-        NSAccessibility.post(element: self, notification: .layoutChanged)
+        if abs(grid.height - gridBefore.height) > 0.25 { engine?.tableLayoutDidChange(self) }
+        if structureChanged || grid != gridBefore {
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        }
+        // The wrappers read values live. A key only changes cell values;
+        // it does not replace the rows/columns or their navigation graph.
+        if let previousTable, !structureChanged, axCache != nil {
+            for row in table.rows.indices where previousTable.rows[row] != table.rows[row] {
+                for column in table.columns.indices where previousTable.rows[row].cells[column] != table.rows[row].cells[column] {
+                    if let cell = axCell(NoteTable.Position(row: row, column: column)) {
+                        NSAccessibility.post(element: cell, notification: .valueChanged)
+                    }
+                }
+            }
+        }
     }
 
     func cellString(_ position: NoteTable.Position) -> NSMutableAttributedString {
@@ -663,17 +682,20 @@ final class NoteTableView: NSView {
 
     // MARK: Accessibility
 
-    private var axCache: (table: NoteTable, rows: [NoteTableAXRow], columns: [NoteTableAXColumn])?
+    private var axCache: (rowIDs: [UUID], columnIDs: [UUID], rows: [NoteTableAXRow], columns: [NoteTableAXColumn])?
 
     private func axElements() -> (rows: [NoteTableAXRow], columns: [NoteTableAXColumn]) {
-        if let axCache, axCache.table == table { return (axCache.rows, axCache.columns) }
+        // Invalidate on model delivery, rather than comparing structure for
+        // every cell of a column's indexed AX traversal.
+        if let axCache { return (axCache.rows, axCache.columns) }
         let table = self.table
+        let rowIDs = table.rows.map(\.id), columnIDs = table.columns.map(\.id)
         let rows = table.rows.indices.map { NoteTableAXRow(view: self, row: $0) }
         let columns = table.columns.indices.map { NoteTableAXColumn(view: self, column: $0) }
         for row in rows {
             row.cells = table.columns.indices.map { NoteTableAXCell(view: self, row: row.row, column: $0, parentRow: row) }
         }
-        axCache = (table, rows, columns)
+        axCache = (rowIDs, columnIDs, rows, columns)
         return (rows, columns)
     }
 
@@ -689,9 +711,19 @@ final class NoteTableView: NSView {
     override func accessibilityRoleDescription() -> String? { NSAccessibility.Role.table.description(with: nil) }
     override func accessibilityChildren() -> [Any]? { axElements().rows }
     override func accessibilityRows() -> [Any]? { axElements().rows }
-    override func accessibilityVisibleRows() -> [Any]? { axElements().rows }
+    override func accessibilityVisibleRows() -> [Any]? {
+        let visible = canvas.visibleRect
+        return axElements().rows.filter { row in
+            CGRect(x: 0, y: grid.rowY(row.row), width: grid.width, height: grid.rowHeights[row.row]).intersects(visible)
+        }
+    }
     override func accessibilityColumns() -> [Any]? { axElements().columns }
-    override func accessibilityVisibleColumns() -> [Any]? { axElements().columns }
+    override func accessibilityVisibleColumns() -> [Any]? {
+        let visible = canvas.visibleRect
+        return axElements().columns.filter { column in
+            CGRect(x: grid.columnX(column.column), y: 0, width: grid.columnWidths[column.column], height: grid.height).intersects(visible)
+        }
+    }
     override func accessibilityRowCount() -> Int { table.rowCount }
     override func accessibilityColumnCount() -> Int { table.columnCount }
     override func accessibilityColumnHeaderUIElements() -> [Any]? {
