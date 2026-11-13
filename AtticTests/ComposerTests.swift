@@ -134,6 +134,25 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(liveTasks().allSatisfy { $0.dueDay == nil && $0.dueTimeMinutes == nil })
     }
 
+    func testBG9EventDraftUsesGregorianCivilDayForEverySystemCalendar() throws {
+        for zone in ["Europe/London", "America/Los_Angeles"] {
+            var gregorian = Calendar(identifier: .gregorian)
+            gregorian.timeZone = TimeZone(identifier: zone)!
+            let civilDay = DueDay(year: 2026, month: 11, day: 13)!
+            for time: Int? in [nil, 16 * 60 + 30] {
+                let expected = try XCTUnwrap(ComposerModel.eventDraft(title: "Meeting", day: civilDay, time: time,
+                    length: 60, calendarID: "home", calendar: gregorian))
+                for identifier in [Calendar.Identifier.buddhist, .japanese, .gregorian] {
+                    var calendar = Calendar(identifier: identifier)
+                    calendar.timeZone = gregorian.timeZone
+                    let actual = try XCTUnwrap(ComposerModel.eventDraft(title: "Meeting", day: civilDay, time: time,
+                        length: 60, calendarID: "home", calendar: calendar))
+                    XCTAssertEqual(actual, expected, "\(identifier), \(zone), \(String(describing: time))")
+                }
+            }
+        }
+    }
+
     func testQueuedEventSubmissionCannotCreateAReplacementSession() async {
         model.open(on: .calendar(selected: today))
         await model.loadCalendars()

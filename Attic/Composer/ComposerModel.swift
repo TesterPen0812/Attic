@@ -624,6 +624,7 @@ final class ComposerModel: ObservableObject {
     /// (end exclusive, the next local midnight).
     nonisolated static func eventDraft(title: String, day: DueDay, time: Int?, length: Int,
                                        calendarID: String, calendar: Calendar, notes: String = "") -> CalendarEventDraft? {
+        let calendar = DueDay.storageCalendar(matching: calendar)
         let zone = calendar.timeZone.identifier
         // The writing line becomes the event's notes; an empty line writes none.
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
