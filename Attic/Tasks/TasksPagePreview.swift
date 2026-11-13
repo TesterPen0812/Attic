@@ -146,7 +146,7 @@ enum TasksPagePreview {
         try context.save()
     }
 
-    static func seedDemo(in container: ModelContainer, long: Bool = false) throws {
+    static func seedDemo(in container: ModelContainer, long: Bool = false, filters: Bool = false) throws {
         let context = ModelContext(container)
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
@@ -186,6 +186,18 @@ enum TasksPagePreview {
         for (offset, title) in [(1, "Send invoice"), (1, "Water the plants"), (2, "Call the bank"), (6, "Pay rent"), (40, "Renew passport")] {
             let completed = calendar.date(byAdding: .day, value: -offset, to: now) ?? now
             _ = task(title, .done, completed: completed, logged: true)
+        }
+        if filters {
+            // The filters drawing's samples (`tasks-filters-drafts.html`):
+            // tasks in #work, #home, #design and #errands.
+            _ = task("Draft Q4 plan", .inProgress, .medium, due: today, tags: ["work"])
+            _ = task("Fix the boiler", .inProgress, due: today, tags: ["home"])
+            _ = task("Send invoice to Mira", .todo, due: today, tags: ["work"])
+            _ = task("Book dentist", .todo, due: day(-2), tags: ["home"])
+            _ = task("Sketch the onboarding", .todo, tags: ["design", "work"])
+            _ = task("Pick up dry cleaning", .todo, tags: ["errands", "home"])
+            _ = task("Ship 2.1 notes", .done, tags: ["work"],
+                     completed: calendar.date(byAdding: .day, value: -1, to: now) ?? now, logged: true)
         }
         if long {
             // Round 3's stress rows (captures only): a long details line and

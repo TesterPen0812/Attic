@@ -539,8 +539,9 @@ final class AppCoordinator: ObservableObject {
         #if DEBUG
         // Capture seam: the in-memory UI-test store holds the design mockup's
         // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
-        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
-            try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long")
+        if inMemoryStore, isUITesting, ["demo", "long", "filters"].contains(environment["ATTIC_UI_TEST_SEED"] ?? "") {
+            try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long",
+                                           filters: environment["ATTIC_UI_TEST_SEED"] == "filters")
         }
         // The spec's sizes (round 11, on-screen measurement): 500 open, 500
         // in Later, 5,000 in the Done log.

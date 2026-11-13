@@ -195,6 +195,11 @@ struct TasksPage: View {
             }
             .equatable()
         }
+        // ••• wears its dot while a filter is on, the tags too (Accepted
+        // 2026-11-13). Outside the equatable content, which a model change
+        // alone does not re-evaluate: every change is read once settled.
+        .onAppear(perform: syncFilterDot)
+        .onReceive(model.objectWillChange.receive(on: DispatchQueue.main)) { _ in syncFilterDot() }
         .atticTagColourOrigin(.page(.tasks))
         // The owner's panel design: every control in its superellipse(1.4)
         // corner (fix round 2: the build drew them round).
@@ -285,6 +290,11 @@ struct TasksPage: View {
         #endif
     }
 
+    private func syncFilterDot() {
+        let filtered = model.tab == .done ? !model.tagPicks.isEmpty : model.filtered(on: model.tab)
+        sharedChrome?.setFiltered(filtered, for: .tasks)
+    }
+
     private func pageAppeared() {
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
@@ -320,6 +330,27 @@ struct TasksPage: View {
         // use (formatters, calendars) happens here, not in the first
         // keystroke (round 4).
         DispatchQueue.main.async { model.warmUpShorthand() }
+        #if DEBUG
+        // Capture seam (`ATTIC_UI_TEST_TASKS_FILTER=status=inProgress;
+        // show=overdueOnly;tags=work,home;match=all`, UI testing only): the
+        // Tasks filters set by themselves for hands-off captures.
+        if ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+           let spec = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASKS_FILTER"] {
+            var fields: [String: String] = [:]
+            for pair in spec.split(separator: ";") {
+                let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                if parts.count == 2 { fields[parts[0]] = parts[1] }
+            }
+            var options = model.viewOptions(for: .now)
+            if let raw = fields["status"], let status = TasksViewOptions.Status(rawValue: raw) { options.status = status }
+            if let raw = fields["show"], let show = TasksViewOptions.Show(rawValue: raw) { options.show = show }
+            model.setViewOptions(options, for: .now)
+            let tags = (fields["tags"] ?? "").split(separator: ",").map(String.init)
+            if !tags.isEmpty {
+                model.setTagPicks(TagPicks(tags, match: fields["match"] == "all" ? .all : .any))
+            }
+        }
+        #endif
         #if DEBUG
         // Capture seam (`ATTIC_UI_TEST_META=date|tags`, optionally
         // `@<seconds>`, 2.5 by default): a row's date or tag list opens by
@@ -549,10 +580,6 @@ struct TasksPage: View {
             // A glass menu names the press that opened it (it opens a turn
             // after the press, when the current event may have moved on).
             pointer.menuBegan(with: (note.userInfo?[AtticGlassMenu.openerKey] as? NSEvent) ?? NSApp.currentEvent)
-        }
-        // ••• wears its dot while a filter is on, the tags too (13 Nov).
-        .onChange(of: model.tab == .done ? !model.tagPicks.isEmpty : model.filtered(on: model.tab), initial: true) { _, filtered in
-            sharedChrome?.setFiltered(filtered, for: .tasks)
         }
         .onChange(of: model.tab) { _, _ in
             IdleLatencyTrace.point("task_tab_observed")

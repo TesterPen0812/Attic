@@ -19,6 +19,9 @@ final class PanelSharedChrome: ObservableObject {
     @Published private(set) var bars: [PanelPage: PanelBottomBarLook] = [:]
     /// What each page's top row lends the shell (its search button).
     @Published private(set) var topRows: [PanelPage: PanelTopRowLook] = [:]
+    /// The pages a filter is on (••• wears its dot), kept apart from the
+    /// top rows, which a page drops and registers again as it is rebuilt.
+    @Published private(set) var filteredPages: Set<PanelPage> = []
     /// The pages a task's page covers (its own bars replace the shared ones).
     @Published private(set) var covered: Set<PanelPage> = []
     /// The "+" card has the bar's row (Accepted 2026-11-03, P4): the bar's
@@ -64,6 +67,7 @@ final class PanelSharedChrome: ObservableObject {
     func topRow(for page: PanelPage) -> PanelTopRowLook {
         var look = topRows[page] ?? .placeholder(for: page)
         if covered.contains(page) { look.shown = false }
+        look.filtered = filteredPages.contains(page)
         return look
     }
 
@@ -84,9 +88,8 @@ final class PanelSharedChrome: ObservableObject {
     func search(on page: PanelPage) { searchActions[page]?() }
 
     func setFiltered(_ filtered: Bool, for page: PanelPage) {
-        var look = topRows[page] ?? .placeholder(for: page)
-        look.filtered = filtered
-        if topRows[page] != look { topRows[page] = look }
+        guard filteredPages.contains(page) != filtered else { return }
+        if filtered { filteredPages.insert(page) } else { filteredPages.remove(page) }
     }
 
     /// What ••• offers on `page`, built when it opens.

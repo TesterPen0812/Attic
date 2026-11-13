@@ -615,6 +615,16 @@ struct AtticPanelView: View {
             }
             // The tag bar starts collapsed each time the panel opens
             // (Accepted 2026-11-13, 1A); the picked tags stay.
+            #if DEBUG
+            // Capture seam (`ATTIC_UI_TEST_TAG_BAR_OPEN=<seconds>`, UI testing
+            // only): the tag bar opens by itself after the panel shows.
+            .onAppear {
+                let environment = ProcessInfo.processInfo.environment
+                guard environment["ATTIC_UI_TESTING"] == "1",
+                      let delay = environment["ATTIC_UI_TEST_TAG_BAR_OPEN"].flatMap(Double.init) else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { sharedChrome.tagBar.open() }
+            }
+            #endif
             .onChange(of: uiState.revealCount) { _, _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.hideCount) { _, _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.selectedSection) { _, _ in

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -192,6 +193,37 @@ final class TasksFiltersTests: XCTestCase {
         let id = try XCTUnwrap(model.submitAddBar())
         XCTAssertEqual(Set(store.task(withID: id)?.tags ?? []), ["work", "home"])
         XCTAssertEqual(model.addBar.picked.tags, ["work", "home"], "the next draft starts with them again")
+    }
+
+    // MARK: - ••• dot
+
+    /// The page's top row re-registers (a page rebuilt, the panel shown
+    /// again) while the filter stays on: ••• keeps its dot.
+    func testTheDotOutlivesTheTopRowsReRegistration() {
+        let chrome = PanelSharedChrome()
+        chrome.setFiltered(true, for: .tasks)
+        chrome.removeTopRow(for: .tasks)
+        chrome.setTopRowShown(true, for: .tasks)
+        XCTAssertTrue(chrome.topRow(for: .tasks).filtered)
+        chrome.setFiltered(false, for: .tasks)
+        XCTAssertFalse(chrome.topRow(for: .tasks).filtered)
+        XCTAssertFalse(chrome.topRow(for: .notes).filtered)
+    }
+
+    /// The dot is drawn on the shared ••• (not only told to VoiceOver).
+    func testTheSharedMoreButtonDrawsItsDot() throws {
+        func raster(_ filtered: Bool) throws -> Data {
+            let view = PanelTopRowMoreButton(shared: true, page: .tasks, filtered: filtered) { [] }
+                .padding(8)
+                .atticDesign(AtticDesignContext(mode: .light))
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.nsImage)
+            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            let bytes = try XCTUnwrap(bitmap.bitmapData)
+            return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        XCTAssertNotEqual(try raster(true), try raster(false), "filtered: the accent dot shows")
     }
 
     // MARK: - Keys and Tab order

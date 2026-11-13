@@ -521,6 +521,12 @@ struct PanelTopRowSearchButton: View {
 /// (`shared`); a page's own is a clear stand-in that lends the shell what
 /// the page offers.
 struct PanelTopRowMoreButton: View {
+    private func dotted(_ button: AtticRaisedButton) -> AtticRaisedButton {
+        var button = button
+        button.showsDot = filtered
+        return button
+    }
+
     var shared = false
     let page: PanelPage
     /// A filter is on: the dot (13 Nov).
@@ -539,16 +545,13 @@ struct PanelTopRowMoreButton: View {
                 .accessibilityHidden(true)
                 .onAppear { chrome.setMore(commands, for: page) }
         } else {
-            AtticRaisedButton(systemName: "ellipsis.circle", label: "Options", size: CGSize(width: side, height: side),
-                              help: String(localized: "Options"), emphasisedGlyph: true,
-                              flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
+            dotted(AtticRaisedButton(systemName: "ellipsis.circle", label: "Options", size: CGSize(width: side, height: side),
+                                     help: String(localized: "Options"), emphasisedGlyph: true,
+                                     flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
                 guard let view = anchor.view else { return }
                 AtticNativeMenu.popUp(commands(), in: view)
-            }
+            })
             .atticDesignCorners()
-            .overlay(alignment: .topTrailing) {
-                if filtered { AtticMenuButtonDot().allowsHitTesting(false) }
-            }
             .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
             .accessibilityHint(String(localized: "Opens a menu"))
             .accessibilityValue(filtered ? String(localized: "Filters on") : "")

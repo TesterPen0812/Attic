@@ -90,6 +90,10 @@ struct AtticRaisedButton: View {
     /// L3: the header's flat corner surface (one fill, one hairline, no
     /// inner chip); a selected toggle takes the selected chip's fill whole.
     var flat = false
+    /// A menu button's dot (a filter is on), drawn with the glyph on the
+    /// control's face: an overlay outside the control lands under its
+    /// Liquid Glass.
+    var showsDot = false
     /// A toggle that says "on" with its glyph (O14-05, the pinned pin): the
     /// glyph when selected (`pin.fill`) and, under the pointer, the action
     /// a click takes (`pin.slash`), cross-faded. Such a toggle draws no
@@ -158,6 +162,9 @@ struct AtticRaisedButton: View {
                 .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
+                .overlay(alignment: .topTrailing) {
+                    if showsDot { AtticMenuButtonDot().allowsHitTesting(false) }
+                }
                 // A 27 pt header control still answers a 28 pt target.
                 .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: size.height)))
                 .background {
