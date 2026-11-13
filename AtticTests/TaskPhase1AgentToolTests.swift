@@ -130,6 +130,7 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         }
         try context.save()
         let after = try proof()
+        print("PF33 unrelated=320 taskRows=\(before.1)->\(after.1) writingRows=\(before.2)->\(after.2)")
         XCTAssertEqual(after.0, before.0, "Unrelated storage must not alter a family proof")
         XCTAssertEqual(after.1, before.1, "A selected family must not materialize unrelated tasks")
         XCTAssertEqual(after.2, before.2, "A selected family must not materialize unrelated writing")
