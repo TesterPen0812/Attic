@@ -588,6 +588,59 @@ final class AtticGlassMenuTests: XCTestCase {
 
     // MARK: Keyboard
 
+    /// keyboard-hunt: seeded key sequences across nested menus, including
+    /// focus movement, type-to-select, shortcuts, Tab and dismissal.
+    func testKeyboardHuntSeededMenuKeysNeverTargetDisabledOrMissingRows() {
+        for seed in [UInt64(0x4B4D_1601), 0x4B4D_1602, 0x4B4D_1603] {
+            var random = seed
+            func next(_ count: Int) -> Int {
+                random ^= random << 13
+                random ^= random >> 7
+                random ^= random << 17
+                return Int(random % UInt64(count))
+            }
+            var menu = open(commands())
+            for step in 0..<360 {
+                if !menu.isOpen { menu = open(commands()) }
+                let action = next(16)
+                let label = "seed=\(String(seed, radix: 16)) step=\(step) action=\(action)"
+                let timestamp = 1 + Double(step) * 0.08
+                switch action {
+                case 0: menu.handle(key(125, time: timestamp)) // Down.
+                case 1: menu.handle(key(126, time: timestamp)) // Up.
+                case 2: menu.handle(key(124, time: timestamp)) // Submenu.
+                case 3: menu.handle(key(123, time: timestamp)) // Back from submenu.
+                case 4: menu.handle(key(115, time: timestamp)) // Home.
+                case 5: menu.handle(key(119, time: timestamp)) // End.
+                case 6: menu.handle(key(36, "\r", time: timestamp)) // Return.
+                case 7: menu.handle(key(53, "\u{1b}", time: timestamp)) // Escape.
+                case 8: menu.handle(key(49, " ", time: timestamp)) // Space.
+                case 9: menu.handle(key(48, "\t", time: timestamp)) // Tab.
+                case 10: menu.handle(key(48, "\t", flags: .shift, time: timestamp)) // Shift-Tab.
+                case 11: menu.handle(key(2, "d", time: timestamp))
+                case 12: menu.handle(key(14, "e", time: timestamp))
+                case 13: menu.handle(key(17, "t", time: timestamp))
+                case 14: menu.handle(key(40, "k", flags: .command, time: timestamp))
+                default: menu.handle(key(14, "e", flags: .option, time: timestamp))
+                }
+                XCTAssertTrue(ran.isEmpty, "a tracked menu never executes a command twice: \(label)")
+                if menu.isOpen {
+                    XCTAssertTrue(menu.cards.indices.contains(menu.focus), "keyboard focus belongs to an open card: \(label)")
+                    for card in menu.cards {
+                        if let selected = card.highlighted {
+                            XCTAssertTrue(card.selectableIndices.contains(selected), "disabled/removed row cannot take focus: \(label)")
+                        }
+                    }
+                } else if let chosen = menu.chosen {
+                    XCTAssertTrue(["Complete", "Today", "Tomorrow", "#home", "Delete"].contains(chosen.title),
+                                  "an actual enabled row is chosen once: \(label)")
+                }
+            }
+            menu.close(animated: false)
+            print("KEYBOARD_HUNT_MENU seed=\(String(seed, radix: 16)) steps=360")
+        }
+    }
+
     func testArrowsSkipDisabledRowsAndRightLeftOpenAndCloseASubmenu() {
         let menu = open(commands())
         menu.handle(key(125))
