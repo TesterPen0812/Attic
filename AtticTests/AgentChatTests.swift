@@ -5,12 +5,40 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+/// Optional off-screen evidence using the same hosted window as the behavior tests.
+@MainActor
+func captureAgentReviewWindow(_ window: NSWindow, name: String) throws {
+    guard let directory = ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"],
+          let host = window.contentView else { return }
+    host.layoutSubtreeIfNeeded()
+    let size = host.bounds.size
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+        pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    bitmap.size = size
+    host.cacheDisplay(in: host.bounds, to: bitmap)
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent(
+        URL(fileURLWithPath: directory).lastPathComponent, isDirectory: true)
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let url = destination.appendingPathComponent("\(name).png")
+    let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    try png.write(to: url)
+    let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+    attachment.name = "Review-\(name)"
+    attachment.lifetime = .keepAlways
+    XCTContext.runActivity(named: "Review render \(name)") { $0.add(attachment) }
+    print("REVIEW_RENDER \(url.path)")
+}
+
 /// A run the test drives by hand, event by event.
 @MainActor
 private final class FakeRunner: AgentRunning {
     var continuation: AsyncStream<AgentEvent>.Continuation?
     var observedContinuation: AsyncStream<AgentEvent>.Continuation?
     var retainsThread = false
+    var recoveredUndo: (UUID) -> Bool = { _ in false }
+    func canUndoRecovered(_ id: UUID) -> Bool { recoveredUndo(id) }
     var snapshot = AgentThreadSnapshot(entries: [], events: [], isRunning: false)
     var forgotten = false
     var sent: [(text: String, watching: Bool)] = []
@@ -148,6 +176,30 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
     }
 
+    func testR5OpenChatParsingMaterializesOnlyAppendedWords() {
+        model.open()
+        let count = 2_000
+        for index in 0..<count { model.apply(.textDelta("word\(index) ")) }
+        print("R5 openDeltas=\(count) materializedWords=\(model.replyParsingWordsMaterialized)")
+        XCTAssertLessThanOrEqual(model.replyParsingWordsMaterialized, count * 4,
+                                 "Open-chat snapshots must not copy every previous word on each delta")
+        XCTAssertEqual(replies.first?.wordTimes.count, count)
+        XCTAssertNotNil(replies.first?.parsed, "Exercise the visible streaming parse")
+    }
+
+    func testR5DiscardingThreadReleasesItsPresentation() {
+        model.open()
+        for finishes in [false, true] {
+            model.draft = "A reply to discard"
+            model.send()
+            model.apply(.textDelta("A visible reply"))
+            weak var presentation = replies.last?.parsed
+            XCTAssertNotNil(presentation)
+            if finishes { model.apply(.finished) }
+            model.newChat()
+            XCTAssertNil(presentation, "Discarding a completed or cancelled thread must release its text cache")
+        }
+    }
 
     func testReconnectingLiveRunnerRestoresHistoryAndReplaysInFlightStepsOnce() async {
         let reading = step(.read, targets: tasks(["Real task"]), title: "Reading 1 task")
@@ -1149,6 +1201,65 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testReviewFixRenders() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil else {
+            throw XCTSkip("Offscreen review renders require ATTIC_FIX_RENDER_DIR")
+        }
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: (0..<160).flatMap { index in
+            [AgentThreadEntry(id: UUID(), role: "user", text: "Saved question \(index)"),
+             AgentThreadEntry(id: UUID(), role: "assistant", text: "Saved reply \(index)")]
+        }, events: [], isRunning: false)
+        model.connect(runner)
+        model.open()
+        spin(0.7)
+        let scroll = try XCTUnwrap(findScrollView(in: window.contentView))
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin(0.02)
+        try captureAgentReviewWindow(window, name: "R1")
+
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentReviewRender").appendingPathComponent("undo.json")
+        try FileManager.default.createDirectory(at: journal.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let change = AgentChangeSet(id: UUID(), title: "Edit note", pages: [.notes], count: 1)
+        let inverse: [String: Any] = ["updatedNote": ["id": UUID().uuidString,
+            "document": Data("undecodable document".utf8).base64EncodedString(),
+            "title": "Original", "body": "Before", "revision": "fixture", "metadata": "fixture", "name": "Edit note"]]
+        let request: [String: Any] = ["changeSet": try JSONSerialization.jsonObject(with: JSONEncoder().encode(change)),
+                                      "entries": [inverse]]
+        try JSONSerialization.data(withJSONObject: ["version": 1, "requests": [request]]).write(to: journal)
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), journalURL: journal)
+        runner.recoveredUndo = { actions.canRecoverUndo($0) }
+        runner.snapshot = AgentThreadSnapshot(entries: [
+            AgentThreadEntry(id: UUID(), role: "user", text: "Edit note"),
+            AgentThreadEntry(id: UUID(), role: "receipt", text: "", changeSet: change)
+        ], events: [], isRunning: false)
+        model.connect(runner)
+        spin(0.8)
+        try captureAgentReviewWindow(window, name: "R2")
+    }
+
+    func testR5VisibleStreamingBuildsTextOnlyForAppendedWords() throws {
+        model.now = { Date(timeIntervalSince1970: 0) }
+        model.open()
+        spin(0.5)
+        AgentChatThread.replyWordsBuilt = 0
+        let count = 200
+        for index in 0..<count {
+            model.apply(.textDelta("word\(index)" + (index % 16 == 15 ? "\n\n" : " ")))
+            spin(0.002)
+        }
+        spin(0.1)
+        print("R5 renderedDeltas=\(count) wordsBuilt=\(AgentChatThread.replyWordsBuilt)")
+        XCTAssertGreaterThan(AgentChatThread.replyWordsBuilt, 0, "The real reply view must have rendered")
+        XCTAssertLessThanOrEqual(AgentChatThread.replyWordsBuilt, count * 4,
+                                 "Visible streaming must reuse completed word text across deltas")
+        model.apply(.finished)
+        spin(0.1)
+        try captureAgentReviewWindow(window, name: "R5")
+    }
+
     func testPF30AnimatingUnchangedReplyDoesNotRebuildStaticAttributedText() {
         model.pacing = AgentChatPacing(word: 0.05)
         model.open()
@@ -1272,6 +1383,8 @@ final class AgentChatHostedTests: XCTestCase {
         chrome = PanelSharedChrome()
         topRow = PanelTopRowState()
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let rendering = ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil
+        let context = rendering ? AtticDesignContext(mode: .light, reduceTransparency: true) : .default
         let root = ZStack(alignment: .bottom) {
             PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout, agentChat: model)
             AgentChatHost(bar: model.bar, room: PanelComposerRoom(), model: model, layout: layout, page: .tasks, chrome: chrome,
@@ -1280,9 +1393,10 @@ final class AgentChatHostedTests: XCTestCase {
         .frame(width: 340, height: 560)
         .environment(\.panelSharedChrome, chrome)
         .environment(\.panelTopRowState, topRow)
-        .atticDesign(.default)
+        .atticDesign(context)
         window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
                           styleMask: [.borderless], backing: .buffered, defer: false)
+        if rendering { window.appearance = NSAppearance(named: .aqua) }
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: root)
         window.orderFront(nil)

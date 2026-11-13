@@ -168,9 +168,9 @@ struct AgentChatWeek: Equatable {
 struct AgentChatReply: Equatable {
     var raw = ""
     var wordTimes: [Date] = []
-    /// A visible streaming reply's parsed snapshot. Saved replies can parse
-    /// once on reveal; hidden runs never have to rebuild their entire prefix.
-    var parsed: [[AgentChatWords.Word]]? = nil
+    /// A visible reply reuses completed paragraph text. Hidden runs defer
+    /// presentation work until reveal.
+    var parsed: AgentReplyPresentation? = nil
     /// When the underlines start: set once the reply is complete.
     var marksStart: Date?
 }
@@ -287,6 +287,7 @@ enum AgentChatWords {
 
     /// Parses appended text once while preserving the reference parser's
     /// cross-chunk `**` marks, whitespace and paragraph boundaries.
+    @MainActor
     final class Stream {
         private(set) var words: [Word] = []
         private var breaks: [Int] = []
@@ -301,6 +302,10 @@ enum AgentChatWords {
         private var pendingStar = false
         private var previousNewline = false
         private(set) var charactersExamined = 0
+        private(set) var wordsMaterialized = 0
+        private let presentation = AgentReplyPresentation()
+        private var presentedBreaks = 0
+        private var presentedParagraphStart = 0
 
         var wordCount: Int { words.count + (pendingStar && currentWord == nil ? 1 : 0) }
 
@@ -369,6 +374,33 @@ enum AgentChatWords {
             }
         }
 
+        /// Only newly settled words and the unfinished tail reach the view.
+        /// The parser keeps one word buffer and reuses completed paragraph Text.
+        func present() -> AgentReplyPresentation {
+            let settled = currentWord ?? words.count
+            while presentation.committedWords < settled {
+                let index = presentation.committedWords
+                wordsMaterialized += 1
+                presentation.commit(words[index], at: index, paragraphStart: paragraphStart(at: index))
+            }
+            if currentWord != nil || pendingStar {
+                let index = currentWord ?? words.count
+                wordsMaterialized += 1
+                presentation.showTail(word(at: index), at: index, paragraphStart: paragraphStart(at: index))
+            } else {
+                presentation.showTail(nil, at: words.count, paragraphStart: 0)
+            }
+            return presentation
+        }
+
+        private func paragraphStart(at index: Int) -> Int {
+            while presentedBreaks < breaks.count, breaks[presentedBreaks] <= index {
+                presentedParagraphStart = breaks[presentedBreaks]
+                presentedBreaks += 1
+            }
+            return presentedParagraphStart
+        }
+
         func paragraphs() -> [[Word]] {
             var snapshot = words
             if pendingStar {
@@ -381,10 +413,14 @@ enum AgentChatWords {
             var paragraphs: [[Word]] = []
             var start = 0
             for end in breaks where end > start {
+                wordsMaterialized += end - start
                 paragraphs.append(Array(snapshot[start..<end]))
                 start = end
             }
-            if start < snapshot.count { paragraphs.append(Array(snapshot[start...])) }
+            if start < snapshot.count {
+                wordsMaterialized += snapshot.count - start
+                paragraphs.append(Array(snapshot[start...]))
+            }
             return paragraphs
         }
     }
@@ -566,6 +602,7 @@ final class AgentChatModel: ObservableObject {
     private var replyParser: AgentChatWords.Stream?
     #if DEBUG
     private(set) var replyParsingCharactersExamined = 0
+    private(set) var replyParsingWordsMaterialized = 0
     #endif
     /// While a saved thread is put back: its words are already written.
     private var restoring = false
@@ -616,6 +653,7 @@ final class AgentChatModel: ObservableObject {
         let resting = phase
         defer { restoring = false; phase = resting }
         entries = []
+        replyParser = nil
         for message in archived {
             switch message.role {
             case "user": entries.append(AgentChatEntry(.asked(message.text)))
@@ -1150,6 +1188,7 @@ final class AgentChatModel: ObservableObject {
         stopWatching()
         isRunning = false
         entries = []
+        replyParser = nil
         approval = nil
         queuedApprovals.removeAll()
         phase = .idle
@@ -1457,9 +1496,12 @@ final class AgentChatModel: ObservableObject {
         let parser = replyParser ?? AgentChatWords.Stream()
         replyParser = parser
         reply.raw += text
+        #if DEBUG
+        let previousCharacters = parser.charactersExamined
+        #endif
         parser.append(text)
         #if DEBUG
-        replyParsingCharactersExamined += text.utf16.count
+        replyParsingCharactersExamined += parser.charactersExamined - previousCharacters
         #endif
         // Closed, or with Reduce Motion: already written when it is next seen.
         let writes = isOpen && !reducesMotion() && !restoring
@@ -1469,7 +1511,13 @@ final class AgentChatModel: ObservableObject {
             reply.wordTimes.append(writes ? next : .distantPast)
             next += AgentChatWords.gap(after: word.text, pacing: pacing)
         }
-        reply.parsed = isOpen && !restoring ? parser.paragraphs() : nil
+        #if DEBUG
+        let previousMaterialized = parser.wordsMaterialized
+        #endif
+        reply.parsed = isOpen && !restoring ? parser.present() : nil
+        #if DEBUG
+        replyParsingWordsMaterialized += parser.wordsMaterialized - previousMaterialized
+        #endif
         nextWordTime = next
         replyEnds = next.addingTimeInterval(pacing.settle)
         if let id {
@@ -1485,6 +1533,7 @@ final class AgentChatModel: ObservableObject {
         reply.marksStart = isOpen && !reducesMotion() && !restoring
             ? (replyEnds?.addingTimeInterval(-pacing.settle) ?? now()) : .distantPast
         update(last.id) { $0 = .reply(reply) }
+        replyParser = nil
     }
 
     private func stepStarted(_ step: AgentStep) {

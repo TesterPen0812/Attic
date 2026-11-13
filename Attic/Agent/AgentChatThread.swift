@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The ✦ itself: the design's four-point star.
@@ -155,6 +156,7 @@ struct AgentChatThread: View {
     static var lastOutgoingTravel: CGFloat = 0
     static var archivedRowAppearances = 0
     static var replyTextBuilds = 0
+    static var replyWordsBuilt = 0
     #endif
 
     static let topInset: CGFloat = 52
@@ -431,6 +433,117 @@ private struct AgentTick: Shape {
     }
 }
 
+/// The live reply's display projection. Paragraphs retain immutable Text
+/// prefixes; appending never copies the parser's accumulated word array.
+/// The owning reply publishes changes to the paragraph list and timing, while
+/// each paragraph publishes only its own changed text.
+@MainActor
+final class AgentReplyPresentation: Equatable {
+    nonisolated static func == (lhs: AgentReplyPresentation, rhs: AgentReplyPresentation) -> Bool { lhs === rhs }
+
+    private(set) var paragraphs: [Paragraph] = []
+    private(set) var committedWords = 0
+    private var keys: Set<Int> = []
+    private var tailKey: Int?
+    var keyCount: Int { keys.count + (tailKey.map { keys.contains($0) ? 0 : 1 } ?? 0) }
+
+    init(paragraphs: [[AgentChatWords.Word]] = []) {
+        var index = 0
+        for words in paragraphs {
+            let start = index
+            for word in words {
+                commit(word, at: index, paragraphStart: start)
+                index += 1
+            }
+        }
+        showTail(nil, at: index, paragraphStart: 0)
+    }
+
+    func commit(_ word: AgentChatWords.Word, at index: Int, paragraphStart: Int) {
+        paragraph(startingAt: paragraphStart).append(word, at: index)
+        committedWords += 1
+        if let key = word.key { keys.insert(key) }
+    }
+
+    func showTail(_ word: AgentChatWords.Word?, at index: Int, paragraphStart: Int) {
+        tailKey = word?.key
+        if let word {
+            paragraph(startingAt: paragraphStart).showTail(word, at: index)
+        } else if let last = paragraphs.last {
+            last.showTail(nil, at: index)
+            // A lone '*' can appear and then become a '**' delimiter.
+            if last.isEmpty { paragraphs.removeLast() }
+        }
+    }
+
+    private func paragraph(startingAt index: Int) -> Paragraph {
+        if let last = paragraphs.last, last.firstIndex == index { return last }
+        paragraphs.last?.showTail(nil, at: index)
+        let next = Paragraph(firstIndex: index)
+        paragraphs.append(next)
+        return next
+    }
+
+    @MainActor
+    final class Paragraph: ObservableObject {
+        let firstIndex: Int
+        @Published private(set) var text = Text("")
+        private var prefix = Text("")
+        private var prefixCount = 0
+        private var phrases: [Int: String] = [:]
+        private var tail: AgentChatWords.Word?
+        var isEmpty: Bool { prefixCount == 0 && tail == nil }
+
+        init(firstIndex: Int) { self.firstIndex = firstIndex }
+
+        func append(_ word: AgentChatWords.Word, at index: Int) {
+            if prefixCount > 0, !word.joinsPrevious { prefix = prefix + Text(verbatim: " ") }
+            prefix = prefix + fragment(word, at: index)
+            prefixCount += 1
+            if let key = word.key {
+                if phrases[key] != nil { phrases[key, default: ""] += " " }
+                phrases[key, default: ""] += word.text
+            }
+        }
+
+        func showTail(_ word: AgentChatWords.Word?, at index: Int) {
+            tail = word
+            var result = prefix
+            if let word {
+                if prefixCount > 0, !word.joinsPrevious { result = result + Text(verbatim: " ") }
+                result = result + fragment(word, at: index)
+            }
+            #if DEBUG
+            AgentChatThread.replyTextBuilds += 1
+            #endif
+            text = result
+        }
+
+        func phrase(for key: Int) -> String {
+            var result = phrases[key] ?? ""
+            if let tail, tail.key == key {
+                if !result.isEmpty { result += " " }
+                result += tail.text
+            }
+            return result
+        }
+
+        private func fragment(_ word: AgentChatWords.Word, at index: Int) -> Text {
+            #if DEBUG
+            AgentChatThread.replyWordsBuilt += 1
+            #endif
+            return Text(verbatim: word.text).customAttribute(AgentWordAttribute(index: index, key: word.key))
+        }
+    }
+}
+
+private struct AgentReplyParagraphText: View {
+    @ObservedObject var paragraph: AgentReplyPresentation.Paragraph
+    let renderer: AgentWordRenderer
+
+    var body: some View { paragraph.text.textRenderer(renderer) }
+}
+
 /// The reply: word by word while it writes, plain text once it has settled.
 private struct AgentReplyView: View {
     let reply: AgentChatReply
@@ -445,28 +558,26 @@ private struct AgentReplyView: View {
     @State private var settled = false
 
     /// When the last word and underline have finished.
-    private var settlesAt: Date? {
+    private func settlesAt(keys: Int) -> Date? {
         guard let marksStart = reply.marksStart else { return nil }
         guard marksStart != .distantPast else { return .distantPast }
-        let keys = Set((reply.parsed ?? AgentChatWords.paragraphs(reply.raw)).flatMap { $0 }.compactMap(\.key)).count
         return marksStart.addingTimeInterval(0.62 + 0.17 * Double(keys))
     }
 
     var body: some View {
-        let paragraphs = reply.parsed ?? AgentChatWords.paragraphs(reply.raw)
-        let starts = paragraphs.reduce(into: [0]) { $0.append(($0.last ?? 0) + $1.count) }
-        let staticText = paragraphs.indices.map { text(paragraphs[$0], first: starts[$0]) }
+        let parsed = presentation
+        let paragraphs = parsed.paragraphs
         TimelineView(.animation(paused: settled)) { timeline in
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(paragraphs.indices, id: \.self) { index in
-                    staticText[index]
-                        .textRenderer(AgentWordRenderer(now: timeline.date, times: reply.wordTimes, marksStart: reply.marksStart,
-                                                        paragraph: index, probe: fx.word, marks: marks))
+                    AgentReplyParagraphText(paragraph: paragraphs[index],
+                        renderer: AgentWordRenderer(now: timeline.date, times: reply.wordTimes, marksStart: reply.marksStart,
+                                                    paragraph: index, probe: fx.word, marks: marks))
                         .onContinuousHover { phase in
                             guard case let .active(at) = phase, let key = marks.key(at: at, paragraph: index),
                                   Date().timeIntervalSince(pinged[key] ?? .distantPast) > 0.9 else { return }
                             pinged[key] = Date()
-                            ping(paragraphs[index].filter { $0.key == key }.map(\.text).joined(separator: " "))
+                            ping(paragraphs[index].phrase(for: key))
                         }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AgentChatStage.space)) } action: { fx.paragraphFrames[index] = $0 }
                 }
@@ -478,24 +589,17 @@ private struct AgentReplyView: View {
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(reply.raw.replacingOccurrences(of: "**", with: ""))
-        .task(id: settlesAt) {
-            guard let settlesAt else { return }
+        .task(id: settlesAt(keys: parsed.keyCount)) {
+            guard let settlesAt = settlesAt(keys: parsed.keyCount) else { return }
             let wait = settlesAt.timeIntervalSinceNow
             if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
             if !Task.isCancelled { settled = true }
         }
     }
 
-    private func text(_ words: [AgentChatWords.Word], first: Int) -> Text {
-        #if DEBUG
-        AgentChatThread.replyTextBuilds += 1
-        #endif
-        var text = Text("")
-        for (index, word) in words.enumerated() {
-            if index > 0, !word.joinsPrevious { text = text + Text(verbatim: " ") }
-            text = text + Text(verbatim: word.text).customAttribute(AgentWordAttribute(index: first + index, key: word.key))
-        }
-        return text
+    private var presentation: AgentReplyPresentation {
+        if let parsed = reply.parsed { return parsed }
+        return AgentReplyPresentation(paragraphs: AgentChatWords.paragraphs(reply.raw))
     }
 }
 
