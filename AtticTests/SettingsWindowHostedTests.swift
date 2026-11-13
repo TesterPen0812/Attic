@@ -288,7 +288,17 @@ final class SettingsWindowHostedTests: XCTestCase {
             // client before excluding only those system-created parts.
             let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
             if !hiddenParts.isEmpty {
-                XCTAssertTrue(externalScrollbarsAreHidden(),
+                // AppKit can publish its private scroller parts before the
+                // external AX client sees the containing scrollbar's hidden
+                // state. Require that actual state, not a fixed paint delay.
+                let deadline = Date().addingTimeInterval(2)
+                var scrollbarsHidden = externalScrollbarsAreHidden()
+                while !scrollbarsHidden && Date() < deadline {
+                    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+                    host.layoutSubtreeIfNeeded()
+                    scrollbarsHidden = externalScrollbarsAreHidden()
+                }
+                XCTAssertTrue(scrollbarsHidden,
                               "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
             }
             let interactive = after.filter {
