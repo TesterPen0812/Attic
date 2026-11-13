@@ -74,6 +74,17 @@ protocol AsyncCalendarEventReading: AnyObject {
     func loadEvents(in interval: DateInterval) async -> [CalendarEvent]
 }
 
+extension CalendarEventSource {
+    /// Production EventKit callers suspend on its serial reader. Fixtures
+    /// without an async reader retain the existing synchronous contract.
+    func eventsWithoutBlocking(in interval: DateInterval) async -> [CalendarEvent] {
+        if let reader = self as? AsyncCalendarEventReading {
+            return await reader.loadEvents(in: interval)
+        }
+        return events(in: interval)
+    }
+}
+
 /// Search streams matching batches so an all-date scan never blocks the
 /// main actor or queues a long scan ahead of ordinary agenda reads.
 @MainActor

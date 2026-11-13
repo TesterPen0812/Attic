@@ -575,6 +575,94 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertNil(result.changeSet)
     }
 
+    private final class HeldAgentCalendarReader: CalendarEventSource, AsyncCalendarEventReading {
+        var accessState: CalendarAccessState = .granted
+        var onChange: (@MainActor () -> Void)?
+        var occurrences: [CalendarEvent] = []
+        private(set) var syncReads = 0
+        private(set) var asyncReads = 0
+        private var pending: [CheckedContinuation<[CalendarEvent], Never>] = []
+        var hold = false
+
+        func requestAccess() async -> CalendarAccessState { accessState }
+        func events(in interval: DateInterval) -> [CalendarEvent] {
+            syncReads += 1
+            return occurrences.filter { $0.overlaps(interval) }
+        }
+        func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] {
+            events(in: interval).filter { $0.matches(text) }
+        }
+        func loadEvents(in interval: DateInterval) async -> [CalendarEvent] {
+            asyncReads += 1
+            if hold {
+                return await withCheckedContinuation { pending.append($0) }
+            }
+            return occurrences.filter { $0.overlaps(interval) }
+        }
+        func resume() { pending.removeFirst().resume(returning: occurrences) }
+    }
+
+    func testPF32CalendarAgentReadsNeverBlockOnSynchronousEventKitBridge() async throws {
+        let f = try fixture()
+        let source = HeldAgentCalendarReader()
+        let actions = AgentActions(tasks: f.actions.tasks, calendarSource: source)
+        let start = Date(timeIntervalSince1970: 1_793_361_600)
+        let occurrenceID = "fixture@\(start.timeIntervalSinceReferenceDate)"
+        source.occurrences = [CalendarEvent(id: occurrenceID, title: "Calendar audit", start: start,
+                                            end: start.addingTimeInterval(3600), isAllDay: false,
+                                            calendarTitle: "Fake", colour: .init(red: 0, green: 0, blue: 0))]
+        let request = actions.beginRequest(title: "Read Calendar")
+        source.hold = true
+        let search = Task {
+            try await actions.call(name: "calendar_search", arguments: [
+                "query": "audit", "start": iso(start.addingTimeInterval(-3600)),
+                "end": iso(start.addingTimeInterval(7200))], watching: false, requestID: request)
+        }
+        for _ in 0..<500 where source.asyncReads == 0 { await Task.yield() }
+        let heldAsync = source.asyncReads == 1
+        var otherMainActorWork = 0
+        Task { @MainActor in otherMainActorWork += 1 }
+        for _ in 0..<20 where otherMainActorWork == 0 { await Task.yield() }
+        if heldAsync { source.hold = false; source.resume() }
+        let searchResult = try performed(await search.value)
+        XCTAssertTrue(heldAsync, "the agent must suspend on the async reader")
+        XCTAssertEqual(otherMainActorWork, 1, "the suspended read must allow other UI work")
+        XCTAssertEqual(try payload(searchResult.text)["count"] as? Int, 1)
+
+        for _ in 0..<100 {
+            let read = try performed(await actions.call(name: "calendar_read", arguments: [
+                "occurrence_id": occurrenceID], watching: false, requestID: request))
+            XCTAssertEqual((try payload(read.text)["event"] as? [String: Any])?["title"] as? String,
+                           "Calendar audit")
+        }
+        XCTAssertEqual(source.syncReads, 0, "101 reads must issue no synchronous worker waits")
+        XCTAssertEqual(source.asyncReads, 101, "read work stays constant across identical requests")
+
+        // Deterministic 256-step read/search sequence (seed 0x13112026):
+        // main-actor work per request is a single async source projection,
+        // without a late switch back to synchronous worker reads.
+        var seed: UInt64 = 0x1311_2026
+        for step in 0..<256 {
+            seed = seed &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+            let search = (seed & 0x100) == 0
+            let args: [String: Any] = search
+                ? ["query": "audit", "start": iso(start.addingTimeInterval(-3600)),
+                   "end": iso(start.addingTimeInterval(7200))]
+                : ["occurrence_id": occurrenceID]
+            let response = try performed(await actions.call(name: search ? "calendar_search" : "calendar_read",
+                                                            arguments: args, watching: false, requestID: request))
+            let body = try payload(response.text)
+            if search {
+                XCTAssertEqual(body["count"] as? Int, 1, "sequence step \(step)")
+            } else {
+                XCTAssertEqual((body["event"] as? [String: Any])?["title"] as? String,
+                               "Calendar audit", "sequence step \(step)")
+            }
+            XCTAssertEqual(source.syncReads, 0, "step \(step) must not block on the EventKit sync bridge")
+            XCTAssertEqual(source.asyncReads, 102 + step, "source work stays flat per request")
+        }
+    }
+
     func testCalendarSearchAndReadUseOnlyFakeSource() async throws {
         let f = try fixture()
         let date = Date(timeIntervalSince1970: 1_793_361_600)

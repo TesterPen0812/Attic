@@ -235,7 +235,7 @@ extension AgentActions {
             guard end > start, end.timeIntervalSince(start) <= 366 * 86_400 else {
                 throw AgentActionsError.invalid("Calendar search interval must be positive and at most one year.")
             }
-            let events = source.events(in: DateInterval(start: start, end: end)).filter {
+            let events = await source.eventsWithoutBlocking(in: DateInterval(start: start, end: end)).filter {
                 Self.matchScore(query: query, in: $0.title + " " + ($0.location ?? "")) != nil
             }
             return try result(Self.json(["events": events.map(Self.calendarRow), "count": events.count]),
@@ -249,7 +249,7 @@ extension AgentActions {
             }
             let start = Date(timeIntervalSinceReferenceDate: seconds)
             let interval = DateInterval(start: start.addingTimeInterval(-1), end: start.addingTimeInterval(86_400))
-            guard let event = source.events(in: interval).first(where: { $0.id == id }) else {
+            guard let event = await source.eventsWithoutBlocking(in: interval).first(where: { $0.id == id }) else {
                 throw AgentActionsError.invalid("Calendar occurrence not found.")
             }
             return try result(Self.json(["event": Self.calendarRow(event)]), .read, [Self.calendarTarget(event)])

@@ -705,6 +705,33 @@ final class AgentChatTests: XCTestCase {
     }
     #endif
 
+    func testPF32ChatWeekWaitsAsynchronouslyForCalendarBars() async throws {
+        model.weekDays = { AgentChatModel.emptyWeek(holding: $0) }
+        let day = Date(timeIntervalSince1970: 1_793_361_600)
+        model.now = { day }
+        var pending: [CheckedContinuation<[AgentChatWeekDay], Never>] = []
+        model.loadWeekDays = { _ in await withCheckedContinuation { pending.append($0) } }
+        model.open()
+        await start()
+        await emit(.stepStarted(step(.read, targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)])))
+        for _ in 0..<100 where pending.isEmpty { await Task.yield() }
+        let suspended = !pending.isEmpty
+        XCTAssertNil(week, "an entirely blank week has no strip until events arrive")
+        var mainActorProgress = 0
+        Task { @MainActor in mainActorProgress += 1 }
+        for _ in 0..<20 where mainActorProgress == 0 { await Task.yield() }
+        if suspended {
+            let populated = AgentChatModel.emptyWeek(holding: day).enumerated().map { index, item in
+                AgentChatWeekDay(day: item.day, bars: index == 2 ? [0.1...0.3] : [])
+            }
+            pending.removeFirst().resume(returning: populated)
+            for _ in 0..<100 where week == nil { await Task.yield() }
+        }
+        XCTAssertTrue(suspended, "EventKit must be loaded from a suspending task")
+        XCTAssertEqual(mainActorProgress, 1)
+        XCTAssertEqual(week?.days.filter { !$0.bars.isEmpty }.count, 1)
+    }
+
     func testACalendarReadShowsTheWeekAndAMoveTargetsADay() async {
         model.open()
         await start()
