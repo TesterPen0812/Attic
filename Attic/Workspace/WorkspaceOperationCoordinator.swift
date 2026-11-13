@@ -127,6 +127,9 @@ final class WorkspaceOperationCoordinator {
         unclassifiedRecoveryBytes ? nil : retainedRecoveryBytes
     }
     private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
+    private var damagedCollectionHoldPending = false
+    private var damagedCollectionAdmission: Task<Void, Never>?
+    private var pendingCheckpointInventory: [NoteDraftRecoveryEntry]?
     private(set) var damagedCheckpointNotes = Set<UUID>()
     private var compatibilityPending = Set<UUID>()
     private var abortedCompatibility: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim)] = [:]
@@ -335,20 +338,62 @@ final class WorkspaceOperationCoordinator {
     private func observeCheckpointInventory() {
         journal.inventoryChanged = { [weak self] entries in
             guard let self else { return }
+            self.pendingCheckpointInventory = entries
             do {
                 try self.registerCheckpointInventory(entries)
-                self.damagedCollectionHold?.release()
-                self.damagedCollectionHold = nil
+                self.releaseDamagedCollectionHold()
             }
             catch {
                 // Keep the last known owners and hold unbounded collection.
-                if self.damagedCollectionHold == nil {
-                    self.damagedCollectionHold = self.ownership.tryAcquire([self.ownership.unknownID], kind: .admission)
-                }
+                self.holdDamagedCollection()
             }
         }
     }
-    private func registerCheckpointInventory(_ entries: [NoteDraftRecoveryEntry]) throws {
+
+    isolated deinit { damagedCollectionAdmission?.cancel() }
+
+    private func releaseDamagedCollectionHold() {
+        pendingCheckpointInventory = nil
+        damagedCollectionHoldPending = false
+        damagedCollectionHold?.release()
+        damagedCollectionHold = nil
+    }
+
+    private func installPendingCheckpointInventory(excluding collection: WorkspaceOwnershipGate.Lease? = nil) {
+        guard let entries = pendingCheckpointInventory else { return }
+        do {
+            try registerCheckpointInventory(entries, excluding: collection)
+            releaseDamagedCollectionHold()
+        } catch { /* Damaged or unclassified ownership still needs the hold. */ }
+    }
+
+    private func holdDamagedCollection() {
+        guard damagedCollectionHold == nil else { return }
+        // Fail closed synchronously, including while an existing collector
+        // prevents the unknown-owner admission from being acquired.
+        damagedCollectionHoldPending = true
+        if let hold = ownership.tryAcquire([ownership.unknownID], kind: .admission) {
+            damagedCollectionHold = hold
+            damagedCollectionHoldPending = false
+            installPendingCheckpointInventory()
+            return
+        }
+        guard damagedCollectionAdmission == nil else { return }
+        let gate = ownership
+        damagedCollectionAdmission = Task { [weak self] in
+            guard let hold = try? await gate.admit([gate.unknownID]) else { return }
+            guard let self else { hold.release(); return }
+            self.damagedCollectionAdmission = nil
+            guard self.damagedCollectionHoldPending else { hold.release(); return }
+            self.damagedCollectionHold = hold
+            self.damagedCollectionHoldPending = false
+            // A complete retry may have arrived while collection was still
+            // active. Adopt its exact owners before releasing the global hold.
+            self.installPendingCheckpointInventory()
+        }
+    }
+    private func registerCheckpointInventory(_ entries: [NoteDraftRecoveryEntry],
+                                             excluding collection: WorkspaceOwnershipGate.Lease? = nil) throws {
         var rows = Set<WorkspaceOwner>(), bytes = Set<UUID>()
         for item in entries {
             guard case let .valid(entry, _, _) = item else { throw WorkspaceFoundationError.unknown }
@@ -358,7 +403,8 @@ final class WorkspaceOperationCoordinator {
                 .union(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
             bytes.formUnion(ids); rows.formUnion(ids.map { .init(entity: .attachment, id: $0) })
         }
-        guard let hold = ownership.tryAcquire(bytes.union(rows.map(\.id)), kind: .admission) else { throw WorkspaceFoundationError.unknown }
+        guard let hold = ownership.tryAcquire(bytes.union(rows.map(\.id)), kind: .admission,
+                                             excluding: collection) else { throw WorkspaceFoundationError.unknown }
         checkpointCollectionHold?.release(); checkpointCollectionHold = hold
         checkpointOwners = rows; checkpointBytes = bytes
         try releaseAbortedCompatibility(ownedCheckpoints: entries)
@@ -390,6 +436,7 @@ final class WorkspaceOperationCoordinator {
         // commits into that inaccessible directory.
         try FileManager.default.createDirectory(at: replacement.directory, withIntermediateDirectories: true)
         journal.inventoryChanged = nil
+        pendingCheckpointInventory = nil
         journal = replacement
         startupReconciled = false; launchFinished = false
         observeCheckpointInventory()
@@ -417,6 +464,7 @@ final class WorkspaceOperationCoordinator {
         for row in context.deletedModelsArray {
             guard launchHold == nil || startupReconciled,
                   damagedCollectionHold == nil,
+                  !damagedCollectionHoldPending,
                   (row as? NoteAttachment).map({ !unclassifiedRecoveryBytes && !abortedRecoveryBytes.contains($0.id) }) ?? true,
                   Self.owner(row).map({ !checkpointOwners.contains($0) && !heldOwners.contains($0) }) == true else {
                 throw WorkspaceFoundationError.protectedOwner
@@ -531,6 +579,12 @@ final class WorkspaceOperationCoordinator {
             defer { admission.release() }
             try validatePreservedOpaqueContent(context, before: envelope.tokens, contents: originalContents)
             try validateWriteSet(context, declared: envelope.writes)
+            if let collector = collection?.lease(for: ownership), ownership.validatesCollection(collector, ids: []) {
+                // Install complete checkpoint owners under the operation's
+                // own collection, just like its other write admissions. An
+                // unreadable inventory still keeps the pending deletion hold.
+                installPendingCheckpointInventory(excluding: collector)
+            }
             let resulting = try states(envelope.writes, in: context)
             context.insert(OperationReceipt(id: envelope.id, envelopeDigest: claim.digest,
                 affectedIDs: try WorkspaceModelFields.encode(sorted(affected)),
@@ -1078,14 +1132,13 @@ final class WorkspaceOperationCoordinator {
         defer { startupAdmission.release() }
         try registerCheckpointInventory(valid)
         damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
+        pendingCheckpointInventory = nil
         if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
             // Raw damage can name arbitrary bytes. Its note publication hold
             // is bounded by the filename; byte collection stays conservative
             // until explicit archive/repair proves the complete inventory.
-            if damagedCollectionHold == nil {
-                damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
-            }
-        } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
+            holdDamagedCollection()
+        } else { releaseDamagedCollectionHold() }
         let inventory = try await journal.operationInventory()
         var recorded = try await refreshOperationRecovery(inventory)
         let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in

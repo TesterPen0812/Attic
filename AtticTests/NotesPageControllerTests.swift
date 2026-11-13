@@ -3865,6 +3865,9 @@ extension NotesPageControllerTests {
         private var thrown = 0
         private var skipPostcommitCollector = false
         private var expectsCheckpoint = true
+        private var successfulListings = 0
+        private var beforeWrite: (@Sendable () -> Void)?
+        private var beforeFailure: (@Sendable () -> Void)?
 
         var injectedFailures: Int { lock.withLock { thrown } }
         var pendingFailures: Int { lock.withLock { failures } }
@@ -3875,31 +3878,48 @@ extension NotesPageControllerTests {
             super.init()
         }
 
-        func failNextInventory(afterRemoval: Bool = false) {
+        func failNextInventory(afterRemoval: Bool = false, afterSuccessfulListings: Int = 0, failureCount: Int = 1,
+                               beforeWrite: (@Sendable () -> Void)? = nil,
+                               beforeFailure: (@Sendable () -> Void)? = nil) {
             lock.withLock {
-                failures += 1
+                failures += failureCount
                 expectsCheckpoint = !afterRemoval
+                successfulListings = afterSuccessfulListings
+                self.beforeWrite = beforeWrite
+                self.beforeFailure = beforeFailure
                 // The writer makes a best-effort collection read after the
                 // atomic checkpoint write, before its throwing refresh.
                 skipPostcommitCollector = true
             }
         }
 
+        override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                      attributes: [FileAttributeKey: Any]? = nil) throws {
+            try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+            let callback = lock.withLock { let callback = beforeWrite; beforeWrite = nil; return callback }
+            callback?()
+        }
+
         override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
                                           options mask: FileManager.DirectoryEnumerationOptions = []) throws -> [URL] {
             if url.standardizedFileURL == root.standardizedFileURL
                 && super.fileExists(atPath: checkpoint.path) == lock.withLock({ expectsCheckpoint }) {
-                let fail = lock.withLock { () -> Bool in
+                let action = lock.withLock { () -> (Bool, (@Sendable () -> Void)?) in
                     if skipPostcommitCollector {
                         skipPostcommitCollector = false
-                        return false
+                        return (false, nil)
                     }
-                    guard failures > 0 else { return false }
+                    guard failures > 0 else { return (false, nil) }
+                    if successfulListings > 0 {
+                        successfulListings -= 1
+                        return (false, nil)
+                    }
                     failures -= 1
                     thrown += 1
-                    return true
+                    return (true, beforeFailure)
                 }
-                if fail { throw CocoaError(.fileReadNoPermission) }
+                action.1?()
+                if action.0 { throw CocoaError(.fileReadNoPermission) }
             }
             return try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
         }
@@ -3914,6 +3934,146 @@ extension NotesPageControllerTests {
             staged: [.init(id: staged.id, filename: staged.filename,
                            contentTypeIdentifier: staged.contentTypeIdentifier,
                            byteCount: staged.byteCount, digest: staged.digest)], savedAt: .now)
+    }
+
+    private func r2Delete(_ owner: WorkspaceOwner, container: ModelContainer) throws {
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
+        defer { context.rollback() }
+        if owner.entity == .task {
+            let rows = try context.fetch(FetchDescriptor<TaskItem>())
+            try WorkspaceLegacyBridge.establishScopeBaseline(context, roots: rows, entities: [.task])
+            for row in rows where row.id == owner.id {
+                WorkspaceLegacyBridge.prepareMutation(row, in: context)
+                context.delete(row)
+            }
+        } else {
+            let rows = try context.fetch(FetchDescriptor<NoteItem>())
+            try WorkspaceLegacyBridge.establishScopeBaseline(context, roots: rows, entities: [.note])
+            for row in rows where row.id == owner.id {
+                WorkspaceLegacyBridge.prepareMutation(row, in: context)
+                context.delete(row)
+            }
+        }
+        try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "R2 deletion", history: false)
+    }
+
+    func testR2_1RetirementInventoryRetriesWithoutAnotherWriteAndUnblocksTaskDeletion() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2Retry")
+        let noteID = UUID(), taskID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
+        let seed = ModelContext(container)
+        seed.insert(TaskItem(id: taskID, title: "Unrelated task")); try seed.save()
+        let document = NoteDocument(blocks: [.text("Saved")])
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
+        let claim = try await journal.writeDurably(entry, staged: [])
+        fault.failNextInventory(afterRemoval: true)
+        try await journal.retireDurably(noteID: noteID, claim: claim, saved: .init(document: document, tags: []))
+        XCTAssertEqual(fault.injectedFailures, 1)
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        XCTAssertThrowsError(try r2Delete(owner, container: container))
+        var deleted = false
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !deleted, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+            do { try r2Delete(owner, container: container); deleted = true } catch { }
+        }
+        XCTAssertTrue(deleted, "a transient inventory failure must recover without another journal write or relaunch")
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).isEmpty)
+        XCTAssertTrue(try journal.recoveryEntries().isEmpty)
+        withExtendedLifetime(coordinator) { }
+    }
+
+    func testR2_2FailedInventoryDuringCollectionStillProtectsCheckpointOwner() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2PendingHold")
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
+        let seed = ModelContext(container)
+        seed.insert(NoteItem(id: noteID)); try seed.save()
+        let collection = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection))
+        defer { collection.release() }
+        fault.failNextInventory()
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Only recovery copy")])),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
+        _ = try await journal.writeDurably(entry, staged: [])
+        XCTAssertEqual(fault.injectedFailures, 1)
+        // Keep the competing collector alive beyond the bounded IO retry.
+        // A successful listing still cannot install admissions until it ends.
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertThrowsError(try r2Delete(.init(entity: .note, id: noteID), container: container))
+        collection.release()
+        XCTAssertThrowsError(try r2Delete(.init(entity: .note, id: noteID), container: container),
+            "a failed hold acquisition must not permit deletion when the collection ends")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !coordinator.recoveryDependsOnNote(noteID), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(coordinator.recoveryDependsOnNote(noteID), "the retry must install the checkpoint's exact owners")
+        XCTAssertThrowsError(try r2Delete(.init(entity: .note, id: noteID), container: container))
+    }
+
+    func testR2_1PersistentInventoryFailureBoundsRetriesAndKeepsCollectionHeld() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2RetryBound")
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
+        fault.failNextInventory(failureCount: 100)
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Keep safe")])),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
+        _ = try await journal.writeDurably(entry, staged: [])
+        try await Task.sleep(for: .seconds(2))
+        let failures = fault.injectedFailures
+        XCTAssertGreaterThan(failures, 1, "publication must retry transient failures")
+        XCTAssertLessThanOrEqual(failures, 4, "persistent faults must not start an unbounded IO loop")
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(fault.injectedFailures, failures, "the bounded retry must stop")
+        XCTAssertThrowsError(try journal.recoveryEntries())
+        let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+        XCTAssertNil(collection, "exhausting retries must never clear the safety hold")
+        collection?.release()
+    }
+
+    func testR2_2NewerRecoveryOfferCannotHideFailedCompleteInventory() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2InventoryVersion")
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
+        let collector = expectation(description: "writer reached directory creation")
+        let resumeCollector = DispatchSemaphore(value: 0), resumeFailure = DispatchSemaphore(value: 0)
+        defer { resumeCollector.signal(); resumeFailure.signal() }
+        fault.failNextInventory(afterSuccessfulListings: 3, beforeWrite: {
+            collector.fulfill()
+            _ = resumeCollector.wait(timeout: .now() + 5)
+        }, beforeFailure: { _ = resumeFailure.wait(timeout: .now() + 5) })
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Checkpoint")])),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
+        let writer = Task { try await journal.writeDurably(entry, staged: []) }
+        await fulfillment(of: [collector], timeout: 5)
+        let readerStarted = expectation(description: "newer offer snapshot queued")
+        let reader = Task {
+            readerStarted.fulfill()
+            return try await journal.readRecoveryEntries()
+        }
+        await fulfillment(of: [readerStarted], timeout: 5)
+        resumeCollector.signal()
+        let offers = try await reader.value
+        XCTAssertEqual(offers.count, 1)
+        resumeFailure.signal()
+        _ = try await writer.value
+        XCTAssertEqual(fault.injectedFailures, 1)
+        XCTAssertThrowsError(try journal.recoveryEntries(), "filtered offers must not mask a failed complete inventory")
+        let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+        XCTAssertNil(collection, "the failed complete inventory must publish its safety hold despite a newer offer")
+        collection?.release()
     }
 
     func testR3FailedPostcommitInventoryInvalidatesCacheAndHoldsCollectionUntilRefresh() async throws {

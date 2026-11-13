@@ -773,6 +773,10 @@ final class NoteDraftJournal: NoteDraftJournaling {
     private var cached: [NoteDraftRecoveryEntry]?
     private var liveReferenceVersion: UInt64 = 0
     private var cachedVersion: UInt64 = 0
+    // Filtered recovery offers do not supersede complete ownership inventory.
+    private var inventoryVersion: UInt64 = 0
+    private var inventoryUnavailable = false
+    private var inventoryRetry: Task<Void, Never>?
 
     private func liveSnapshot() throws -> NoteLiveReferenceSnapshot {
         try path.refreshLiveReferences()
@@ -784,27 +788,52 @@ final class NoteDraftJournal: NoteDraftJournaling {
     }
 
     private func publish(_ entries: [NoteDraftRecoveryEntry], for snapshot: NoteLiveReferenceSnapshot) throws {
-        guard snapshot.version >= cachedVersion else { return }
+        guard snapshot.version >= inventoryVersion else { return }
         // Result leases cover the IO-return-to-adoption interval. Refresh all
         // live facades before replacing this facade's cached recovery lease.
         try path.refreshLiveReferences()
         path.publishCache(snapshot, entries: entries)
-        cachedVersion = snapshot.version
+        inventoryVersion = snapshot.version
+        cachedVersion = max(cachedVersion, snapshot.version)
         cached = entries
+        inventoryUnavailable = false
         inventoryChanged?(entries)
     }
     /// The disk mutation has already committed. Publication failure must
     /// preserve its result, invalidate stale offers and keep collection held
-    /// until a later complete inventory can publish the exact owners.
+    /// until a complete inventory can publish the exact owners.
     private func publishCommittedInventory(for snapshot: NoteLiveReferenceSnapshot) async {
         do {
             let entries = try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot)
             try publish(entries, for: snapshot)
         } catch {
-            guard snapshot.version >= cachedVersion else { return }
-            cachedVersion = snapshot.version
+            guard snapshot.version >= inventoryVersion else { return }
+            inventoryVersion = snapshot.version
+            cachedVersion = max(cachedVersion, snapshot.version)
             cached = nil
+            inventoryUnavailable = true
             inventoryChanged?([.damaged("Recovery inventory is unavailable.")])
+            scheduleInventoryRetry()
+        }
+    }
+
+    private func scheduleInventoryRetry() {
+        guard inventoryRetry == nil else { return }
+        inventoryRetry = Task { [weak self] in
+            // Coalesce failures and bound disk work. Exhaustion retains the
+            // safety hold; a later committed mutation may start another retry.
+            for delay in [100, 300, 1_000] {
+                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                guard let self else { return }
+                guard self.inventoryUnavailable else { self.inventoryRetry = nil; return }
+                do {
+                    let snapshot = try self.liveSnapshot()
+                    let entries = try await self.io.recoveryEntries(collectRetired: false, offering: false, live: snapshot)
+                    try self.publish(entries, for: snapshot)
+                    if !self.inventoryUnavailable { self.inventoryRetry = nil; return }
+                } catch { /* Keep stale offers unavailable and collection held. */ }
+            }
+            self?.inventoryRetry = nil
         }
     }
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
@@ -819,7 +848,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
         path.register(liveOwner) { [weak self] in try self?.liveReferencedIDs() ?? [] }
     }
 
-    isolated deinit { path.release(liveOwner) }
+    isolated deinit { inventoryRetry?.cancel(); path.release(liveOwner) }
 
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
         throw NoteDraftJournalError.asynchronousIORequired
@@ -842,7 +871,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
         let entries = try await io.recoveryEntries(live: snapshot)
         // Filtered offers cannot release complete-inventory ownership, and an
         // older actor completion must not replace a newer cached inventory.
-        if snapshot.version >= cachedVersion {
+        if !inventoryUnavailable, snapshot.version >= cachedVersion {
             cachedVersion = snapshot.version
             cached = entries
         }
