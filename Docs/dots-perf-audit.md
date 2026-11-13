@@ -210,15 +210,15 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 4. **DP-8** synchronous approach warmup if it overlaps an input.
 5. **DP-21/DP-22** long-note projection and large code-block tokenization (depending on content).
 6. **DP-19** whole Draw AX navigation rebuild during text edits on a large board.
-6. **DP-3** width-triggered Notes table remeasurement on large tables.
-7. **DP-16** Notes row anchors, focusable controls and global-revision invalidation.
-8. **DP-17** conditional Genie capture near first input, especially at larger panel sizes.
-9. **DP-18** bulk deletion staging scans of unrelated workspace data.
-10. **DP-15** duplicated eager shared-tag strip construction with many tags.
-11. **DP-2** separate island-window positioning and glass work during resize.
-12. **DP-4** Draw coverage traversal on each frame-size call for large scenes.
-13. **DP-12** full inline tag candidates in tag-heavy rows.
-14. **DP-9/DP-14** folded-heading viewport work and dense Calendar filtering.
+7. **DP-3** width-triggered Notes table remeasurement on large tables.
+8. **DP-16** Notes row anchors, focusable controls and global-revision invalidation.
+9. **DP-17** conditional Genie capture near first input, especially at larger panel sizes.
+10. **DP-18** bulk deletion staging scans of unrelated workspace data.
+11. **DP-15** duplicated eager shared-tag strip construction with many tags.
+12. **DP-2** separate island-window positioning and glass work during resize.
+13. **DP-4** Draw coverage traversal on each frame-size call for large scenes.
+14. **DP-12** full inline tag candidates in tag-heavy rows.
+15. **DP-9/DP-14** folded-heading viewport work and dense Calendar filtering.
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-8 and DP-16/DP-17 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
