@@ -80,7 +80,7 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticRadius.noteRow, 16)
         XCTAssertEqual(NotesLibraryRowMetrics.radius, 16)
         XCTAssertEqual(NotesLibraryRowMetrics.thumbnailInset, 6)
-        XCTAssertEqual(CalendarDesign.eventRadius, 17.5, "24 − 6.5")
+        XCTAssertEqual(CalendarDesign.eventRadius, 14, "Accepted 2026-11-13 Corners, measured fix")
         XCTAssertEqual(AtticRadius.popover, 16)
         XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 18, "the picker cards: the glass menu's 18 pt (Accepted 2026-11-10)")
         // Picker cards are menu cards (Corners B, Accepted 2026-11-13).

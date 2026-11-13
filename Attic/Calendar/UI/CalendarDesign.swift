@@ -83,10 +83,11 @@ enum CalendarDesign {
     static let eventLine: CGFloat = 15
     static let eventMetaFont: CGFloat = 11
     static let eventMetaTop: CGFloat = 1.5
-    /// Concentric inside the day card (Corners B, Accepted 2026-11-13):
-    /// 24 − 6.5 = 17.5 on Apple's continuous curve, capped by a short row's
-    /// half height.
-    static let eventRadius: CGFloat = AtticRadius.concentric(outer: dayRadius, padding: dayPadding)
+    /// 14 pt on Apple's continuous curve (Corners B, Accepted 2026-11-13,
+    /// measured fix: the sheet's 42 pt B event drew its corner in a 21 pt
+    /// box, which 14 pt continuous matches). The card stays 24 with 6.5 pt
+    /// padding, so the event is a little tighter than concentric.
+    static let eventRadius: CGFloat = 14
     // Now line: 10 px dot, 2 px line, 18 px time; 4 px above and below.
     static let nowDot: CGFloat = 5
     static let nowLine: CGFloat = 1
