@@ -569,6 +569,7 @@ final class AgentActions {
         try checkOpen(requestID)
         try guardMode(name, requestID: requestID)
         if Self.isMutation(name) { try requireDurableUndoBeforeMutation() }
+        if name == "create_task" { _ = try tasks.taskCreationDraft(arguments) }
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))

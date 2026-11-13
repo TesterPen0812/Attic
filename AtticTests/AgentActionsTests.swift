@@ -2176,6 +2176,32 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertTrue(AgentActions.mutationNames.isSubset(of: names))
     }
 
+    func testRejectedCreateDoesNotStrandDurableAgentIntent() async throws {
+        let store = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentRejectedCreate")
+            .appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: store,
+            library: AtticLibrary(tasks: store)), journalURL: journal)
+        let request = actions.beginRequest(title: "Rejected then valid")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "   "],
+                                       watching: false, requestID: request)
+            XCTFail("Blank task titles must be refused")
+        } catch {
+            XCTAssertTrue((error as? AgentToolError)?.message.contains("non-empty") == true, "\(error)")
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Valid now"],
+                                             watching: false, requestID: request))
+        let reopened = TaskStore(container: store.container)
+        let afterRestart = AgentActions(tasks: AgentTaskTools(store: reopened,
+            library: AtticLibrary(tasks: reopened)), journalURL: journal)
+        let later = afterRestart.beginRequest(title: "Valid after restart")
+        _ = try performed(await afterRestart.call(name: "create_task", arguments: ["title": "Valid later"],
+                                                 watching: false, requestID: later))
+        XCTAssertEqual(Set(reopened.tasks.map(\.title)), ["Valid now", "Valid later"])
+    }
+
     func testUnverifiedCalendarCommitKeepsIntentAndPreventsRetryAcrossRestart() async throws {
         let failures: [CalendarEventWriteError] = [.eventChanged, .calendarReadOnly]
         for failure in failures {
