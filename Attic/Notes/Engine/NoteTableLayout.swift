@@ -126,7 +126,9 @@ struct NoteTableLayout: Equatable {
         var floors: [CGFloat] = []
         var widths: [CGFloat] = table.columns.enumerated().map { column, value in
             if let set = value.width {
-                let width = max(M.minDraggedWidth, CGFloat(set))
+                // Imported widths remain unmodified in NoteTable. Bound only
+                // the geometry used for drawing and text measurement.
+                let width = min(10_000, max(M.minDraggedWidth, CGFloat(set)))
                 floors.append(width)
                 return width
             }
@@ -300,7 +302,9 @@ final class NoteTableTextCache {
             }
         }
         if hasRelativeDate { hasher.combine(startOfToday()) }
-        return Key(cell: hasher.finalize(), header: header, width: Int((width * 2).rounded()))
+        // Cache keys must be safe even if a caller supplies foreign geometry.
+        let bounded = width.isFinite ? min(10_000, max(-10_000, width)) : 10_000
+        return Key(cell: hasher.finalize(), header: header, width: Int((bounded * 2).rounded()))
     }
 
     func natural(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
