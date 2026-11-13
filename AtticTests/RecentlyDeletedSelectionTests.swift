@@ -76,6 +76,113 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(reloads, 1, "old callbacks must not rearm into additional observation chains")
     }
 
+    /// PF-49: frequent activation with no expired task/redirect group must
+    /// start zero asynchronous ownership scans, independent of live data size.
+    func testPF49RepeatedActivationWithoutExpiredFamiliesStartsNoCoordinatedPurges() async throws {
+        let fixture = try makeFixture()
+        for index in 0..<120 { XCTAssertNotNil(fixture.tasks.create(title: "Live \(index)")) }
+        var started = 0
+        fixture.library.taskNotePurge = { _, _, _ in started += 1; return [] }
+        fixture.library.presentationDefaults = nil
+
+        for _ in 0..<100 {
+            _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        }
+        for _ in 0..<150 { await Task.yield() }
+        XCTAssertEqual(started, 0, "no expired groups means no speculative coordinated purge work")
+    }
+
+    /// One expired family must not materialize the many unrelated live
+    /// tasks/notes simply to preserve the family's Undo writing references.
+    func testPF49ExpiredFamilyInventoryAvoidsUnrelatedLiveRows() async throws {
+        let fixture = try makeFixture()
+        fixture.library.presentationDefaults = nil
+        let context = ModelContext(fixture.container)
+        for index in 0..<120 {
+            let live = try XCTUnwrap(fixture.tasks.create(title: "Unrelated \(index)"))
+            let note = NoteItem(id: UUID())
+            note.taskID = live.id
+            context.insert(note)
+        }
+        try context.save()
+        let expired = try XCTUnwrap(fixture.tasks.create(title: "Expired family"))
+        XCTAssertTrue(fixture.library.delete(.init(.task, expired.id)))
+        let linked = NoteItem(id: UUID())
+        linked.taskID = expired.id
+        context.insert(linked)
+        try context.save()
+        fixture.clock.value += 35 * 86_400
+        var started = 0
+        fixture.library.taskNotePurge = { _, _, _ in started += 1; return [] }
+
+        _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        for _ in 0..<200 where started == 0 { await Task.yield() }
+        XCTAssertEqual(started, 1, "the expired family still enters coordinated purge")
+        XCTAssertLessThanOrEqual(fixture.library.lastDeletedGroupWritingInventoryRows, 12,
+                                 "120 unrelated live task/note pairs should not be materialized for one expired family")
+    }
+
+    /// The fast eligibility probe must ignore independent note deletion,
+    /// but recognize a grouped redirect with no expired task row.
+    func testPF49CandidateProbeIncludesExpiredRedirectOnlyNoteGroups() throws {
+        let fixture = try makeFixture()
+        let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: fixture.clock.value, calendar: calendar)
+        let context = ModelContext(fixture.container)
+        let independent = NoteItem(id: UUID())
+        independent.deletedAt = cutoff.addingTimeInterval(-86_400)
+        context.insert(independent)
+        try context.save()
+        XCTAssertFalse(TaskNotePurge.hasExpiredCandidates(in: ModelContext(fixture.container), before: cutoff),
+                       "an unrelated deleted note does not need coordinated ownership scans")
+
+        let grouped = NoteItem(id: UUID())
+        grouped.deletedAt = cutoff.addingTimeInterval(-86_400)
+        grouped.deletionGroupID = UUID()
+        context.insert(grouped)
+        try context.save()
+        XCTAssertTrue(TaskNotePurge.hasExpiredCandidates(in: ModelContext(fixture.container), before: cutoff),
+                      "a redirect-note-only group still needs the coordinated purge")
+    }
+
+    /// Repeated wake/activation during a suspended coordinated purge must
+    /// leave one owner of that work and at most one follow-up cycle.
+    func testPF49OverlappingActivationsCoalesceCoordinatedPurge() async throws {
+        let fixture = try makeFixture()
+        fixture.library.presentationDefaults = nil
+        let task = try XCTUnwrap(fixture.tasks.create(title: "Task with writing"))
+        XCTAssertTrue(fixture.library.delete(.init(.task, task.id)))
+        let context = ModelContext(fixture.container)
+        let note = NoteItem(id: UUID())
+        note.taskID = task.id
+        context.insert(note)
+        try context.save()
+        fixture.clock.value += 35 * 86_400
+
+        let held = HeldFamilyPurge()
+        var started = 0
+        var concurrent = 0
+        var peak = 0
+        fixture.library.taskNotePurge = { _, _, _ in
+            started += 1
+            concurrent += 1
+            peak = max(peak, concurrent)
+            defer { concurrent -= 1 }
+            if started == 1 { return await held.wait() }
+            return []
+        }
+
+        _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        for _ in 0..<200 where held.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(held.gate, "first coordinated purge must start")
+        for _ in 0..<50 { _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar) }
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(started, 1, "activation must not start a second purge while the first waits")
+        gate.resume(returning: [])
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertLessThanOrEqual(started, 2, "50 overlapping activations need at most one follow-up")
+        XCTAssertEqual(peak, 1, "only one coordinated purge may own the same deletion family")
+    }
+
     private final class HeldFamilyPurge {
         var gate: CheckedContinuation<Set<UUID>, Never>?
         func wait() async -> Set<UUID> {
