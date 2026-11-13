@@ -4021,6 +4021,19 @@ extension NotesPageControllerTests {
         let root = ownedTemporaryDirectory(prefix: "R2RetryBound")
         let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
         let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let firstDelay = expectation(description: "inventory retry is waiting for its clock")
+        var resumeFirstDelay: CheckedContinuation<Void, Never>?
+        var delays: [Duration] = []
+        journal.inventoryRetrySleep = { delay in
+            delays.append(delay)
+            if delays.count == 1 {
+                await withCheckedContinuation { continuation in
+                    resumeFirstDelay = continuation
+                    firstDelay.fulfill()
+                }
+            }
+        }
+        defer { resumeFirstDelay?.resume() }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
         fault.failNextInventory(failureCount: 100)
@@ -4028,12 +4041,19 @@ extension NotesPageControllerTests {
             content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Keep safe")])),
             selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
         _ = try await journal.writeDurably(entry, staged: [])
-        try await Task.sleep(for: .seconds(2))
+        let retry = try XCTUnwrap(journal.inventoryRetry)
+        await fulfillment(of: [firstDelay], timeout: 10)
+        XCTAssertEqual(fault.injectedFailures, 1, "retries must wait for the clock")
+        XCTAssertThrowsError(try journal.recoveryEntries())
+        resumeFirstDelay?.resume()
+        resumeFirstDelay = nil
+        await retry.value
         let failures = fault.injectedFailures
         XCTAssertGreaterThan(failures, 1, "publication must retry transient failures")
         XCTAssertLessThanOrEqual(failures, 4, "persistent faults must not start an unbounded IO loop")
-        try await Task.sleep(for: .milliseconds(500))
-        XCTAssertEqual(fault.injectedFailures, failures, "the bounded retry must stop")
+        XCTAssertEqual(failures, 4, "all three bounded retries must finish before sampling")
+        XCTAssertEqual(delays, [.milliseconds(100), .milliseconds(300), .milliseconds(1_000)])
+        XCTAssertNil(journal.inventoryRetry, "the bounded retry must stop")
         XCTAssertThrowsError(try journal.recoveryEntries())
         let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
         XCTAssertNil(collection, "exhausting retries must never clear the safety hold")

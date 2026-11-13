@@ -776,7 +776,8 @@ final class NoteDraftJournal: NoteDraftJournaling {
     // Filtered recovery offers do not supersede complete ownership inventory.
     private var inventoryVersion: UInt64 = 0
     private var inventoryUnavailable = false
-    private var inventoryRetry: Task<Void, Never>?
+    private(set) var inventoryRetry: Task<Void, Never>?
+    var inventoryRetrySleep: @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 
     private func liveSnapshot() throws -> NoteLiveReferenceSnapshot {
         try path.refreshLiveReferences()
@@ -819,11 +820,12 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     private func scheduleInventoryRetry() {
         guard inventoryRetry == nil else { return }
+        let retrySleep = inventoryRetrySleep
         inventoryRetry = Task { [weak self] in
             // Coalesce failures and bound disk work. Exhaustion retains the
             // safety hold; a later committed mutation may start another retry.
             for delay in [100, 300, 1_000] {
-                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                do { try await retrySleep(.milliseconds(delay)) } catch { return }
                 guard let self else { return }
                 guard self.inventoryUnavailable else { self.inventoryRetry = nil; return }
                 do {
