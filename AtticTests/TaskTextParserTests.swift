@@ -32,6 +32,22 @@ final class TaskTextParserTests: XCTestCase {
         (parser ?? self.parser()).parse(text).dueDay
     }
 
+    func testDateCardKeepsExplicitWeekStartWhenLocaleDisagrees() {
+        for (localeID, weekStart) in [("en_US", 2), ("en_GB", 1)] {
+            let locale = Locale(identifier: localeID)
+            var calendar = Calendar(identifier: .gregorian)
+            // The system calendar may still carry a different region from the
+            // parser's display locale (or have no explicit locale at all).
+            calendar.locale = Locale(identifier: localeID == "en_US" ? "en_GB" : "en_US")
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            calendar.firstWeekday = weekStart
+            let parser = TaskTextParser(calendar: calendar, locale: locale, now: { Date(timeIntervalSince1970: 0) })
+
+            XCTAssertEqual(TaskDateChoices(parser: parser).cardCalendar.firstWeekday, weekStart,
+                           "The explicit week-start preference must survive the date-card locale: \(localeID)")
+        }
+    }
+
     func testTaskTimesAreRemovedAlongsideExistingDayTagAndPriorityTokens() {
         for time in ["4pm", "4:30 pm", "16:30"] {
             let parsed = parser().parse("Call tomorrow \(time) #home !")

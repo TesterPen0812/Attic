@@ -19,7 +19,10 @@ final class NotesFormatUITests: XCTestCase {
         require(noteText, timeout: 10, "the Notes page shows a note")
         let button = app.buttons["notes-new-note"]
         require(button, "the New note button")
-        button.click()
+        // Accepted Quick note (2026-10-30): the + button opens the shared
+        // composer (06d6834ae), while Command-N creates an editable note.
+        // These tests need the latter before exercising the editor's keys.
+        app.typeKey("n", modifierFlags: .command)
         waitFor(noteValue.isEmpty, "a new note starts empty (\(noteValue))")
         // The new note's text view replaces the old one: wait until the new
         // one is on screen before clicking it (the first launch is slowest).

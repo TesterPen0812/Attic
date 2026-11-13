@@ -195,6 +195,73 @@ final class TasksFiltersTests: XCTestCase {
         XCTAssertEqual(model.addBar.picked.tags, ["work", "home"], "the next draft starts with them again")
     }
 
+    // MARK: - The optimistic first frame (ack-latency-2)
+
+    private struct Shown: Equatable { let ids: [UUID]; let titles: [String]; let hidden: Int? }
+    private func shown(_ tab: TasksTab) -> Shown {
+        let rows = model.rows(for: tab)
+        return Shown(ids: rows.map(\.id), titles: rows.map(\.model.title), hidden: model.filterHiddenCount(for: tab))
+    }
+
+    /// Runs an acknowledged command and returns the filtered tab's first
+    /// frame and its settled frame.
+    private func frames(_ tab: TasksTab, _ start: (@escaping () -> Void) -> Void) async throws -> (first: Shown, settled: Shown) {
+        var done = false
+        start { done = true }
+        let first = shown(tab)
+        for _ in 0..<50 where !done { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(done, "the command settled")
+        return (first, shown(tab))
+    }
+
+    /// A filtered tab's first frame after a create, a move or a delete
+    /// shows exactly the rows its settled snapshot will: several tags with
+    /// Any/All, status and date, and the just-changed stay rule.
+    func testAFilteredTabsFirstFrameEqualsItsSettledSnapshot() async throws {
+        let started = try add("Started", tags: ["work"])
+        let parked = try add("Parked", tags: ["work"])
+        let doomed = try add("Doomed", tags: ["work", "home"])
+        try add("Elsewhere", tags: ["errands"])
+        let later = try add("From Backlog", tags: ["home"], tab: .backlog)
+        model.select(tab: .now)
+        model.setViewOptions(TasksViewOptions(status: .toDo), for: .now)
+        model.chooseTagChip("work")
+        model.chooseTagChip("home")
+        model.releaseFilterStay()
+        XCTAssertEqual(titles(.now), ["Doomed", "Parked", "Started"])
+
+        // A status change out of the filter: it stays, in both frames.
+        var step = try await frames(.now) { end in self.model.setStatusAcknowledged(.inProgress, for: [started]) { _ in end() } }
+        XCTAssertEqual(step.first, step.settled, "status change")
+        XCTAssertTrue(step.settled.ids.contains(started))
+        // Moved to Backlog: gone from Now in both.
+        step = try await frames(.now) { end in self.model.moveToBacklogAcknowledged([parked]) { _ in end() } }
+        XCTAssertEqual(step.first, step.settled, "move to Backlog")
+        XCTAssertFalse(step.settled.ids.contains(parked))
+        // Moved in from Backlog and matching: there in both.
+        step = try await frames(.now) { end in self.model.moveToNowAcknowledged([later]) { _ in end() } }
+        XCTAssertEqual(step.first, step.settled, "move to Now")
+        XCTAssertTrue(step.settled.ids.contains(later))
+        // Deleted: gone in both.
+        step = try await frames(.now) { end in self.model.deleteAcknowledged([doomed]) { _ in end() } }
+        XCTAssertEqual(step.first, step.settled, "delete")
+        XCTAssertFalse(step.settled.ids.contains(doomed))
+        // All instead of Any, then a create the filter would hide: "+"
+        // keeps what it made in view, in both frames.
+        model.setTagMatch(.all)
+        model.releaseFilterStay()
+        let library = self.library!
+        step = try await frames(.now) { end in
+            let draft = TaskDraft(title: "Made here", tags: ["errands"], status: self.model.newOpenStatus(from: .now))
+            self.model.createAcknowledged(draft, save: { id in library.createTask(draft, writing: "", in: .tasks, id: id) }) { made in
+                if let made { self.model.keepInView(made.id, on: .now) }
+                end()
+            }
+        }
+        XCTAssertEqual(step.first, step.settled, "create")
+        XCTAssertTrue(step.settled.titles.contains("Made here"))
+    }
+
     // MARK: - ••• dot
 
     /// The page's top row re-registers (a page rebuilt, the panel shown
@@ -224,6 +291,21 @@ final class TasksFiltersTests: XCTestCase {
             return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         }
         XCTAssertNotEqual(try raster(true), try raster(false), "filtered: the accent dot shows")
+    }
+
+    /// Drawing 4b: over the empty state the line under the tabs goes; the
+    /// empty state names the filter and keeps Clear Filters.
+    func testTheViewLineGivesWayToTheEmptyState() throws {
+        try add("Pay rent", tags: ["home"])
+        model.select(tab: .now)
+        model.chooseTagChip("home")
+        XCTAssertTrue(model.showsViewLine(on: .now))
+        model.setViewOptions(TasksViewOptions(status: .inProgress), for: .now)
+        model.releaseFilterStay()
+        XCTAssertEqual(titles(.now), [])
+        XCTAssertFalse(model.showsViewLine(on: .now), "the empty state says it")
+        XCTAssertTrue(TasksPanelDesign.empty(tab: .now, query: "", view: model.viewOptions(for: .now), picks: model.tagPicks).canClear)
+        XCTAssertFalse(model.showsViewLine(on: .done), "Done with no matching finished tasks")
     }
 
     // MARK: - Keys and Tab order

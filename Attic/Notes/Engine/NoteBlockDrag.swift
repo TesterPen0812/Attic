@@ -399,7 +399,16 @@ final class NoteBlockDragSession: NSObject {
     private func showLine(_ rect: CGRect?, in textView: NoteEditorTextView) {
         let line = textView.dropLine
         guard let rect else {
-            line.isHidden = true
+            guard !line.isHidden else { return }
+            guard animated else { line.isHidden = true; return }
+            // Out on the exit (F, ease-in); a gap found meanwhile keeps it.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = AtticMotionScale.fast
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                line.animator().alphaValue = 0
+            } completionHandler: {
+                MainActor.assumeIsolated { if line.alphaValue == 0 { line.isHidden = true } }
+            }
             return
         }
         if line.isHidden || !animated {
@@ -407,8 +416,17 @@ final class NoteBlockDragSession: NSObject {
             line.frame = rect
             line.isHidden = false
             line.needsDisplay = true
+            guard animated else { line.alphaValue = 1; return }
+            // In where it first shows (F/E).
+            line.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = AtticMotionScale.fast
+                context.timingFunction = AtticMotionScale.easeOutTimingFunction
+                line.animator().alphaValue = 1
+            }
             return
         }
+        if line.alphaValue < 1 { line.animator().alphaValue = 1 }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = AtticMotionScale.fast
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)

@@ -258,6 +258,15 @@ extension TasksPageModel {
         !tagPicks.isEmpty && doneSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The line under the tabs while a filter is on, except over the empty
+    /// state, which names the filter itself with Clear Filters (drawing 4b).
+    func showsViewLine(on tab: TasksTab) -> Bool {
+        if tab == .done { return showsDoneViewLine && !doneDays().isEmpty }
+        guard trimmedQuery(for: tab).isEmpty, filtered(on: tab) else { return false }
+        let shown = sections(for: tab)
+        return !(shown.open.isEmpty && shown.groups.isEmpty)
+    }
+
     /// Whether anything filters the page (the view line, ••• dot).
     func filtered(on tab: TasksTab) -> Bool {
         viewOptions(for: tab).filters || !tagPicks(on: tab).isEmpty

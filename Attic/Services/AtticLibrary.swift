@@ -208,12 +208,12 @@ final class AtticLibrary {
     /// One step for the whole batch: undo moves every new task to Recently
     /// Deleted in one save, redo brings them all back.
     @discardableResult
-    func createTasks(_ drafts: [TaskDraft], in history: UndoHistoryID = .tasks) -> [TaskItem]? {
+    func createTasks(_ drafts: [TaskDraft], in history: UndoHistoryID = .tasks, ids: [UUID]? = nil) -> [TaskItem]? {
         var created: [TaskItem]?
         let serial = tasks.errorSerial
         defer { if created == nil { _ = taskOutcome(false, since: serial, ids: []) } }
         undo.perform(in: history) {
-            guard let tasks = self.tasks.commit(drafts), !tasks.isEmpty else { return nil }
+            guard let tasks = self.tasks.commit(drafts, ids: ids), !tasks.isEmpty else { return nil }
             created = tasks
             let ids = tasks.map(\.id)
             // What this step made: the tasks and any subtasks they came with.

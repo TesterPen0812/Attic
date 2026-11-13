@@ -796,13 +796,15 @@ final class TaskStore: ObservableObject {
     /// the tasks in draft order, or nil after reporting why nothing changed
     /// (a draft with no title is refused silently, like an empty add bar).
     @discardableResult
-    func commit(_ drafts: [TaskDraft]) -> [TaskItem]? {
+    func commit(_ drafts: [TaskDraft], ids: [UUID]? = nil) -> [TaskItem]? {
         guard !drafts.isEmpty else { return [] }
         guard drafts.allSatisfy({ !Self.normalized($0.title).isEmpty }) else { return nil }
+        let ids = ids ?? drafts.map { _ in UUID() }
+        guard ids.count == drafts.count, Set(ids).count == ids.count else { return nil }
         let parentIDs = Set(drafts.map(\.parentID))
         let owner = parentIDs.count == 1 ? familyOwner(forParentID: parentIDs.first ?? nil) : nil
         do {
-            let created = try stageCreation(drafts, ids: drafts.map { _ in UUID() }, timestamp: now())
+            let created = try stageCreation(drafts, ids: ids, timestamp: now())
             guard save(owner: owner) else { return nil }
             return created.map { task(withID: $0.id) ?? $0 }
         } catch {

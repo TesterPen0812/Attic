@@ -173,6 +173,8 @@ struct NotesLibraryRow: View {
         .background { AtticNoteRowAnchor(id: row.id, anchors: anchors) }
         .onHover { actionsHovered = $0 }
         .opacity(shown ? 1 : 0)
+        // ••• fades in and out with the hover, as a task row's does.
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: shown)
         .allowsHitTesting(shown)
         .padding(.trailing, M.paddingX - M.actionsOutset)
         .padding(.top, M.paddingY + (M.titleLine - M.actionsHeight) / 2

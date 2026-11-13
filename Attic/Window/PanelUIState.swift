@@ -155,11 +155,25 @@ final class PanelUIState: ObservableObject {
     /// item ("Back to Now").
     private(set) var taskNoteBackTitle = String(localized: "Back to Notes")
 
+    /// Where the task page being opened grows from (taken by the route).
+    var taskNoteGrowOrigin: AtticGrowOrigin?
+    /// Each page's rows and cards, by task: where a task's page grows from
+    /// and shrinks back to. Not observed.
+    var growOriginProviders: [PanelPage: (UUID) -> AtticGrowOrigin?] = [:]
+
+    func taskNoteGrowOrigin(for taskID: UUID, on page: PanelPage) -> AtticGrowOrigin? {
+        growOriginProviders[page]?(taskID)
+    }
+
     /// Opens a task's page over `origin`. Opening the one already shown is
     /// a no-op; another task replaces the route (its handoff can refuse).
-    func openTaskNote(_ taskID: UUID, from origin: PanelPage, row: UUID? = nil, backTitle: String? = nil) {
+    func openTaskNote(_ taskID: UUID, from origin: PanelPage, row: UUID? = nil, backTitle: String? = nil,
+                      growsFrom: AtticGrowOrigin? = nil) {
         if openTaskNoteID == taskID, taskNoteOrigin == origin { return }
         PerformanceSignposts.beginTaskPageOpen()
+        // Grow from what's there (Accepted 2026-11-13): the row or card the
+        // page opens from, else the click's band; read before anything moves.
+        taskNoteGrowOrigin = growsFrom ?? taskNoteGrowOrigin(for: taskID, on: origin) ?? AtticGrowOrigin.atCurrentClick()
         taskNoteOrigin = origin
         taskNoteReturnRow = row
         let fallback = switch origin {

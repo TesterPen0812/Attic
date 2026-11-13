@@ -1222,6 +1222,9 @@ struct TaskNotePageContainer: View {
     var backTitle = String(localized: "Back to Notes")
     var placement: TaskNotePlacement = .panel
     var onOpenInWindow: (() -> Void)?
+    /// Back began (true: the page starts shrinking into its row at once)
+    /// or was refused (false: it grows back).
+    var onLeaving: ((Bool) -> Void)?
     let onClose: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1303,6 +1306,10 @@ struct TaskNotePageContainer: View {
 
     private func open() {
         guard presenter == nil, !openFailed else { return }
+        #if DEBUG
+        AtticGrowTrace.mark("page-build", style: .grow)
+        defer { AtticGrowTrace.mark("page-built", style: .grow) }
+        #endif
         // OD-1: one live page per task. Open in a window already, it comes
         // forward there instead of opening a second editor here.
         if placement == .panel, TaskNoteWindows.shared.bringForward(taskID) {
@@ -1332,12 +1339,17 @@ struct TaskNotePageContainer: View {
     /// composition, a save not yet durable); it never loses the draft.
     private func back() {
         guard !closing else { return }
-        guard let presenter else { onClose(); return }
+        guard let presenter else { onLeaving?(true); onClose(); return }
         closing = true
+        onLeaving?(true)
+        let shrinks = onLeaving != nil && !design.reduceMotion
         Task { @MainActor in
+            // The shrink's first frame goes out before the save holds the
+            // main thread (the page lets go durably, as before).
+            if shrinks { await AtticGrowDriver.yieldFirstFrame(.grow) }
             let closed = await presenter.close()
             closing = false
-            if closed { onClose() }
+            if closed { onClose() } else { onLeaving?(false) }
         }
     }
 

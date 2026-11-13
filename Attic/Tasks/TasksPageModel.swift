@@ -370,6 +370,15 @@ final class TasksPageModel: ObservableObject {
     /// A row can acknowledge a press before its family transaction runs.
     /// Retain the intent until that transaction has settled, including failure.
     private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
+    /// Transient value copies for a command awaiting its durable family
+    /// transaction. The store's SwiftData instances are never modified by
+    /// this preview, so rollback only removes the copies.
+    private var acknowledgedRows: [UUID: TaskItem] = [:]
+    private var acknowledgedDeleted: Set<UUID> = []
+    private var acknowledgedCreated: [TaskItem] = []
+    @Published private(set) var acknowledgementRevision: UInt64 = 0
+    private var acknowledgedTaskCommand: (() -> Bool)?
+    private var acknowledgedTaskToken: UUID?
 
     struct HeldPlace: Equatable {
         let tab: TasksTab
@@ -686,6 +695,7 @@ final class TasksPageModel: ObservableObject {
     private struct RowsKey: Equatable {
         let tab: TasksTab
         let revision: UInt64
+        let acknowledgementRevision: UInt64
         let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
@@ -707,6 +717,7 @@ final class TasksPageModel: ObservableObject {
     struct PageToken: Equatable {
         let tab: TasksTab
         let revision: UInt64
+        let acknowledgementRevision: UInt64
         let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
@@ -732,7 +743,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        PageToken(tab: tab, revision: store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: self.tab == tab ? tagPicks(on: tab) : .none,
@@ -797,7 +808,7 @@ final class TasksPageModel: ObservableObject {
     func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }
 
     private func cached(_ tab: TasksTab) -> RowsSnapshot {
-        let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        let key = RowsKey(tab: tab, revision: store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
                           folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
@@ -860,6 +871,29 @@ final class TasksPageModel: ObservableObject {
         return entry
     }
 
+    /// The projected tasks in the order the settled snapshot gives them:
+    /// by state in the scope's order, then the store's section order
+    /// (manual order, newest change, id), so a row moved or restated on
+    /// the first frame is where it will settle. `created`: tasks that go
+    /// first in their state (made, or arriving from another state).
+    static func inSnapshotOrder(_ tasks: [TaskItem], scope: TaskScope, created: Set<UUID>) -> [TaskItem] {
+        let rank = Dictionary(uniqueKeysWithValues: scope.statuses.enumerated().map { ($1, $0) })
+        return tasks.sorted { lhs, rhs in
+            let left = rank[lhs.listedStatus] ?? Int.max, right = rank[rhs.listedStatus] ?? Int.max
+            if left != right { return left < right }
+            let lhsNew = created.contains(lhs.id), rhsNew = created.contains(rhs.id)
+            if lhsNew != rhsNew { return lhsNew }
+            switch (lhs.manualOrder, rhs.manualOrder) {
+            case let (.some(l), .some(r)) where l != r: return l > r
+            case (.some, .none): return true
+            case (.none, .some): return false
+            default: break
+            }
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
     private func buildRows(for tab: TasksTab) -> [TasksListRow] {
         let scope: TaskScope = tab == .backlog ? .backlog : .tasks
         // The view (item 6): each state's tasks filtered and ordered, the
@@ -873,30 +907,51 @@ final class TasksPageModel: ObservableObject {
         let picks = tagPicks(on: tab)
         let day = today
         let sections = store.snapshot(for: scope).sections
+        // The tab's tasks as they will settle: the snapshot with the
+        // acknowledged command applied (ack-latency-2). The first frame
+        // goes through the same filters below as settled data, so it shows
+        // the rows the settled snapshot will. A moved row is eligible on
+        // its destination tab at once; a delete is absent until the
+        // transaction saves or rolls back.
+        var universe = sections.flatMap(\.tasks)
+        let projecting = !acknowledgedRows.isEmpty || !acknowledgedDeleted.isEmpty || !acknowledgedCreated.isEmpty
+        if projecting {
+            universe = universe.filter { !acknowledgedDeleted.contains($0.id) }.map { acknowledgedRows[$0.id] ?? $0 }
+            let already = Set(universe.map(\.id))
+            let additions = (Array(acknowledgedRows.values) + acknowledgedCreated)
+                .filter { !already.contains($0.id) && !acknowledgedDeleted.contains($0.id) }
+            universe = (additions + universe).filter { tab == .backlog ? $0.status == .backlog : $0.status != .backlog }
+            // A new task, and a task changing state, go first in their
+            // state, as the store places them.
+            let arriving = Set(acknowledgedCreated.map(\.id)).union(acknowledgedRows.values.filter {
+                store.task(withID: $0.id)?.listedStatus != $0.listedStatus
+            }.map(\.id))
+            universe = Self.inSnapshotOrder(universe, scope: scope, created: arriving)
+        }
         // A task the person changed while filtered stays where it is until
         // the view changes (Accepted 2026-11-13, "Changed while filtered"):
-        // what this same view showed last time is still shown.
+        // what this same view showed last time is still shown, and a task
+        // "+" is making stays as it will once made (`keepInView`).
         let filtering = query.isEmpty && (view.filters || !picks.isEmpty)
         let stayKey = TasksStayKey(view: view, picks: picks)
-        let staying = filtering && filterStay[tab]?.key == stayKey ? filterStay[tab]?.ids ?? [] : []
+        var staying: Set<UUID> = filtering && filterStay[tab]?.key == stayKey ? filterStay[tab]?.ids ?? [] : []
+        if filtering { staying.formUnion(acknowledgedCreated.map(\.id)) }
         var tasks: [TaskItem]
         if view.isDefault, query.isEmpty, picks.isEmpty {
-            tasks = sections.flatMap(\.tasks)
+            tasks = universe
+        } else if !query.isEmpty {
+            // Find: the open tasks whose title matches (the finished ones
+            // are Done's to find), the picked tags too.
+            tasks = view.sorted(universe.filter { $0.status != .done && store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
         } else {
-            tasks = sections.flatMap { section -> [TaskItem] in
-                if !query.isEmpty {
-                    guard section.status != .done else { return [] }
-                    return view.sorted(section.tasks.filter { store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
-                }
-                return view.sorted(section.tasks.filter {
-                    (view.includes($0, today: day) && picks.matches($0.tags)) || staying.contains($0.id)
-                })
-            }
+            tasks = view.sorted(universe.filter {
+                (view.includes($0, today: day) && picks.matches($0.tags)) || staying.contains($0.id)
+            })
         }
         if filtering {
             filterStay[tab] = (stayKey, Set(tasks.map(\.id)))
             // The view line's "9 hidden": the open tasks this view leaves out.
-            let open = sections.filter { $0.status != .done }.reduce(0) { $0 + $1.tasks.count }
+            let open = universe.filter { $0.status != .done }.count
             filterHidden[tab] = max(0, open - tasks.filter { $0.status != .done }.count)
         } else {
             filterStay[tab] = nil
@@ -1334,10 +1389,17 @@ final class TasksPageModel: ObservableObject {
     /// or finish its input). `onSaved` runs if a later Retry saves it.
     @discardableResult
     func pickerChange(on id: UUID, onSaved: (() -> Void)? = nil, _ change: @escaping () -> CommandOutcome) -> Bool {
-        let outcome = change()
+        pickerResult(change(), on: id, onSaved: onSaved, retry: change)
+    }
+
+    /// A picker shows the new value immediately, but keeps its Retry route
+    /// until the deferred family transaction has actually settled.
+    @discardableResult
+    func pickerResult(_ outcome: CommandOutcome, on id: UUID, onSaved: (() -> Void)? = nil,
+                      retry: @escaping () -> CommandOutcome) -> Bool {
         if let failure = outcome.failure {
             pickerFailure = RowFailure(id: id, message: failure.message, canRetry: failure.canRetry)
-            pickerRetry = failure.canRetry ? change : nil
+            pickerRetry = failure.canRetry ? retry : nil
             pickerRetrySaved = failure.canRetry ? onSaved : nil
             AtticSounds.play(.failed)
             return false
@@ -1719,6 +1781,196 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - State changes
 
+    /// The page's immediate, read-only projection of a pending command.
+    /// Durable edits and Undo still go through the original command layer,
+    /// after a chance to paint. A second command forces settlement first.
+    private static func acknowledgementCopy(_ task: TaskItem) -> TaskItem {
+        let copy = TaskItem(id: task.id, title: task.title, status: task.status, priority: task.priority,
+                            createdAt: task.createdAt, updatedAt: task.updatedAt,
+                            completedAt: task.completedAt, manualOrder: task.manualOrder, parentID: task.parentID)
+        copy.tagsRaw = task.tagsRaw
+        copy.dueDayRaw = task.dueDayRaw
+        copy.dueTimeMinutesRaw = task.dueTimeMinutesRaw
+        copy.imageReferencesData = task.imageReferencesData
+        copy.doneLoggedAt = task.doneLoggedAt
+        copy.completedFromRaw = task.completedFromRaw
+        copy.completedFromOrder = task.completedFromOrder
+        copy.listOrderVersion = task.listOrderVersion
+        return copy
+    }
+
+    func acknowledgeCommand(_ ids: [UUID], deleting: Bool = false,
+                            preview: (TaskItem) -> Void = { _ in },
+                            command: @escaping () -> CommandOutcome,
+                            settled: @escaping (CommandOutcome) -> Void) {
+        settlePendingCompletionAcknowledgements()
+        var proposed: [UUID: TaskItem] = [:]
+        for task in ids.compactMap({ store.listedTask(withID: $0) }) {
+            let copy = Self.acknowledgementCopy(task)
+            preview(copy)
+            proposed[task.id] = copy
+        }
+        guard !proposed.isEmpty else { settled(command()); return }
+        if deleting { acknowledgedDeleted = Set(proposed.keys) }
+        else { acknowledgedRows = proposed }
+        acknowledgementRevision &+= 1
+        let token = UUID()
+        acknowledgedTaskToken = token
+        acknowledgedTaskCommand = { [self] in
+            let outcome = command()
+            acknowledgedRows = [:]
+            acknowledgedDeleted = []
+            acknowledgementRevision &+= 1
+            if !outcome.isApplied { ids.forEach(cancelHold) }
+            settled(outcome)
+            return outcome.isApplied
+        }
+        Task { @MainActor [self] in
+            try? await Task.sleep(for: .milliseconds(20))
+            if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
+        }
+    }
+
+    @discardableResult
+    private func settlePendingTaskAcknowledgement() -> Bool {
+        guard let command = acknowledgedTaskCommand else { return false }
+        acknowledgedTaskCommand = nil
+        acknowledgedTaskToken = nil
+        return command()
+    }
+
+    func setStatusAcknowledged(_ status: TaskStatus, for ids: [UUID],
+                               settled: @escaping (CommandOutcome) -> Void) {
+        _ = settlePendingTaskAcknowledgement()
+        if status == .done, tab != .done {
+            let visible = rows(for: tab)
+            for id in ids {
+                if let index = visible.firstIndex(where: { $0.id == id }) { hold(id, tab: tab, at: index) }
+            }
+        }
+        acknowledgeCommand(ids, preview: { $0.status = status },
+                           command: { [self] in setStatus(status, for: ids) }, settled: settled)
+    }
+
+    func toggleDoneAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        _ = settlePendingTaskAcknowledgement()
+        let tasks = ids.compactMap { store.listedTask(withID: $0) }
+        let reopening = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
+        if !reopening, tab != .done {
+            let visible = rows(for: tab)
+            for id in ids {
+                if let index = visible.firstIndex(where: { $0.id == id }) { hold(id, tab: tab, at: index) }
+            }
+        }
+        acknowledgeCommand(ids, preview: { task in
+            task.status = reopening
+                ? (TaskStatus(rawValue: task.completedFromRaw ?? "") ?? .todo) : .done
+        }, command: { [self] in toggleDone(ids) }, settled: settled)
+    }
+
+    func moveToBacklogAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, preview: { $0.status = .backlog },
+                           command: { [self] in moveToBacklog(ids) }, settled: settled)
+    }
+
+    func moveToNowAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, preview: { $0.status = .todo },
+                           command: { [self] in moveToNow(ids) }, settled: settled)
+    }
+
+    func restoreToNowAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, preview: { $0.status = .todo },
+                           command: { [self] in restoreToNow(ids) }, settled: settled)
+    }
+
+    func setPriorityAcknowledged(_ priority: TaskPriority, for ids: [UUID],
+                                 settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, preview: { $0.priority = priority },
+                           command: { [self] in setPriority(priority, for: ids) }, settled: settled)
+    }
+
+    func setDueDayAcknowledged(_ day: DueDay?, for ids: [UUID],
+                               settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, preview: { $0.dueDay = day },
+                           command: { [self] in setDueDay(day, for: ids) }, settled: settled)
+    }
+
+    func toggleTagAcknowledged(_ tag: String, for ids: [UUID],
+                               settled: @escaping (CommandOutcome) -> Void) {
+        let removing = tagState(tag, for: ids) == .on
+        acknowledgeCommand(ids, preview: { task in
+            if removing { task.tags.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame } }
+            else if !task.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+                task.tags.append(tag)
+            }
+        }, command: { [self] in toggleTag(tag, for: ids) }, settled: settled)
+    }
+
+    func deleteAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        acknowledgeCommand(ids, deleting: true, command: { [self] in delete(ids) }, settled: settled)
+    }
+
+    func toggleWorkingAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
+        _ = settlePendingTaskAcknowledgement()
+        let tasks = ids.compactMap { store.task(withID: $0) }
+        let target: TaskStatus = !tasks.isEmpty && tasks.allSatisfy { $0.status == .inProgress } ? .todo : .inProgress
+        acknowledgeCommand(ids, preview: { $0.status = target },
+                           command: { [self] in toggleWorking(ids) }, settled: settled)
+    }
+
+    /// The title field leaves the list immediately. Its original text and
+    /// chips are restored before the transaction; a failed save reopens the
+    /// editor with exactly what was submitted and its existing Retry line.
+    func commitTitleAcknowledged(settled: @escaping (Bool) -> Void = { _ in }) -> Bool {
+        _ = settlePendingTaskAcknowledgement()
+        guard let id = editingTitleID, let task = store.listedTask(withID: id),
+              let patch = titlePatch(for: task) else { return commitTitle() }
+        let input = titleEdit
+        editingTitleID = nil
+        acknowledgeCommand([id], preview: { task in
+            if let title = patch.title { task.title = title }
+            if let priority = patch.priority { task.priority = priority }
+            if let tags = patch.tags { task.tags = tags }
+            if let day = patch.dueDay { task.dueDay = day }
+            if let time = patch.dueTimeMinutes { task.dueTimeMinutes = time }
+        }, command: { [self] in
+            editingTitleID = id
+            titleEdit = input
+            return commitTitle() ? .applied : .failed(CommandFailure(library.lastErrorMessage ?? "Couldn’t save the title."))
+        }, settled: { outcome in settled(outcome.isApplied) })
+        return true
+    }
+
+    /// Composer creation has a stable logical UUID during the optimistic
+    /// frame and its eventual all-or-nothing task+writing save. The preview
+    /// never enters the physical store or Undo history.
+    @discardableResult
+    func createAcknowledged(_ draft: TaskDraft, save: @escaping (UUID) -> TaskItem?,
+                            settled: @escaping (TaskItem?) -> Void) -> UUID {
+        settlePendingCompletionAcknowledgements()
+        let id = UUID()
+        let copy = TaskItem(id: id, title: draft.title, status: draft.status, priority: draft.priority)
+        copy.tags = draft.tags
+        copy.dueDay = draft.dueDay
+        copy.dueTimeMinutes = draft.dueTimeMinutes
+        acknowledgedCreated = [copy]
+        acknowledgementRevision &+= 1
+        let token = UUID()
+        acknowledgedTaskToken = token
+        acknowledgedTaskCommand = { [self] in
+            let created = save(id)
+            acknowledgedCreated = []
+            acknowledgementRevision &+= 1
+            settled(created)
+            return created != nil
+        }
+        Task { @MainActor [self] in
+            try? await Task.sleep(for: .milliseconds(20))
+            if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
+        }
+        return id
+    }
+
     /// The circle's click and Space (Direction A: one-click completion):
     /// an open task (to do, in progress or Later) is done; a done task goes
     /// back to what it was.
@@ -1813,7 +2065,7 @@ final class TasksPageModel: ObservableObject {
     /// for an already-settled click has no remaining work to do.
     @discardableResult
     func settlePendingCompletionAcknowledgements(through id: UUID? = nil) -> Bool {
-        var savedAny = false
+        var savedAny = settlePendingTaskAcknowledgement()
         while !completingAfterAcknowledgement.isEmpty {
             let next = completingAfterAcknowledgement.removeFirst()
             let outcome = finishCompletion(next.id)
@@ -2056,6 +2308,7 @@ final class TasksPageModel: ObservableObject {
     // MARK: - Title and subtasks
 
     func beginEditingTitle(_ id: UUID) {
+        settlePendingCompletionAcknowledgements()
         // A Done log task's title too (round 10: Done's Edit Title).
         guard let task = store.listedTask(withID: id), editingTitleID != id else { return }
         // Another editor's changes are saved first (review 2).
@@ -2412,7 +2665,7 @@ final class TasksPageModel: ObservableObject {
     /// notice (Astra 23).
     @discardableResult
     func undo() -> CommandOutcome {
-        let hadPending = !completingAfterAcknowledgement.isEmpty
+        let hadPending = acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
         let savedPending = settlePendingCompletionAcknowledgements()
         // A failed acknowledged click never acquired an Undo step. Do not
         // let ⌘Z reach back into an unrelated earlier saved task edit.
@@ -2466,14 +2719,14 @@ final class TasksPageModel: ObservableObject {
 
     /// A task change is newer than the draft's last edit: ⌘Z belongs to it.
     var taskChangeOwnsUndo: Bool {
-        if !completingAfterAcknowledgement.isEmpty { return true }
+        if acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty { return true }
         guard let top = library.undo.undoStepID(in: .tasks) else { return false }
         return top != stepAtLastTextEdit
     }
 
     /// The step a claimed ⌘Z just undid is waiting for ⇧⌘Z.
     var taskChangeOwnsRedo: Bool {
-        completingAfterAcknowledgement.isEmpty && taskRedoIsNext && library.undo.canRedo(in: .tasks)
+        acknowledgedTaskCommand == nil && completingAfterAcknowledgement.isEmpty && taskRedoIsNext && library.undo.canRedo(in: .tasks)
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the

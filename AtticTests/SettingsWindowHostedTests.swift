@@ -288,7 +288,17 @@ final class SettingsWindowHostedTests: XCTestCase {
             // client before excluding only those system-created parts.
             let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
             if !hiddenParts.isEmpty {
-                XCTAssertTrue(externalScrollbarsAreHidden(),
+                // AppKit can publish its private scroller parts before the
+                // external AX client sees the containing scrollbar's hidden
+                // state. Require that actual state, not a fixed paint delay.
+                let deadline = Date().addingTimeInterval(2)
+                var scrollbarsHidden = externalScrollbarsAreHidden()
+                while !scrollbarsHidden && Date() < deadline {
+                    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+                    host.layoutSubtreeIfNeeded()
+                    scrollbarsHidden = externalScrollbarsAreHidden()
+                }
+                XCTAssertTrue(scrollbarsHidden,
                               "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
             }
             let interactive = after.filter {
@@ -335,6 +345,10 @@ final class SettingsWindowHostedTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             spin(0.2)
             host.layoutSubtreeIfNeeded()
+            // The native hierarchy is created by the hosted draw as well as
+            // layout; on CI the initial layout can complete before SwiftUI
+            // has handed its ScrollView to AppKit.
+            window.displayIfNeeded()
             // On a slower hosted runner the NSHostingView can publish its
             // first native ScrollView after the initial layout pass.
             let deadline = Date().addingTimeInterval(2)
@@ -342,6 +356,7 @@ final class SettingsWindowHostedTests: XCTestCase {
             while candidate == nil && Date() < deadline {
                 spin(0.05)
                 host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
                 candidate = scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 }
             }
             let scroll = try XCTUnwrap(candidate,
@@ -455,7 +470,19 @@ final class SettingsWindowHostedTests: XCTestCase {
             XCTAssertTrue(dark.accessibilityPerformPress?() ?? false)
             try assertContentFits(["setting-appearance-system", "setting-appearance-light",
                                    "setting-appearance-dark", "setting-panel-theme"], at: size)
-            XCTAssertEqual(try frame("settings-nav-general").minX - window.frame.minX, sidebarBefore, accuracy: 0.5,
+            // Appearance changes animate the page for 0.16 s. The first AX
+            // frame during that transition can still describe the prior
+            // scroll presentation. Wait for the actual sidebar to return to
+            // its fixed offset; a lasting horizontal shift still fails.
+            let deadline = Date().addingTimeInterval(2)
+            var sidebarAfter = try frame("settings-nav-general").minX - window.frame.minX
+            while abs(sidebarAfter - sidebarBefore) > 0.5 && Date() < deadline {
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.008))
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                sidebarAfter = try frame("settings-nav-general").minX - window.frame.minX
+            }
+            XCTAssertEqual(sidebarAfter, sidebarBefore, accuracy: 0.5,
                            "Choosing Dark must not scroll the sidebar horizontally")
             let general = try XCTUnwrap(element("settings-nav-general"))
             XCTAssertTrue(general.accessibilityPerformPress?() ?? false)

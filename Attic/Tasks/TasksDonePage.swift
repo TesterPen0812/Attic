@@ -94,7 +94,7 @@ struct TasksDonePage<Cell: View>: View {
                 // The picked tags never hide finished tasks silently (13
                 // Nov, drawn in 4c): what is shown, how many are hidden, and
                 // Show All. Done has no status or date filter.
-                if model.showsDoneViewLine {
+                if model.showsDoneViewLine, !lines.isEmpty {
                     let parts = TasksPanelDesign.viewLine(view: TasksViewOptions(), picks: model.tagPicks,
                                                           hidden: model.filterHiddenCount(for: .done))
                     AtticViewLine(summary: parts.map(\.plain).joined(), parts: parts,

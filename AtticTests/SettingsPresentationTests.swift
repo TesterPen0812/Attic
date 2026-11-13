@@ -390,7 +390,15 @@ final class SettingsPresentationTests: XCTestCase {
             (kVK_RightArrow, UInt32(cmdKey | optionKey), "Add column"),
             (kVK_ANSI_C, UInt32(cmdKey | optionKey | shiftKey), "Copy as Markdown"),
             (kVK_ANSI_V, UInt32(cmdKey | optionKey | shiftKey), "Paste as Text"),
-            (kVK_ANSI_H, UInt32(cmdKey | controlKey), "Fold heading")
+            (kVK_ANSI_H, UInt32(cmdKey | controlKey), "Fold heading"),
+            // keyboard-hunt: additional live page commands. These are
+            // recordable under the earlier list, shadowing the local action.
+            (kVK_ANSI_V, UInt32(cmdKey | optionKey), "Tasks View Options"),
+            (kVK_ANSI_Equal, UInt32(cmdKey | shiftKey), "Canvas Zoom In"),
+            (kVK_Space, UInt32(optionKey), "Task Option-Space Complete"),
+            (kVK_ANSI_T, UInt32(optionKey), "Date Card Today"),
+            (kVK_UpArrow, UInt32(optionKey), "Date Card Previous Year"),
+            (kVK_DownArrow, UInt32(optionKey), "Date Card Next Year")
         ]
         for (keyCode, modifiers, action) in existing {
             let combination = GlobalHotKeyCombination(
@@ -412,6 +420,58 @@ final class SettingsPresentationTests: XCTestCase {
             XCTAssertEqual(settings.quickCaptureShortcut, .newTask,
                            "An older recorded key may no longer shadow the New note command")
             XCTAssertNil(settings.quickCaptureShortcut.recordingProblem)
+        }
+    }
+
+    @MainActor
+    func testKeyboardHuntOldRecordedPageShortcutsFallbackOnRelaunch() throws {
+        let collisions: [(Int, UInt32)] = [
+            (kVK_ANSI_V, UInt32(cmdKey | optionKey)),
+            (kVK_ANSI_Equal, UInt32(cmdKey | shiftKey)),
+            (kVK_Space, UInt32(optionKey)),
+            (kVK_ANSI_T, UInt32(optionKey)),
+            (kVK_UpArrow, UInt32(optionKey)),
+            (kVK_DownArrow, UInt32(optionKey))
+        ]
+        for (code, modifiers) in collisions {
+            try withSettingsDefaults { defaults in
+                defaults.set(code, forKey: "quickCaptureKeyCode")
+                defaults.set(Int(modifiers), forKey: "quickCaptureModifiers")
+                let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+                XCTAssertEqual(settings.quickCaptureShortcut, .newTask,
+                               "Previously recorded in-app keys must not shadow a page on launch")
+            }
+        }
+    }
+
+    /// keyboard-hunt: catch future Note shortcut additions that would collide
+    /// with Quick Capture, using the note commands' own advertised bindings.
+    func testKeyboardHuntAllNoteFormatBindingsAreReservedForQuickCapture() {
+        for command in NoteCommandCatalog.allCommands {
+            guard let shortcut = NoteCommandCatalog.keyboardShortcut(command) else { continue }
+            let displayedKey: String = switch shortcut.key {
+            case .upArrow: "↑"
+            case .downArrow: "↓"
+            case .leftArrow: "←"
+            case .rightArrow: "→"
+            case .return: "↩"
+            case .tab: "⇥"
+            default: String(shortcut.key.character).lowercased()
+            }
+            guard let keyCode = GlobalHotKeyCombination.keyNames.first(where: {
+                $0.value.lowercased() == displayedKey
+            })?.key else {
+                XCTFail("Unmapped key for note shortcut: \(command.title) \(shortcut.key)")
+                continue
+            }
+            var modifiers: UInt32 = 0
+            if shortcut.modifiers.contains(.control) { modifiers |= UInt32(controlKey) }
+            if shortcut.modifiers.contains(.option) { modifiers |= UInt32(optionKey) }
+            if shortcut.modifiers.contains(.shift) { modifiers |= UInt32(shiftKey) }
+            if shortcut.modifiers.contains(.command) { modifiers |= UInt32(cmdKey) }
+            let combination = GlobalHotKeyCombination(keyCode: keyCode, modifiers: modifiers)
+            XCTAssertNotNil(combination.recordingProblem,
+                            "Quick Capture must not claim Notes' \(command.title): \(combination.displayName ?? "unnamed")")
         }
     }
 

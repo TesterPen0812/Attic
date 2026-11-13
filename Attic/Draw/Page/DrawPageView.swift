@@ -41,6 +41,8 @@ struct DrawPageHost: View {
             // Unlike the top row, they stay folded while the chat watches.
             DrawSelectionOverlay(model: model, viewportState: model.viewportState)
                 .opacity(model.isDrawingLive ? 0 : 1)
+                // It steps aside for a stroke with the bars, not ahead of them.
+                .animation(dimAnimation, value: model.isDrawingLive)
                 .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
             DrawZoomPill(model: model, viewportState: model.viewportState)
                 .modifier(PanelChatFold(state: topRowState, page: .canvas, topRow: false))
@@ -129,6 +131,10 @@ struct DrawPageHost: View {
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
+        // The title capsule and the results card take Search's own motion
+        // (their transitions were never driven: Search opens without one).
+        .animation(PanelTopRowLayout.searchAnimation(shown: model.isSearching, reduceMotion: design.reduceMotion),
+                   value: model.isSearching)
     }
 }
 

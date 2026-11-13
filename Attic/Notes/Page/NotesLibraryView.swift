@@ -50,7 +50,9 @@ struct NotesLibraryView: View {
     @Namespace private var layoutMotion
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
-    @State private var reveal = NotesLibraryReveal()
+    /// The model's, so the note page can grow from (and back into) a row
+    /// or card it registers.
+    private var reveal: NotesLibraryReveal { model.reveal }
     @State private var recoveryReview: WorkspaceOperationCoordinator.RecoveryIssue?
     @State private var recoveryActionRunning = false
     @State private var confirmRecoveryDiscard = false
@@ -782,6 +784,32 @@ final class NotesLibraryReveal {
     let glide = AtticPanelScrollGlide()
 
     func register(_ view: NSView, for id: UUID) { views[id] = Weak(view: view) }
+
+    /// Where a note's page grows from: its card on the board, its row's
+    /// highlight in the list, in window coordinates. Nil when it isn't laid
+    /// out in a window (scrolled away in a lazy stack, the library closed).
+    func growOrigin(for id: UUID, board: Bool, title: String) -> AtticGrowOrigin? {
+        guard let view = views[id]?.view, let window = view.window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        var frame = view.convert(view.bounds, to: nil)
+        if let scroll = view.enclosingScrollView {
+            // Only the part on show: a card half under the bar grows from there.
+            let visible = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
+            guard frame.intersects(visible) else { return nil }
+        }
+        if board {
+            return AtticGrowOrigin(frame: frame, cornerRadius: NotesBoardMetrics.radius, title: title,
+                                   titleStyle: .noteRowTitle, titleInset: NotesBoardMetrics.padding.leading,
+                                   titleBand: NotesBoardMetrics.padding.top * 2 + NotesBoardMetrics.titleLine,
+                                   windowNumber: window.windowNumber)
+        }
+        frame = frame.insetBy(dx: AtticNoteMetrics.libraryHighlightInset, dy: 0)
+        return AtticGrowOrigin(frame: frame, cornerRadius: NotesLibraryRowMetrics.radius, title: title,
+                               titleStyle: .noteRowTitle, titleInset: Self.rowTitleInset,
+                               windowNumber: window.windowNumber)
+    }
+
+    /// A list row's title: past the mini page.
+    static let rowTitleInset: CGFloat = NotesLibraryRowMetrics.paddingX + 24 + NotesLibraryRowMetrics.thumbnailToText
 
     /// How far the list moves (positive: its content moves up) to bring
     /// `frame` between `clearTop` and `clearBottom`, as little as it can;

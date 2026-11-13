@@ -15,8 +15,10 @@ import SwiftUI
 enum TasksPagePreview {
     static let argument = "--attic-tasks-page"
     static let seedArgument = "--seed-500"
+    static let noDropTargetArgument = "--attic-drag-no-drop-target"
 
     private static var window: NSWindow?
+    private static var noDropWindow: NSWindow?
     private static var retained: [AnyObject] = []
 
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains(argument) }
@@ -54,6 +56,25 @@ enum TasksPagePreview {
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        if ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+           ProcessInfo.processInfo.arguments.contains(noDropTargetArgument) {
+            // Finder accepts promised task text as a file (fbbdc9a8).
+            // A dedicated window in this app, containing no registered drop
+            // receiver, lets the UI test release over a true no-drop target.
+            // The dragging source disallows within-application operations.
+            let targetSize = NSSize(width: 170, height: 130)
+            let bounds = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
+            let origin = NSPoint(x: min(window.frame.maxX + 24, bounds.maxX - targetSize.width),
+                                 y: min(max(window.frame.midY - 65, bounds.minY), bounds.maxY - targetSize.height))
+            let target = NSWindow(contentRect: NSRect(origin: origin, size: targetSize),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            target.title = "Attic No-Drop Target"
+            target.identifier = NSUserInterfaceItemIdentifier("AtticNoDropTarget")
+            target.isReleasedWhenClosed = false
+            target.contentView = NSView(frame: NSRect(origin: .zero, size: targetSize))
+            target.orderFront(nil)
+            noDropWindow = target
+        }
         for delay in [0.1, 0.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 guard !window.isKeyWindow else { return }
