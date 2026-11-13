@@ -40,7 +40,7 @@ struct CalendarPageInput: NSViewRepresentable {
             if let token { NSEvent.removeMonitor(token) }
             token = nil
         }
-        private func handle(_ event: NSEvent) -> NSEvent? {
+        func handle(_ event: NSEvent) -> NSEvent? {
             guard let route, route.enabled(), AtticGlassMenu.current == nil,
                   let window, event.window === window else { return event }
             let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
@@ -49,7 +49,11 @@ struct CalendarPageInput: NSViewRepresentable {
                     route.today()
                     return nil
                 }
-                if flags.isEmpty, event.keyCode == 53, route.escape() { return nil }
+                if flags.isEmpty, event.keyCode == 53 {
+                    // Escape first belongs to the input method's composition.
+                    if (window.firstResponder as? NSTextView)?.hasMarkedText() == true { return event }
+                    if route.escape() { return nil }
+                }
             } else if bounds.contains(convert(event.locationInWindow, from: nil)) {
                 let onRow = CalendarEventRowBoundary.Boundary.live.allObjects.contains {
                     $0.window === window && $0.bounds.contains($0.convert(event.locationInWindow, from: nil))
