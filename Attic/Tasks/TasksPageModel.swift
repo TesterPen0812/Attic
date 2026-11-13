@@ -976,15 +976,20 @@ final class TasksPageModel: ObservableObject {
         let stayKey = TasksStayKey(view: view, picks: picks)
         var staying: Set<UUID> = filtering && filterStay[tab]?.key == stayKey ? filterStay[tab]?.ids ?? [] : []
         if filtering { staying.formUnion(acknowledgedCreated.map(\.id)) }
+        func sortedByStatus(_ items: [TaskItem]) -> [TaskItem] {
+            scope.statuses.flatMap { status in
+                view.sorted(items.filter { $0.listedStatus == status })
+            }
+        }
         var tasks: [TaskItem]
         if view.isDefault, query.isEmpty, picks.isEmpty {
             tasks = universe
         } else if !query.isEmpty {
             // Find: the open tasks whose title matches (the finished ones
             // are Done's to find), the picked tags too.
-            tasks = view.sorted(universe.filter { $0.status != .done && store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
+            tasks = sortedByStatus(universe.filter { $0.status != .done && store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
         } else {
-            tasks = view.sorted(universe.filter {
+            tasks = sortedByStatus(universe.filter {
                 (view.includes($0, today: day) && picks.matches($0.tags)) || staying.contains($0.id)
             })
         }

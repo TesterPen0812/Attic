@@ -93,6 +93,41 @@ final class TasksFiltersTests: XCTestCase {
         XCTAssertFalse(state.hasKeyboard)
     }
 
+    func testR4SortStaysWithinStatusForFilteredSearchedAndAcknowledgedRows() throws {
+        let started = try add("Started", tags: ["work"])
+        let waiting = try add("Waiting", tags: ["work"])
+        XCTAssertTrue(model.setStatus(.inProgress, for: [started]).isApplied)
+        XCTAssertTrue(model.setPriority(.low, for: [started]).isApplied)
+        XCTAssertTrue(model.setPriority(.high, for: [waiting]).isApplied)
+        for sort: TasksViewOptions.Sort in [.priority, .dueDate] {
+            model.setViewOptions(TasksViewOptions(sort: sort), for: .now)
+            model.setTagPicks(TagPicks(["work"]))
+            XCTAssertEqual(model.rows(for: .now).map(\.id), [started, waiting])
+            model.setTagPicks(.none)
+            model.setSearchQuery("t", for: .now)
+            XCTAssertEqual(model.rows(for: .now).map(\.id), [started, waiting])
+            model.setSearchQuery("", for: .now)
+        }
+        model.services.acknowledgementDelay = .seconds(3_600)
+        model.setPriorityAcknowledged(.none, for: [started]) { XCTAssertTrue($0.isApplied) }
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [started, waiting])
+        model.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [started, waiting])
+        model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [started, waiting])
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 360, height: 560)), addBarFocused: .constant(false))
+        let host = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
+            .frame(width: 360, height: 560))
+        let window = NSWindow(contentRect: CGRect(x: -8_000, y: -8_000, width: 360, height: 560),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        try captureCatchupView(host, name: "status-sort")
+    }
+
     // MARK: - Picks
 
     func testAnyNeedsOneTagAndAllNeedsEvery() {
