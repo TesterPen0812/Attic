@@ -272,11 +272,44 @@ enum TaskAttachmentActions {
         Task {
             guard let source = await verifiedURL(reference, store: store, owner: owner) else { return }
             do {
-                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.trashItem(at: destination, resultingItemURL: nil) }
-                try FileManager.default.copyItem(at: source, to: destination)
+                try exportVerifiedCopy(from: source, to: destination)
             } catch {
                 store.reportAttachmentOpenFailure(named: reference.filename, error: error, owner: owner)
             }
+        }
+    }
+
+    /// Separate file operation so an injected file failure can exercise the
+    /// same replacement path without presenting a system save panel.
+    static func exportVerifiedCopy(from source: URL, to destination: URL,
+                                   fileManager: FileManager = .default) throws {
+        // A save panel grants the selected file, not permission to create
+        // arbitrary siblings. Use the sandbox-safe replacement directory on
+        // its volume, as the Draw export path does.
+        let scratch = try fileManager.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                          appropriateFor: destination, create: true)
+        let staged = scratch.appendingPathComponent(destination.lastPathComponent)
+        defer {
+            try? fileManager.removeItem(at: staged)
+            if (try? fileManager.contentsOfDirectory(atPath: scratch.path))?.isEmpty == true {
+                try? fileManager.removeItem(at: scratch)
+            }
+        }
+        // Stage the complete verified copy before touching the chosen path.
+        try fileManager.copyItem(at: source, to: staged)
+        if fileManager.fileExists(atPath: destination.path) {
+            let backup = scratch.appendingPathComponent(
+                "Replaced \(UUID().uuidString.prefix(8)) \(destination.lastPathComponent)")
+            do { try fileManager.copyItem(at: destination, to: backup) }
+            catch { try? fileManager.removeItem(at: backup); throw error }
+            // Replace only the URL granted by the save panel. A named backup
+            // beside it would require additional sandbox folder access.
+            _ = try fileManager.replaceItemAt(destination, withItemAt: staged)
+            // Keep the previous bytes recoverable in Trash. On a Trash
+            // failure the backup stays in scratch, never silently deleted.
+            try? fileManager.trashItem(at: backup, resultingItemURL: nil)
+        } else {
+            try fileManager.moveItem(at: staged, to: destination)
         }
     }
 
