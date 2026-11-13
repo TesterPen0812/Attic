@@ -40,11 +40,18 @@ Ran `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_
 - Confidence: high for the synchronous blocking path, medium for real-world perceptibility. Existing AgentChat tests inject immediate synchronous `weekDays` closures and do not establish nonblocking EventKit behavior.
 - Red test: provide a fake Calendar reader whose read stays suspended, trigger the week strip, and assert a main-actor heartbeat and chat interaction continue before releasing the reader; then assert the correct week receives its results and a stale week does not.
 
+### DB-3 (P1): A recorded Option-only shortcut can intercept normal text input globally
+- `Attic/Services/GlobalHotKey.swift:100–123, 252–304`.
+- Trigger: record an Option-only printable key such as Option-E on a US keyboard and then try to type an accented character in another application. The recorder permits any Option combination because `option` alone passes the guard, and `RegisterEventHotKey` claims the combination application-wide. Option-E is a normal dead-key input on that layout, so a successful registration can intercept text entry instead of composing the accent. Other layouts have different printable Option chords. The default Control-Option-Space is unaffected.
+- Smallest fix: reject printable-key combinations whose only modifiers are Option and/or Shift, or check the current keyboard layout for text-producing/dead-key chords before allowing them. Warn when a previously stored setting becomes unsafe; do not silently replace it.
+- Confidence: high for validation and registration path; medium for exact Carbon behavior across macOS versions and input layouts, which needs a Mac.
+- Red test: unit-test that Option-E and Option-Shift-letter are rejected and Control-Option-Space remains valid. On a Mac, register the former in an isolated preview and verify another app can still compose an accented character.
+
 Initial force-unwrap and HTTP parser searches are leads only, not findings.
 
 ## Summary at this checkpoint
 - Dead code confirmed: 0. Removed: 0. No removal branch created.
 - Lightness opportunities: 2; LT-1 and LT-2 are preliminary, not a ranked top 10.
-- Bugs: 2 static findings (DB-1 and DB-2); runtime effect remains unmeasured. This is not a complete bug inventory.
+- Bugs: 3 static findings (DB-1 through DB-3); runtime effect remains unmeasured. This is not a complete bug inventory.
 - Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading and Calendar search before and after any proposed change, and DB-1 with a deliberately slow EventKit source.
 - Remaining: exhaustive symbol and dynamic-reference analysis; assets/scripts/tests/CI; launch and lifetime review; the full bug hunt across all requested areas. In particular, no folder has been read fully file by file.
