@@ -62,6 +62,7 @@ final class TasksRound6Tests: XCTestCase {
         XCTAssertEqual(selected, order.map(\.id).filter(hosted.model.selection.contains), "in the log's order")
 
         hosted.page.actions(for: id("Pay rent"), in: .done).restoreToNow?()
+        hosted.model.settlePendingCompletionAcknowledgements()
         for task in selected {
             XCTAssertNotEqual(hosted.store.listedTask(withID: task)?.status, .done, "restored together")
         }
@@ -404,7 +405,7 @@ final class TasksRound6Tests: XCTestCase {
 @MainActor
 extension TasksRound6Tests {
     #if !ATTIC_GENERATED_TESTS
-    func testFix18QueuedControlFocusFromOldTabMustNotReachSharedPlus() throws {
+    func testFix18QueuedControlFocusFromOldTabMustNotReachSharedPlus() async throws {
         let store = try makeTestStore()
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
         let destination = TasksTabTarget()
@@ -419,29 +420,29 @@ extension TasksRound6Tests {
         // run-loop spin does not prove that the queued handoff was evaluated.
         // The barrier runs after that handoff (including one rejected by its
         // guards), so both the positive and negative assertions are definite.
-        func drainFocusQueue() {
+        func drainFocusQueue() async {
             let drained = expectation(description: "queued focus handoff evaluated")
             DispatchQueue.main.async { drained.fulfill() }
-            wait(for: [drained], timeout: 0.05)
+            await fulfillment(of: [drained], timeout: 0.05)
         }
 
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
-        drainFocusQueue()
+        await drainFocusQueue()
         XCTAssertEqual(delivered, [.now], "a current Tab handoff still reaches the Plus button")
         delivered.removeAll()
 
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .now, model: model, requests: requests)
         model.select(tab: .done)
-        drainFocusQueue()
+        await drainFocusQueue()
         XCTAssertEqual(model.tab, .done)
         XCTAssertTrue(delivered.isEmpty, "the old Tab request must not focus the shared Plus on Done")
 
         destination.request(.plus)
         destination.queueControlFocus(PanelPlusFocusID(), for: .plus, in: .done, model: model, requests: requests)
         destination.cancel()
-        drainFocusQueue()
+        await drainFocusQueue()
         XCTAssertTrue(delivered.isEmpty, "a newer focus move also supersedes a queued handoff")
     }
     #endif

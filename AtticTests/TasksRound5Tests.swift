@@ -137,6 +137,9 @@ final class TasksRound5Tests: XCTestCase {
 
         gate.shouldFail = true
         actions.toggleWorking?()
+        // Acknowledged commands paint first, then settle durably (6c96b052).
+        // Drive that boundary explicitly instead of racing the deferred save.
+        model.settlePendingCompletionAcknowledgements()
         XCTAssertEqual(model.rowFailure?.id, task.id, "⇧Space's failure shows under its row")
         XCTAssertEqual(store.task(withID: task.id)?.status, .todo)
         gate.shouldFail = false
@@ -146,6 +149,7 @@ final class TasksRound5Tests: XCTestCase {
 
         gate.shouldFail = true
         actions.moveToBacklog?()
+        model.settlePendingCompletionAcknowledgements()
         XCTAssertEqual(model.rowFailure?.id, task.id, "⌘B's failure shows under its row")
         gate.shouldFail = false
         model.retryRowFailure()
