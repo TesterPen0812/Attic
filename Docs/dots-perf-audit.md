@@ -951,11 +951,11 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 12. **DP-46:** Draw gesture flushes synchronously encode/write the recovery archive on main.
 13. **DP-21:** multi-paragraph edits can force full Notes projection at autosave.
 14. **DP-40:** each table-cell edit searches earlier document attachment runs.
-15. **DP-19:** Draw text edits can rebuild the full AX navigation graph.
+15. **DP-180:** Notes accessibility queries rebuild wrappers and repeatedly scan object/table ranges.
 
 **Additional high-priority Done test:** DP-123 can rehydrate the entire previously loaded archive prefix after a revision; isolate it when reproducing the near-1 s Done outliers. It is not yet ranked against the 15 above without a trace.
 
-Close contenders depend on usage: DP-128 (task menu/shortcut full Notes scan), DP-124 (hidden loaded Done token), DP-166 (long agent note update parsing), DP-171 (table reorder start), DP-65 (chat item-picker search), DP-66 repeatedly verifies growing batch-import recovery payloads, DP-35 makes expanded quick-look command generation quadratic, DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
+Close contenders depend on usage: DP-19 (Draw AX graph refresh), DP-172/DP-174 (Notes resize), DP-128 (task menu/shortcut full Notes scan), DP-124 (hidden loaded Done token), DP-166 (long agent note update parsing), DP-171 (table reorder start), DP-65 (chat item-picker search), DP-66 repeatedly verifies growing batch-import recovery payloads, DP-35 makes expanded quick-look command generation quadratic, DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-172 and DP-174 for Notes, DP-3 for tables and DP-4 for Draw under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-180 for object-heavy Notes, DP-123 for Done after a revision, DP-124 for hidden loaded Done, DP-127, DP-133 and DP-38 for row clicks, DP-75 for page switches, DP-78 for ordinary press hit-testing, DP-80 for client AX hit-testing, DP-77 when many native editors have been focused, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
