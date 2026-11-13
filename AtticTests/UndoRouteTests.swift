@@ -28,16 +28,55 @@ final class UndoRouteTests: XCTestCase {
         XCTAssertTrue(route.canRedo(in: .calendar))
     }
 
-    func testAsyncObsoleteCalendarUndoDropsOnlyThatStep() async {
+    func testAsyncObsoleteCalendarUndoSkipsToEarlierStep() async {
         let route = UndoRoute()
         route.record(UndoStep(name: "Earlier", undoOutcome: { .applied }, redoOutcome: { .applied }), in: .calendar)
         var gone = UndoStep(name: "Gone", undoOutcome: { .failed }, redoOutcome: { .failed })
         gone.replay = { _, _ in .obsolete }
         route.record(gone, in: .calendar)
         let result = await route.replay(in: .calendar, redo: false)
-        XCTAssertEqual(result, .obsolete)
-        XCTAssertEqual(route.undoName(in: .calendar), "Earlier")
-        XCTAssertFalse(route.canRedo(in: .calendar))
+        XCTAssertEqual(result, .applied)
+        XCTAssertFalse(route.canUndo(in: .calendar))
+        XCTAssertEqual(route.redoName(in: .calendar), "Earlier")
+    }
+
+    func testObsoleteTopUndoDoesNotConsumeTheShortcutBeforeAValidEdit() {
+        let route = UndoRoute()
+        let counter = Counter()
+        route.perform(in: .tasks) { counter.value += 1; return step(counter, name: "Still valid") }
+        route.record(UndoStep(name: "Deleted target", undoOutcome: { .obsolete }, redoOutcome: { .obsolete }), in: .tasks)
+
+        XCTAssertTrue(route.undo(in: .tasks), "one shortcut skips the obsolete step and undoes the valid edit")
+        XCTAssertEqual(counter.value, 0)
+        XCTAssertFalse(route.canUndo(in: .tasks))
+        XCTAssertEqual(route.redoName(in: .tasks), "Still valid")
+    }
+
+    func testObsoleteTopRedoDoesNotConsumeTheShortcutBeforeAValidEdit() {
+        let route = UndoRoute()
+        let counter = Counter()
+        route.record(UndoStep(name: "Deleted target", undoOutcome: { .applied }, redoOutcome: { .obsolete }), in: .tasks)
+        route.perform(in: .tasks) { counter.value += 1; return step(counter, name: "Still valid") }
+        XCTAssertTrue(route.undo(in: .tasks))
+        XCTAssertTrue(route.undo(in: .tasks))
+
+        XCTAssertTrue(route.redo(in: .tasks), "one shortcut skips the obsolete step and redoes the valid edit")
+        XCTAssertEqual(counter.value, 1)
+        XCTAssertFalse(route.canRedo(in: .tasks))
+    }
+
+    func testAsyncObsoleteTopUndoReachesTheValidActionInOneShortcut() async {
+        let route = UndoRoute()
+        let counter = Counter()
+        route.perform(in: .calendar) { counter.value += 1; return step(counter, name: "Still valid") }
+        var gone = UndoStep(name: "Deleted target", undoOutcome: { .failed }, redoOutcome: { .failed })
+        gone.replay = { _, _ in .obsolete }
+        route.record(gone, in: .calendar)
+
+        let outcome = await route.replay(in: .calendar, redo: false)
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertEqual(counter.value, 0)
+        XCTAssertFalse(route.canUndo(in: .calendar))
     }
 
     func testRecordingDuringAsyncCalendarUndoPreservesTheCommittedCursor() async {
