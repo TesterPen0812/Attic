@@ -78,6 +78,38 @@ final class ComposerTests: XCTestCase {
 
     private func liveTasks() -> [TaskItem] { tasks.tasks.filter { $0.deletedAt == nil } }
 
+    func testBG7ConsecutiveCalendarEventsKeepTheSelectedDay() async throws {
+        let selected = day(3)
+        model.open(on: .calendar(selected: selected))
+        await model.loadCalendars()
+        for title in ["First event", "Second event"] {
+            type(title)
+            let made = await model.create()
+            XCTAssertTrue(made)
+            XCTAssertTrue(model.isOpen)
+        }
+        XCTAssertEqual(events.events.count, 2)
+        for event in events.events.values {
+            XCTAssertEqual(DueDay(date: event.draft.start, calendar: clock), selected)
+        }
+    }
+
+    func testBG7ConsecutiveCalendarTasksKeepTheSelectedDayThroughSubmit() async throws {
+        let selected = day(3)
+        model.open(on: .calendar(selected: selected), as: .task)
+        for title in ["First task", "Second task"] {
+            type(title)
+            model.submit()
+            for _ in 0..<200 where model.isCreating { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(model.isCreating)
+            XCTAssertTrue(model.isOpen)
+        }
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertTrue(liveTasks().allSatisfy { $0.dueDay == selected })
+        XCTAssertEqual(library.undo(in: .calendar), .applied)
+        XCTAssertEqual(liveTasks().count, 1)
+    }
+
     func testQueuedEventSubmissionCannotCreateAReplacementSession() async {
         model.open(on: .calendar(selected: today))
         await model.loadCalendars()

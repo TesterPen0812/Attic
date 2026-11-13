@@ -528,7 +528,7 @@ final class ComposerModel: ObservableObject {
         // The next task starts with the picked tags too (13 Nov).
         if case .tasks = page { tasks.startDraftFromFilter() }
         if openingPage { isOpen = false }
-        else { focusRequest &+= 1 }
+        else { fillCalendarDay(); focusRequest &+= 1 }
     }
 
     private func createImmediately(openingPage: Bool) -> Bool {
@@ -553,6 +553,7 @@ final class ComposerModel: ObservableObject {
         if openingPage {
             isOpen = false
         } else {
+            fillCalendarDay()
             focusRequest &+= 1
         }
         return true
