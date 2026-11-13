@@ -552,6 +552,16 @@ final class AgentActions {
     /// Failed calls keep previously committed steps in the same request.
     private func execute(name: String, arguments: [String: Any], watching: Bool,
                          requestID: UUID) async throws -> AgentActionResult {
+        let recording = Self.isMutation(name)
+            ? UndoRoute.ActionRecording(routeID: tasks.library.undo.ownershipID) : nil
+        return try await UndoRoute.$actionRecording.withValue(recording) {
+            try await execute(name: name, arguments: arguments, watching: watching,
+                              requestID: requestID, recording: recording)
+        }
+    }
+
+    private func execute(name: String, arguments: [String: Any], watching: Bool,
+                         requestID: UUID, recording: UndoRoute.ActionRecording?) async throws -> AgentActionResult {
         try checkOpen(requestID)
         try guardMode(name, requestID: requestID)
         if Self.isMutation(name) { try requireDurableUndoBeforeMutation() }
@@ -600,13 +610,16 @@ final class AgentActions {
         } else if name == "search_items" {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
-            (text, step) = try await calendarAction(name, arguments, requestID: requestID)
+            let savedDraft: CalendarEventDraft?
+            (text, step, savedDraft) = try await calendarAction(name, arguments, requestID: requestID)
             if ["calendar_create", "calendar_update", "calendar_delete"].contains(name),
                let id = step.targets.first?.itemID {
                 let old = (arguments["_expected_draft"] as? String)
                     .flatMap { Data(base64Encoded: $0) }
                     .flatMap { try? JSONDecoder().decode(CalendarEventDraft.self, from: $0) }
-                let after = name == "calendar_delete" ? nil : try await calendarWriter?.ownedEvent(id: id)?.draft
+                // Seal this operation's receipt, never a later owner edit read
+                // after the writer's committed result crosses an await.
+                let after = name == "calendar_delete" ? nil : savedDraft
                 if name == "calendar_create" || old != nil {
                     if name == "calendar_delete" || after != nil {
                         extraEntries.append(.calendar(id, before: old, after: after, name: step.title))
@@ -702,18 +715,8 @@ final class AgentActions {
         }
         step.title = AgentActionWords.completed(name, arguments, response: text, targets: step.targets,
                                                previousNoteBody: noteBefore?.body)
-        var entries: [UndoEntry] = []
-        for history in route.retainedHistories {
-            let current = route.steps(in: history, redo: false)
-            let old = before[history] ?? []
-            let ids = current.map(\.id)
-            if ids.starts(with: old) {
-                for added in current.dropFirst(old.count) {
-                    entries.append(.history(history, added.id, step.title))
-                }
-            } else if ids != old {
-                entries.append(.unavailable("\(step.title): history changed during the action"))
-            }
+        var entries: [UndoEntry] = (recording?.steps ?? []).map {
+            .history($0.history, $0.id, step.title)
         }
         // An editable task transition can be replayed after the session's
         // closure-only UndoRoute is gone. Seal the full physical replica set

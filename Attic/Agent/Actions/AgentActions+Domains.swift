@@ -215,10 +215,11 @@ extension AgentActions {
          "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
     }
 
-    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID) async throws -> (String, AgentStep) {
-        func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget]) -> (String, AgentStep) {
+    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID) async throws -> (String, AgentStep, CalendarEventDraft?) {
+        func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget],
+                    savedDraft: CalendarEventDraft? = nil) -> (String, AgentStep, CalendarEventDraft?) {
             (text, AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
-                             kind: kind, targets: targets, state: .done))
+                             kind: kind, targets: targets, state: .done), savedDraft)
         }
         switch name {
         case "calendar_search":
@@ -290,7 +291,8 @@ extension AgentActions {
             }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
                                      externalID: saved.occurrenceID)
-            return try result(Self.json(Self.ownedCalendarRow(saved)), name == "calendar_create" ? .create : .update, [target])
+            return try result(Self.json(Self.ownedCalendarRow(saved)), name == "calendar_create" ? .create : .update,
+                              [target], savedDraft: saved.draft)
         case "calendar_delete":
             guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
             let id = try Self.uuid(args["id"], "id")

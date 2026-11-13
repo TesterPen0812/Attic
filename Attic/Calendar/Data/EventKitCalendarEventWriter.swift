@@ -194,7 +194,9 @@ final class BackgroundCalendarEventWriter: CalendarEventWriter {
     private func reporting<T: Sendable>(_ work: @escaping @Sendable (CalendarEventTransactions) throws -> T) async throws -> T {
         let (result, notify, recoveries) = await worker.perform(work)
         if let undoRoute {
-            for recovery in recoveries { recordRecovery(recovery, route: undoRoute) }
+            UndoRoute.$actionRecording.withValue(nil) {
+                for recovery in recoveries { recordRecovery(recovery, route: undoRoute) }
+            }
         }
         if notify { center.post(name: .EKEventStoreChanged, object: self) }
         switch result {
@@ -318,7 +320,10 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
     }
 
     private func reporting<T>(_ work: () throws -> T) throws -> T {
-        defer { publishRecoveries(); postChanges() }
+        defer {
+            UndoRoute.$actionRecording.withValue(nil) { publishRecoveries() }
+            postChanges()
+        }
         do {
             let value = try work()
             lastError = nil

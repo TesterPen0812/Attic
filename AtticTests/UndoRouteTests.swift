@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class UndoRouteTests: XCTestCase {
+    func testActionOwnershipIsCapturedBeforeDeferredHistoryPublication() async {
+        let route = UndoRoute()
+        let replayOwner = UndoRoute.ActionRecording(routeID: route.ownershipID)
+        let forwardOwner = UndoRoute.ActionRecording(routeID: route.ownershipID)
+        var release: CheckedContinuation<Void, Never>?
+        var entered: CheckedContinuation<Void, Never>?
+        var first = UndoStep(name: "First", undo: { true }, redo: { true })
+        first.replay = { _, commit in
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered?.resume()
+                entered = nil
+            }
+            do { try commit(); return .applied } catch { return .failed }
+        }
+        route.record(first, in: .calendar)
+        let replay = Task {
+            await UndoRoute.$actionRecording.withValue(replayOwner) {
+                await route.replay(in: .calendar, redo: false)
+            }
+        }
+        await withCheckedContinuation { continuation in
+            if release != nil { continuation.resume() } else { entered = continuation }
+        }
+        let next = UndoStep(name: "Next", undo: { true }, redo: { true })
+        UndoRoute.$actionRecording.withValue(forwardOwner) { route.record(next, in: .calendar) }
+        XCTAssertEqual(forwardOwner.steps.map(\.id), [next.id])
+        release?.resume()
+        let outcome = await replay.value
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertEqual(route.undoStepID(in: .calendar), next.id)
+        XCTAssertEqual(forwardOwner.steps.map(\.id), [next.id], "Deferred publication must not capture twice")
+        XCTAssertTrue(replayOwner.steps.isEmpty, "The replay task must not claim the later command")
+    }
+
     func testLifecycleCapabilitySurvivesUndoAndRedoWithoutEnglishName() {
         let route = UndoRoute()
         route.record(UndoStep(name: "Wiederherstellen", lifecycle: .restore,
