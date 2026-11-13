@@ -1062,10 +1062,10 @@ final class DrawPageModel: ObservableObject {
         if self.canvasID == canvasID { apply(result) }
     }
 
-    /// Settle owner input before an agent reads its baseline or validates a
-    /// token. Keep the text editor open; failed saves remain pending in store.
+    /// Settle queued owner input before an agent reads its baseline or
+    /// validates a token. The pointer gesture and text editor stay open;
+    /// failed saves remain pending in store.
     func flushLiveInput() {
-        finishLiveInput()
         flushAcknowledgedDraw()
         flushTyping()
     }

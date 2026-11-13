@@ -81,6 +81,48 @@ final class DrawDataSafetyTests: XCTestCase {
         XCTAssertEqual(page.objects, try store.open(canvas).objects)
     }
 
+    func testCatchupR3AgentReadsKeepInkAndMoveLiveUntilPointerUp() throws {
+        for name in ["draw_read_canvas", "draw_list_canvases"] {
+            for moving in [false, true] {
+                let store = try persistent()
+                let page = DrawPageModel(store: store)
+                page.start()
+                let canvas = try XCTUnwrap(page.canvasID)
+                let box = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 100, height: 50), content: .shape(.rectangle))
+                if moving { XCTAssertTrue(page.perform(.put([box])).isSaved) }
+                page.setTool(moving ? .select : .pen)
+                let start = page.viewport.screen(CGPoint(x: 80, y: 100))
+                let middle = page.viewport.screen(CGPoint(x: 100, y: 110))
+                let end = page.viewport.screen(CGPoint(x: 180, y: 140))
+                page.pointerDown(at: start)
+                page.pointerDragged(to: middle)
+                XCTAssertNotNil(page.live)
+                let before = try store.open(canvas).objects
+                let undoBefore = store.undoStepID(on: canvas)
+                let agent = try actions(store)
+                _ = try agent.drawAction(name, ["canvas_id": canvas.uuidString], beforeMutation: {})
+                XCTAssertNotNil(page.live, name)
+                XCTAssertEqual(try store.open(canvas).objects, before, name)
+                XCTAssertEqual(store.undoStepID(on: canvas), undoBefore, name)
+                page.pointerDragged(to: end)
+                page.pointerUp()
+                page.flushAcknowledgedDraw()
+                XCTAssertNil(page.live)
+                let after = try store.open(canvas).objects
+                XCTAssertEqual(after.count, 1)
+                XCTAssertEqual(page.objects, after)
+                if moving {
+                    XCTAssertEqual(after.first?.frame.x, box.frame.x + 100)
+                    XCTAssertEqual(after.first?.frame.y, box.frame.y + 40)
+                } else {
+                    XCTAssertGreaterThan(try XCTUnwrap(after.first).frame.width, 80)
+                }
+                XCTAssertTrue(store.undo(on: canvas).isSaved)
+                XCTAssertEqual(try store.open(canvas).objects, before)
+            }
+        }
+    }
+
     func testDS6PendingTypingFlushesBeforeAgentSnapshotAndValidation() throws {
         let store = try persistent()
         let page = DrawPageModel(store: store)
