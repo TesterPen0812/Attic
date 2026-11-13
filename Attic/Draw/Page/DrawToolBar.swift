@@ -36,6 +36,30 @@ enum DrawPageMetrics {
 
     static func fold(_ reduceMotion: Bool) -> Animation { AtticPanelChromeMetrics.fold(reduceMotion: reduceMotion) }
 
+    /// The tool capsule's width with `strip` open (nil: shut), as
+    /// `DrawToolBar` lays it out: Select, Pen, Eraser, Text, Shape, the
+    /// swatch and Undo, one of them widened into its strip (Undo folds away
+    /// while a strip is open). The bar's ✦ reads it to step aside (13 Nov).
+    static func capsuleWidth(strip: DrawStrip?) -> CGFloat {
+        let tool = cell.width
+        let cells: [CGFloat]
+        switch strip {
+        case nil: cells = Array(repeating: tool, count: 7)
+        case .pen?, .text?: cells = Array(repeating: tool, count: 5) + [stripWidth(count: DrawSize.allCases.count, cell: tool)]
+        case .shape?: cells = Array(repeating: tool, count: 5) + [stripWidth(count: DrawShape.allCases.count, cell: tool)]
+        case .colour?: cells = Array(repeating: tool, count: 5) + [stripWidth(count: DrawColour.allCases.count, cell: colourCell)]
+        }
+        return stripWidth(cells) + 2 * capsulePadding
+    }
+
+    private static func stripWidth(count: Int, cell: CGFloat) -> CGFloat {
+        stripWidth(Array(repeating: cell, count: count))
+    }
+
+    private static func stripWidth(_ cells: [CGFloat]) -> CGFloat {
+        cells.reduce(0, +) + CGFloat(max(0, cells.count - 1)) * cellGap
+    }
+
     /// D4 removes the menu's search row. The list keeps both card insets
     /// and stops at the panel's bottom inset, with one pixel of grace.
     static let bottomGrace: CGFloat = 0.5
@@ -242,6 +266,10 @@ struct DrawToolBar: View {
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticShape.controlRadius(height: m.capsule), interactive: false, edgeLight: true))
         .fixedSize()
         .animation(m.fold(design.reduceMotion), value: model.strip)
+        // Esc from a focused cell closes an open strip, so the keyboard
+        // gets back to Undo and to the bar's ✦, which steps aside while a
+        // strip is open (13 Nov). Shut, Esc passes on as before.
+        .onExitCommand(perform: model.strip == nil ? nil : { model.closeStrip() })
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tools"))
         .accessibilityIdentifier("draw-tool-bar")

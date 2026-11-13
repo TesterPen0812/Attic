@@ -373,8 +373,29 @@ final class O14PinGlyphTests: XCTestCase {
         XCTAssertEqual(pinned(.focused), "pin.fill")
         XCTAssertEqual(pinned(.hover), "pin.slash")
         XCTAssertEqual(pinned(.pressed), "pin.slash")
-        for name in [M.pinnedSymbol, M.unpinSymbol] {
+        for name in [M.pinnedSymbol, M.unpinSymbol, M.unpinnedSymbol] {
             XCTAssertNotNil(NSImage(systemSymbolName: name, accessibilityDescription: nil), name)
+        }
+    }
+
+    /// Owner, 13 Nov: the panel pin is not filled until the panel is pinned;
+    /// it leans while unpinned; its toggle lays both glyphs on one centre so
+    /// the change cross-fades; the menu bar's Pin Panel wears the same glyph.
+    @MainActor func testThePanelPinIsAnOutlineUntilPinned() {
+        typealias M = AtticRaisedButtonMetrics
+        XCTAssertEqual(M.pinSymbol(pinned: false), "pin")
+        XCTAssertEqual(M.pinSymbol(pinned: true), "pin.fill")
+        XCTAssertEqual(M.pinRotation(pinned: false), 30)
+        XCTAssertEqual(M.pinRotation(pinned: true), 0)
+        XCTAssertEqual(M.pinAccessibilityValue(pinned: false), "Not pinned")
+        XCTAssertEqual(M.pinAccessibilityValue(pinned: true), "Pinned")
+        XCTAssertEqual(M.toggleSymbols(M.unpinnedSymbol, on: M.pinnedSymbol, onHover: nil), ["pin", "pin.fill"])
+        XCTAssertEqual(M.toggleSymbols("pin", on: "pin", onHover: "pin.slash"), ["pin", "pin.slash"], "each glyph once")
+        for pinned in [false, true] {
+            let menu = MenuBarCommands.commands(advertisedNewTaskShortcut: nil, showPanel: {}, newTask: {}, newNote: {},
+                                                search: {}, openSettings: {}, quit: {}, isPinned: pinned)
+            let item = menu.flatMap(\.children).first { $0.title == String(localized: "Pin Panel") }
+            XCTAssertEqual(item?.systemImage, M.pinSymbol(pinned: pinned), "menu bar Pin Panel, pinned \(pinned)")
         }
     }
 }

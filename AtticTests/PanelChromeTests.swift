@@ -334,6 +334,24 @@ final class PanelChromeTests: XCTestCase {
     /// centre must find the control. On CI the top row's controls and the
     /// page switch hit an unnamed node spanning their bar instead, so every
     /// one of them was "Not hittable".
+    /// Owner, 13 Nov: the pin is an outline until the panel is pinned. Its
+    /// name says what a click does; its value says which state it is in.
+    func testThePinSaysPinnedOrNotPinned() throws {
+        try withPanel { host, state, _, _, _, _ in
+            state.isPanelPinned = false
+            spin(0.3)
+            let pin = try XCTUnwrap(element("panel-pin-button", in: host))
+            XCTAssertEqual(pin.accessibilityLabel?() ?? nil, "Pin panel")
+            XCTAssertEqual((pin as? NSObject)?.value(forKey: "accessibilityValue") as? String, "Not pinned")
+            state.isPanelPinned = true
+            spin(0.3)
+            let pinned = try XCTUnwrap(element("panel-pin-button", in: host))
+            XCTAssertEqual(pinned.accessibilityLabel?() ?? nil, "Unpin panel")
+            XCTAssertEqual((pinned as? NSObject)?.value(forKey: "accessibilityValue") as? String, "Pinned")
+            state.isPanelPinned = false
+        }
+    }
+
     func testTheBarsControlsAreWhatTheAccessibilityHitTestFinds() throws {
         try withPanel { host, _, _, _, _, _ in
             var report: [String] = []

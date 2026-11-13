@@ -32,6 +32,10 @@ enum NotesBarMetrics {
     /// The bar ends with "+", as on Tasks (Accepted 2026-10-30, "Top row
     /// and bottom bar"), not the compose glyph.
     static let newNoteSymbol = "plus"
+    /// An open note's way back to All notes (owner, 13 Nov): the gallery's
+    /// icon, which is Notes' own symbol in the island's page switch, the
+    /// ••• menu and the menu bar's Open ▸ (the gallery shows none itself).
+    static var allNotesSymbol: String { PanelPage.notes.systemName }
 }
 
 /// The tag bar on every page that has tags (Notes, and Tasks since

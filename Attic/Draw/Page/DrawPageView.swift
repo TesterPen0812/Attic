@@ -58,7 +58,11 @@ struct DrawPageHost: View {
                 .animation(dimAnimation, value: model.isDrawingLive)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus),
+        // An open strip widens the tool capsule toward the bar's ✦; the ✦
+        // steps aside when it would reach it (owner, 13 Nov: they never
+        // overlap, they take turns in one place).
+        .panelBottomBar(.canvas, look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus,
+                                                          leadingReach: model.strip.map { DrawPageMetrics.capsuleWidth(strip: $0) }),
                         actions: PanelBottomBarActions(plus: { [weak model] in
                             guard let model else { return }
                             AtticSounds.play(.created, if: model.newCanvas())

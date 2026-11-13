@@ -124,6 +124,12 @@ struct PanelBottomBarLook: Equatable {
     var folded = false
     /// Off while the page draws its own bar (an open note).
     var shown = true
+    /// How far the page's own floating controls on the bar's line reach
+    /// from its leading inset, while the person has widened them (Draw's
+    /// tool capsule with a strip open). The ✦ steps aside while they would
+    /// reach it and comes back when they shut (owner, 13 Nov; adaptive UI:
+    /// the two take turns in one place). Nil: nothing reaches across.
+    var leadingReach: CGFloat?
 
     static let tasksPlus = Plus(label: String(localized: "New task"), help: String(localized: "New task"), identifier: "tasks-new-task")
     static let notesPlus = Plus(label: String(localized: "New note"), help: String(localized: "New note (⌘N)"), identifier: "notes-new-note")
@@ -296,13 +302,10 @@ struct PanelSharedBottomBar: View {
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
             .allowsHitTesting(!folded && !taken)
             if look.plus != nil, !folded, let agentChat, agentChat.isConnected {
-                PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
-                    AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
-                }
-                .allowsHitTesting(!taken)
-                .accessibilityHidden(!look.shown || taken)
-                .padding(.trailing, gap)
-                .transition(.opacity)
+                PanelAgentSlot(agentChat: agentChat, taken: taken, covered: covered, shown: look.shown,
+                               reach: look.leadingReach)
+                    .padding(.trailing, gap)
+                    .transition(.opacity)
             }
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
@@ -330,6 +333,7 @@ struct PanelSharedBottomBar: View {
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: todayShown(look)),
                    value: todayShown(look))
         .frame(height: side)
+        .coordinateSpace(.named(Self.rowSpace))
         .padding(.horizontal, Self.plusInsets(layout: layout).trailing)
         .padding(.bottom, Self.plusInsets(layout: layout).bottom)
         .opacity(look.shown ? 1 : 0)
@@ -339,6 +343,15 @@ struct PanelSharedBottomBar: View {
 
     /// How far the pills move as the card takes the row (12 design px).
     static let takenSlide: CGFloat = 6
+    /// The bar's row, inside its side insets: where the ✦ measures itself.
+    static let rowSpace = "panel-bottom-bar-row"
+
+    /// Whether the ✦ steps aside: controls reaching `reach` from the row's
+    /// leading edge would come within the bar's gap of its leading edge.
+    static func agentStepsAside(reach: CGFloat?, agentMinX: CGFloat) -> Bool {
+        guard let reach, agentMinX.isFinite else { return false }
+        return reach + AtticPanelChromeMetrics.footerGap > agentMinX
+    }
     /// The row going under the card uses the quick leave. After the card
     /// finishes folding, the row starts its normal popover show immediately.
     static func rowAnimation(taken: Bool, reduceMotion: Bool) -> Animation? {
@@ -538,4 +551,42 @@ struct PanelControlFold<Content: View>: View {
             withAnimation(animation(false)) { away = false }
         }
     }
+}
+
+/// The ✦ beside "+". It folds away with the row when the composer takes
+/// it, and steps aside (fading, 6 pt toward "+") while the page's widened
+/// controls would reach it: Draw's tool capsule with its colours, shapes or
+/// widths open (owner, 13 Nov). It comes back as the strip shuts, in the
+/// row's popover motion; Reduced fades without the slide.
+private struct PanelAgentSlot: View {
+    let agentChat: AgentChatModel
+    let taken: Bool
+    let covered: Bool
+    let shown: Bool
+    let reach: CGFloat?
+
+    @Environment(\.atticDesign) private var design
+    @State private var minX = CGFloat.infinity
+
+    var body: some View {
+        let aside = PanelSharedBottomBar.agentStepsAside(reach: reach, agentMinX: minX)
+        let away = taken || aside
+        PanelControlFold(folded: away, animation: { covered ? nil : PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+            AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
+        }
+        .offset(x: aside && !design.reduceMotion ? PanelSharedBottomBar.takenSlide : 0)
+        .animation(covered ? nil : PanelSharedBottomBar.rowAnimation(taken: aside, reduceMotion: design.reduceMotion), value: aside)
+        .allowsHitTesting(!away)
+        .accessibilityHidden(!shown || away)
+        // Its laid-out place (the slide above is drawn, not laid out).
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(PanelSharedBottomBar.rowSpace)).minX } action: { minX = $0 }
+        #if DEBUG
+        .onChange(of: aside, initial: true) { _, now in Self.stepsAside = now }
+        #endif
+    }
+
+    #if DEBUG
+    /// Test seam: whether the ✦ stood aside last time it changed.
+    static var stepsAside = false
+    #endif
 }

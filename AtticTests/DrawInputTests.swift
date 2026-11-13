@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -811,10 +812,112 @@ final class DrawInputTests: XCTestCase {
         XCTAssertFalse(model.isFiltering, "Escape closes the menu")
     }
 
+    // MARK: 5. The open strips and the bar's ✦ (owner, 13 Nov)
+
+    /// The tool capsule's width the ✦ reads is the width it lays out.
+    func testTheCapsuleWidthMatchesTheToolBarForEveryStrip() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        for strip: DrawStrip? in [nil, .pen, .text, .shape, .colour] {
+            model.closeStrip()
+            switch strip {
+            case .colour?: model.clickSwatch()
+            case .shape?: model.clickTool(.shape)
+            case let widths?:
+                let tool: DrawTool = widths == .pen ? .pen : .text
+                model.setTool(tool)
+                model.clickTool(tool)
+            case nil: break
+            }
+            XCTAssertEqual(model.strip, strip)
+            let host = NSHostingView(rootView: DrawToolBar(model: model).atticDesign(AtticDesignContext()))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.fittingSize.width, DrawPageMetrics.capsuleWidth(strip: strip), accuracy: 0.5, "\(String(describing: strip))")
+        }
+    }
+
+    func testTheAgentStepsAsideOnlyWhenTheOpenStripWouldReachIt() {
+        XCTAssertFalse(PanelSharedBottomBar.agentStepsAside(reach: nil, agentMinX: 10), "nothing open: it stays")
+        XCTAssertFalse(PanelSharedBottomBar.agentStepsAside(reach: 200, agentMinX: .infinity), "not laid out yet")
+        XCTAssertFalse(PanelSharedBottomBar.agentStepsAside(reach: 200, agentMinX: 200 + AtticPanelChromeMetrics.footerGap))
+        XCTAssertTrue(PanelSharedBottomBar.agentStepsAside(reach: 200, agentMinX: 200 + AtticPanelChromeMetrics.footerGap - 0.5))
+    }
+
+    /// Every strip at the narrowest and widest panel: the capsule never runs
+    /// under the ✦. Where it would, the ✦ steps aside (hidden from
+    /// VoiceOver, no hits) and comes back when the strip shuts; where there
+    /// is room, it stays. Esc from the capsule shuts the strip.
+    func testOpenStripsNeverRunUnderTheAgentButton() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let widest = min(PanelContentSize.max, 640)
+        for width in [PanelContentSize.standard.rawValue, widest] {
+            let rig = try makeRig(width: width)
+            defer { close(rig) }
+            // The app connects before the panel shows; here the bar redraws
+            // on a page change to pick the connection up.
+            rig.uiState.agentChat.connect(StripTestRunner())
+            rig.uiState.selectSection(.tasks)
+            spin(0.5)
+            rig.uiState.selectSection(.canvas)
+            spin(0.8)
+            let agent = try XCTUnwrap(frame(of: "agent-chat-button", in: rig), "\(width): the ✦ is on the bar")
+            var steppedAside: [DrawStrip] = []
+            for strip in [DrawStrip.pen, .text, .shape, .colour] {
+                switch strip {
+                case .colour: rig.model.clickSwatch()
+                case .shape: rig.model.clickTool(.shape)
+                case .pen, .text:
+                    let tool: DrawTool = strip == .pen ? .pen : .text
+                    rig.model.setTool(tool)
+                    rig.model.clickTool(tool)
+                }
+                XCTAssertEqual(rig.model.strip, strip)
+                spin(0.6)
+                let bar = try XCTUnwrap(frame(of: "draw-tool-bar", in: rig), "\(width) \(strip): the capsule")
+                XCTAssertEqual(bar.width, DrawPageMetrics.capsuleWidth(strip: strip), accuracy: 0.5)
+                if let shown = frame(of: "agent-chat-button", in: rig) {
+                    XCTAssertLessThanOrEqual(bar.maxX + AtticPanelChromeMetrics.footerGap, shown.minX + 0.5,
+                                             "\(width) \(strip): the capsule stops short of the ✦")
+                } else {
+                    steppedAside.append(strip)
+                    XCTAssertGreaterThan(bar.maxX + AtticPanelChromeMetrics.footerGap, agent.minX,
+                                         "\(width) \(strip): the ✦ steps aside only when the strip would reach it")
+                }
+                rig.model.closeStrip()
+                spin(0.6)
+                XCTAssertNotNil(frame(of: "agent-chat-button", in: rig), "\(width) \(strip): the ✦ comes back as the strip shuts")
+            }
+            if width == widest {
+                XCTAssertEqual(steppedAside, [], "the widest panel has room for every strip")
+            } else {
+                XCTAssertTrue(steppedAside.contains(.colour), "\(width): the colours reach the ✦ (\(steppedAside))")
+            }
+        }
+    }
+
     func testTheMenusListRoomUsesTheSpaceRecoveredFromTheSearchRow() {
         let room = DrawPageMetrics.menuListRoom(boardHeight: 700, chromeTop: 15.5, chromeBottom: 15.5)
         XCTAssertEqual(room, 700 - 15.5 - DrawPageMetrics.capsule - DrawPageMetrics.menuGap - 15.5
                        - AtticGlassMenuShape.inset * 2 + DrawPageMetrics.bottomGrace, accuracy: 0.01,
                        "D4 keeps both card insets and gives the old search row's height to the list")
     }
+}
+
+/// A connected runner that never runs: the ✦ only needs a connection.
+@MainActor
+private final class StripTestRunner: AgentRunning {
+    func send(_ text: String, watching: Bool) -> AsyncStream<AgentEvent> { AsyncStream { $0.finish() } }
+    func setWatching(_ watching: Bool) {}
+    func setMode(_ mode: AgentChatMode) {}
+    func resolve(approval id: UUID, allow: Bool) {}
+    func undo(changeSet id: UUID) async throws {}
+    func cancel() {}
+    func observe() -> AsyncStream<AgentEvent> { AsyncStream { $0.finish() } }
+    func threadSnapshot() -> AgentThreadSnapshot { AgentThreadSnapshot(entries: [], events: [], isRunning: false) }
+    var retainsThread: Bool { false }
+    func forgetThread() {}
+    func chats() -> [AgentChatSummary] { [] }
+    func reopen(chat id: UUID) -> Bool { false }
 }

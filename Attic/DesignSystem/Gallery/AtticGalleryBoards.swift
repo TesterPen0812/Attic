@@ -427,9 +427,7 @@ struct AtticGalleryPanelComposition: View {
     private var header: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
-                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)",
-                                  glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true,
-                                  action: demo.record("Pin"))
+                AtticPanelPinButton(isPinned: false, action: demo.record("Pin"))
                 Spacer(minLength: AtticSpacing.betweenControls)
                 AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
@@ -482,8 +480,13 @@ private struct RaisedControlsBoard: View {
                     AtticRaisedButton(systemName: "pin", label: "Pin", action: demo.record("Pin")).atticForcedState(state)
                 }
             }
+            // The panel pin's two states (13 Nov): outline until pinned,
+            // filled (no chip) once pinned.
+            AtticSpecimen("Panel pin") {
+                AtticPanelPinButton(isPinned: false, action: demo.record("Pin"))
+            }
             AtticSpecimen("Pinned") {
-                AtticRaisedButton(systemName: "pin", label: "Unpin", isSelected: true, action: demo.record("Unpin"))
+                AtticPanelPinButton(isPinned: true, action: demo.record("Unpin"))
             }
         }
         BoardHeading(title: "Label buttons · 32 tall")
@@ -1043,12 +1046,9 @@ private struct EdgeBlurBoard: View {
                 .overlay {
                     VStack {
                         HStack {
-                            // The top row's own pin (`PanelHeader`): the
-                            // filled glyph in the header's strong ink.
-                            AtticRaisedButton(systemName: "pin.fill", label: "Pin",
-                                              glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
-                                              emphasisedGlyph: true, cornerRadius: AtticRadius.header,
-                                              glyphRotation: 30, action: demo.record("Pin"))
+                            // The top row's own pin (`PanelHeader`), not
+                            // pinned: the outline in the header's strong ink.
+                            AtticPanelPinButton(isPinned: false, action: demo.record("Pin"))
                             Spacer()
                         }
                         Spacer()

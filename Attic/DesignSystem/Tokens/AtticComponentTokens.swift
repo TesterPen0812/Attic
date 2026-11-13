@@ -261,6 +261,15 @@ enum AtticRaisedButtonMetrics {
     /// O14-05: the pinned pin, and what hovering it offers (Unpin).
     static let pinnedSymbol = "pin.fill"
     static let unpinSymbol = "pin.slash"
+    /// The panel pin while the panel is not pinned (owner, 13 Nov: "not
+    /// filled"; it fills only when pinned).
+    static let unpinnedSymbol = "pin"
+    /// The panel pin's glyph, lean and VoiceOver value for a state.
+    static func pinSymbol(pinned: Bool) -> String { pinned ? pinnedSymbol : unpinnedSymbol }
+    static func pinRotation(pinned: Bool) -> Double { pinned ? 0 : 30 }
+    static func pinAccessibilityValue(pinned: Bool) -> String {
+        pinned ? String(localized: "Pinned") : String(localized: "Not pinned")
+    }
     /// All notes' `rectangle.stack` (A3-02: measured high).
     static let stackGlyphOffsetY: CGFloat = 0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.

@@ -186,6 +186,11 @@ final class NotesChromeTests: XCTestCase {
             draft.pages.dismissLibrary()
             spin(1)
             let back = try XCTUnwrap(element("notes-all-notes", in: host), "Back before composer")
+            // Owner, 13 Nov: the gallery's icon (Notes' own symbol), same name.
+            XCTAssertEqual(back.accessibilityLabel?() ?? nil, "All notes")
+            XCTAssertEqual(NotesBarMetrics.allNotesSymbol, PanelPage.notes.systemName)
+            XCTAssertNotEqual(NotesBarMetrics.allNotesSymbol, "chevron.left", "not a back arrow")
+            XCTAssertNotNil(NSImage(systemSymbolName: NotesBarMetrics.allNotesSymbol, accessibilityDescription: nil))
             let plus = try XCTUnwrap(element("notes-new-note", in: host), "+ before composer")
             XCTAssertTrue(plus.accessibilityPerformPress?() ?? false, "open the real composer")
             spin(1)

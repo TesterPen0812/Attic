@@ -48,25 +48,15 @@ struct PanelHeader: View {
                 // pinned, and under the pointer a pinned pin shows what a
                 // click does (the pin with a slash), cross-faded. No chip:
                 // the fill says "on". At the switch's icon size.
-                // The owner's panel design (2026-10-27): the filled pin,
-                // leaning 30° until pinned, upright once pinned; round.
+                // The owner's panel design (2026-10-27): the pin leans 30°
+                // until pinned, upright once pinned; round.
                 // Top row (Accepted 2026-10-29/30): Pin alone on the left;
                 // it folds away while the page's search is open.
+                // Owner, 13 Nov: the outline pin while not pinned; it fills
+                // only when pinned (`AtticPanelPinButton`).
                 PanelPinFold(page: page) {
-                    AtticRaisedButton(
-                        systemName: "pin.fill",
-                        label: isPinned ? "Unpin panel" : "Pin panel",
-                        help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
-                        isSelected: isPinned,
-                        glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
-                        emphasisedGlyph: true,
-                        flat: flat,
-                        selectedSystemName: "pin.fill",
-                        cornerRadius: AtticRadius.header,
-                        glyphRotation: isPinned ? 0 : 30,
-                        action: onTogglePin
-                    )
-                    .atticMaterialProbe("panel-pin")
+                    AtticPanelPinButton(isPinned: isPinned, flat: flat, action: onTogglePin)
+                        .atticMaterialProbe("panel-pin")
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")

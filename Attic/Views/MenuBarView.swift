@@ -67,7 +67,9 @@ enum MenuBarCommands {
             AtticMenuCommand(verbatim: page.title, systemImage: page.systemName,
                              shortcut: KeyboardShortcut(page.keyEquivalent, modifiers: .command)) { openPage(page) }
         }
-        open.append(AtticMenuCommand(verbatim: String(localized: "Pin Panel"), systemImage: "pin", shortcut: pinShortcut,
+        // Its icon is the panel pin's (13 Nov): outline until pinned, filled once pinned.
+        open.append(AtticMenuCommand(verbatim: String(localized: "Pin Panel"),
+                                     systemImage: AtticRaisedButtonMetrics.pinSymbol(pinned: isPinned), shortcut: pinShortcut,
                                      startsSection: true, state: isPinned ? .on : .off, action: togglePin))
         return [
             AtticMenuCommand("Show Attic", systemImage: "rectangle.topthird.inset.filled", action: showPanel),
