@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import ObjectiveC
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -11,6 +12,76 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testDS10DividerExtrasSurviveEditorProjectionAndStructuralEdit() throws {
+        let json = #"{"format":1,"requires":["structure-v1"],"blocks":[{"kind":"text","text":"T"},{"kind":"divider","id":"11111111-1111-4111-8111-111111111111","hint":{"colour":"blue","nested":{"numbers":[1,2]}}},{"kind":"text","text":"AB"}]}"#
+        let document = try XCTUnwrap(NoteContentCodec.decode(Data(json.utf8)).document)
+        XCTAssertTrue(NoteContentCodec.decode(Data(json.utf8)).isEditable)
+        let extras = document.blocks[1].extras
+        XCTAssertFalse(extras.isEmpty)
+        let attributed = NoteTextCodec.attributedString(from: document, style: NoteTextStyle())
+        XCTAssertEqual(NoteTextCodec.document(from: attributed, template: document).blocks[1].extras, extras)
+
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        XCTAssertEqual(engine.document().blocks[1].extras, extras)
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                                         with: NSAttributedString(string: "\nC"), name: "Type"))
+        let projected = engine.document()
+        XCTAssertEqual(projected.blocks[1].extras, extras)
+        let reopened = try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(projected)).document)
+        XCTAssertEqual(reopened.blocks[1].extras, extras)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: projected) else {
+            return XCTFail("projected note must save")
+        }
+        let saved = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let persisted = try XCTUnwrap(NoteContentCodec.decode(XCTUnwrap(saved.content)).document)
+        XCTAssertEqual(persisted.blocks[1].extras, extras, "a fresh context must retain the divider metadata")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks[1].extras, extras)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks[1].extras, extras)
+    }
+
+    func testDS10SeededEditorEditsKeepDividerMetadataThroughUndoRedoAndRoundTrips() throws {
+        let extras: [String: NoteJSON] = ["future-rule": .object(["payload": .array([.int(1), .string("kept")])])]
+        for seed in [UInt64(0xD510), UInt64(0xD511)] {
+            var divider = NoteBlock.divider(id: UUID())
+            divider.extras = extras
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(
+                blocks: [.text("Title"), divider, .text("Seed")], requires: ["structure-v1"]))
+            var expected = "Seed"
+            var random = seed
+            for step in 0..<320 {
+                random = random &* 6_364_136_223_846_793_005 &+ 1
+                if random & 3 == 0 && expected.count > 4 {
+                    XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length - 1, length: 1),
+                        with: NSAttributedString(string: ""), name: "Backspace"), "seed \(seed), step \(step)")
+                    expected.removeLast()
+                } else {
+                    let letter = ["a", "b", "c", "d", "e"][Int(random % 5)]
+                    XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                        with: NSAttributedString(string: letter), name: "Type"), "seed \(seed), step \(step)")
+                    expected += letter
+                }
+                let actual = engine.document()
+                XCTAssertEqual(actual.blocks[1].extras, extras, "seed \(seed), step \(step)")
+                XCTAssertEqual(actual.blocks.last?.text, expected, "seed \(seed), step \(step)")
+                if step % 37 == 0 {
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertTrue(engine.history.redo())
+                    XCTAssertEqual(engine.document(), actual, "seed \(seed), Undo/Redo at step \(step)")
+                    let bytes = try NoteContentCodec.encode(actual)
+                    let restored = try XCTUnwrap(NoteContentCodec.decode(bytes).document)
+                    XCTAssertEqual(restored.blocks[1].extras, extras)
+                    let projected = NoteTextCodec.document(from: NoteTextCodec.attributedString(
+                        from: restored, style: NoteTextStyle()), template: restored)
+                    XCTAssertEqual(projected.blocks[1].extras, extras)
+                }
+            }
+        }
+    }
+
     func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
         let renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let recent = renderer.dateChip("day 0")
