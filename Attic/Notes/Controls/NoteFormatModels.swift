@@ -534,7 +534,9 @@ final class NoteFormatCardModel: ObservableObject {
     /// A title is only the editable label; an existing link keeps its exact
     /// destination until the person edits or explicitly picks a suggestion.
     private var openedLink: (url: String, text: String)?
-    private var navigatedLinkSuggestions = false
+    /// The highlighted row when the card opened. Return commits the opened
+    /// link only while the highlight is still there; arrows or hover move it.
+    private var openedLinkSuggestionIndex = 0
 
     func refreshLinkSuggestions() {
         let query = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -554,9 +556,7 @@ final class NoteFormatCardModel: ObservableObject {
 
     func moveLinkSuggestion(by delta: Int) {
         guard !linkSuggestions.isEmpty else { return }
-        let next = min(max(linkSuggestionIndex + delta, 0), linkSuggestions.count - 1)
-        if next != linkSuggestionIndex { navigatedLinkSuggestions = true }
-        linkSuggestionIndex = next
+        linkSuggestionIndex = min(max(linkSuggestionIndex + delta, 0), linkSuggestions.count - 1)
     }
 
     func chooseNote(_ index: Int) {
@@ -614,17 +614,17 @@ final class NoteFormatCardModel: ObservableObject {
             linkText = noteCandidates?().first(where: { $0.id == noteID })?.title ?? ""
         } else { linkText = url ?? "" }
         openedLink = url.map { (url: $0, text: linkText) }
-        navigatedLinkSuggestions = false
         linkError = nil
         card = .link(hasLink: url != nil)
         refreshLinkSuggestions()
         if let noteID, let index = linkSuggestions.firstIndex(where: { $0.id == noteID }) {
             linkSuggestionIndex = index
         }
+        openedLinkSuggestionIndex = linkSuggestionIndex
     }
 
     func submitLink() {
-        if let openedLink, linkText == openedLink.text, !navigatedLinkSuggestions {
+        if let openedLink, linkText == openedLink.text, linkSuggestionIndex == openedLinkSuggestionIndex {
             if onCommitLink?(openedLink.url) == true { return }
             linkError = String(localized: "This link could not be updated.")
             return
