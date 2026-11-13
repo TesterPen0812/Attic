@@ -3,6 +3,17 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+private final class ScrollCountingDefaults: UserDefaults {
+    private(set) var writes: [String: Int] = [:]
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        writes[defaultName, default: 0] += 1
+        super.set(value, forKey: defaultName)
+    }
+
+    func count(_ key: String) -> Int { writes[key, default: 0] }
+}
+
 @MainActor
 final class UXAuditFixTests: XCTestCase {
     override func setUp() {
@@ -133,6 +144,68 @@ final class UXAuditFixTests: XCTestCase {
         let (third, shorter) = mount(height: 300)
         XCTAssertLessThanOrEqual(shorter.contentView.bounds.minY, 100)
         third.close()
+    }
+
+    func testPF7ThousandTaskScrollPositionsDoNotWritePreferencesAtEventCadence() throws {
+        let suite = "PF7.Tasks.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ScrollCountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let memory = TasksPageMemory(defaults: defaults)
+        let model = TasksPageModel(library: AtticLibrary(tasks: try makeTestStore()), memory: memory)
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 240, height: 220))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 1_800))
+        let keeper = TasksScrollKeeper.KeeperView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        keeper.model = model
+        keeper.tab = .now
+        document.addSubview(keeper)
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.04))
+
+        for step in 0..<1_000 {
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: CGFloat(20 + step)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        let final = scroll.contentView.bounds.minY
+        XCTAssertEqual(model.scrollOffsets[.now] ?? -1, final, accuracy: 1,
+                       "the latest offset must be available to a warm list immediately")
+        XCTAssertLessThan(defaults.count("AtticTasksPanel.scroll"), 10,
+                          "1,000 scroll steps must share a bounded durable checkpoint")
+        window.contentView = nil
+        window.close()
+        XCTAssertEqual(memory.scrollOffsets[.now] ?? -1, final, accuracy: 1,
+                       "unmounting the scroll keeper must flush the last offset")
+    }
+
+    func testPF7SharedPageScrollPositionsCommitOnceWhenLeavingTheView() throws {
+        let suite = "PF7.Panel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ScrollCountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 240, height: 220))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 1_800))
+        let keeper = PanelResumeScrollKeeper.KeeperView(defaults: defaults, key: "pf7")
+        document.addSubview(keeper)
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.04))
+
+        for step in 0..<1_000 {
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: CGFloat(20 + step)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        let final = scroll.contentView.bounds.minY
+        XCTAssertLessThan(defaults.count("AtticPanel.scroll.pf7"), 10,
+                          "the shared keeper must avoid a write for every bounds notification")
+        window.contentView = nil
+        window.close()
+        XCTAssertEqual(defaults.double(forKey: "AtticPanel.scroll.pf7"), Double(final), accuracy: 1,
+                       "leaving Notes or Calendar must durably save its latest scroll position")
     }
 
     func testAuditB5PendingScrollWaitsForContentAndYieldsToNavigation() throws {
