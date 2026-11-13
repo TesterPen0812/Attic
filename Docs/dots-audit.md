@@ -4,7 +4,7 @@ Target: `review/pro-13nov`, commit `42f9b5707d06f78c0c6bc3fb99d135d6f38fcb44`. S
 
 ## Coverage and checkpoint
 
-Inventory: 375 Swift files under Attic, 259 under AtticTests/AtticUITests, 807 files total across Attic, tests, Scripts and .github. Counted with `find`. Initial searches covered type names, asset filenames and build flags, but this is not an exhaustive audit. Detailed inspection so far: development contract, resources inventory, Draw metadata/search paths, HTTP request parser and part of agent-server lifecycle. All other areas remain to review. No completion or absence-of-bugs claim is justified.
+Inventory: 375 Swift files under Attic, 259 under AtticTests/AtticUITests, 807 files total across Attic, tests, Scripts and .github. Counted with `find`. Initial searches covered type names, asset filenames and build flags, but this is not an exhaustive audit. Detailed inspection so far: development contract, resources inventory, Draw metadata/search paths, Calendar agenda/search pipeline, HTTP request parser and part of agent-server lifecycle. All other areas remain to review. No completion or absence-of-bugs claim is justified.
 
 ## Part 1: dead code
 
@@ -18,6 +18,12 @@ No safe removal has yet been established. An automated identifier-frequency pass
 - Estimated gain: for N canvases with thumbnails, avoid up to N thumbnail queries and the sum of their byte reads on each uncached search, replacing them with reads for visible results. Actual latency and memory savings require measurement on a Mac with representative data.
 - Risk: medium. Preserve thumbnail correctness, duplicate-replica selection, scrolling and accessibility; add repository metrics tests and measure cold/warm paths.
 
+### LT-2: Calendar searches scan the entire 10,000-year date domain
+- `Attic/Calendar/UI/CalendarAgenda.swift:212–219`; `Attic/Calendar/Data/EventKitCalendarEventSource.swift:86–87, 188–198, 273–299`; `Attic/Calendar/UI/CalendarPageModel.swift:409–431`.
+- Every new query searches years 1 through 9999, divided into fixed three-year intervals. The worker queues a query for every span, even with no matching events, and recurring events can generate many snapshots retained in `seen` and `matches`. Nearby spans are processed first and cancellation is supported, which mitigates responsiveness but does not bound work if a search is left open. Preserve the complete-domain requirement while investigating an indexed, incremental or user-controlled deep search rather than silently removing historical results.
+- Estimated gain: a completed search currently requires about 3,336 EventKit span queries; a cached local index or bounded first pass could avoid most repeated queries. CPU, elapsed time and memory gains are unmeasured and depend on EventKit and the user's calendars. Measure before choosing a design.
+- Risk: medium/high. Must retain old/future event discoverability, recurring-event correctness, permissions, cancellation and fresh results. Add a fake-store query-count test and profile representative recurring calendars on a Mac.
+
 ### Size baseline, not a finding
 `find Attic/Resources -type f -printf '%s %p\\n' | sort -nr` reports the largest individual resource as `Sounds/done.wav` at 28,844 bytes; the entire `Attic/Resources` directory is about 308 KiB on this checkout (`du -sh`). WAV cues are loaded by enum raw value in `Attic/Services/AtticSounds.swift:103–111`, so a literal filename search alone would falsely label them unused. These filesystem numbers are not a built app size or compressed bundle measurement.
 
@@ -27,7 +33,7 @@ No bug has yet been validated to the required evidence standard. Initial force-u
 
 ## Summary at this checkpoint
 - Dead code confirmed: 0. Removed: 0. No removal branch created.
-- Lightness opportunities: 1; LT-1 is the only candidate so far, not a ranked top 10.
+- Lightness opportunities: 2; LT-1 and LT-2 are preliminary, not a ranked top 10.
 - Validated bugs: 0; this does not mean there are none.
-- Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading before and after any proposed change.
+- Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading and Calendar search before and after any proposed change.
 - Remaining: exhaustive symbol and dynamic-reference analysis; assets/scripts/tests/CI; launch and lifetime review; the full bug hunt across all requested areas. In particular, no folder has been read fully file by file.
