@@ -701,6 +701,170 @@ final class TaskLifecycleSliceTests: XCTestCase {
         return (presenter, session.noteID, before)
     }
 
+    func testBG13TaskReviewSaveAsNewWorksWithAnotherOrdinaryNoteActive() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Unrelated ordinary note"), .text("Leave me alone")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+
+        let original = try storedDocument(session.noteID)
+        var proposed = original
+        proposed.blocks.append(.text("Agent's proposed task writing"))
+        let revision = try XCTUnwrap(notes.store.note(withID: session.noteID)?.revisionToken)
+        guard case let .success(.pending(proposalID)) = notes.store.agentWrite(noteID: session.noteID,
+            baseRevisionToken: revision, document: proposed, agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("task note proposal fixture")
+        }
+        await XCTAssertTrueAsync(await notes.beginProposalReview(id: proposalID))
+        XCTAssertEqual(notes.proposalReview?.sessionID, session.id)
+        let copied = await notes.saveReviewedProposalAsNew()
+        XCTAssertTrue(copied, "the task's leased review must work even when ordinary A is active")
+        XCTAssertEqual(try storedDocument(session.noteID), original, "original task writing is retained")
+        XCTAssertEqual(notes.store.note(withID: ordinaryID)?.title, "Unrelated ordinary note")
+        var detachedProposal = proposed
+        detachedProposal.requires.removeAll { $0 == "taskNote" }
+        XCTAssertTrue(notes.store.notes.contains { $0.id != ordinaryID && $0.id != session.noteID
+            && $0.taskID == nil && notes.store.loadDocument(noteID: $0.id)?.content.document == detachedProposal })
+        XCTAssertNil(notes.proposalReview)
+        XCTAssertTrue(notes.store.pendingEdits(noteID: session.noteID).isEmpty)
+    }
+
+    func testBG17PrivateFragmentPasteIntoTaskNoteUsesItsMountedLeaseAndUndo() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        var markedCopy = NoteBlock.text("Copied writing")
+        markedCopy.marks = [NoteMark(.bold, offset: 0, length: 14)]
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Ordinary"), markedCopy])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        let ordinary = try XCTUnwrap(notes.active)
+        let sourceView = ordinary.engine.makeView().1
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let sourceRange = (sourceView.string as NSString).range(of: "Copied writing")
+        XCTAssertNotEqual(sourceRange.location, NSNotFound)
+        XCTAssertTrue(ordinary.engine.writeSelection(sourceRange, to: board,
+            types: [NoteEditorEngine.fragmentType, .string]))
+        let fragment = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+
+        let engine = session.engine, before = engine.document()
+        let insertion = NSRange(location: engine.textStorage.length, length: 0)
+        presenter.host.textView.setSelectedRange(insertion)
+        let pasted = await engine.pasteDurably(fragmentData: fragment, at: insertion)
+        XCTAssertTrue(pasted, "the receiving task workspace is live even though another ordinary note is active")
+        XCTAssertTrue(engine.plainText.contains("Copied writing"))
+        XCTAssertTrue(engine.document().blocks.contains { $0.text.contains("Copied writing") &&
+            $0.marks.contains(where: { $0.kind == .bold }) },
+            "a private fragment keeps its formatting in the task note")
+        XCTAssertTrue(engine.canUndoCommand)
+        XCTAssertTrue(engine.undoCommand())
+        XCTAssertEqual(engine.document(), before, "a fragment paste is one reversible task-note edit")
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+    }
+
+    func testBG16TaskNoteStatusCancelAndCopyActOnDisplayedSession() async throws {
+        let taskID = try seed(.boundary)
+        let existingStore = notes.store
+        notes = NotesPageController(store: existingStore, journal: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in
+                try? await Task.sleep(for: .seconds(30))
+                return nil
+            })
+        notes.attachUndoRoute(library.undo)
+        let presenter = try open(taskID)
+        let taskSession = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Other ordinary"), .text("Do not copy this text")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        XCTAssertNotEqual(notes.active?.noteID, taskSession.noteID)
+        let originalText = taskSession.engine.plainText
+
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("BG16-\(UUID()).png")
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        notes.importFiles([source], into: taskSession)
+        XCTAssertTrue(notes.statusItems(for: taskSession).contains(.importing))
+        let damaged = NoteDamagedRecoveryExit(perform: { [controller = notes!] in await controller.perform($0) })
+        var slot = NoteStatusSlot(controller: notes, store: notes.store, session: taskSession,
+            damaged: damaged, maxWidth: 240)
+        let importing = try XCTUnwrap(slot.item(.importing))
+        slot.cancel(for: importing)?()
+        XCTAssertFalse(notes.statusItems(for: taskSession).contains(.importing),
+            "Cancel on task B must cancel its batch, even when ordinary A is active")
+
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        slot.copyPasteboard = board
+        let failedSave = try XCTUnwrap(slot.item(.notSaved("Write retained in recovery")))
+        try XCTUnwrap(failedSave.actions.first { $0.identifier == "notes-copy-text" }).handler()
+        XCTAssertEqual(board.string(forType: .string), originalText,
+            "Copy Text on task B's status must use B's draft")
+        XCTAssertFalse(originalText.contains("Do not copy this text"))
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+    }
+
+    func testBG16KeepAsNewFromTaskConflictCopiesItsDraftWithoutStealingTheOrdinaryNote() async throws {
+        let taskID = try seed(.boundary)
+        let presenter = try open(taskID), session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        type(" Recovery-only task writing", into: presenter.host.textView)
+        let originalID = session.noteID, originalText = session.engine.plainText
+        var external = try storedDocument(originalID)
+        external.blocks.append(.text("External edit that makes the task draft stale"))
+        _ = try notes.store.saveDocument(noteID: originalID, document: external,
+            baseRevisionID: notes.store.note(withID: originalID)?.revisionID).get()
+        _ = notes.refreshWorkspaceSession(session)
+        XCTAssertEqual(session.state, .conflict(.changed))
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Ordinary"), .text("Other writing")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        let existingIDs = Set(notes.store.notes.map(\.id))
+        let damaged = NoteDamagedRecoveryExit(perform: { [controller = notes!] in await controller.perform($0) })
+        let slot = NoteStatusSlot(controller: notes, store: notes.store, session: session,
+                                  damaged: damaged, maxWidth: 240)
+        let conflict = try XCTUnwrap(slot.item(.changedElsewhere))
+        try XCTUnwrap(conflict.actions.first { $0.identifier == "notes-keep-as-new" }).handler()
+        var newIDs = Set<UUID>()
+        for _ in 0..<200 {
+            newIDs = Set(notes.store.notes.map(\.id)).subtracting(existingIDs)
+            if !newIDs.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let copiedID = try XCTUnwrap(newIDs.first, "the displayed task draft must be copied as an ordinary note")
+        XCTAssertNil(notes.store.note(withID: copiedID)?.taskID)
+        XCTAssertFalse(try storedDocument(copiedID).requires.contains("taskNote"),
+                       "the detached recovery copy must open as an ordinary note")
+        XCTAssertTrue(NoteTextExport.plainText(try storedDocument(copiedID)).contains(originalText),
+                      "the copy is from task B rather than ordinary A")
+        XCTAssertEqual(session.noteID, originalID, "the task page retains its original lease and identity")
+        XCTAssertNotNil(presenter.lease)
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+    }
+
+    func testBG23TaskNoteObjectControlsInstallSourcePickerForRetryAndLocate() throws {
+        let taskID = try seed(.boundary)
+        let presenter = try open(taskID)
+        let controls = TaskNoteHostRepresentable.configuredControlsForTesting(presenter: presenter)
+        defer { controls.invalidate() }
+        let objects = try XCTUnwrap(controls.objects)
+        XCTAssertNotNil(presenter.host.engine.onRetryImportObject)
+        XCTAssertNotNil(presenter.host.engine.onLocateObject)
+        XCTAssertNotNil(objects.requestSource,
+            "both object actions must have a live task-note source picker destination")
+    }
+
     private func waitForStoredTexts(_ noteID: UUID, _ texts: [String]) async throws {
         for _ in 0..<200 where (try? storedDocument(noteID).blocks.map(\.text)) != texts {
             try await Task.sleep(for: .milliseconds(10))

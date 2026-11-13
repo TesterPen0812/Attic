@@ -611,13 +611,51 @@ final class NotesPageController: ObservableObject {
         return true
     }
     func keepAsNewNoteDurably() async -> Bool {
+        guard let active else { return false }
+        return await keepAsNewNoteDurably(active)
+    }
+
+    func keepAsNewNoteDurably(_ session: NoteSession) async -> Bool {
         guard await awaitRecoveryForUser() else { return false }
-        guard let session = active else { return false }
+        guard isReviewSessionCurrent(session),
+              NoteSessionPolicy.keepAsNewAllowed(session.state, activity: session.engine.activity,
+                  hasBatch: session.isImporting, hasMarkedText: session.engine.textView?.hasMarkedText() == true) else { return false }
         let document = checkpointDocument(for: session)
+        let engine = session.engine
         guard let stored = await performBoundedUserIO({ [self] in
             Array(await durableAttachmentsAsync(in: document).values)
-        }), active === session, checkpointDocument(for: session) == document else { return false }
-        return await performAfterRecovery { keepAsNewNote(stored: stored) }
+        }), isReviewSessionCurrent(session), session.engine === engine,
+              checkpointDocument(for: session) == document else { return false }
+        return await performAfterRecovery {
+            guard self.isReviewSessionCurrent(session), session.engine === engine,
+                  self.checkpointDocument(for: session) == document,
+                  NoteSessionPolicy.keepAsNewAllowed(session.state, activity: engine.activity,
+                      hasBatch: session.isImporting, hasMarkedText: engine.textView?.hasMarkedText() == true) else { return false }
+            if session.usesWorkspaceBinding {
+                // A task owns this leased session. The recovery escape makes
+                // a separate ordinary note, never rekeys the task's editor.
+                var ordinary = document
+                ordinary.requires.removeAll { $0 == "taskNote" }
+                guard let (copy, bytes) = self.replacementForDeletedNote(ordinary, oldID: session.noteID,
+                    staged: engine.stagedAttachments(for: document) + stored) else {
+                    session.showNotice(NoteNotice(kind: .imageGone,
+                        detail: String(localized: "An image is unavailable, so this draft remains in recovery until it can be restored.")))
+                    return false
+                }
+                let tags = engine.tags
+                guard case .success = self.store.createDocumentNote(id: UUID(), document: copy,
+                    staged: bytes, tags: tags.isEmpty ? nil : tags) else {
+                    session.showNotice(NoteNotice(kind: .notSaved,
+                        detail: String(localized: "Couldn’t save a new note; your text is still in recovery.")))
+                    return false
+                }
+                session.showNotice(NoteNotice(kind: .noteSaved,
+                    detail: String(localized: "Your writing was saved as a separate note.")))
+                return true
+            }
+            guard self.active === session else { return false }
+            return self.keepAsNewNote(stored: stored)
+        }
     }
     func deleteNoteDurably(noteID: UUID) async -> Bool {
         // removeNote proves this note's retirement and store save itself.
@@ -1434,25 +1472,30 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func saveReviewedProposalAsNew() async -> Bool {
         guard proposalReview?.workspaceIntent == nil else { proposalReviewNotice = "Apply or discard the whole workspace operation."; return false }
-        guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
+        guard await awaitRecoveryForUser(), let review = proposalReview,
+              let session = cache[review.noteID], isReviewSessionCurrent(session),
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
+        let engine = session.engine
         if review.isDeletion, session.engine.document() != review.current {
             _ = refreshProposalReview(id: review.id, session: session)
             proposalReviewNotice = "Your text changed. Review the refreshed comparison before saving a copy."
             return false
         }
         let document = review.isDeletion ? review.current : review.proposed
+        var detached = document
+        if session.usesWorkspaceBinding { detached.requires.removeAll { $0 == "taskNote" } }
         guard let stored = await performBoundedUserIO({ [self] in Array(await durableAttachmentsAsync(in: document).values) }),
-              proposalReview == review, active === session else { return false }
+              proposalReview == review, isReviewSessionCurrent(session), session.engine === engine else { return false }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session, !session.isImporting,
+            guard self.proposalReview == review, self.isReviewSessionCurrent(session), session.engine === engine,
+                  !session.isImporting,
                   self.canLeaveComposition(in: session),
                   !review.isDeletion || session.engine.document() == review.current,
                   let rows = try? self.store.pendingEditRows(review.id),
                   NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [review.noteID]),
                   rows.first.map(NoteProposalSignature.init) == review.signature,
-                  let (copy, bytes) = self.replacementForDeletedNote(document, oldID: review.noteID,
+                  let (copy, bytes) = self.replacementForDeletedNote(detached, oldID: review.noteID,
                     staged: session.engine.stagedAttachments(for: document) + stored) else {
                 self.proposalReviewNotice = "The proposal or its files changed. Review it again."
                 return false
@@ -2033,7 +2076,9 @@ final class NotesPageController: ObservableObject {
         }
         engine.canPasteFragment = { [weak self, weak session] in
             guard let self, let session else { return false }
-            return self.active === session && !self.isLibraryPresented && !session.isImporting
+            let mounted = (self.active === session && !self.isLibraryPresented)
+                || (session.usesWorkspaceBinding && session.workspacePage?.activeLease != nil)
+            return mounted && !session.isImporting
                 && !session.isReadOnly
                 && session.engine.textView?.hasMarkedText() != true
         }
@@ -2720,8 +2765,13 @@ final class NotesPageController: ObservableObject {
 
     func copyActiveText(to pasteboard: NSPasteboard) {
         guard let active else { return }
+        copyText(of: active, to: pasteboard)
+    }
+
+    func copyText(of session: NoteSession, to pasteboard: NSPasteboard) {
+        guard isReviewSessionCurrent(session) else { return }
         pasteboard.clearContents()
-        pasteboard.setString(active.engine.plainText, forType: .string)
+        pasteboard.setString(session.engine.plainText, forType: .string)
     }
 
     // MARK: Recovery copy (Phase 2 audit, item 17)
@@ -3219,9 +3269,10 @@ final class NotesPageController: ObservableObject {
 
     /// Retry picker entry point. Admission happens from file metadata before
     /// reading, then again at commit in case the draft changed meanwhile.
-    func retryFailedFile(_ objectID: UUID, with url: URL) async -> Bool {
-        guard let session = active, !session.isReadOnly,
+    func retryFailedFile(_ objectID: UUID, with url: URL, in target: NoteSession? = nil) async -> Bool {
+        guard let session = target ?? active, isReviewSessionCurrent(session), !session.isReadOnly,
               case .importFailed = session.engine.objectState(objectID) else { return false }
+        let engine = session.engine, stamp = session.callbackStamp
         if let failure = sourceAdmissionFailure(url, in: session).1 {
             session.showNotice(NoteNotice(kind: .notAdded, detail: failure))
             return false
@@ -3234,9 +3285,11 @@ final class NotesPageController: ObservableObject {
         } else {
             item = await Self.loadFile(url, type: type.identifier)
         }
-        guard active === session, session.noteID == noteID,
+        guard isReviewSessionCurrent(session), session.engine === engine,
+              session.accepts(stamp), !session.isReadOnly,
+              case .importFailed = engine.objectState(objectID), session.noteID == noteID,
               !session.isPersisted || store.note(withID: noteID) != nil else { return false }
-        return session.engine.replaceFailedFile(objectID, with: item)
+        return engine.replaceFailedFile(objectID, with: item)
     }
 
     private func completeImportIfPossible(in session: NoteSession) {
@@ -3276,7 +3329,12 @@ final class NotesPageController: ObservableObject {
     }
 
     func cancelActiveImport() {
-        guard let session = active, let batch = session.importBatch else { return }
+        guard let active else { return }
+        cancelImport(in: active)
+    }
+
+    func cancelImport(in session: NoteSession) {
+        guard isReviewSessionCurrent(session), let batch = session.importBatch else { return }
         dropImport(in: session, batchID: batch.id,
             notice: NoteNotice(kind: .cancelled, detail: String(localized: "The file batch was cancelled.")))
     }
