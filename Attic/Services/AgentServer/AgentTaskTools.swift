@@ -1255,10 +1255,19 @@ final class AgentTaskTools {
         } else {
             payload["own_note_id"] = NSNull()
         }
-        payload["workspace_token"] = try WorkspaceModelFields.encode(AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: context)).base64EncodedString()
-        payload["note_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskNotes(id), in: context)).base64EncodedString()
-        payload["association_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskAssociations(id), in: context)).base64EncodedString()
-        let tokens = try tokenOwners.map { try WorkspaceModelToken.read($0, in: context) }
+        let readSet = try AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: context)
+        payload["workspace_token"] = try WorkspaceModelFields.encode(readSet).base64EncodedString()
+        guard let notesScope = readSet.scopes.first(where: { $0.scope == .taskNotes(id) }),
+              let associationsScope = readSet.scopes.first(where: { $0.scope == .taskAssociations(id) }) else {
+            throw WorkspaceFoundationError.unknown
+        }
+        payload["note_token"] = try WorkspaceModelFields.encode(notesScope).base64EncodedString()
+        payload["association_token"] = try WorkspaceModelFields.encode(associationsScope).base64EncodedString()
+        let tokenMap = Dictionary(uniqueKeysWithValues: readSet.tokens.map { ($0.owner, $0) })
+        let tokens = try tokenOwners.map { owner in
+            guard let token = tokenMap[owner] else { throw WorkspaceFoundationError.unknown }
+            return token
+        }
         payload["task_token"] = WorkspaceModelFields.digest(try WorkspaceModelFields.encode(Array(tokens.prefix(1 + children.count))))
         return try encode(payload)
     }
