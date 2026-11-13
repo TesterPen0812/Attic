@@ -456,14 +456,36 @@ final class AgentChatTests: XCTestCase {
         let raw = "2 tasks now on **Friday**, your first free afternoon."
         let whole = AgentChatWords.paragraphs(raw)
         XCTAssertEqual(whole[0].filter(\.joinsPrevious).map(\.text), [","])
-        for cut in 1..<raw.count {
-            model.newChat()
-            await start()
-            let index = raw.index(raw.startIndex, offsetBy: cut)
-            await emit(.textDelta(String(raw[..<index])), .textDelta(String(raw[index...])), .finished)
-            XCTAssertEqual(replies.count, 1)
-            XCTAssertEqual(AgentChatWords.paragraphs(replies[0].raw), whole)
-            XCTAssertEqual(replies[0].wordTimes.count, whole[0].count, "Cut at \(cut)")
+        for delayed in [false, true] {
+            for cut in 1..<raw.count {
+                model.newChat()
+                await start()
+                let index = raw.index(raw.startIndex, offsetBy: cut)
+                let finished = expectation(description: "All deltas consumed at cut \(cut), delayed=\(delayed)")
+                let observation = model.$phase.dropFirst().filter { $0 == .idle }.prefix(1).sink { _ in finished.fulfill() }
+                let delivery: Task<Void, Never>?
+                if delayed {
+                    await emit(.textDelta(String(raw[..<index])))
+                    // Real streams can pause between chunks. Keep the burst
+                    // route too, so both delivery patterns cover every cut.
+                    let tail = String(raw[index...])
+                    delivery = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(10))
+                        await self.emit(.textDelta(tail), .finished)
+                    }
+                    await settle()
+                } else {
+                    delivery = nil
+                    await emit(.textDelta(String(raw[..<index])), .textDelta(String(raw[index...])), .finished)
+                }
+                await fulfillment(of: [finished], timeout: 1)
+                await delivery?.value
+                observation.cancel()
+                XCTAssertFalse(model.isBusy, "the stream reached its terminal event")
+                XCTAssertEqual(replies.count, 1)
+                XCTAssertEqual(AgentChatWords.paragraphs(replies[0].raw), whole)
+                XCTAssertEqual(replies[0].wordTimes.count, whole[0].count, "Cut at \(cut)")
+            }
         }
     }
 
