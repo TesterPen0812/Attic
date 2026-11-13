@@ -470,7 +470,19 @@ final class SettingsWindowHostedTests: XCTestCase {
             XCTAssertTrue(dark.accessibilityPerformPress?() ?? false)
             try assertContentFits(["setting-appearance-system", "setting-appearance-light",
                                    "setting-appearance-dark", "setting-panel-theme"], at: size)
-            XCTAssertEqual(try frame("settings-nav-general").minX - window.frame.minX, sidebarBefore, accuracy: 0.5,
+            // Appearance changes animate the page for 0.16 s. The first AX
+            // frame during that transition can still describe the prior
+            // scroll presentation. Wait for the actual sidebar to return to
+            // its fixed offset; a lasting horizontal shift still fails.
+            let deadline = Date().addingTimeInterval(2)
+            var sidebarAfter = try frame("settings-nav-general").minX - window.frame.minX
+            while abs(sidebarAfter - sidebarBefore) > 0.5 && Date() < deadline {
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.008))
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                sidebarAfter = try frame("settings-nav-general").minX - window.frame.minX
+            }
+            XCTAssertEqual(sidebarAfter, sidebarBefore, accuracy: 0.5,
                            "Choosing Dark must not scroll the sidebar horizontally")
             let general = try XCTUnwrap(element("settings-nav-general"))
             XCTAssertTrue(general.accessibilityPerformPress?() ?? false)
