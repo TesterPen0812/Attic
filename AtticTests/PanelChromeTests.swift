@@ -1318,17 +1318,30 @@ final class SelectionMarkerMotionProbe: ObservableObject {
         let start = Date()
         change(probe)
         var raw: [(TimeInterval, [CGFloat])] = []
-        while Date().timeIntervalSince(start) < 0.6 {
+        var firstDrawnChange: TimeInterval?
+        // A SwiftUI state write can wait for an offscreen render pass. Time
+        // the fade from its first *drawn* change, not the publisher write;
+        // the 220 ms settlement assertion still measures the whole visible
+        // motion without giving the animation more time.
+        while Date().timeIntervalSince(start) < 1 {
             spin(0.008)
-            raw.append((Date().timeIntervalSince(start), try levels()))
+            let elapsed = Date().timeIntervalSince(start)
+            let drawn = try levels()
+            raw.append((elapsed, drawn))
+            if firstDrawnChange == nil,
+               zip(before, drawn).contains(where: { abs($0.0 - $0.1) > 0.01 }) {
+                firstDrawnChange = elapsed
+            }
+            if let firstDrawnChange, elapsed - firstDrawnChange >= 0.44 { break }
         }
+        let observedStart = try XCTUnwrap(firstDrawnChange, "the marker must begin its visible change")
         let after = try XCTUnwrap(raw.last?.1)
         // Each cell's unselected level: the old cell's after, the others' before.
         let off = points.indices.map { $0 == from ? after[$0] : before[$0] }
         let full = max(off[to] - after[to], 0.001)
         XCTAssertGreaterThan(full, 0.02, "the marker is visible on its cell")
-        return raw.map { time, level in
-            Frame(time: time, presence: points.indices.map { (off[$0] - level[$0]) / full })
+        return raw.filter { $0.0 >= observedStart }.map { time, level in
+            Frame(time: time - observedStart, presence: points.indices.map { (off[$0] - level[$0]) / full })
         }
     }
 }
