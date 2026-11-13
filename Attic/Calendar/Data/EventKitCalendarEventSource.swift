@@ -72,14 +72,25 @@ final class LiveCalendarEventStore: CalendarEventStoring {
 @MainActor
 protocol AsyncCalendarEventReading: AnyObject {
     func loadEvents(in interval: DateInterval) async -> [CalendarEvent]
+    /// A complete read for callers that act on the answer (the agent and its
+    /// week strip): off the main actor like `loadEvents`, but never from the
+    /// range cache and never dropped or emptied by a store change mid-read.
+    func loadCompleteEvents(in interval: DateInterval) async -> [CalendarEvent]
+}
+
+extension AsyncCalendarEventReading {
+    func loadCompleteEvents(in interval: DateInterval) async -> [CalendarEvent] {
+        await loadEvents(in: interval)
+    }
 }
 
 extension CalendarEventSource {
-    /// Production EventKit callers suspend on its serial reader. Fixtures
+    /// Agent callers suspend on EventKit's serial reader and get the same
+    /// complete answer the synchronous fetch gave. Fixtures
     /// without an async reader retain the existing synchronous contract.
     func eventsWithoutBlocking(in interval: DateInterval) async -> [CalendarEvent] {
         if let reader = self as? AsyncCalendarEventReading {
-            return await reader.loadEvents(in: interval)
+            return await reader.loadCompleteEvents(in: interval)
         }
         return events(in: interval)
     }
@@ -232,6 +243,13 @@ final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEvent
         ranges.append((interval, events))
         if ranges.count > 2 { ranges.removeFirst(ranges.count - 2) }
         return Task.isCancelled ? [] : events
+    }
+
+    /// The page's generation drop and 2-entry cache suit a view that rereads on
+    /// `onChange`; an agent tool that acts on the answer needs the read itself.
+    func loadCompleteEvents(in interval: DateInterval) async -> [CalendarEvent] {
+        guard accessState == .granted else { return [] }
+        return await worker.events(in: interval)
     }
 
     func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
