@@ -45,41 +45,81 @@ final class NoteEditorEngineTests: XCTestCase {
 
     func testDS10SeededEditorEditsKeepDividerMetadataThroughUndoRedoAndRoundTrips() throws {
         let extras: [String: NoteJSON] = ["future-rule": .object(["payload": .array([.int(1), .string("kept")])])]
+        var sequences = Set<[String]>()
         for seed in [UInt64(0xD510), UInt64(0xD511)] {
             var divider = NoteBlock.divider(id: UUID())
             divider.extras = extras
             let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(
-                blocks: [.text("Title"), divider, .text("Seed")], requires: ["structure-v1"]))
-            var expected = "Seed"
-            var random = seed
-            for step in 0..<320 {
+                blocks: [.text("Title"), .text("Left"), divider, .text("Right")], requires: ["structure-v1"]))
+            var before = "Left", after = "Right", random = seed
+            var coveredOperations = Set<String>(), coveredPositions = Set<String>(), sequence: [String] = []
+            func draw(_ count: Int) -> Int {
                 random = random &* 6_364_136_223_846_793_005 &+ 1
-                if random & 3 == 0 && expected.count > 4 {
-                    XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length - 1, length: 1),
-                        with: NSAttributedString(string: ""), name: "Backspace"), "seed \(seed), step \(step)")
-                    expected.removeLast()
-                } else {
-                    let letter = ["a", "b", "c", "d", "e"][Int(random % 5)]
-                    XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
-                        with: NSAttributedString(string: letter), name: "Type"), "seed \(seed), step \(step)")
-                    expected += letter
+                return Int((random >> 32) % UInt64(count))
+            }
+            for step in 0..<320 {
+                let left = draw(2) == 0
+                let text = (left ? before : after) as NSString
+                let choice = draw(4)
+                var position = draw(text.length + 1)
+                // Repeatedly hit the two paragraph edges beside the divider,
+                // as well as arbitrary positions inside either neighbour.
+                if draw(4) == 0 { position = left ? text.length : 0 }
+                var length = 0, replacement = "", operation = "insert"
+                switch choice {
+                case 1 where text.length > 0:
+                    position = min(position, text.length - 1)
+                    length = 1
+                    operation = text.substring(with: NSRange(location: position, length: 1)) == "\n" ? "join" : "delete"
+                case 2:
+                    replacement = "\n"
+                    operation = "split"
+                case 3:
+                    let joins = (0..<text.length).filter { text.character(at: $0) == 10 }
+                    if !joins.isEmpty {
+                        position = joins[draw(joins.count)]
+                        length = 1
+                        operation = "join"
+                    } else {
+                        replacement = "\n"
+                        operation = "split"
+                    }
+                default:
+                    replacement = ["a", "b", "c", "d", "e"][draw(5)]
                 }
+                if left && position + length == text.length { coveredPositions.insert("before-divider") }
+                if !left && position == 0 { coveredPositions.insert("after-divider") }
+                if position > 0 && position < text.length { coveredPositions.insert("interior") }
+                if position + length == text.length { coveredPositions.insert("end") }
+                coveredOperations.insert(operation)
+                sequence.append("\(left):\(operation):\(position)")
+                let start = left ? "Title\n".utf16.count : "Title\n".utf16.count + before.utf16.count + 3
+                XCTAssertTrue(engine.performEdit(NSRange(location: start + position, length: length),
+                    with: NSAttributedString(string: replacement), name: operation), "seed \(seed), step \(step)")
+                let expected = text.replacingCharacters(in: NSRange(location: position, length: length), with: replacement)
+                if left { before = expected } else { after = expected }
                 let actual = engine.document()
-                XCTAssertEqual(actual.blocks[1].extras, extras, "seed \(seed), step \(step)")
-                XCTAssertEqual(actual.blocks.last?.text, expected, "seed \(seed), step \(step)")
+                let index = try XCTUnwrap(actual.blocks.firstIndex { $0.id == divider.id }, "seed \(seed), step \(step)")
+                XCTAssertEqual(actual.blocks[index].extras, extras, "seed \(seed), step \(step)")
+                XCTAssertTrue(actual.blocks.enumerated().allSatisfy { $0.offset == index || $0.element.extras.isEmpty },
+                    "metadata must not leak to a neighbouring paragraph: seed \(seed), step \(step)")
+                XCTAssertEqual(actual.blocks[..<index].map(\.text).joined(separator: "\n"), "Title\n" + before, "seed \(seed), step \(step)")
+                XCTAssertEqual(actual.blocks[(index + 1)...].map(\.text).joined(separator: "\n"), after, "seed \(seed), step \(step)")
                 if step % 37 == 0 {
                     XCTAssertTrue(engine.history.undo())
                     XCTAssertTrue(engine.history.redo())
                     XCTAssertEqual(engine.document(), actual, "seed \(seed), Undo/Redo at step \(step)")
-                    let bytes = try NoteContentCodec.encode(actual)
-                    let restored = try XCTUnwrap(NoteContentCodec.decode(bytes).document)
-                    XCTAssertEqual(restored.blocks[1].extras, extras)
+                    let restored = try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(actual)).document)
                     let projected = NoteTextCodec.document(from: NoteTextCodec.attributedString(
                         from: restored, style: NoteTextStyle()), template: restored)
-                    XCTAssertEqual(projected.blocks[1].extras, extras)
+                    XCTAssertEqual(projected.blocks.first { $0.id == divider.id }?.extras, extras)
                 }
             }
+            XCTAssertEqual(coveredOperations, ["insert", "delete", "split", "join"], "seed \(seed) must exercise structural edits")
+            XCTAssertEqual(coveredPositions, ["before-divider", "after-divider", "interior", "end"], "seed \(seed) must edit around the divider")
+            sequences.insert(sequence)
         }
+        XCTAssertEqual(sequences.count, 2, "different seeds must explore different edit sequences")
     }
 
     func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
