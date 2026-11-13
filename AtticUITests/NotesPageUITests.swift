@@ -232,8 +232,10 @@ final class NotesPageUITests: XCTestCase {
         waitFor(noteValue == "Groceries\nOat milk", "the untagged note typed")
 
         showAllNotes()
-        // The tag filter is the shared bottom bar's recent-tag pill
-        // (`notes-tag-bar-<tag>`), not a tab on the removed label line.
+        // Accepted 2026-11-13, 1A: Notes shares the collapsed # bar.
+        let tagKey = app.buttons["notes-tag-bar-key"]
+        require(tagKey, "the collapsed tag bar")
+        tagKey.click()
         let pill = app.descendants(matching: .any)["notes-tag-bar-kyoto"]
         require(pill, "the recent tag sits in the bottom bar")
         pill.click()

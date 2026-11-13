@@ -382,20 +382,21 @@ final class TasksViewOptionsTests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let commands = hosted.page.viewCommands(for: .now)
-        // Dropdown content: answers (owner, 2026-10-24), sheet 5: a Priority
-        // header, "Sort By", and no icon on any choice (no stray flag).
-        XCTAssertEqual(commands.map(\.title), ["Show", "All Tasks", "Due or Overdue", "Overdue Only",
+        // Accepted 2026-11-13, "Tag bar collapsed, several tags, status filters",
+        // 3A: Status on Now; Show becomes Date. Choice rows keep no icons.
+        XCTAssertEqual(commands.map(\.title), ["Status", "Any Status", "In Progress", "To Do",
+                                               "Date", "Any Date", "Due or Overdue", "Overdue Only",
                                                "Priority", "Any Priority", "Medium and High", "High Only",
                                                "Sort By", "Manual Order", "Due Date", "Priority", "Reset View"])
-        XCTAssertEqual(commands.filter(\.isHeader).map(\.title), ["Show", "Priority", "Sort By"])
+        XCTAssertEqual(commands.filter(\.isHeader).map(\.title), ["Status", "Date", "Priority", "Sort By"])
         XCTAssertFalse(AtticGlassMenuCard.layout(commands).hasIcons, "a pure choice list draws no icons")
-        XCTAssertEqual(commands.filter { $0.state == .on }.map(\.title), ["All Tasks", "Any Priority", "Manual Order"])
+        XCTAssertEqual(commands.filter { $0.state == .on }.map(\.title), ["Any Status", "Any Date", "Any Priority", "Manual Order"])
         XCTAssertEqual(commands.last?.isDisabled, true, "nothing to reset")
         commands.first { $0.title == "Due Date" }?.action()
         XCTAssertEqual(hosted.model.viewOptions(for: .now).sort, .dueDate)
         XCTAssertTrue(hosted.model.viewOptions(for: .backlog).isDefault)
         let again = hosted.page.viewCommands(for: .now)
-        XCTAssertEqual(again.filter { $0.state == .on }.map(\.title), ["All Tasks", "Any Priority", "Due Date"])
+        XCTAssertEqual(again.filter { $0.state == .on }.map(\.title), ["Any Status", "Any Date", "Any Priority", "Due Date"])
         again.last?.action()
         XCTAssertTrue(hosted.model.viewOptions(for: .now).isDefault, "Reset View")
     }
