@@ -235,7 +235,9 @@ extension TasksPageModel {
     /// typed pieces of that kind leave the text too.
     func clearComposer(_ field: ComposerField, editor: AtticTokenFieldEditor) {
         switch field {
-        case .date: composerChange(editor, removing: addBar.ranges(of: .date, parser: parser)) { $0.day = nil }
+        case .date:
+            let schedule = addBar.ranges(of: .date, parser: parser) + addBar.ranges(of: .time, parser: parser)
+            composerChange(editor, removing: schedule) { $0.day = nil }
         case .priority: composerChange(editor, removing: addBar.ranges(of: .priority, parser: parser)) { $0.priority = nil }
         case .tags: composerChange(editor, removing: addBar.ranges(of: .tag, parser: parser)) { $0.tags = [] }
         }

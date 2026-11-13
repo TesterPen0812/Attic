@@ -110,6 +110,30 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(liveTasks().count, 1)
     }
 
+    func testBG8ClearDateRemovesDateAndTimeAndUndoRestoresBoth() async throws {
+        model.open(on: .tasks(.now))
+        for text in ["Call tomorrow 4pm", "Call 4pm"] {
+            type(text)
+            let before = page.addBar
+            let expected = before.parts(parser: page.parser)
+            let steps = page.addBarState.history.undoStack.count
+            page.clearComposer(.date, editor: model.editor)
+            XCTAssertNil(model.values.day)
+            XCTAssertNil(model.values.time)
+            XCTAssertEqual(page.addBarState.history.undoStack.count, steps + 1)
+            let cleared = page.addBar
+            let undo = try XCTUnwrap(page.addBarState.history.undo(current: cleared, selection: nil))
+            page.addBar = undo.text
+            XCTAssertEqual(page.addBar.parts(parser: page.parser), expected)
+            let redo = try XCTUnwrap(page.addBarState.history.redo(current: page.addBar, selection: nil))
+            page.addBar = redo.text
+            let made = await model.create()
+            XCTAssertTrue(made)
+        }
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertTrue(liveTasks().allSatisfy { $0.dueDay == nil && $0.dueTimeMinutes == nil })
+    }
+
     func testQueuedEventSubmissionCannotCreateAReplacementSession() async {
         model.open(on: .calendar(selected: today))
         await model.loadCalendars()
