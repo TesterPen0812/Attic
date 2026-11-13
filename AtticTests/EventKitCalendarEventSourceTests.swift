@@ -33,6 +33,26 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
     }
 }
 
+/// Holds the first store read on the worker queue until the test lets it go.
+private final class StoreReadGate: @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+    private var used = false  // only touched on the worker queue
+
+    func holdFirstRead() {
+        guard !used else { return }
+        used = true
+        entered.signal()
+        _ = released.wait(timeout: .now() + 5)
+    }
+
+    func waitForRead() async -> Bool {
+        await Task.detached { [entered] in entered.wait(timeout: .now() + 3) == .success }.value
+    }
+
+    func release() { released.signal() }
+}
+
 @MainActor
 private final class HeldCalendarReader: CalendarEventSource, AsyncCalendarEventReading {
     var accessState: CalendarAccessState = .granted
@@ -118,6 +138,36 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         let refreshed = await source.loadEvents(in: interval)
         XCTAssertTrue(refreshed.isEmpty)
         XCTAssertEqual(backend.queries.count, fetches + 1)
+    }
+
+    func testR1AgentReadSurvivesAStoreChangeMidRead() async {
+        let backend = FakeCalendarEventStore()
+        backend.stored = [occurrence("dentist", "Dentist", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let center = NotificationCenter(), source = source(backend, center: center)
+        let gate = StoreReadGate()
+        backend.onFetch = { gate.holdFirstRead() }
+        let interval = day(2026, 10, 29)
+        let read = Task { await source.eventsWithoutBlocking(in: interval) }
+        let entered = await gate.waitForRead()
+        // The agent's own writer store (separate) reports a change mid-read.
+        center.post(name: .EKEventStoreChanged, object: nil)
+        gate.release()
+        let events = await read.value
+        XCTAssertTrue(entered)
+        XCTAssertEqual(events.map(\.title), ["Dentist"], "a change mid-read must not look like an empty calendar")
+    }
+
+    func testR5AgentReadsAreNotServedFromTheRangeCache() async {
+        let backend = FakeCalendarEventStore()
+        backend.stored = [occurrence("dentist", "Dentist", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let source = source(backend)
+        let interval = day(2026, 10, 29)
+        let first = await source.eventsWithoutBlocking(in: interval)
+        XCTAssertEqual(first.map(\.title), ["Dentist"])
+        // The agent's own write, before any change notification arrives.
+        backend.stored = [occurrence("dentist", "Dentist (moved)", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let second = await source.eventsWithoutBlocking(in: interval)
+        XCTAssertEqual(second.map(\.title), ["Dentist (moved)"])
     }
 
     func testReturningToACachedQueryAndReplacingASourceIgnoreLateReads() async throws {

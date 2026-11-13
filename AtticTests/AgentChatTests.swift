@@ -732,6 +732,74 @@ final class AgentChatTests: XCTestCase {
         XCTAssertEqual(week?.days.filter { !$0.bars.isEmpty }.count, 1)
     }
 
+    func testR2AsyncRefreshKeepsThePreMoveDueMarks() async {
+        let friday = november(6)
+        model.now = { friday }
+        var due = [DueDay(year: 2026, month: 11, day: 3)!]
+        model.weekDays = { AgentChatModel.week(holding: $0, dueDays: due) }
+        var pending: [CheckedContinuation<Void, Never>] = []
+        model.loadWeekDays = { day in
+            await withCheckedContinuation { pending.append($0) }
+            // Like production: due marks are read when EventKit replies.
+            return AgentChatModel.week(holding: day, dueDays: due)
+        }
+        model.open()
+        await start()
+        await emit(.stepStarted(step(.move(toDay: friday), targets: tasks(["A"]))))
+        for _ in 0..<100 where pending.isEmpty { await Task.yield() }
+        XCTAssertFalse(pending.isEmpty, "the week read is suspended")
+        XCTAssertEqual(week?.days[1].bars.count, 1, "the strip starts with the task on its old day")
+        due = [DueDay(year: 2026, month: 11, day: 6)!]
+        pending.forEach { $0.resume() }
+        await settle()
+        XCTAssertEqual(week?.days[1].bars.count, 1, "the refresh must not redraw the move")
+        XCTAssertEqual(week?.days[4].bars.count, 0, "the destination gets dots, not a due mark")
+    }
+
+    func testR3FinishedRunsStripIsNotRefreshedBySourceChanges() async {
+        var calls = 0
+        model.loadWeekDays = { day in
+            calls += 1
+            return AgentChatModel.emptyWeek(holding: day).map {
+                AgentChatWeekDay(day: $0.day, bars: calls == 1 ? [0.1...0.3] : [0.5...0.9])
+            }
+        }
+        model.open()
+        await start()
+        await readTheCalendar()
+        await emit(.textDelta("Done"), .finished)
+        await settle()
+        let before = week
+        let readsBefore = calls
+        XCTAssertNotNil(before)
+        model.calendarWeekSourceChanged()
+        await settle()
+        XCTAssertEqual(calls, readsBefore, "an idle chat does no Calendar read for an old strip")
+        XCTAssertEqual(week, before, "an earlier strip stays as the agent saw it")
+    }
+
+    func testR4LateWeekReadIsInsertedAfterItsStepAndDoesNotOwnTheFinishedRun() async {
+        model.weekDays = { AgentChatModel.emptyWeek(holding: $0) }
+        var pending: [CheckedContinuation<[AgentChatWeekDay], Never>] = []
+        model.loadWeekDays = { _ in await withCheckedContinuation { pending.append($0) } }
+        model.open()
+        await start()
+        var read = step(.read, targets: [AgentTarget(page: .calendar, itemID: nil, title: nil)])
+        await emit(.stepStarted(read))
+        for _ in 0..<100 where pending.isEmpty { await Task.yield() }
+        read.state = .done
+        await emit(.stepFinished(read), .textDelta("Nothing on Friday."), .finished)
+        let populated = AgentChatModel.emptyWeek(holding: Date()).enumerated().map { index, item in
+            AgentChatWeekDay(day: item.day, bars: index == 2 ? [0.1...0.3] : [])
+        }
+        pending.forEach { $0.resume(returning: populated) }
+        await settle()
+        let stepIndex = model.entries.firstIndex { if case .step = $0.content { true } else { false } }
+        let weekIndex = model.entries.firstIndex { if case .week = $0.content { true } else { false } }
+        if let weekIndex { XCTAssertEqual(weekIndex, stepIndex.map { $0 + 1 }, "the strip belongs under its step") }
+        XCTAssertNil(model.runWeek, "a strip that lands after the run is not the run's")
+    }
+
     func testACalendarReadShowsTheWeekAndAMoveTargetsADay() async {
         model.open()
         await start()
