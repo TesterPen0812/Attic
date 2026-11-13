@@ -766,6 +766,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
             "a private fragment keeps its formatting in the task note")
         XCTAssertTrue(engine.canUndoCommand)
         XCTAssertTrue(engine.undoCommand())
+        // A task workspace routes this command through an asynchronous durable
+        // replay. Wait for the edit to be restored before comparing snapshots.
+        for _ in 0..<200 where engine.document() != before {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertEqual(engine.document(), before, "a fragment paste is one reversible task-note edit")
         XCTAssertEqual(notes.active?.noteID, ordinaryID)
     }
@@ -2837,8 +2842,17 @@ final class TaskLifecycleSliceTests: XCTestCase {
         for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
             row.imageReferencesData = try JSONEncoder().encode(references)
         }
-        try context.save(); tasks.refresh(); await notes.startAndWait()
-        let original = try open(id), session = try XCTUnwrap(original.session)
+        try context.save(); tasks.refresh()
+        tasks.fileMigration.refreshAfterLegacyChange(id, tasks: tasks)
+        await notes.startAndWait()
+        // The window must own the first mounting of this editor. The ordinary
+        // open(id) fixture attaches its scroll view to a different NSWindow.
+        let original = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: notes,
+                                             design: .default, columnInset: 28, defaults: nil)
+        presenters.append(original)
+        let session = try XCTUnwrap(original.session)
+        XCTAssertEqual(tasks.fileMigration.status(of: id).earlier.map(\.id), references.map(\.id),
+                       "the task has legacy files before opening its window")
         TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes,
                                     noteStore: notes.store, design: .default, uiState: PanelUIState())
         defer { TaskNoteWindows.shared.finishHandoff(id) }
