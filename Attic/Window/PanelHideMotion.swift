@@ -1537,7 +1537,9 @@ private struct PanelGenieMaterialView: View {
             case .frosted:
                 shape.fill(.ultraThinMaterial)
             }
-            AtticGlassLift(shape: shape, strength: material.lift)
+            // As the panel at rest, the lift leaves the control bands.
+            AtticGlassLift(shape: shape, strength: material.lift, leavesControlBands: true,
+                           bandsFrame: outline?.boundingRect ?? rest)
         }
         .environment(\.colorScheme, material.colorScheme)
         // Each frame's shape is the mesh's, not a morph toward it.

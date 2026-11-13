@@ -786,6 +786,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// A small satellite crops the panel-sized material. Native regular glass
     /// switches to a dark control treatment at narrow dimensions.
     var nativeGlassSize: CGSize?
+    /// The panel's lift leaves its top and bottom control bands
+    /// (`AtticSurfaceModel.LiftControlBands`, Accepted 2026-11-13).
+    var liftLeavesControlBands = false
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -797,7 +800,8 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
                 // Light Glass and Frosted only; never Settings' chrome.
                 if !isChrome {
-                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass))
+                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
+                                   leavesControlBands: liftLeavesControlBands)
                 }
                 // The foundation, with Dark's dark tint over it (A37).
                 shape.fill(model.backing.color)
@@ -882,16 +886,44 @@ struct AtticSurfaceBackground<S: Shape>: View {
 /// The glass lift (owner, 2026-11-11, option C): an additive white in the
 /// surface's shape. It raises every level by the same amount, so the
 /// desktop's detail shows through at the same contrast. Draws nothing at 0.
+///
+/// On the panel the lift leaves the top and bottom control bands
+/// (`AtticSurfaceModel.LiftControlBands`, Accepted 2026-11-13).
 struct AtticGlassLift<S: Shape>: View {
     let shape: S
     let strength: Double
+    var leavesControlBands = false
+    /// The panel's frame the bands are measured in, in this view's
+    /// coordinates. Nil is the whole view.
+    var bandsFrame: CGRect?
 
     var body: some View {
         if strength > 0 {
-            shape.fill(Color.white.opacity(strength))
-                .blendMode(.plusLighter)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if leavesControlBands {
+                // The mask goes inside the blend, so the masked white still
+                // adds to the glass rather than lying over it.
+                lift(shape.fill(Color.white.opacity(strength)).mask { bandMask })
+            } else {
+                lift(shape.fill(Color.white.opacity(strength)))
+            }
+        }
+    }
+
+    private func lift(_ white: some View) -> some View {
+        white
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var bandMask: some View {
+        GeometryReader { proxy in
+            let frame = bandsFrame ?? CGRect(origin: .zero, size: proxy.size)
+            let stops = AtticSurfaceModel.LiftControlBands.stops(height: frame.height)
+            LinearGradient(stops: stops.map { .init(color: .black.opacity($0.opacity), location: $0.location) },
+                           startPoint: .top, endPoint: .bottom)
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX, y: frame.midY)
         }
     }
 }
@@ -977,7 +1009,8 @@ struct AtticPanelStageSurface: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
+                               liftLeavesControlBands: true)
     }
 }
 
