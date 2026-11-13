@@ -156,6 +156,26 @@ final class AdaptiveTasksTests: XCTestCase {
         }
     }
 
+    /// Find's cross-tab counts need matching roots, never another page's
+    /// ordered rows. Keep that cold work out of the first-key budget.
+    func testElsewhereCountsDoNotBuildOtherTabsOrderedSnapshots() throws {
+        let (store, model) = try makeModel()
+        _ = store.commit([TaskDraft(title: "Launch now"),
+                          TaskDraft(title: "Launch later", status: .backlog)])
+        let done = try XCTUnwrap(store.create(title: "Launch finished"))
+        XCTAssertTrue(model.library.completeTask(done.id).isApplied)
+        _ = model.rows(for: .now) // The panel is shown before Find receives a key.
+        let builds = store.scopeSnapshotBuildCount
+        print("CI7_ELSEWHERE_COUNTS pid=\(ProcessInfo.processInfo.processIdentifier) baseline=\(builds)")
+        for tab in TasksTab.allCases {
+            model.setSearchQuery("launch", for: tab)
+            let expected = TasksTab.allCases.filter { $0 != tab }.map { TasksElsewhereCount(tab: $0, count: 1) }
+            XCTAssertEqual(model.searchMatchesElsewhere(from: tab), expected)
+            XCTAssertEqual(store.scopeSnapshotBuildCount, builds,
+                           "A cross-tab count must not build and sort an unrequested page")
+        }
+    }
+
     /// Now's Find counts Done's matches through the Done log's index, so
     /// Now's first key still shows at once on 5,000 finished tasks: the
     /// count's median stays in Done's own 16 ms query budget.
