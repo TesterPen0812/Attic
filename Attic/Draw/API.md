@@ -131,9 +131,10 @@ block quit after the bound. Undo survives session switches, not app relaunch.
 
 Agent Draw snapshots, token checks and Draw Undo guards first settle queued input
 on pages using that exact store (acknowledged commands and typing). An active
-pointer gesture continues until its normal end; the editor stays open with its
-latest text. A failed flush remains an unsettled
-store edit and prevents an agent mutation. Raster image decoding bounds its
+pointer gesture continues until its normal end. Mutations and agent Undo on
+that canvas are refused with a retry message until pointer-up; reads and other
+canvases remain available. The editor stays open with its latest text. A failed
+flush remains an unsettled store edit and prevents an agent mutation. Raster image decoding bounds its
 requested pixel size before integer arithmetic, without rewriting stored frames.
 
 

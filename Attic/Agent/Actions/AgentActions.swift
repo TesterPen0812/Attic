@@ -889,6 +889,10 @@ final class AgentActions {
                     if !success { failures.append("\(entry.title): \(String(describing: result))") }
                 }
             case let .draw(canvasID, snapshot, expectedStepID, _):
+                if let draw, DrawLibraryHub.hasLiveGesture(on: canvasID, in: draw) {
+                    failures.append("\(entry.title): the owner is drawing on this canvas; retry after the gesture ends")
+                    break
+                }
                 if let draw { DrawLibraryHub.flushLiveInput(for: draw) }
                 if let draw, let current = try? draw.open(canvasID),
                    current.objects == snapshot.objects && current.canvas.name == snapshot.canvas.name,
@@ -897,6 +901,10 @@ final class AgentActions {
                 }
                 if !success { failures.append("\(entry.title): Draw has changed or refused Undo") }
             case let .durableDraw(canvasID, snapshot, _, proof, _):
+                if let draw, DrawLibraryHub.hasLiveGesture(on: canvasID, in: draw) {
+                    failures.append("\(entry.title): the owner is drawing on this canvas; retry after the gesture ends")
+                    break
+                }
                 if let draw { DrawLibraryHub.flushLiveInput(for: draw) }
                 if let draw, let current = try? draw.open(canvasID), current == snapshot {
                     success = draw.undoAgentStep(on: canvasID, proof: proof).isSaved

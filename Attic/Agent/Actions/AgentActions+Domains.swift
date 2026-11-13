@@ -349,6 +349,9 @@ extension AgentActions {
                               targets: [AgentTarget(page: .draw, itemID: canvas.id, title: saved.canvas.name)], state: .done), saved)
         }
         let canvasID = try Self.uuid(args["canvas_id"], "canvas_id")
+        if Self.isMutation(name), DrawLibraryHub.hasLiveGesture(on: canvasID, in: draw) {
+            throw AgentActionsError.refused("The owner is drawing on this canvas. Retry after the gesture ends.")
+        }
         let snapshot = try draw.open(canvasID)
         if name == "draw_duplicate_canvas" {
             try beforeMutation()
