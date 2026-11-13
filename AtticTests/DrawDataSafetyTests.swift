@@ -308,4 +308,23 @@ final class DrawDataSafetyTests: XCTestCase {
         }
     }
 
+    func testDS11HugeFiniteImageExtentRendersAndReopensWithoutChangingStoredGeometry() throws {
+        let store = try persistent()
+        let canvas = store.create(name: "Huge image")
+        let agent = try actions(store)
+        var object = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 20, height: 10), content: .image(
+            DrawImage(original: Draw3Images.encoded(width: 20, height: 10), pixelWidth: 20, pixelHeight: 10)))
+        XCTAssertTrue(store.perform(.put([object]), on: canvas.id).isSaved)
+        for extent in [1e20, Double(Int64.max / 2) + 4096] {
+            let token = try XCTUnwrap(read(agent, canvas: canvas.id)["object_token"] as? String)
+            _ = try agent.drawAction("draw_resize_object", ["canvas_id": canvas.id.uuidString,
+                "object_id": object.id.uuidString, "object_token": token, "width": extent, "height": extent / 2], beforeMutation: {})
+            object = try XCTUnwrap(store.open(canvas.id).objects.first)
+            let reopened = try DrawPersistentStore(container: store.container).open(canvas.id)
+            XCTAssertEqual(reopened.objects, [object])
+            let key = DrawRasterKey(size: CGSize(width: 32, height: 32), scale: 2)
+            XCTAssertNotNil(DrawRaster.render(DrawRasterRequest(key: key, objects: reopened.objects)))
+            XCTAssertEqual(try store.open(canvas.id).objects, [object], "Rendering must never rewrite stored geometry")
+        }
+    }
 }
