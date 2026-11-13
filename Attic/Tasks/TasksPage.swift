@@ -1906,7 +1906,9 @@ struct TasksPage: View {
                 }
                 beginDayDrop(in: tab)
             },
-            onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
+            onMove: { [pointer, dragSession] translation in
+                pointer.liftedCard.follow(translation, horizontal: dragSession.horizontalTranslation)
+            },
             onEnd: finishDrag,
             onPushPastGroup: { if reorders { showBoundaryHint() } },
             crossDay: { location in updateDayDrop(for: id, in: tab, at: location) }
@@ -3183,8 +3185,7 @@ struct TasksPage: View {
         guard let lift = pointer.liftedCard.lift, lift.id == id, let view = pointer.view, let window = view.window,
               let images = pointer.liftedCard.snapshot?(lift, window.backingScaleFactor) else { return nil }
         let room = TasksDragOut.Card.Images.room
-        let frame = CGRect(x: lift.origin.minX - room, y: lift.y - room,
-                           width: images.shadowed.size.width, height: images.shadowed.size.height)
+        let frame = Self.dragOutImageFrame(lift, imageSize: images.shadowed.size)
         let row = TasksRowID(tab: lift.tab, id: id)
         let liftedCard = pointer.liftedCard
         return TasksDragOut.Card(
@@ -3202,6 +3203,13 @@ struct TasksPage: View {
                 if $dragOutRow.wrappedValue == row { $dragOutRow.wrappedValue = nil }
             }
         )
+    }
+
+    /// The image carried from the page into the native drag, in page space.
+    static func dragOutImageFrame(_ lift: TasksLiftedCard.Lift, imageSize: CGSize) -> CGRect {
+        let room = TasksDragOut.Card.Images.room
+        return CGRect(x: lift.x - room, y: lift.y - room,
+                      width: imageSize.width, height: imageSize.height)
     }
 
     /// The list's scroll view under a page point (the page's current tab).
@@ -4161,6 +4169,9 @@ final class TasksLiftedCard: ObservableObject {
         let origin: CGRect
         /// The card's top in the page.
         var y: CGFloat
+        var horizontalTranslation: CGFloat = 0
+        /// Shared by the lifted presentation and native drag image.
+        var x: CGFloat { origin.minX + horizontalTranslation }
         /// Dropped: the card settles back to its size as it lands.
         var landed = false
     }
@@ -4196,12 +4207,14 @@ final class TasksLiftedCard: ObservableObject {
         }
     }
 
-    /// The pointer moved `translation` from where the press began.
-    func follow(_ translation: CGFloat) {
+    /// Keep the original grip in both axes. Only this card observes the
+    /// movement; the list's reorder targets still use vertical translation.
+    func follow(_ translation: CGFloat, horizontal: CGFloat = 0) {
         guard var lift else { return }
         let y = lift.origin.minY + translation
-        guard y != lift.y else { return }
+        guard y != lift.y || horizontal != lift.horizontalTranslation else { return }
         lift.y = y
+        lift.horizontalTranslation = horizontal
         self.lift = lift
     }
 
@@ -4209,6 +4222,7 @@ final class TasksLiftedCard: ObservableObject {
     func land(at y: CGFloat) {
         guard var lift else { return }
         lift.y = y
+        lift.horizontalTranslation = 0
         lift.landed = true
         self.lift = lift
     }
@@ -4261,7 +4275,7 @@ struct TasksLiftedCardLayer<Card: View>: View {
                     .frame(width: current.origin.width, alignment: .topLeading)
                     .modifier(AtticReorderLiftModifier(lifted: true))
                     .scaleEffect(Self.scale(raised: raised, landed: false, reduceMotion: design.reduceMotion))
-                    .offset(x: current.origin.minX, y: current.y)
+                    .offset(x: current.x, y: current.y)
             }
         }
         .onChange(of: lift.lift?.id, initial: true) { _, id in
@@ -4317,6 +4331,7 @@ final class TasksDragSession {
     private(set) var isCancelled = false
     let cancellation = TasksDragCancellation()
     var translation: CGFloat = 0
+    var horizontalTranslation: CGFloat = 0
     var location: CGPoint?
     var controlFrames: [TasksRowID: [CGRect]] = [:]
     /// Which cell reported each row's control frames (`TasksCellReports`).
@@ -4406,6 +4421,7 @@ final class TasksDragSession {
         timer = nil
         location = nil
         translation = 0
+        horizontalTranslation = 0
         geometry = nil
         geometryTab = nil
         cachedScrollView = nil
@@ -4561,6 +4577,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
                       let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
+                session.horizontalTranslation = value.translation.width
                 session.location = value.location
                 onMove(value.translation.height)
                 let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0

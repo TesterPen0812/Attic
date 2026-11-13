@@ -342,6 +342,47 @@ final class TasksDragO2Tests: XCTestCase {
         XCTAssertEqual(back.minY, card.minY + 200, accuracy: 0.001)
     }
 
+    /// CI6-D: exercise the page's image producer, rather than supplying an
+    /// already-correct grip. The pointer can cross the whole panel between
+    /// gesture updates before AppKit takes the drag.
+    func testHorizontalHandoffKeepsTheOriginalGripOnTheOutgoingCard() {
+        let origin = CGRect(x: 12, y: 100, width: 300, height: 34)
+        let press = CGPoint(x: 192, y: 117)
+        let imageSize = CGSize(width: 340, height: 74)
+        var moves: [(CGFloat, CGFloat)] = [-650, -400, 400, 650].map { ($0, 25) }
+        for seed: UInt64 in [610601, 610602, 610603] {
+            var random = seed
+            for _ in 0..<300 {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                let dx = CGFloat(Int(random >> 32) % 1401 - 700)
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                let dy = CGFloat(Int(random >> 32) % 1001 - 500)
+                moves.append((dx, dy))
+            }
+        }
+        for (dx, dy) in moves {
+            let card = TasksLiftedCard()
+            card.begin(id: UUID(), tab: .now, origin: origin)
+            card.follow(dy, horizontal: dx)
+            let lift = card.lift!
+            let pointer = CGPoint(x: press.x + dx, y: press.y + dy)
+            XCTAssertEqual(lift.x, origin.minX + dx, accuracy: 0.001, "the drawn card follows the original grip too")
+            let image = TasksPage.dragOutImageFrame(lift, imageSize: imageSize)
+            XCTAssertTrue(image.contains(pointer), "the outgoing card contains the pointer at handoff: \(dx)")
+            let grip = AtticDragGrip(image: image, pointer: pointer)
+            let release = CGPoint(x: pointer.x + 50, y: pointer.y + 60)
+            let start = grip.frame(at: release)
+            XCTAssertTrue(start.contains(release), "a cancelled card starts home under its release point")
+            XCTAssertEqual(release.x - start.minX, 200, accuracy: 0.001, "the original horizontal grip, including shadow room")
+            XCTAssertEqual(release.y - start.minY, 37, accuracy: 0.001)
+            card.land(at: origin.minY)
+            XCTAssertEqual(card.lift?.x, origin.minX, "landing returns horizontally on the same settle")
+            card.end()
+            XCTAssertNil(card.lift)
+        }
+        print("CI6_DRAG_HANDOFF seeds=610601,610602,610603 steps=300/seed boundaryVectors=4")
+    }
+
     /// The corner jump (O17-12): the session's own frame for its image at
     /// the end is not where it was drawn. A cancelled card starts home from
     /// the release point and its grip, whatever the session reports, and

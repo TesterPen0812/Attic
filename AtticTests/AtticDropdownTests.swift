@@ -2516,14 +2516,16 @@ final class AtticDateCardTests: XCTestCase {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
         XCTAssertEqual(m.cornerRadius, 18, "Accepted 2026-11-10: Loam's 18 pt continuous glass card")
-        XCTAssertEqual(m.inset, 3)
+        // Accepted 2026-11-13, Corners B: picker cards share menu padding
+        // and concentric highlights, retaining their own row heights.
+        XCTAssertEqual(m.inset, 6)
         XCTAssertEqual(m.rowPadding, 10)
-        XCTAssertEqual(m.highlightRadius, 13)
-        XCTAssertEqual(m.highlightRadius, AtticRadius.menuRow,
-                       "the picker rows retain their own 13 pt radius inside the Loam card")
+        XCTAssertEqual(m.highlightRadius, 12)
+        XCTAssertEqual(m.highlightRadius, AtticMenuMetrics.highlightRadius,
+                       "picker rows use the Accepted concentric 12 pt radius inside the 18 pt card")
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
-        XCTAssertEqual(m.inset + m.fieldInset, 5, "the field stays 2 pt inside the rows")
+        XCTAssertEqual(m.inset + m.fieldInset, 6, "the field shares the Accepted 6 pt card inset")
         XCTAssertEqual(m.minWidth, 150)
         XCTAssertEqual(m.panelMargin, 12)
         XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)

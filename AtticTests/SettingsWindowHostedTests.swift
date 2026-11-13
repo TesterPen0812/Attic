@@ -249,6 +249,7 @@ final class SettingsWindowHostedTests: XCTestCase {
             }
             return result
         }
+        var axDiagnostic = ""
         func externalScrollbarsAreHidden() -> Bool {
             var found = false
             var allHidden = true
@@ -263,7 +264,9 @@ final class SettingsWindowHostedTests: XCTestCase {
                        hidden as? Bool != true { allHidden = false }
                 }
                 var children: CFTypeRef?
-                guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success else {
+                let childrenResult = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+                if depth == 0 { axDiagnostic = "application children=\(childrenResult.rawValue) trusted=\(AXIsProcessTrusted())" }
+                guard childrenResult == .success else {
                     return
                 }
                 for child in (children as? [AXUIElement]) ?? [] { visit(child, depth: depth + 1) }
@@ -300,6 +303,7 @@ final class SettingsWindowHostedTests: XCTestCase {
                 }
                 XCTAssertTrue(scrollbarsHidden,
                               "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
+                print("CI6_SETTINGS_AX section=\(section.rawValue) \(axDiagnostic)")
             }
             let interactive = after.filter {
                 roles.contains($0.accessibilityRole?()?.rawValue ?? "") &&
@@ -359,6 +363,7 @@ final class SettingsWindowHostedTests: XCTestCase {
                 window.displayIfNeeded()
                 candidate = scrollViews(in: host).first { abs($0.frame.width - size.width) < 2 }
             }
+            print("CI6_SETTINGS_SIZE requested=\(size) window=\(window.contentLayoutRect.size) host=\(host.frame) scrolls=\(scrollViews(in: host).map(\.frame))")
             let scroll = try XCTUnwrap(candidate,
                                        "The undersized Settings host must offer scrolling")
             let content = try XCTUnwrap(scroll.documentView)
@@ -484,6 +489,7 @@ final class SettingsWindowHostedTests: XCTestCase {
             }
             XCTAssertEqual(sidebarAfter, sidebarBefore, accuracy: 0.5,
                            "Choosing Dark must not scroll the sidebar horizontally")
+            print("CI6_SETTINGS_DARK size=\(size) sidebar=\(sidebarBefore)->\(sidebarAfter) scroll=\(scroll.frame) clip=\(scroll.contentView.bounds) document=\(document.frame)")
             let general = try XCTUnwrap(element("settings-nav-general"))
             XCTAssertTrue(general.accessibilityPerformPress?() ?? false)
         }
