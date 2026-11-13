@@ -212,7 +212,12 @@ final class AgentActions {
             for request in saved.requests {
                 let entries = request.entries.map(Self.restoreInverse)
                 journals[request.changeSet.id] = Journal(changeSet: request.changeSet, entries: entries)
-                inverseCache[request.changeSet.id] = request.entries
+                // Keep the encoded cache consistent with decode failures, without
+                // re-encoding valid restored documents on subsequent saves.
+                inverseCache[request.changeSet.id] = zip(request.entries, entries).map { pair in
+                    if case let .unavailable(reason) = pair.1 { return .unavailable(reason) }
+                    return pair.0
+                }
                 order.append(request.changeSet.id)
                 if let pending = request.pendingAction { pendingActions[request.changeSet.id] = pending }
                 if let checkpoint = request.undoInFlight { undoInFlight[request.changeSet.id] = checkpoint }
