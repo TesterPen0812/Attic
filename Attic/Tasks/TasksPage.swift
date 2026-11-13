@@ -1652,6 +1652,9 @@ struct TasksPage: View {
                             ForEach(sections.done) { row in
                                 cell(row, tab: tab, group: groups[row.status] ?? [], run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                     .id(row.id)
+                                    .transition(.asymmetric(
+                                        insertion: .identity,
+                                        removal: AtticMotionScale.deleteExit(reduceMotion: design.reduceMotion)))
                             }
                         }
                     }

@@ -606,14 +606,19 @@ enum AtticMotionScale {
         return .asymmetric(insertion: insertion, removal: removal)
     }
 
+    /// One removal for Tasks rows, Notes rows, Notes cards and completed
+    /// tasks. Their existing insertion recipes stay as they are.
+    static func deleteExit(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: deleteScale)).animation(exit)
+    }
+
     /// A list row: added, it drops into its place on `settle` (round 9);
     /// leaving, it fades and shrinks to 0.96 on the exit, before the gap
     /// closes (`gapClose`). Reduced: a fade.
     static func rowTransition(reduceMotion: Bool) -> AnyTransition {
         if reduceMotion { return .opacity }
-        let removal = AnyTransition.opacity.combined(with: .scale(scale: deleteScale)).animation(exit)
         return .asymmetric(insertion: AtticMotionPreset.settle.transition(reduceMotion: false, edge: .top),
-                           removal: removal)
+                           removal: deleteExit(reduceMotion: false))
     }
 
     /// The list's own move: `travel`, starting `gapCloseDelay` late while
@@ -633,6 +638,34 @@ enum AtticMotionScale {
     /// `motion`, or Reduced's choice (`reducedChange`) when motion is reduced.
     static func resolved(_ motion: Animation?, reduceMotion: Bool) -> Animation? {
         reduceMotion ? reducedChange : motion
+    }
+}
+
+/// Delays the space left by a deleted item, while preserving the list's
+/// normal settle on inserts, filtering, folding and reordering. The previous
+/// membership is kept by the view, so asynchronous durable deletions receive
+/// the same exit as an immediate Tasks deletion.
+struct AtticDeleteGapMotion: ViewModifier {
+    let ids: [UUID]
+    let travel: Animation?
+    let isDeleted: (UUID) -> Bool
+
+    @State private var previousIDs: Set<UUID> = []
+
+    static func animation(previous: Set<UUID>, current: [UUID], travel: Animation?,
+                          isDeleted: (UUID) -> Bool) -> Animation? {
+        let retained = Set(current)
+        let leaving = previous.subtracting(retained).contains(where: isDeleted)
+        return AtticMotionScale.gapClose(travel, afterRowsLeave: leaving)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .animation(Self.animation(previous: previousIDs, current: ids,
+                                      travel: travel, isDeleted: isDeleted), value: ids)
+            .onChange(of: ids, initial: true) { _, updated in
+                previousIDs = Set(updated)
+            }
     }
 }
 
