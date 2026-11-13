@@ -264,7 +264,7 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
 
 1. **DP-1** resize shell publications and reflow: every grip drag; compare with known shared host.
-2. **DP-5** scrolling geometry reports proportional to realized rows.
+2. **DP-5/DP-29** scrolling geometry reports and quadratic Done day-slot reconstruction after history is loaded.
 3. **DP-6** native menu anchors per realized Tasks row under AX.
 4. **DP-8/DP-30** synchronous approach warmup or Calendar’s click-time accessibility hit test, under their respective triggers.
 5. **DP-21/DP-22** long-note projection and large code-block tokenization (depending on content).
@@ -277,7 +277,7 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 12. **DP-2** separate island-window positioning and glass work during resize.
 13. **DP-4** Draw coverage traversal on each frame-size call for large scenes.
 14. **DP-12** full inline tag candidates in tag-heavy rows.
-15. **DP-9/DP-14/DP-23–DP-25** long-note headings and Calendar filtering, obsolete read queues, global task projections and ownership lookup (depending on use).
+15. **DP-9, DP-14, DP-23–DP-25, DP-28 and DP-31–DP-32** long-note headings and Calendar filtering, queues, projections, day layout, search batches and row invalidation (depending on use).
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-8, DP-16/DP-17 and Calendar click-specific DP-30 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
@@ -290,4 +290,4 @@ This is a prioritized test plan, not a measured ranking. The owner-provided H-01
 - At scale count Draw AX object visits/sorts per keystroke; task deletion fetches and rows per root; tag-bar controls and candidate measurements; Calendar filter comparisons; long-note heading comparisons. Each finding above gives a non-wall-clock guard test.
 
 ### Coverage and where to continue
-32 source-backed suspects; severity and order provisional. The three owner paths have initial call-chain and measurement plans, not exhaustive event-to-presentation traces. I inspected selected files in Window, Tasks, DesignSystem, Notes, Draw, Calendar, Agent, Services, Workspace, Composer and Settings. **Fully read:** `Attic/Calendar/Data` (all eight Swift files) and `Attic/Composer` (all three Swift files), with selected call sites traced into Calendar UI and Tasks. No other folder is yet fully read file by file. Remaining: the rest of these folders and every other app folder, helper and script; launch, wake/display changes, idle/lifetime retention, menus, all editor/table operations, Canvas/Draw interactions, all composer and Calendar flows, MCP method-by-method and helper lifecycle. Complete those areas before calling this an exhaustive audit. Dormant mobile/CloudKit intentionally excluded; no Mac build, profiling or app code changes.
+32 source-backed suspects; severity and order provisional. The three owner paths have initial call-chain and measurement plans, not exhaustive event-to-presentation traces. I inspected selected files in Window, Tasks, DesignSystem, Notes, Draw, Calendar, Agent, Services, Workspace, Composer and Settings. **Fully read:** `Attic/Calendar/Data` (all eight Swift files), `Attic/Calendar/UI` (all twelve Swift files) and `Attic/Composer` (all three Swift files), with selected call sites traced into Tasks. No other folder is yet fully read file by file. Remaining: the rest of these folders and every other app folder, helper and script; launch, wake/display changes, idle/lifetime retention, menus, all editor/table operations, Canvas/Draw interactions, all composer and Calendar flows, MCP method-by-method and helper lifecycle. Complete those areas before calling this an exhaustive audit. Dormant mobile/CloudKit intentionally excluded; no Mac build, profiling or app code changes.
