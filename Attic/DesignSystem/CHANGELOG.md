@@ -1,3 +1,10 @@
+## 2026-11-13 · Menu triggers (catchup-2 R-7)
+
+Switching menus also recognizes AppKit table grips, cell context menus, the
+code-language and callout-icon slots, and file-card menus. Notes row, board,
+title and note-menu buttons register their visible trigger regions. Ordinary
+dismissing clicks remain consumed; menu geometry and motion stay unchanged.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another

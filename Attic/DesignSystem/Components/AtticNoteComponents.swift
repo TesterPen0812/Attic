@@ -44,6 +44,7 @@ struct AtticNoteMenuButton: View {
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isFocused) private var isFocused
     @State private var hovered = false
+    @State private var menuAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let m = AtticNoteMetrics.self
@@ -63,6 +64,7 @@ struct AtticNoteMenuButton: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .atticFocusRing(state == .focused, cornerRadius: radius)
+        .background(AtticMenuAnchor(holder: menuAnchor).accessibilityHidden(true))
         .onHover { hovered = $0 }
         .help(String(localized: "Note options (⇧⌘I)"))
         .accessibilityLabel(String(localized: "Note options"))
@@ -176,6 +178,7 @@ struct AtticWrapLayout: Layout {
 struct AtticHeaderTitle: View {
     let title: String
     let action: () -> Void
+    @State private var menuAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let height = AtticControlSize.headerControl
@@ -188,6 +191,7 @@ struct AtticHeaderTitle: View {
             .frame(height: height)
         }
         .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.control(height: height)))
+        .background(AtticMenuAnchor(holder: menuAnchor).accessibilityHidden(true))
         .focusEffectDisabled()
         .help(String(localized: "Note options (⇧⌘I)"))
         .accessibilityLabel(title)
@@ -298,7 +302,7 @@ struct AtticNoteRow: View {
         .focused($actionsFocused)
         .atticOwnFocusRing(.rounded(radius: radius, height: Self.actionsHeight))
         .background {
-            if let anchors { AtticNoteRowAnchor(id: model.id, anchors: anchors) }
+            if let anchors { AtticNoteRowAnchor(id: model.id, anchors: anchors, isMenuTrigger: shown) }
         }
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
@@ -484,18 +488,17 @@ final class AtticNoteRowAnchors {
 struct AtticNoteRowAnchor: NSViewRepresentable {
     let id: UUID
     let anchors: AtticNoteRowAnchors
+    var isMenuTrigger = true
 
-    func makeNSView(context: Context) -> NSView {
-        let view = PassthroughView()
+    func makeNSView(context: Context) -> AtticMenuAnchor.AnchorView {
+        let view = AtticMenuAnchor.AnchorView()
+        view.isMenuTrigger = isMenuTrigger
         anchors.register(view, for: id)
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: AtticMenuAnchor.AnchorView, context: Context) {
+        view.isMenuTrigger = isMenuTrigger
         anchors.register(view, for: id)
-    }
-
-    private final class PassthroughView: NSView {
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 import ObjectiveC
 
+/// A custom AppKit control's actual menu hit region, including drawn controls.
+@MainActor
+protocol AtticMenuTrigger: AnyObject {
+    func opensAtticMenu(for event: NSEvent) -> Bool
+}
+
 // MARK: - Glass menus (Loam's, Accepted 2026-11-10)
 //
 // The look, placement and motion follow Loam's `GlassMenu.swift` (MIT,
@@ -2252,8 +2258,17 @@ enum AtticContextMenus {
 
     static func isMenuTrigger(for event: NSEvent) -> Bool {
         if activeShields(for: event).contains(where: { $0.contains(event) }) { return false }
+        if !isContextPress(event), event.type == .leftMouseDown, AtticMenuAnchor.containsTrigger(for: event) { return true }
+        if let window = event.window, let hit = hitView(for: event, in: window), isShown(hit) {
+            var view: NSView? = hit
+            while let current = view {
+                if let trigger = current as? any AtticMenuTrigger { return trigger.opensAtticMenu(for: event) }
+                if current is NSTextView || (!isContextPress(event) && current is NSControl) { return false }
+                view = current.superview
+            }
+        }
         if isContextPress(event) { return routedTarget(for: event) != nil }
-        return event.type == .leftMouseDown && AtticMenuAnchor.containsTrigger(for: event)
+        return false
     }
 
     /// Native text and table controls are not triggers for this router.

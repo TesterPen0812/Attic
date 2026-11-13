@@ -324,7 +324,7 @@ struct NotesBoardCard: View {
         .focusEffectDisabled()
         .focused($actionsFocused)
         .atticOwnFocusRing(.rounded(radius: radius, height: M.actionsSide))
-        .background { AtticNoteRowAnchor(id: row.id, anchors: anchors) }
+        .background { AtticNoteRowAnchor(id: row.id, anchors: anchors, isMenuTrigger: shown) }
         .onHover { actionsHovered = $0 }
         .opacity(shown ? 1 : 0)
         // ••• fades in and out with the hover, as a task row's does.

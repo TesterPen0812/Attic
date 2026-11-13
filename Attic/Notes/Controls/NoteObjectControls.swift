@@ -202,6 +202,16 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         return nil
     }
 
+    func opensAtticMenu(for event: NSEvent) -> Bool {
+        guard event.clickCount == 1, let textView,
+              !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.command),
+              let (object, _, rect) = object(at: textView.convert(event.locationInWindow, from: nil)),
+              let face = engine.objectFace(for: object) else { return false }
+        let point = textView.convert(event.locationInWindow, from: nil)
+        return AtticNoteObjectLayout.headerAction(at: CGPoint(x: point.x - rect.minX, y: point.y - rect.minY),
+                                                 face: face, size: rect.size) == .more
+    }
+
     func handleMouseDown(_ event: NSEvent) -> Bool {
         guard event.clickCount == 1, let textView,
               !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.command) else { return false }

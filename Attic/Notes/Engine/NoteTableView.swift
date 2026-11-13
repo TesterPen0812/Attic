@@ -776,7 +776,11 @@ final class NoteTableFrameView: NSView {
 // MARK: - The grid (drawn) and its keys in cell-selection mode
 
 @MainActor
-final class NoteTableCanvas: NSView {
+final class NoteTableCanvas: NSView, AtticMenuTrigger {
+    func opensAtticMenu(for event: NSEvent) -> Bool {
+        AtticContextMenus.isContextPress(event) && contextCommands(for: event)?.isEmpty == false
+    }
+
     weak var table: NoteTableView?
     /// Off while the table scrolls: the fixed `NoteTableFrameView` draws
     /// the outline then (U-25).
