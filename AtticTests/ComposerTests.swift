@@ -9,6 +9,22 @@ import XCTest
 /// mounted on their own. Event writes go to a fake store only.
 @MainActor
 final class ComposerTests: XCTestCase {
+    func testComposerCannotSubmitWhileFirstDraftFileProviderIsStillStaging() async throws {
+        model.open(on: .tasks(.now))
+        type("Task A with a pending file")
+        page.addBarState.stagingFiles = 1 // deterministic held provider; completion still owns A's draft
+        let premature = await model.create()
+        XCTAssertFalse(premature, "the staging batch must settle before A can be submitted")
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(page.addBar.text, "Task A with a pending file")
+        page.addBarState.stagingFiles = 0
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertEqual(liveTasks().map(\.title), ["Task A with a pending file"])
+        type("Task B")
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Task A with a pending file", "Task B"])
+    }
+
     private var container: ModelContainer!
     private var tasks: TaskStore!
     private var notes: NoteStore!

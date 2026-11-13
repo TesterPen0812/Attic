@@ -198,7 +198,12 @@ final class ComposerModel: ObservableObject {
             || !writing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var canCreate: Bool { !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
+    // The current draft owns outstanding provider results. Do not begin the
+    // next draft until every file callback can join this one.
+    var canCreate: Bool {
+        !isCreating && tasks.addBarState.stagingFiles == 0
+            && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty
+    }
 
     // MARK: Opening and closing
 
