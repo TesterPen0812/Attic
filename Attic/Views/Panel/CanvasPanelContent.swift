@@ -413,6 +413,19 @@ struct CanvasPanelContent: View {
                 Divider().frame(height: 16)
                 CanvasCommandButton(title: "Fit Canvas", systemImage: "arrow.up.left.and.arrow.down.right",
                     identifier: "canvas-fit-view") { session.fit(in: surfaceSize, excluding: controlRects + mainControlRects) }
+                Group {
+                #if os(macOS)
+                AtticCommandMenu(commands: [
+                    AtticMenuCommand("Zoom In", systemImage: "plus.magnifyingglass") { zoom(by: 1.25) },
+                    AtticMenuCommand("Zoom Out", systemImage: "minus.magnifyingglass") { zoom(by: 0.8) },
+                    AtticMenuCommand("Actual Size (100%)", startsSection: true) { session.resetView() },
+                ], accessibilityLabel: "Zoom \(Int((session.viewport.scale * 100).rounded())) percent") {
+                    Text("\(Int((session.viewport.scale * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
+                        .frame(width: 44, height: 36)
+                        .contentShape(Capsule())
+                }
+                #else
                 Menu {
                     Button("Zoom In", systemImage: "plus.magnifyingglass") { zoom(by: 1.25) }
                     Button("Zoom Out", systemImage: "minus.magnifyingglass") { zoom(by: 0.8) }
@@ -435,6 +448,8 @@ struct CanvasPanelContent: View {
                 // does not reach it
                 // (`testQuietMenuGlyphIsWhatActuallyColoursABorderlessMenuLabel`).
                 .atticQuietMenuGlyph(Color.primary)
+                #endif
+                }
                 .help("Zoom · pinch or use Command + / −")
                 .accessibilityLabel("Zoom \(Int((session.viewport.scale * 100).rounded())) percent")
                 .accessibilityIdentifier("canvas-zoom")
@@ -458,6 +473,17 @@ struct CanvasPanelContent: View {
     }
 
     private func addMenu(compact: Bool) -> some View {
+        Group {
+        #if os(macOS)
+        AtticCommandMenu(commands: canvasMenuCommands(), accessibilityLabel: "Canvas menu") {
+            Image(systemName: "square.stack")
+                .font(.system(size: compact ? 15 : 17, weight: .medium))
+                .atticClearGlassForegroundReadability()
+                .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
+                .contentShape(Circle())
+        }
+        .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
+        #else
         Menu {
             Button {
                 isImageImporterPresented = true
@@ -550,12 +576,66 @@ struct CanvasPanelContent: View {
         .menuIndicator(.hidden)
         .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
         .atticQuietMenuGlyph(Color.primary)
+        #endif
+        }
         .atticGlassControl(in: Circle())
         .help("Canvas actions")
         .accessibilityLabel("Canvas menu")
         .accessibilityValue(session.selectedCanvas.name)
         .accessibilityIdentifier("canvas-document-menu")
     }
+
+    #if os(macOS)
+    /// The Canvas commands use the same glass card and recursive submenu
+    /// route as Tasks, Notes, Calendar and the top-row controls.
+    private func canvasMenuCommands() -> [AtticMenuCommand] {
+        var commands: [AtticMenuCommand] = [
+            AtticMenuCommand("Import Image…", systemImage: "photo.badge.plus") { isImageImporterPresented = true },
+            .header("Canvases"),
+        ]
+        commands += session.canvases.map { canvas in
+            AtticMenuCommand(verbatim: canvas.name, systemImage: "square.on.square",
+                             state: canvas.id == session.selectedCanvasID ? .on : nil) {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
+                _ = session.selectCanvas(canvas.id)
+            }
+        }
+        commands += [
+            AtticMenuCommand("New Canvas", systemImage: "plus") {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
+                createCanvasName = ""
+                isCreateCanvasPresented = true
+            },
+            AtticMenuCommand("Rename Canvas", systemImage: "pencil") {
+                renameCanvasName = session.selectedCanvas.name
+                isRenameCanvasPresented = true
+            },
+            AtticMenuCommand("Delete Canvas", systemImage: "trash", isDestructive: true,
+                             isDisabled: session.canvases.count <= 1) { isDeleteCanvasPresented = true },
+            .submenu("View", startsSection: true, [
+                AtticMenuCommand("Fit Content", systemImage: "arrow.up.left.and.arrow.down.right",
+                                 shortcut: KeyboardShortcut("9", modifiers: .command)) {
+                    session.fit(in: surfaceSize, excluding: controlRects + mainControlRects)
+                },
+                AtticMenuCommand("Reset View", systemImage: "scope",
+                                 shortcut: KeyboardShortcut("0", modifiers: .command)) { session.resetView() },
+            ]),
+            .submenu("Edit", [
+                AtticMenuCommand("Undo", systemImage: "arrow.uturn.backward", isDisabled: !canUndoCanvasEdit) {
+                    _ = CanvasEditCommandRoute.undo(session: session, section: .canvas)
+                },
+                AtticMenuCommand("Redo", systemImage: "arrow.uturn.forward", isDisabled: !canRedoCanvasEdit) {
+                    _ = CanvasEditCommandRoute.redo(session: session, section: .canvas)
+                },
+                AtticMenuCommand("Clear Canvas", systemImage: "trash",
+                                 shortcut: KeyboardShortcut(.delete, modifiers: [.command, .shift]),
+                                 isDestructive: true, isDisabled: canvasIsEmpty, startsSection: true,
+                                 identifier: "canvas-clear") { isClearConfirmationPresented = true },
+            ]),
+        ]
+        return commands
+    }
+    #endif
 
     private func toolDock(compact: Bool) -> some View {
         HStack(spacing: compact ? 0 : 2) {
@@ -619,17 +699,7 @@ struct CanvasPanelContent: View {
 
             shapeMenu
 
-            CanvasCommandButton(
-                title: "Ink and Width",
-                systemImage: "circle.fill",
-                identifier: "canvas-style",
-                symbolColor: session.color.swiftUIColor
-            ) {
-                isStylePopoverPresented.toggle()
-            }
-            .popover(isPresented: $isStylePopoverPresented, arrowEdge: .bottom) {
-                stylePopover
-            }
+            inkAndWidthPicker
 
         }
         .padding(.horizontal, compact ? 5 : 8)
@@ -640,6 +710,17 @@ struct CanvasPanelContent: View {
     }
 
     private var shapeMenu: some View {
+        Group {
+        #if os(macOS)
+        AtticCommandMenu(commands: CanvasShapeKind.allCases.map { shape in
+            AtticMenuCommand(verbatim: shape.title, systemImage: shape.symbolName) {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
+                session.prepareShapePlacement(shape)
+            }
+        }, accessibilityLabel: "Add Shape") {
+            shapeMenuLabel
+        }
+        #else
         Menu {
             ForEach(CanvasShapeKind.allCases) { shape in
                 Button {
@@ -650,28 +731,30 @@ struct CanvasPanelContent: View {
                 }
             }
         } label: {
-            Image(systemName: pendingShape?.symbolName ?? "square")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(pendingShape == nil ? Color.primary : selectedShapeForeground)
-                .atticClearGlassForegroundReadability()
-                .frame(width: 32, height: 32)
-                .background {
-                    Circle()
-                        .fill(pendingShape == nil ? Color.primary.opacity(isShapeHovered ? 0.08 : 0) : pendingShapeFill)
-                }
-                .contentShape(Circle())
+            shapeMenuLabel
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .frame(width: 32, height: 32)
-        // At rest the pop-up button painted the square accent blue, which is
-        // exactly the signal a pending shape uses. Quiet the idle glyph so the
-        // deliberate accent fill below means "waiting to be placed" again.
         .atticQuietMenuGlyph(pendingShape == nil ? Color.primary : selectedShapeForeground)
+        #endif
+        }
+        .frame(width: 32, height: 32)
         .onHover { isShapeHovered = $0 }
         .help("Add Shape")
         .accessibilityLabel("Add Shape")
         .accessibilityIdentifier("canvas-add-shape")
+    }
+
+    private var shapeMenuLabel: some View {
+        Image(systemName: pendingShape?.symbolName ?? "square")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(pendingShape == nil ? Color.primary : selectedShapeForeground)
+            .atticClearGlassForegroundReadability()
+            .frame(width: 32, height: 32)
+            .background {
+                Circle().fill(pendingShape == nil ? Color.primary.opacity(isShapeHovered ? 0.08 : 0) : pendingShapeFill)
+            }
+            .contentShape(Circle())
     }
 
     #if !os(macOS)
@@ -718,6 +801,32 @@ struct CanvasPanelContent: View {
     }
     #endif
 
+    private var inkAndWidthControl: some View {
+        CanvasCommandButton(
+            title: "Ink and Width",
+            systemImage: "circle.fill",
+            identifier: "canvas-style",
+            symbolColor: session.color.swiftUIColor
+        ) {
+            isStylePopoverPresented.toggle()
+        }
+    }
+
+    @ViewBuilder private var inkAndWidthPicker: some View {
+        #if os(macOS)
+        inkAndWidthControl
+            .atticDropdown(isPresented: $isStylePopoverPresented, prefer: .above,
+                           label: "Ink and Width", takesKeyboard: false) {
+                stylePopover.padding(8)
+            }
+        #else
+        inkAndWidthControl
+            .popover(isPresented: $isStylePopoverPresented, arrowEdge: .bottom) {
+                stylePopover.padding(14)
+            }
+        #endif
+    }
+
     private var stylePopover: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Ink")
@@ -731,12 +840,19 @@ struct CanvasPanelContent: View {
             CanvasWidthControl(session: session)
                 .frame(width: 190)
         }
-        .padding(14)
     }
 
     private var imageSelectionDock: some View {
         HStack(spacing: 2) {
             if let image = session.selectedImage {
+                Group {
+                #if os(macOS)
+                AtticCommandMenu(commands: imageMenuCommands(image), accessibilityLabel: "Image recovery and export") {
+                    Image(systemName: session.failedImageIDs.contains(image.id) ? "exclamationmark.triangle" : "ellipsis")
+                        .frame(width: 32, height: 32)
+                        .foregroundStyle(session.failedImageIDs.contains(image.id) ? Color.orange : secondaryForeground)
+                }
+                #else
                 Menu {
                     if session.failedImageIDs.contains(image.id) {
                         Button("Retry Image", systemImage: "arrow.clockwise") {
@@ -763,6 +879,8 @@ struct CanvasPanelContent: View {
                 // A failed image keeps its warning colour; everything else is
                 // quiet chrome rather than system accent.
                 .atticQuietMenuGlyph(session.failedImageIDs.contains(image.id) ? .orange : secondaryForeground)
+                #endif
+                }
                 .accessibilityLabel("Image recovery and export")
             }
             CanvasCommandButton(
@@ -815,6 +933,30 @@ struct CanvasPanelContent: View {
         .accessibilityLabel("Selected image actions")
     }
 
+    #if os(macOS)
+    private func imageMenuCommands(_ image: CanvasPlacedImage) -> [AtticMenuCommand] {
+        var commands: [AtticMenuCommand] = []
+        if session.failedImageIDs.contains(image.id) {
+            commands.append(AtticMenuCommand("Retry Image", systemImage: "arrow.clockwise") {
+                session.retryImageDecode(image.id)
+            })
+        }
+        commands += [
+            AtticMenuCommand("Locate Replacement…", systemImage: "folder") {
+                replacementImageID = image.id
+                isReplacementImporterPresented = true
+            },
+            AtticMenuCommand("Export Original…", systemImage: "square.and.arrow.up") {
+                presentExport(of: image)
+            },
+            AtticMenuCommand("Remove Image", systemImage: "trash", isDestructive: true) {
+                _ = session.deleteImage(image.id)
+            },
+        ]
+        return commands
+    }
+    #endif
+
     private var contentCountLabel: String {
         var count = session.strokes.count + session.images.count
         #if os(macOS)
@@ -840,58 +982,10 @@ struct CanvasPanelContent: View {
                 }
             }
             if let content = object.content {
-                Menu {
-                    Menu("Color") {
-                        ForEach(CanvasInkColor.allCases) { color in
-                            Button(color.title) {
-                                editSemanticStyle(object.id) { $0.color = color }
-                            }
-                        }
-                    }
-                    if content.text != nil {
-                        Menu("Weight") {
-                            ForEach(["regular", "semibold", "bold"], id: \.self) { weight in
-                                Button(weight.capitalized) {
-                                    editSemanticStyle(object.id) { $0.fontWeight = weight }
-                                }
-                            }
-                        }
-                        Menu("Alignment") {
-                            ForEach(["left", "center", "right"], id: \.self) { alignment in
-                                Button(alignment.capitalized) {
-                                    editSemanticStyle(object.id) { $0.alignment = alignment }
-                                }
-                            }
-                        }
-                        Menu("Text Size") {
-                            ForEach([12, 18, 24, 36, 48, 72], id: \.self) { size in
-                                Button("\(size) pt") {
-                                    editSemanticStyle(object.id) { $0.fontSize = Double(size) }
-                                }
-                            }
-                        }
-                    } else {
-                        Menu("Shape") {
-                            ForEach(CanvasShapeKind.allCases) { shape in
-                                Button(shape.title) {
-                                    editSemanticStyle(object.id) { $0.shape = shape }
-                                }
-                            }
-                        }
-                        Menu("Line Width") {
-                            ForEach([1, 3, 6, 10, 16], id: \.self) { width in
-                                Button("\(width) pt") {
-                                    editSemanticStyle(object.id) { $0.strokeWidth = Double(width) }
-                                }
-                            }
-                        }
-                    }
-                } label: {
+                AtticCommandMenu(commands: objectStyleCommands(object.id, content: content),
+                                 accessibilityLabel: "Selected object style") {
                     Image(systemName: "slider.horizontal.3").frame(width: 32, height: 32)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .atticQuietMenuGlyph(secondaryForeground)
                 .accessibilityLabel("Selected object style")
             }
             CanvasCommandButton(title: "Send Object Backward", systemImage: "square.2.layers.3d.bottom.filled",
@@ -911,6 +1005,51 @@ struct CanvasPanelContent: View {
         .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Selected object actions")
+    }
+
+    private func objectStyleCommands(_ id: UUID, content: CanvasSemanticContent) -> [AtticMenuCommand] {
+        var commands = [AtticMenuCommand.submenu("Color", CanvasInkColor.allCases.map { color in
+            AtticMenuCommand(verbatim: color.title, state: content.color == color ? .on : nil) {
+                editSemanticStyle(id) { $0.color = color }
+            }
+        })]
+        if content.text != nil {
+            commands += [
+                .submenu("Weight", ["regular", "semibold", "bold"].map { weight in
+                    AtticMenuCommand(verbatim: weight.capitalized,
+                                     state: content.fontWeight == weight ? .on : nil) {
+                        editSemanticStyle(id) { $0.fontWeight = weight }
+                    }
+                }),
+                .submenu("Alignment", ["left", "center", "right"].map { alignment in
+                    AtticMenuCommand(verbatim: alignment.capitalized,
+                                     state: content.alignment == alignment ? .on : nil) {
+                        editSemanticStyle(id) { $0.alignment = alignment }
+                    }
+                }),
+                .submenu("Text Size", [12, 18, 24, 36, 48, 72].map { size in
+                    AtticMenuCommand(verbatim: "\(size) pt",
+                                     state: content.fontSize == Double(size) ? .on : nil) {
+                        editSemanticStyle(id) { $0.fontSize = Double(size) }
+                    }
+                }),
+            ]
+        } else {
+            commands += [
+                .submenu("Shape", CanvasShapeKind.allCases.map { shape in
+                    AtticMenuCommand(verbatim: shape.title, state: content.shape == shape ? .on : nil) {
+                        editSemanticStyle(id) { $0.shape = shape }
+                    }
+                }),
+                .submenu("Line Width", [1, 3, 6, 10, 16].map { width in
+                    AtticMenuCommand(verbatim: "\(width) pt",
+                                     state: content.strokeWidth == Double(width) ? .on : nil) {
+                        editSemanticStyle(id) { $0.strokeWidth = Double(width) }
+                    }
+                }),
+            ]
+        }
+        return commands
     }
 
     private func editSemanticStyle(_ id: UUID, change: (inout CanvasSemanticContent) -> Void) {

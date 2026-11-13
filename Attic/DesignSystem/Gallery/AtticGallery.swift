@@ -286,10 +286,20 @@ private struct AtticGalleryControls: View {
                 .pickerStyle(.segmented)
                 .frame(width: 250)
                 .help("What raised controls are made of, everywhere in the gallery. Reduce transparency always uses the Craft style.")
-                Picker("Palette", selection: $context.palette) {
-                    ForEach(AtticPanelTheme.allCases) { Text($0.title).tag($0) }
+                AtticCommandMenu(commands: AtticPanelTheme.allCases.map { theme in
+                    AtticMenuCommand(verbatim: theme.title, state: context.palette == theme ? .on : nil) {
+                        context.palette = theme
+                    }
+                }, accessibilityLabel: "Palette") {
+                    HStack(spacing: 5) {
+                        Text("Palette")
+                        Spacer(minLength: 5)
+                        Text(context.palette.title).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .frame(width: 210, height: 24)
+                    .contentShape(Rectangle())
                 }
-                .frame(width: 210)
             }
             HStack(spacing: 14) {
                 Picker("Tint", selection: $context.tint) {
@@ -301,11 +311,22 @@ private struct AtticGalleryControls: View {
                     Text("Tint length")
                     Slider(value: $context.tintLength, in: PanelTintLength.range).frame(width: 110)
                 }
-                Picker("Pin state", selection: $pinnedState) {
-                    Text("Live").tag(AtticControlState?.none)
-                    ForEach(AtticControlState.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+                AtticCommandMenu(commands: [
+                    AtticMenuCommand(verbatim: "Live", state: pinnedState == nil ? .on : nil) { pinnedState = nil },
+                ] + AtticControlState.allCases.map { state in
+                    AtticMenuCommand(verbatim: state.title, state: pinnedState == state ? .on : nil) {
+                        pinnedState = state
+                    }
+                }, accessibilityLabel: "Pin state") {
+                    HStack(spacing: 5) {
+                        Text("Pin state")
+                        Spacer(minLength: 5)
+                        Text(pinnedState?.title ?? "Live").foregroundStyle(.secondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .frame(width: 190, height: 24)
+                    .contentShape(Rectangle())
                 }
-                .frame(width: 190)
             }
             HStack(spacing: 14) {
                 Toggle("Increase contrast", isOn: $context.increaseContrast)
