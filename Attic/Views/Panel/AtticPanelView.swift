@@ -498,6 +498,19 @@ struct AtticPanelView: View {
             noteOwners: services.noteOwners)
     }
 
+    /// Where a task's page grows from on Tasks (Now, Later, Done, a search's
+    /// results): its row's highlight and title, as laid out now.
+    private func installTaskGrowOrigins() {
+        uiState.growOriginProviders[.tasks] = { [weak tasksPageState, store, toasts] id in
+            guard let tasksPageState else { return nil }
+            let model = tasksPageState.model(for: store, toasts: toasts)
+            guard let row = model.agentRowFrames([id]).first?.frame,
+                  let window = model.rowPointer?.view?.window else { return nil }
+            return AtticGrowOrigin.taskRow(row, title: store.listedTask(withID: id)?.title ?? "",
+                                           windowNumber: window.windowNumber)
+        }
+    }
+
     /// A purge made an open task's note ordinary (§ 2.7.2): its page leaves
     /// and, if it was showing, the note opens in Notes.
     private func installTaskNotePurgePresentation() {
@@ -640,6 +653,7 @@ struct AtticPanelView: View {
                 syncNoteDraftInteractionLocks()
                 // The Notes session's hooks belong to the panel Notes is in.
                 if !uiState.isElsewhere(.notes) { installTaskNotePurgePresentation() }
+                installTaskGrowOrigins()
             }
             .background(PanelNoteDraftLockObserver(draft: noteDraft, uiState: uiState))
             .onChange(of: uiState.pagesElsewhere.contains(.notes)) { _, away in
@@ -927,6 +941,14 @@ struct PanelPageVisibility: ViewModifier {
     /// in-place fade read it.
     var motion: PanelPageMotion = .instant
     let disablesWhenHidden: Bool
+    /// A task page growing from its row (`AtticGrowState`) shows its origin
+    /// on its own schedule: away at the click, back from Back's.
+    var opacityOverride: OpacityOverride?
+
+    struct OpacityOverride {
+        let shows: Bool
+        let animation: Animation?
+    }
 
     func body(content: Content) -> some View {
         content
@@ -936,7 +958,9 @@ struct PanelPageVisibility: ViewModifier {
             .offset(x: isCurrent ? 0 : restingOffset)
             // Both pages fully drawn, edge to edge: the new one at once (it
             // starts outside the glass), the old one until it is out.
-            .animation(motion.pageOpacityAnimation(incoming: isCurrent)) { $0.opacity(isCurrent ? 1 : 0) }
+            .animation(opacityOverride.map(\.animation) ?? motion.pageOpacityAnimation(incoming: isCurrent)) {
+                $0.opacity((opacityOverride?.shows ?? isCurrent) ? 1 : 0)
+            }
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
             .accessibilityHidden(!isCurrent)

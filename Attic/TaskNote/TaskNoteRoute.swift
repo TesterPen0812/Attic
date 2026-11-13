@@ -24,6 +24,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
     @State private var presentedTaskID: UUID?
     @State private var taskRouteGeneration = 0
     @State private var routeStateRevision = 0
+    /// The page grows out of its row and shrinks back into it (Accepted
+    /// 2026-11-13): it starts on the click, while the page builds behind.
+    @State private var grow = AtticGrowState()
+    @State private var growStartedAt: CFTimeInterval = 0
 
     /// The route this page serves: only a page opened from here.
     private var requestedID: UUID? { uiState.taskNoteOrigin == page ? uiState.openTaskNoteID : nil }
@@ -36,26 +40,48 @@ struct TaskNoteRouteHost<Origin: View>: View {
     var body: some View {
         let _ = routeStateRevision
         let shown = isReady ? displayedTaskID : nil
+        let looks = Self.looks(grow, shown: shown != nil)
         ZStack {
             if page == .notes {
                 // Notes: the page replaces the editor (one live editor).
-                if shown == nil { origin(false) }
+                if shown == nil {
+                    origin(false)
+                        .opacity(looks.originShows ? 1 : 0)
+                        .animation(grow.originAnimation(showing: looks.originShows), value: looks.originShows)
+                        .allowsHitTesting(looks.originCurrent)
+                        .transition(.asymmetric(insertion: .opacity.animation(grow.originAnimation(showing: true)),
+                                                removal: .identity))
+                }
             } else {
                 origin(shown != nil)
-                    .modifier(PanelPageVisibility(isCurrent: shown == nil, restingOffset: 0, disablesWhenHidden: false))
+                    .modifier(PanelPageVisibility(isCurrent: looks.originCurrent, restingOffset: 0, disablesWhenHidden: false,
+                                                  opacityOverride: grow.style == .instant ? nil
+                                                    : .init(shows: looks.originShows,
+                                                            animation: grow.originAnimation(showing: looks.originShows))))
             }
             if let taskID = shown {
                 TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
                                       noteStore: noteStore, layout: layout,
                                       backTitle: uiState.taskNoteBackTitle,
-                                      onOpenInWindow: { openInWindow(taskID) }) {
+                                      onOpenInWindow: { openInWindow(taskID) },
+                                      onLeaving: { leaving in growBack(taskID, leaving: leaving) }) {
                     Self.closeRoute(taskID, uiState: uiState, controller: noteDraft.pages)
                 }
                 // The page's own top row is this page's (its Find takes it, N4 B).
                 .environment(\.panelTopRowPage, page)
+                .opacity(looks.destinationShows ? 1 : 0)
+                .animation(grow.destinationAnimation(showing: looks.destinationShows), value: looks.destinationShows)
+                .allowsHitTesting(looks.destinationShows)
+                .accessibilityHidden(!looks.destinationShows)
+                .transition(.asymmetric(insertion: .opacity.animation(pageArrival), removal: .identity))
                 .id("\(taskID)-\(taskRouteGeneration)")
             }
+            AtticGrowLayer(state: grow, onFinish: { $grow.finish($0) })
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .zIndex(2)
         }
+        .onChange(of: requestedID, initial: true) { old, new in growRoute(from: old, to: new) }
         .onChange(of: shown != nil, initial: true) { _, covered in sharedChrome?.setCovered(covered, page: page) }
         .onDisappear { sharedChrome?.setCovered(false, page: page) }
         .onReceive(uiState.$openTaskNoteID.dropFirst()) { _ in routeStateRevision &+= 1 }
@@ -64,6 +90,9 @@ struct TaskNoteRouteHost<Origin: View>: View {
             let requested = requestedID
             // Not this page's route, and none shown here: nothing to hand off.
             guard requested != nil || presentedTaskID != nil else { return }
+            // The click's first frame goes out before the page is built.
+            await AtticGrowDriver.yieldFirstFrame(grow.style)
+            guard !Task.isCancelled else { return }
             let previous = noteDraft.pages.taskNotePresenter
             let previousID = displayedTaskID
             guard await noteDraft.pages.prepareTaskNoteRoute(requested) else {
@@ -79,7 +108,76 @@ struct TaskNoteRouteHost<Origin: View>: View {
             // At once: the page is the next frame (no crossfade holding two
             // editors on screen, OD-1).
             presentedTaskID = requested
+            if requested != nil { grow.destinationArrived() }
+            #if DEBUG
+            AtticGrowTrace.mark("presented", style: grow.style)
+            #endif
         }
+    }
+
+    /// What the origin and the page show for `grow`. Instant (Reduced's
+    /// default) is today's route: the origin until the page is there.
+    struct Looks: Equatable {
+        var originCurrent: Bool
+        var originShows: Bool
+        var destinationShows: Bool
+    }
+
+    static func looks(_ grow: AtticGrowState, shown: Bool) -> Looks {
+        if grow.style == .instant {
+            return Looks(originCurrent: !shown, originShows: !shown, destinationShows: true)
+        }
+        let originShows = (grow.phase == .idle && !shown) || grow.phase == .closing
+        let destination = grow.showsDestination || (grow.phase == .idle && shown)
+        return Looks(originCurrent: !shown && !grow.showsDestination, originShows: originShows,
+                     destinationShows: destination)
+    }
+
+    /// The page arriving after the click: the rest of its fade-in delay,
+    /// then M/E (fade: F/E). Instant: at once.
+    private var pageArrival: Animation? {
+        guard grow.style != .instant else { return nil }
+        guard grow.style == .grow else { return AtticMotionScale.reducedFade }
+        let waited = CACurrentMediaTime() - growStartedAt
+        return AtticMotionScale.easeOut(AtticMotionScale.standard).delay(max(0, AtticGrowState.destinationDelay - waited))
+    }
+
+    private var reducedStyle: AtticReducedMotionStyle { AtticReducedMotionStyle.current }
+
+    /// The route asked for changed: a page opening grows from its row; one
+    /// closed without Back (a refused handoff, a purge) shrinks back.
+    private func growRoute(from old: UUID?, to new: UUID?) {
+        if new != nil {
+            guard grow.phase == .idle || grow.phase == .closing else { return }
+            let origin = uiState.taskNoteGrowOrigin
+            uiState.taskNoteGrowOrigin = nil
+            growStartedAt = CACurrentMediaTime()
+            grow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
+            #if DEBUG
+            AtticGrowTrace.mark("open", style: grow.style)
+            #endif
+            AtticGrowDriver.settleWithoutShell($grow)
+        } else if grow.phase == .opening || grow.phase == .open {
+            let back = old.flatMap { uiState.taskNoteGrowOrigin(for: $0, on: page) }
+            grow.close(to: back, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
+            AtticGrowDriver.settleWithoutShell($grow)
+        }
+    }
+
+    /// Back, Escape or the swipe began (true) or the page refused to let
+    /// go (false): the shrink starts on the click and turns round on a
+    /// refusal.
+    private func growBack(_ taskID: UUID, leaving: Bool) {
+        if leaving {
+            grow.close(to: uiState.taskNoteGrowOrigin(for: taskID, on: page),
+                       reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
+            #if DEBUG
+            AtticGrowTrace.mark("close", style: grow.style)
+            #endif
+        } else {
+            grow.refuseClose()
+        }
+        AtticGrowDriver.settleWithoutShell($grow)
     }
 
     /// Back's (and a late close's) end of the route. A newer route stays.

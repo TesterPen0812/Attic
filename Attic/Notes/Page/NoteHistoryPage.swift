@@ -236,6 +236,9 @@ struct NoteHistoryVersionSwitch: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             }
         }
+        // The chosen half's fill moves over on hover's fade, not in a jump.
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: selection)
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: hovered)
         .padding(inset)
         .frame(height: height)
         .atticRaisedMaterial(cornerRadius: outer, interactive: false)
