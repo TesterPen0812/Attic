@@ -405,7 +405,8 @@ final class RecentlyDeletedModel: ObservableObject {
         reload()
         if !drawObserving {
             drawObserving = true
-            observeDraw()
+            drawObservationGeneration &+= 1
+            observeDraw(generation: drawObservationGeneration)
         }
         guard observation == nil, let library else { return }
         var publishers: [AnyPublisher<Void, Never>] = [
@@ -423,18 +424,20 @@ final class RecentlyDeletedModel: ObservableObject {
     func stop() {
         observation = nil
         drawObserving = false
+        drawObservationGeneration &+= 1
     }
 
     private var drawObserving = false
+    private var drawObservationGeneration: UInt64 = 0
 
     /// Follows the Draw store's saves while the page is shown.
-    private func observeDraw() {
-        guard drawObserving, let store = draw() else { return }
+    private func observeDraw(generation: UInt64) {
+        guard drawObserving, generation == drawObservationGeneration, let store = draw() else { return }
         withObservationTracking { _ = store.revision } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.drawObserving else { return }
+                guard let self, self.drawObserving, self.drawObservationGeneration == generation else { return }
                 self.reload()
-                self.observeDraw()
+                self.observeDraw(generation: generation)
             }
         }
     }

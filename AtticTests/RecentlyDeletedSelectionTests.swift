@@ -1,3 +1,4 @@
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -9,6 +10,30 @@ import XCTest
 /// Empty All… still taking everything.
 @MainActor
 final class RecentlyDeletedSelectionTests: XCTestCase {
+    /// PF-46: stale Draw observation callbacks must not multiply work when
+    /// Settings is deactivated/reactivated before the next Draw revision.
+    func testPF46RepeatedSettingsActivationsDoNotMultiplyDrawReloads() async throws {
+        let draw = DrawInMemoryStore()
+        let canvas = draw.create(name: "Observed canvas")
+        let model = RecentlyDeletedModel(library: nil, draw: { draw })
+        for _ in 0..<50 { model.start(); model.stop() }
+        model.start()
+        defer { model.stop() }
+
+        var reloads = 0
+        let subscription = model.$entries.dropFirst().sink { _ in reloads += 1 }
+        defer { subscription.cancel() }
+
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("first"))]), on: canvas.id).isSaved)
+        try await Task.sleep(for: .milliseconds(60)) // Drain posted observation callbacks; measure work, not time.
+        XCTAssertEqual(reloads, 1, "one Draw change should reload once after 50 stop/start cycles")
+
+        reloads = 0
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("second"))]), on: canvas.id).isSaved)
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(reloads, 1, "old callbacks must not rearm into additional observation chains")
+    }
+
     private final class HeldFamilyPurge {
         var gate: CheckedContinuation<Set<UUID>, Never>?
         func wait() async -> Set<UUID> {
