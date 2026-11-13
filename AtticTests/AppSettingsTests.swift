@@ -149,6 +149,48 @@ final class AppSettingsTests: XCTestCase {
     }
 
     @MainActor
+    func testR12QuitWaitsForSubmittedComposerAttachments() async throws {
+        let root = ownedTemporaryDirectory(prefix: "CatchupR12")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let suite = "CatchupR12.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("Files")))
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        page.services.acknowledgementDelay = .seconds(3_600)
+        let composer = ComposerModel(tasks: page)
+        for acknowledged in [true, false] {
+            let name = "Submitted-\(acknowledged).txt"
+            var staging = TaskAttachmentStaging()
+            let stagingRoot = try staging.makeOwnedDirectory()
+            let file = stagingRoot.appendingPathComponent(name)
+            staging.urls = [file]
+            let bytes = Data("File submitted just before quit".utf8)
+            try bytes.write(to: file)
+            composer.open(on: .tasks(.now))
+            page.addBar.text = name
+            page.addBarState.files.append(TasksComposerFiles(staging: staging))
+            if acknowledged { composer.submit() }
+            else { let created = await composer.create(); XCTAssertTrue(created) }
+            let ready = await coordinator.prepareForTerminationDurably()
+            XCTAssertTrue(ready)
+            let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+            let task = try XCTUnwrap(saved.first { $0.title == name })
+            XCTAssertEqual(task.attachments.map(\.filename), [name], "quit approval must include the submitted file")
+            if let attachment = task.attachments.first {
+                let verified = try await store.taskImageFiles.verifiedURL(for: attachment)
+                let url = try XCTUnwrap(verified)
+                XCTAssertEqual(try Data(contentsOf: url), bytes)
+            }
+        }
+        print("CATCHUP_R12 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
+    @MainActor
     func testFix18RepeatedQuitCommandDoesNotBypassPendingPreparation() throws {
         var terminationCalls = 0
         let commands = MenuBarCommands.commands(

@@ -1296,7 +1296,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func prepareForTerminationDurably() async -> Bool {
-        guard prepareTaskAcknowledgementsForQuit() else { return false }
+        guard await prepareTaskWorkForQuitDurably() else { return false }
         let calendar = await CalendarDraftTerminationRegistry.shared.prepareForTerminationResult()
         if case let .refused(owner) = calendar {
             switch owner {
@@ -1332,7 +1332,7 @@ final class AppCoordinator: ObservableObject {
             canvasSession.cancelActiveInteraction()
             canvasSession.flushViewState()
         }
-        return prepareTaskAcknowledgementsForQuit()
+        return await prepareTaskWorkForQuitDurably()
     }
 
     func prepareForTermination() -> Bool {
@@ -1365,6 +1365,14 @@ final class AppCoordinator: ObservableObject {
 
     private func prepareTaskAcknowledgementsForQuit() -> Bool {
         guard TasksPageModel.prepareForTermination(in: store) else {
+            revealTaskFailureForQuit()
+            return false
+        }
+        return true
+    }
+
+    private func prepareTaskWorkForQuitDurably() async -> Bool {
+        guard await TasksPageModel.prepareForTerminationDurably(in: store) else {
             revealTaskFailureForQuit()
             return false
         }

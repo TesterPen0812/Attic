@@ -272,6 +272,27 @@ final class TasksPageModel: ObservableObject {
         return ready
     }
 
+    /// Await both the acknowledged creation and its submitted files. A new
+    /// command admitted during an import must settle before quit approval too.
+    static func prepareForTerminationDurably(in store: TaskStore) async -> Bool {
+        let models = live.allObjects.filter { $0.store.container === store.container }
+        let failures = models.map { ($0, $0.acknowledgementFailures) }
+        var ready = true
+        while true {
+            guard prepareForTermination(in: store) else { return false }
+            let pending = live.allObjects.filter { $0.store.container === store.container }
+                .flatMap { Array($0.composerAttachmentTasks.values) }
+            guard !pending.isEmpty else {
+                return ready && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
+            }
+            for task in pending {
+                if !(await task.value) { ready = false }
+            }
+        }
+    }
+
+    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
+
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
     var services: TasksPageServices
