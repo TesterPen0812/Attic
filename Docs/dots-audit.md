@@ -29,11 +29,18 @@ No safe removal has yet been established. An automated identifier-frequency pass
 
 ## Part 3: bugs
 
-No bug has yet been validated to the required evidence standard. Initial force-unwrap and HTTP parser searches are leads only, not findings.
+### DB-1 (P2): Agent week strip can block the main thread on EventKit
+- `Attic/App/AppCoordinator.swift:669–679`, `Attic/Agent/AgentChatModel.swift:1382–1388, 1481–1492`, `Attic/Calendar/Data/EventKitCalendarEventSource.swift:134–136, 201–203, 253`.
+- Trigger: with Calendar access granted, an agent run reads Calendar or presents a move to another week while the EventKit read worker is slow or busy. The chat model requests its week synchronously on the main actor. The coordinator calls `events(in:)`, whose compatibility path calls `queue.sync` and waits for the worker's EventKit read. The UI can therefore stop responding for the duration of that read or an earlier queued read. The delay's magnitude has not been measured on a Mac.
+- Smallest fix: make the week fetch asynchronous, initially show task/empty-week content, and apply event bars when the current run and week still match. Reuse the existing async event reader; guard against stale results when the target changes.
+- Confidence: high for the synchronous blocking path, medium for real-world perceptibility. Existing AgentChat tests inject immediate synchronous `weekDays` closures and do not establish nonblocking EventKit behavior.
+- Red test: provide a fake Calendar reader whose read stays suspended, trigger the week strip, and assert a main-actor heartbeat and chat interaction continue before releasing the reader; then assert the correct week receives its results and a stale week does not.
+
+Initial force-unwrap and HTTP parser searches are leads only, not findings.
 
 ## Summary at this checkpoint
 - Dead code confirmed: 0. Removed: 0. No removal branch created.
 - Lightness opportunities: 2; LT-1 and LT-2 are preliminary, not a ranked top 10.
-- Validated bugs: 0; this does not mean there are none.
-- Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading and Calendar search before and after any proposed change.
+- Bugs: 1 static finding (DB-1); runtime effect remains unmeasured. This is not a complete bug inventory.
+- Mac checks: build and relevant tests, plus profiling of Draw search and thumbnail loading and Calendar search before and after any proposed change, and DB-1 with a deliberately slow EventKit source.
 - Remaining: exhaustive symbol and dynamic-reference analysis; assets/scripts/tests/CI; launch and lifetime review; the full bug hunt across all requested areas. In particular, no folder has been read fully file by file.
