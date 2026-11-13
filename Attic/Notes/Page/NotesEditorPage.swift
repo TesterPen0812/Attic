@@ -63,6 +63,11 @@ struct NotesEditorPage: View {
     /// (A20; before, the first visit's session start slid it in springily,
     /// so only that visit looked sprung).
     @State private var hasShownNote = false
+    /// A note opened from All notes grows from its card or row and shrinks
+    /// back into it (Accepted 2026-11-13); other notes keep the slide.
+    @State private var noteGrow = AtticGrowState()
+    @State private var noteGrowNoteID: UUID?
+    @State private var noteGrowStartedAt: CFTimeInterval = 0
     /// The history step the delete toast undoes: the toast answers only
     /// while that step is still the next Undo.
     @State private var postedToastStep: UUID?
@@ -126,6 +131,10 @@ struct NotesEditorPage: View {
                 content(extraBottom: extra)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The card or row growing into the note, under the bars.
+            AtticGrowLayer(state: noteGrow, onFinish: { $noteGrow.finish($0) })
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             // The note's variable blur behind the header (none behind the
             // bottom row, owner 2026-10-22), its own layer between the note and the controls (All notes and
             // history draw theirs under their own controls).
@@ -170,6 +179,11 @@ struct NotesEditorPage: View {
         .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
         .animation(Self.noteSlideAnimation(hasShownNote: hasShownNote, reduceMotion: design.reduceMotion),
                    value: controller.active?.id)
+        .onChange(of: controller.active?.noteID) { _, noteID in
+            // Another note took the page (a link, New Note): it is no
+            // longer the one that grew from its card.
+            if noteGrow.phase == .open, noteID != noteGrowNoteID { noteGrow.reset() }
+        }
         .onChange(of: controller.active?.id) { _, id in
             if id != nil { hasShownNote = true }
         }
@@ -183,6 +197,14 @@ struct NotesEditorPage: View {
             Self.lifetimeProbe?(chrome, library)
             #endif
             hasShownNote = controller.active != nil
+            #if DEBUG
+            runGrowCaptureSeam()
+            #endif
+            // A task's page opened from All notes grows from its row or card.
+            uiState.growOriginProviders[.notes] = { [weak library, noteStore] taskID in
+                guard let library, let note = noteStore.notes.first(where: { $0.taskID == taskID }) else { return nil }
+                return library.reveal.growOrigin(for: note.id, board: library.layout == .board, title: note.title)
+            }
             // Back from a task's page opened in All notes: its search is
             // still there (Phase 3 slice 1 carry-over).
             if let kept = controller.libraryQueryAcrossTaskPage {
@@ -357,7 +379,12 @@ struct NotesEditorPage: View {
                              onDelete: { id in delete(id) },
                              onBack: { toggleLibrary() },
                              onCreate: { title, tag in newNote(title: title, tag: tag) })
-                .transition(slide(from: Self.libraryEdge))
+                .opacity(growing && !noteGrow.showsOrigin ? 0 : 1)
+                .animation(noteGrow.originAnimation(showing: noteGrow.showsOrigin), value: noteGrow.showsOrigin)
+                .allowsHitTesting(!growing || noteGrow.phase == .idle)
+                .transition(growing ? .asymmetric(insertion: .opacity.animation(noteGrow.originAnimation(showing: true)),
+                                                  removal: .identity)
+                                    : slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
             NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
                 columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset + extraBottom,
@@ -386,10 +413,95 @@ struct NotesEditorPage: View {
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
-                .transition(slide(from: Self.noteEdge))
+                .opacity(growing && !noteGrow.showsDestination ? 0 : 1)
+                .animation(noteGrow.destinationAnimation(showing: noteGrow.showsDestination), value: noteGrow.showsDestination)
+                .transition(growing ? .asymmetric(insertion: .opacity.animation(noteArrival), removal: .identity)
+                                    : slide(from: Self.noteEdge))
         } else {
             Color.clear
         }
+    }
+
+    #if DEBUG
+    nonisolated(unsafe) private static var growSeamRan = false
+
+    /// Capture seam (`ATTIC_UI_TEST_GROW=note@<seconds>`, preview identity
+    /// only; `ATTIC_UI_TEST_GROW_ROW=<n>` picks the card): All notes opens,
+    /// then its first note opens, goes back, opens and is sent back 0.12 s
+    /// in, opens and goes back again, 1.6 s apart.
+    private func runGrowCaptureSeam() {
+        let environment = ProcessInfo.processInfo.environment
+        guard !Self.growSeamRan, environment["ATTIC_UI_TESTING"] == "1",
+              AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
+              let seam = environment["ATTIC_UI_TEST_GROW"], seam.hasPrefix("note") else { return }
+        Self.growSeamRan = true
+        let delay = seam.split(separator: "@").dropFirst().first.flatMap { Double($0) } ?? 4
+        let index = environment["ATTIC_UI_TEST_GROW_ROW"].flatMap(Int.init) ?? 0
+        // The demo seed has no notes: a few cards to grow from.
+        if environment["ATTIC_UI_TEST_SEED"] != nil, !noteStore.notes.contains(where: { $0.taskID == nil }) {
+            for (title, text) in [("Trip to Lisbon", "Flights, the tram, and a list of cafés."),
+                                  ("Reading list", "Three novels and one about typography."),
+                                  ("Ideas", "A quieter Done page; a smaller island."),
+                                  ("Groceries", "Milk, lemons, rice, coffee.")] {
+                _ = noteStore.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text(title), .text(text)]))
+            }
+        }
+        func at(_ seconds: Double, _ action: @escaping @MainActor () -> Void) {
+            RunLoop.main.add(Timer(timeInterval: seconds, repeats: false) { _ in
+                MainActor.assumeIsolated { action() }
+            }, forMode: .common)
+        }
+        let open: @MainActor () -> Void = {
+            let notes = noteStore.notes.filter { $0.taskID == nil }.sorted { $0.updatedAt > $1.updatedAt }
+            guard notes.indices.contains(index) else { return }
+            openFromLibrary(notes[index].id)
+        }
+        let back: @MainActor () -> Void = { showLibrary(focusSearch: false) }
+        at(max(0, delay - 2)) { back() }
+        for (time, action) in [(0.0, open), (1.6, back), (3.2, open), (3.32, back), (4.8, open), (6.4, back)] {
+            at(delay + time, action)
+        }
+    }
+    #endif
+
+    /// A grow (or its fade) is moving or holds the note it opened.
+    private var growing: Bool { noteGrow.style != .instant && noteGrow.phase != .idle }
+
+    /// The note arriving after the click: the rest of its delay, then M/E.
+    private var noteArrival: Animation? {
+        guard noteGrow.style == .grow else { return AtticMotionScale.reducedFade }
+        let waited = CACurrentMediaTime() - noteGrowStartedAt
+        return AtticMotionScale.easeOut(AtticMotionScale.standard).delay(max(0, AtticGrowState.destinationDelay - waited))
+    }
+
+    private func libraryGrowOrigin(_ noteID: UUID) -> AtticGrowOrigin? {
+        library.reveal.growOrigin(for: noteID, board: library.layout == .board,
+                                  title: noteStore.note(withID: noteID)?.title ?? "")
+    }
+
+    /// A note opening from its card or row: the card grows at the click.
+    private func growNote(from noteID: UUID) {
+        let origin = libraryGrowOrigin(noteID)
+        // Another card mid-shrink starts afresh from that card.
+        if noteGrow.phase != .idle, noteGrowNoteID != noteID { noteGrow.reset() }
+        noteGrowNoteID = noteID
+        noteGrowStartedAt = CACurrentMediaTime()
+        noteGrow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: AtticReducedMotionStyle.current)
+        #if DEBUG
+        AtticGrowTrace.mark("note-open", style: noteGrow.style)
+        #endif
+        AtticGrowDriver.settleWithoutShell($noteGrow)
+    }
+
+    /// The open didn't happen (refused, failed): back into the card.
+    private func growNoteBack() {
+        guard noteGrow.phase == .opening || noteGrow.phase == .open else { return }
+        noteGrow.close(to: noteGrowNoteID.flatMap(libraryGrowOrigin), reduceMotion: design.reduceMotion,
+                       reducedStyle: AtticReducedMotionStyle.current)
+        #if DEBUG
+        AtticGrowTrace.mark("note-close", style: noteGrow.style)
+        #endif
+        AtticGrowDriver.settleWithoutShell($noteGrow)
     }
 
     private func slide(from edge: Edge) -> AnyTransition {
@@ -827,7 +939,11 @@ struct NotesEditorPage: View {
 
     private func showLibrary(focusSearch: Bool) {
         if !controller.isLibraryPresented {
+            // The shrink starts with the click, from the note it grew into.
+            let grown = noteGrow.phase != .idle && controller.active?.noteID == noteGrowNoteID
+            if !grown { noteGrow.reset() }
             guard controller.showLibrary() else { return }
+            if grown { growNoteBack() }
         }
         if focusSearch { searchFocused = true }
     }
@@ -887,9 +1003,19 @@ struct NotesEditorPage: View {
                 library.clearSearch()
             }
         } else {
+            growNote(from: id)
+            let style = noteGrow.style
             Task { @MainActor in
+                // The click's first frame goes out before the note is built.
+                await AtticGrowDriver.yieldFirstFrame(style)
                 if await controller.openFromLibrary(noteID: id, searchQuery: query) {
                     library.dismissAfterOpenedNote(controller, requestedQuery: query)
+                    if noteGrowNoteID == id { noteGrow.destinationArrived() }
+                    #if DEBUG
+                    AtticGrowTrace.mark("note-arrived", style: noteGrow.style)
+                    #endif
+                } else {
+                    growNoteBack()
                 }
             }
             return

@@ -327,6 +327,8 @@ struct NotesBoardCard: View {
         .background { AtticNoteRowAnchor(id: row.id, anchors: anchors) }
         .onHover { actionsHovered = $0 }
         .opacity(shown ? 1 : 0)
+        // ••• fades in and out with the hover, as a task row's does.
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: shown)
         .allowsHitTesting(shown)
         .padding(.top, M.padding.top + (row.images > 0 ? (row.images >= 3 ? M.tallImageHeight : M.imageHeight) : 0)
                  + (M.titleLine - M.actionsSide) / 2)

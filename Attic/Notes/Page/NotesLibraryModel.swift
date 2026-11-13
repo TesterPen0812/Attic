@@ -53,6 +53,9 @@ final class NotesLibrarySummaryCache {
 
 @MainActor
 final class NotesLibraryModel: ObservableObject {
+    /// The laid-out rows and cards (the keyboard's reveal, and where a note
+    /// grows from). Not observed.
+    let reveal = NotesLibraryReveal()
     enum SearchState: Equatable {
         case idle
         /// A search is running (shown only once it takes long enough to notice).

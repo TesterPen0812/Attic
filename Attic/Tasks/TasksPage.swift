@@ -347,6 +347,45 @@ struct TasksPage: View {
                 }
             }
         }
+        // Capture seam (`ATTIC_UI_TEST_GROW=task@<seconds>`, preview
+        // identity only): the first row's page opens, goes Back, opens and
+        // is sent Back 0.12 s in (an interruption), then opens and goes
+        // Back once more, 1.6 s apart, for the grow's motion recordings.
+        if environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
+           let seam = environment["ATTIC_UI_TEST_GROW"], seam.hasPrefix("task") {
+            let delay = seam.split(separator: "@").dropFirst().first.flatMap { Double($0) } ?? 4
+            func at(_ seconds: Double, _ action: @escaping @MainActor () -> Void) {
+                RunLoop.main.add(Timer(timeInterval: seconds, repeats: false) { _ in
+                    MainActor.assumeIsolated { action() }
+                }, forMode: .common)
+            }
+            let row = environment["ATTIC_UI_TEST_GROW_ROW"].flatMap(Int.init) ?? 0
+            var opened: UUID?
+            let open: @MainActor () -> Void = {
+                let rows = model.rows(for: model.tab)
+                guard rows.indices.contains(row) else { return }
+                opened = rows[row].id
+                AtticGrowTrace.mark("click", style: .grow)
+                // As a click on its title would, whoever has the keyboard.
+                model.selectOnly(rows[row].id)
+                model.services.openTaskNote?(rows[row].id)
+            }
+            // The page may still be building at an interruption: Back as
+            // soon as there is one to press.
+            func backSoon(_ tries: Int) {
+                guard let opened else { return }
+                if let presenter = TaskNotePresenter.open(for: opened) {
+                    AtticGrowTrace.mark("click-back", style: .grow)
+                    presenter.menus.back()
+                    return
+                }
+                if tries > 0 { at(0.01) { backSoon(tries - 1) } }
+            }
+            let back: @MainActor () -> Void = { backSoon(30) }
+            for (time, action) in [(0.0, open), (1.6, back), (3.2, open), (3.32, back), (4.8, open), (6.4, back)] {
+                at(delay + time, action)
+            }
+        }
         // Capture seam (`ATTIC_UI_TEST_MENU=view|row`, optionally
         // `@<seconds>`, 3 by default; `ATTIC_UI_TESTING=1` in a preview
         // identity only): the view options menu, or the first row's
