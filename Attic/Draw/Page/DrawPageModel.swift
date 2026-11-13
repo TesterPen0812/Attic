@@ -172,6 +172,25 @@ final class DrawPageModel: ObservableObject {
     private var typingCanvasID: UUID?
     private var typingStartedAt: UInt64 = 0
     private var typingTimer: DispatchWorkItem?
+    private enum AcknowledgedAction {
+        case command(DrawCommand)
+        case undo
+        case redo
+    }
+    private struct AcknowledgedDraw {
+        let canvas: UUID
+        let action: AcknowledgedAction
+        let before: [DrawObject]
+    }
+    /// Visual changes are made on the input callback. The same ordered
+    /// commands enter the store after one display interval, or immediately
+    /// on a lifecycle/command boundary. Until then only this page owns them.
+    private var acknowledgedDraw: [AcknowledgedDraw] = []
+    private var acknowledgedDrawTimer: DispatchWorkItem?
+    /// Sparse, read-only history projections while a batch is waiting to
+    /// settle. Their heads track rapid Undo/Redo without entering the writer.
+    private var acknowledgedUndoChanges: [DrawChange]?
+    private var acknowledgedRedoChanges: [DrawChange] = []
     private(set) var isShown = false
     var spaceHeld = false
     /// Where the board is, and its clear area (inside the top row and the
@@ -356,6 +375,7 @@ final class DrawPageModel: ObservableObject {
     func prepareToQuit() async -> Bool {
         finishLiveInput()
         endEditing()
+        flushAcknowledgedDraw()
         flushTyping()
         flushViewportMemory()
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(750))
@@ -568,6 +588,7 @@ final class DrawPageModel: ObservableObject {
         }
         finishLiveInput()
         endEditing()
+        flushAcknowledgedDraw()
         // The canvas being left gets its thumbnail now.
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
@@ -796,7 +817,7 @@ final class DrawPageModel: ObservableObject {
             if case .text(let text) = copy.content { Self.measure(&copy, text: text) }
             return copy
         }
-        perform(.put(changed))
+        performAcknowledged(.put(changed))
     }
 
     // MARK: Commands
@@ -806,7 +827,7 @@ final class DrawPageModel: ObservableObject {
         guard !selection.isEmpty else { return }
         let ids = selection
         select([])
-        perform(.remove(ids))
+        performAcknowledged(.remove(ids))
     }
 
     func duplicateSelection() {
@@ -821,7 +842,7 @@ final class DrawPageModel: ObservableObject {
             copy.zIndex = z
             return copy
         }
-        perform(.put(copies))
+        performAcknowledged(.put(copies))
         select(copies.map(\.id))
     }
 
@@ -838,7 +859,7 @@ final class DrawPageModel: ObservableObject {
             copy.zIndex = z
             return copy
         }
-        perform(.put(moved))
+        performAcknowledged(.put(moved))
     }
 
     func copySelection() {
@@ -911,6 +932,7 @@ final class DrawPageModel: ObservableObject {
 
     func undo() {
         guard let canvasID, live == nil else { return }
+        flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return }
@@ -923,6 +945,7 @@ final class DrawPageModel: ObservableObject {
 
     func redo() {
         guard let canvasID, live == nil else { return }
+        flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return }
@@ -1006,6 +1029,8 @@ final class DrawPageModel: ObservableObject {
     /// switch and Undo flush the outstanding changes immediately.
     private func queueTyping(_ command: DrawCommand, changed: DrawObject?, id: UUID) {
         guard let canvasID else { return }
+        // A preceding gesture settles on its earlier timer; this keypress
+        // must not force that gesture's writer onto the input callback.
         if typingCanvasID != nil, typingCanvasID != canvasID { flushTyping() }
         let now = DispatchTime.now().uptimeNanoseconds
         if typingCommands.isEmpty { typingStartedAt = now; typingCanvasID = canvasID }
@@ -1027,6 +1052,7 @@ final class DrawPageModel: ObservableObject {
         typingTimer?.cancel()
         typingTimer = nil
         guard let canvasID = typingCanvasID, !typingCommands.isEmpty else { return }
+        flushAcknowledgedDraw()
         let commands = typingCommands
         typingCommands = []
         typingCanvasID = nil
@@ -1044,7 +1070,11 @@ final class DrawPageModel: ObservableObject {
         guard edit.stored, var object = object(edit.id) else { return }
         object.style = edit.style
         Self.measure(&object, text: edit.text)
-        perform(.put([object]))
+        if store is DrawPersistentStore {
+            queueTyping(.put([object]), changed: object, id: edit.id)
+        } else {
+            performAcknowledged(.put([object]))
+        }
     }
 
     static func measure(_ object: inout DrawObject, text: String) {
@@ -1177,9 +1207,138 @@ final class DrawPageModel: ObservableObject {
 
     var topZ: Int64 { objects.last?.zIndex ?? 0 }
 
+    /// Gesture and menu acknowledgement: update the board's own snapshot on
+    /// input, then let the existing duplicate-safe, recoverable store command
+    /// run once a frame has had a chance to render. Commands stay ordered.
+    func performAcknowledged(_ command: DrawCommand) {
+        guard let canvasID else { return }
+        // Test/in-memory stores have no disk latency to remove. Keep their
+        // immediate command and history semantics for direct model callers.
+        guard store is DrawPersistentStore else { _ = perform(command); return }
+        // Preserve the order when a text burst began before this gesture.
+        if !typingCommands.isEmpty { flushTyping() }
+        if acknowledgedDraw.isEmpty { syncExternalChanges() }
+        prepareAcknowledgedHistory(on: canvasID)
+        let before = objects
+        let touched: Set<UUID>
+        let afterValues: [UUID: DrawObject]
+        switch command {
+        case .put(let changed):
+            guard !changed.isEmpty else { return }
+            touched = Set(changed.map(\.id))
+            afterValues = Dictionary(uniqueKeysWithValues: changed.map { ($0.id, $0) })
+            var byID = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
+            for object in changed { byID[object.id] = object }
+            objects = byID.values.filter { $0.deletedAt == nil }.sorted(by: Self.order)
+        case .remove(let removed):
+            guard !removed.isEmpty else { return }
+            let ids = Set(removed)
+            touched = ids
+            afterValues = [:]
+            objects.removeAll { ids.contains($0.id) }
+        default:
+            acknowledgedUndoChanges = nil
+            acknowledgedRedoChanges = []
+            _ = perform(command)
+            return
+        }
+        guard objects != before else { return }
+        let beforeValues = Dictionary(uniqueKeysWithValues: before.filter { touched.contains($0.id) }.map { ($0.id, $0) })
+        acknowledgedUndoChanges?.append(DrawChange(canvasID: canvasID, before: nil, after: nil,
+                                                    objectsBefore: beforeValues, objectsAfter: afterValues))
+        acknowledgedRedoChanges.removeAll()
+        acknowledgedDraw.append(AcknowledgedDraw(canvas: canvasID, action: .command(command), before: before))
+        afterContentChange(replacingEditorText: false)
+        scheduleAcknowledgedDraw()
+    }
+
+    /// Undo/Redo from the board and toolbar may preview the stored inverse
+    /// without changing the history. The store moves that history only after
+    /// its write succeeds. A just-finished stroke is previewed from the
+    /// snapshot captured when that gesture ended.
+    func undoAcknowledged() { acknowledgeHistory(redo: false) }
+    func redoAcknowledged() { acknowledgeHistory(redo: true) }
+
+    private func acknowledgeHistory(redo: Bool) {
+        guard let canvasID, live == nil else { return }
+        guard store is DrawPersistentStore else {
+            if redo { self.redo() } else { self.undo() }
+            return
+        }
+        // Typing has its own 120–250 ms burst semantics and per-key history.
+        // Its flush is still the required boundary for Undo/Redo.
+        if !typingCommands.isEmpty { if redo { self.redo() } else { self.undo() }; return }
+        if acknowledgedDraw.isEmpty { syncExternalChanges() }
+        prepareAcknowledgedHistory(on: canvasID)
+        let before = objects
+        let change: DrawChange
+        if redo {
+            guard let next = acknowledgedRedoChanges.popLast() else { return }
+            change = next
+            acknowledgedUndoChanges?.append(next)
+        } else {
+            guard let next = acknowledgedUndoChanges?.popLast() else { return }
+            change = next
+            acknowledgedRedoChanges.append(next)
+        }
+        var projected = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
+        let target = redo ? change.objectsAfter : change.objectsBefore
+        for id in change.objectIDs {
+            if let object = target[id], object.deletedAt == nil { projected[id] = object }
+            else { projected[id] = nil }
+        }
+        if editing == nil { select([]) }
+        objects = projected.values.sorted(by: Self.order)
+        if let canvas = redo ? change.after : change.before { canvasName = canvas.name }
+        acknowledgedDraw.append(AcknowledgedDraw(canvas: canvasID,
+                                                  action: redo ? .redo : .undo, before: before))
+        afterContentChange(replacingEditorText: true)
+        scheduleAcknowledgedDraw()
+    }
+
+    private func prepareAcknowledgedHistory(on id: UUID) {
+        guard acknowledgedUndoChanges == nil,
+              let history = (store as? DrawStore)?.historyChanges(on: id) else { return }
+        acknowledgedUndoChanges = history.undo
+        acknowledgedRedoChanges = history.redo
+    }
+
+    private func scheduleAcknowledgedDraw() {
+        guard acknowledgedDrawTimer == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushAcknowledgedDraw() }
+        }
+        acknowledgedDrawTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.020, execute: work)
+    }
+
+    /// A canvas switch, quit, synchronous API call or elapsed frame window
+    /// settles the same actions through the original store and recovery code.
+    /// Failed edits keep the store's recoverable after-draft and Retry UI.
+    func flushAcknowledgedDraw() {
+        acknowledgedDrawTimer?.cancel()
+        acknowledgedDrawTimer = nil
+        guard !acknowledgedDraw.isEmpty else { return }
+        let entries = acknowledgedDraw
+        acknowledgedDraw = []
+        acknowledgedUndoChanges = nil
+        acknowledgedRedoChanges = []
+        for entry in entries {
+            let result: DrawSaveResult
+            switch entry.action {
+            case .command(let command): result = store.perform(command, on: entry.canvas)
+            case .undo: result = store.undo(on: entry.canvas)
+            case .redo: result = store.redo(on: entry.canvas)
+            }
+            if canvasID == entry.canvas { apply(result, replacingEditorText: true) }
+        }
+        if externalSyncDeferred { syncExternalChanges() }
+    }
+
     @discardableResult
     func perform(_ command: DrawCommand) -> DrawSaveResult {
         guard let canvasID else { return .unchanged }
+        flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
         guard self.canvasID == canvasID else { return .unchanged }
@@ -1193,6 +1352,7 @@ final class DrawPageModel: ObservableObject {
     /// store, and a failure shows rather than vanishing.
     @discardableResult
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
+        flushAcknowledgedDraw()
         guard id != canvasID else { return perform(command) }
         let result = store.perform(command, on: id)
         switch result {
@@ -1296,6 +1456,11 @@ final class DrawPageModel: ObservableObject {
 
     private func refreshHistory() {
         guard let canvasID else { canUndo = false; canRedo = false; return }
+        if !acknowledgedDraw.isEmpty, let acknowledgedUndoChanges {
+            canUndo = !acknowledgedUndoChanges.isEmpty
+            canRedo = !acknowledgedRedoChanges.isEmpty
+            return
+        }
         let undoable = store.canUndo(on: canvasID), redoable = store.canRedo(on: canvasID)
         if canUndo != undoable { canUndo = undoable }
         if canRedo != redoable { canRedo = redoable }
@@ -1321,6 +1486,10 @@ final class DrawPageModel: ObservableObject {
 
     func syncExternalChanges() {
         guard let canvasID else { return }
+        if !acknowledgedDraw.isEmpty {
+            if store.revision != appliedRevision { externalSyncDeferred = true }
+            return
+        }
         if !typingCommands.isEmpty {
             if store.revision != appliedRevision { externalSyncDeferred = true }
             return

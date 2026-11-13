@@ -210,10 +210,10 @@ extension DrawPageModel {
                 let object = DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: topZ + 1,
                                         style: DrawStyle(colour: colour, size: strokeSize, corners: .square),
                                         content: .stroke(samples))
-                perform(.put([object]))
+                performAcknowledged(.put([object]))
             }
         case .erase(let gone, _):
-            if !gone.isEmpty { perform(.remove(Array(gone))) } else { board?.drawContentChanged() }
+            if !gone.isEmpty { performAcknowledged(.remove(Array(gone))) } else { board?.drawContentChanged() }
         case .shape(let kind, let start, let end):
             if hypot(end.x - start.x, end.y - start.y) * viewport.zoom >= 4 {
                 let frame = kind == .line || kind == .arrow
@@ -222,7 +222,7 @@ extension DrawPageModel {
                 let object = DrawObject(frame: frame, zIndex: topZ + 1,
                                         style: DrawStyle(colour: colour, size: strokeSize, corners: .square),
                                         content: .shape(kind))
-                perform(.put([object]))
+                performAcknowledged(.put([object]))
                 // Shapes return to Select (and nothing is selected after adding).
                 tool = .select
             }
@@ -230,7 +230,7 @@ extension DrawPageModel {
             setMoving(false)
             if moved {
                 let shift = DrawPoint(x: offset.x, y: offset.y)
-                perform(.put(selectedObjects.map { $0.translated(by: shift, id: $0.id) }))
+                performAcknowledged(.put(selectedObjects.map { $0.translated(by: shift, id: $0.id) }))
             }
         case .marquee(let from, let to, let base):
             let rect = CGRect(x: from.x, y: from.y, width: to.x - from.x, height: to.y - from.y).standardized
@@ -328,8 +328,8 @@ extension DrawPageModel {
         let k = key.characters
         if key.command, !key.option, !key.control {
             switch (k, key.shift) {
-            case ("z", false): if !library.undoDeletionIfOffered() { undo() }
-            case ("z", true): redo()
+            case ("z", false): if !library.undoDeletionIfOffered() { undoAcknowledged() }
+            case ("z", true): redoAcknowledged()
             case ("a", false): selectAll()
             case ("d", false): duplicateSelection()
             case ("c", false): copySelection()

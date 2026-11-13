@@ -45,6 +45,140 @@ enum Draw3Images {
 /// "2026-10-31 · Draw: the canvas page").
 @MainActor
 final class Draw3PageTests: XCTestCase {
+    func testR19StrokeThenTypingInSameFrameKeepsBothFramesAndUndoOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19MixedInput-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var writes = 0
+        let durable = DrawPersistentStore(container: container, save: { context in
+            writes += 1
+            try context.save()
+        })
+        use(durable)
+        let id = try XCTUnwrap(model.canvasID)
+        let text = DrawObject(content: .text("Initial"))
+        XCTAssertTrue(model.perform(.put([text])).isSaved)
+        model.edit(text.id)
+        writes = 0
+        let stroke = DrawObject(content: .text("Stroke marker"))
+        model.performAcknowledged(.put([stroke]))
+        model.typed("Later")
+        XCTAssertEqual(model.objects.count, 2)
+        XCTAssertEqual(model.object(text.id)?.text, "Later")
+        await withCheckedContinuation { (next: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { next.resume() }
+        }
+        XCTAssertEqual(writes, 0, "Typing just after a stroke must not flush the stroke on the keypress path")
+        try await Task.sleep(for: .milliseconds(370))
+        let saved = try DrawPersistentStore(container: container).open(id).objects
+        XCTAssertEqual(saved.count, 2)
+        XCTAssertEqual(saved.first { $0.id == text.id }?.text, "Later")
+        model.endEditing()
+        model.undo()
+        XCTAssertEqual(model.object(text.id)?.text, "Initial", "Typing must undo before the stroke")
+        model.undo()
+        XCTAssertNil(model.object(stroke.id))
+        let settled = await model.prepareToQuit()
+        XCTAssertTrue(settled, "Settle thumbnail work before removing the test store")
+    }
+
+    /// A burst of input has one visible result at each step; no middle Undo
+    /// may force the earlier commands through the slow writer on the action path.
+    func testR19RapidStrokeUndoRedoAndCanvasSwitchPreserveOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Sequence-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var writes = 0
+        let durable = DrawPersistentStore(container: container, save: { context in
+            writes += 1
+            try context.save()
+        })
+        use(durable)
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        writes = 0
+        let a = DrawObject(content: .text("First")), b = DrawObject(content: .text("Second"))
+        model.performAcknowledged(.put([a]))
+        model.performAcknowledged(.put([b]))
+        XCTAssertEqual(model.objects.count, 2)
+        model.undoAcknowledged()
+        XCTAssertEqual(model.objects.map(\.id), [a.id])
+        model.undoAcknowledged()
+        XCTAssertEqual(model.objects.count, 0)
+        model.redoAcknowledged()
+        XCTAssertEqual(model.objects.map(\.id), [a.id])
+        XCTAssertEqual(writes, 0, "Rapid Undo and Redo never block their first frame on a save")
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(id).objects.map(\.id), [a.id])
+        XCTAssertTrue(model.canUndo)
+        model.undo()
+        XCTAssertEqual(model.objects.count, 0)
+        model.redo()
+        XCTAssertEqual(model.objects.map(\.id), [a.id])
+
+        model.performAcknowledged(.put([b]))
+        XCTAssertEqual(model.objects.count, 2)
+        XCTAssertTrue(model.newCanvas(), "Switching the canvas flushes its last queued edit")
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(id).objects.count, 2)
+        let settled = await model.prepareToQuit()
+        XCTAssertTrue(settled, "Settle thumbnail work before removing the test store")
+    }
+
+    func testR19StrokeAndUndoAcknowledgeBeforePersistenceAndRecoverFailure() async throws {
+        struct Rejected: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19StrokeFailure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var fail = false
+        var calls = 0
+        let durable = DrawPersistentStore(container: container, save: { context in
+            calls += 1
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        use(durable)
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        calls = 0
+        fail = true
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 55, y: 110))
+        model.pointerDragged(to: CGPoint(x: 95, y: 150))
+        model.pointerUp()
+        XCTAssertEqual(model.objects.count, 1, "Mouse-up replaces the live stroke immediately")
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(calls, 0, "The first frame candidate precedes the disk write")
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(durable.hasUnsettledEdits)
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(id).objects.count, 1,
+                       "The failed stroke is protected by its recovery checkpoint")
+        fail = false
+        XCTAssertTrue(durable.retry(on: id).isSaved)
+        XCTAssertFalse(durable.hasUnsettledEdits)
+
+        let attemptsBeforeUndo = calls
+        model.undoAcknowledged()
+        XCTAssertTrue(model.objects.isEmpty, "Undo changes the board before saving")
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(calls, attemptsBeforeUndo, "Undo's frame candidate precedes the disk write")
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(calls, attemptsBeforeUndo + 1)
+        XCTAssertTrue(try DrawPersistentStore(container: container).open(id).objects.isEmpty)
+        let settled = await model.prepareToQuit()
+        XCTAssertTrue(settled, "Settle thumbnail work before removing the test store")
+    }
+
     func testR19CoalescedTypingKeepsEachUndoStepAfterSuccessAndRetry() async throws {
         struct Rejected: Error {}
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Undo-\(UUID().uuidString)")
@@ -173,6 +307,58 @@ final class Draw3PageTests: XCTestCase {
         }
         XCTAssertEqual(try DrawPersistentStore(container: container).open(boardID).objects.first { $0.id == text.id }?.text,
                        "Typed 100 2")
+    }
+
+    /// Mouse-up and Undo are the remaining R-19 disk-backed action paths.
+    func testR19StrokeAndUndoWriteDelayToFrameCandidate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19Strokes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        var delayMS = 0
+        let durable = DrawPersistentStore(container: container, save: { context in
+            #if ATTIC_OPERATION_CRASH_TESTS
+            if delayMS > 0 { Thread.sleep(forTimeInterval: Double(delayMS) / 1_000) }
+            #endif
+            try context.save()
+        })
+        use(durable)
+        var results: [String: [Int: Double]] = [:]
+        for delay in [0, 20, 100] {
+            delayMS = delay
+            for path in ["stroke", "undo"] {
+                var samples: [Double] = []
+                for sample in 0..<3 {
+                    if path == "stroke" {
+                        let x = CGFloat(delay + sample + 20)
+                        model.setTool(.pen)
+                        model.pointerDown(at: CGPoint(x: x, y: 110))
+                        model.pointerDragged(to: CGPoint(x: x + 40, y: 150))
+                    }
+                    let started = DispatchTime.now().uptimeNanoseconds
+                    if path == "stroke" { model.pointerUp() } else { model.undoAcknowledged() }
+                    let frame = await withCheckedContinuation { (continuation: CheckedContinuation<UInt64, Never>) in
+                        DispatchQueue.main.async { continuation.resume(returning: DispatchTime.now().uptimeNanoseconds) }
+                    }
+                    samples.append(Double(frame - started) / 1_000_000)
+                    // Measure one settled command at a time, including the
+                    // injected 100 ms writer; never stack unmeasured writes.
+                    try await Task.sleep(for: .milliseconds(160))
+                }
+                let median = samples.sorted()[1]
+                results[path, default: [:]][delay] = median
+                print("ACK_R19_PATH path=\(path) delay_ms=\(delay) samples_ms=\(samples) median_ms=\(median)")
+            }
+        }
+        for (path, values) in results {
+            let base = values[0]!
+            for delay in [0, 20, 100] {
+                let measured = values[delay]!
+                let missed = max(0, Int(((measured - base) / (1_000.0 / 60.0)).rounded(.down)))
+                print("ACK_R19_PATH_SUMMARY path=\(path) delay_ms=\(delay) input_to_candidate_ms=\(measured) extra_frames_60hz=\(missed)")
+            }
+        }
     }
     private var store: DrawStore!
     private var model: DrawPageModel!
@@ -737,6 +923,8 @@ final class Draw3PageTests: XCTestCase {
         var path = [corner]
         for step in 1...12 { path.append(CGPoint(x: corner.x + CGFloat(step) * 5, y: corner.y + CGFloat(step) * 5)) }
         drag(path)
+        XCTAssertEqual(durable.metrics.saveAttempts, 0, "The finished resize paints before its save")
+        model.flushAcknowledgedDraw()
         XCTAssertEqual(durable.metrics.saveAttempts, 1, "One save per drag, at the end")
         XCTAssertEqual(durable.revision, revision + 1)
         let scaledLeft = try XCTUnwrap(model.object(left.id)), scaledRight = try XCTUnwrap(model.object(right.id))
@@ -769,6 +957,8 @@ final class Draw3PageTests: XCTestCase {
         var path = [corner]
         for step in 1...10 { path.append(CGPoint(x: corner.x + CGFloat(step) * 10, y: corner.y + CGFloat(step) * 10)) }
         drag(path)
+        XCTAssertEqual(durable.metrics.saveAttempts, 0, "The resized group paints before its save")
+        model.flushAcknowledgedDraw()
         XCTAssertEqual(durable.metrics.saveAttempts, 1, "One save per drag")
         let scaledShape = try XCTUnwrap(model.object(shape.id))
         let s = scaledShape.frame.width / shape.frame.width
@@ -808,6 +998,8 @@ final class Draw3PageTests: XCTestCase {
         model.setTool(.pen)
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 90, y: 120), CGPoint(x: 130, y: 100)])
         let id = try XCTUnwrap(model.canvasID)
+        XCTAssertEqual(model.objects.count, 1, "The stroke appears before its checkpoint")
+        model.flushAcknowledgedDraw()
         let date = try XCTUnwrap(durable.library().first?.updatedAt)
         XCTAssertTrue(wait { (try? durable.library().first?.thumbnail) != nil }, "The thumbnail renders once edits settle")
         let thumbnail = try XCTUnwrap(durable.library().first?.thumbnail)
@@ -1104,6 +1296,8 @@ final class Draw3PageTests: XCTestCase {
         use(durable)
         model.setTool(.pen)
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        XCTAssertEqual(model.objects.count, 1, "The stroke appears before a rejected checkpoint")
+        model.flushAcknowledgedDraw()
         let notice = try XCTUnwrap(model.saveNotice)
         XCTAssertTrue(notice.canRetry)
         XCTAssertFalse(notice.message.isEmpty)
@@ -1123,6 +1317,7 @@ final class Draw3PageTests: XCTestCase {
         use(durable)
         model.setTool(.pen)
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        model.flushAcknowledgedDraw()
         XCTAssertNotNil(model.saveNotice)
         drag([CGPoint(x: 60, y: 200), CGPoint(x: 130, y: 260)])
         XCTAssertEqual(model.objects.count, 2, "Input keeps working: the second stroke stays on the board")
@@ -1188,6 +1383,7 @@ final class Draw3PageTests: XCTestCase {
         use(durable)
         model.setTool(.pen)
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        model.flushAcknowledgedDraw()
         XCTAssertTrue(durable.hasUnsettledEdits)
         fail = false
         let ready = await model.prepareToQuit()

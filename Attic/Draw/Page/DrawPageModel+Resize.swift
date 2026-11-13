@@ -187,7 +187,7 @@ extension DrawPageModel {
         guard fresh.count == resize.originals.count else { board?.drawContentChanged(); return }
         let current = fresh == resize.originals ? resize.current
             : Self.resized(fresh, handle: resize.handle, delta: resize.delta, shift: resize.constrained)
-        if current != fresh { perform(.put(current)) } else { board?.drawContentChanged() }
+        if current != fresh { performAcknowledged(.put(current)) } else { board?.drawContentChanged() }
     }
 
     /// VoiceOver's and the keyboard's way to resize the selection: a tenth
@@ -198,6 +198,6 @@ extension DrawPageModel {
         guard let union = DrawGeometry.union(chosen), live == nil else { return }
         let delta = CGPoint(x: union.width * (factor - 1), y: union.height * (factor - 1))
         let handle: DrawHandle = chosen.count == 1 && chosen[0].text.isEmpty == false ? .right : .bottomRight
-        perform(.put(Self.resized(chosen, handle: handle, delta: delta, shift: true)))
+        performAcknowledged(.put(Self.resized(chosen, handle: handle, delta: delta, shift: true)))
     }
 }
