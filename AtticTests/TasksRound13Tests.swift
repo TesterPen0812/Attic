@@ -10,6 +10,75 @@ import XCTest
 /// a real menu, never by calling the handlers.
 @MainActor
 final class TasksRound13Tests: XCTestCase {
+    /// The measured AX-active layout walks native row focus registrations.
+    /// Keep at most the active logical row registered, even when the list
+    /// has many fully accessible rows rendered in the same hosting tree.
+    func testHostingLayoutBoundsEnabledRowRespondersDuringKeyboardTraversal() throws {
+        try requireKeyWindowTests()
+        var registrations: [AtticRowFocusID: Bool] = [:]
+        TasksNativeResponderProbe.record = { id, enabled in registrations[id] = enabled }
+        defer { TasksNativeResponderProbe.record = nil }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        XCTAssertGreaterThan(registrations.count, 5, "seed must mount multiple native-focus row candidates")
+        func enabledOnCurrentPage() -> Set<AtticRowFocusID> {
+            Set(registrations.compactMap { id, enabled in
+                enabled && id.page == hosted.model.tab.rawValue ? id : nil
+            })
+        }
+        print("HOSTING_R2 focus_candidates=\(registrations.count) enabled_current=\(enabledOnCurrentPage().count)")
+        XCTAssertLessThanOrEqual(enabledOnCurrentPage().count, 1, "only the focused row may register a native responder")
+        hosted.press("\u{F701}", keyCode: 125)
+        let first = try XCTUnwrap(hosted.model.keyboardFocus, "Down must establish logical and native row focus")
+        XCTAssertEqual(enabledOnCurrentPage(), [first])
+        hosted.press("\t", keyCode: 48)
+        let second = try XCTUnwrap(hosted.model.keyboardFocus, "Tab must reach the next row")
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(enabledOnCurrentPage(), [second])
+    }
+
+    /// A single native row responder must still walk consecutive rows
+    /// using the existing Tab/Shift-Tab keyboard map.
+    func testHostingLayoutSingleFocusKeepsNativeTabTraversal() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let first = try XCTUnwrap(hosted.model.keyboardFocus)
+        hosted.press("\t", keyCode: 48)
+        let second = try XCTUnwrap(hosted.model.keyboardFocus, "Tab must focus another task")
+        XCTAssertNotEqual(second.id, first.id)
+        XCTAssertEqual(hosted.model.selection, [second.id])
+        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, first.id, "Shift-Tab moves back to the first task")
+    }
+
+    func testHostingLayoutInitialArrowExtendsFromAnUnfocusedSelection() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(ids.count, 3)
+        let selected = ids[2], next = ids[3]
+        XCTAssertNil(hosted.model.keyboardFocus)
+        hosted.model.selectOnly(selected)
+        hosted.spin(0.2)
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, next)
+        XCTAssertEqual(hosted.model.selection, [selected, next], "the first arrow keeps the existing selection anchor")
+    }
+
+    func testHostingLayoutUnfocusedSelectionStillAnswersReturn() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let selected = try XCTUnwrap(hosted.model.rows(for: .now).dropFirst(2).first?.id)
+        hosted.model.selectOnly(selected)
+        hosted.spin(0.2)
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, selected, "Return still edits the selection before a row owns native focus")
+    }
+
     // H12-06: native Tab focus must supersede a previous arrow selection.
     func testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {

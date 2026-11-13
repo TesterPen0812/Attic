@@ -163,7 +163,16 @@ struct TasksPage: View {
 
     /// Gives the keyboard to `id` on the page shown (nil lets it go).
     private func setFocus(_ id: UUID?) {
-        focusedRow = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
+        let next = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
+        // Admit the target row to native focus before setting FocusState.
+        // This is only a focus-registration update. The normal onChange
+        // handles selection after the key handler finishes; doing that here
+        // would collapse Shift-arrow ranges before they can extend.
+        if model.keyboardFocus != next {
+            model.receiveKeyboardFocus(next, keyboardDriving: false)
+            model.cellUpdates.objectWillChange.send()
+        }
+        focusedRow = next
     }
 
     /// The tabs sit 14 below the header, which moves inward with larger
@@ -406,7 +415,7 @@ struct TasksPage: View {
                 TasksDragCancellation.consumeEscape(event)
                     || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
-                    || tabPressed(event)
+                    || tabPressed(event) || initialArrowPressed(event)
                     ? nil : event
             }
             // The pager reads scroll events itself (round 9): a
@@ -478,6 +487,10 @@ struct TasksPage: View {
             if !shown {
                 cancelTransientState()
                 if searchFocused { searchFocused = false }
+                // Kept-warm rows must relinquish native keyboard focus when
+                // another section covers Tasks. The single registered row
+                // otherwise keeps SwiftUI's focused binding while hidden.
+                if focusedRow != nil || model.keyboardFocus != nil { setFocus(nil) }
             }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
@@ -1080,6 +1093,38 @@ struct TasksPage: View {
         guard modifiers.isEmpty || modifiers == .shift,
               let window = pointer.view?.window, event.window === window else { return false }
         return tabPressed(backward: modifiers == .shift)
+    }
+
+    /// The list owns initial focus when none of its rows has the keyboard;
+    /// the first arrow must still select the first or last visible task.
+    private func initialArrowPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.keyCode == 125 || event.keyCode == 126,
+              focusedRow == nil, model.keyboardFocus == nil, model.isPageShown,
+              let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.hasKeyboard, !AtticTextInput.isPopoverOpen,
+              !Self.isComposing(window.firstResponder), !addBarFocused, !searchFocused,
+              model.editingTitleID == nil, model.newSubtaskParentID == nil,
+              model.renamingSubtaskID == nil, model.focusedSubtaskID == nil,
+              metaPopover == nil, drag == nil, panelComposer?.isOpen() != true,
+              event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+        let visible = visibleIDs()
+        let step = event.keyCode == 125 ? 1 : -1
+        // A selection made while no row owns native focus is still the
+        // keyboard's anchor, just as in pageKey(_:).
+        let current = keyboardRow(visible: visible)
+        let target = current.flatMap { visible.firstIndex(of: $0) }.map {
+            visible[min(max($0 + step, 0), visible.count - 1)]
+        } ?? (step > 0 ? visible.first : visible.last)
+        guard let target else { return false }
+        focusTracker.noteKeyboardNavigation()
+        setFocus(target)
+        if event.modifierFlags.contains(.shift), let current {
+            model.extendSelection(to: target, visible: visible, from: current)
+        } else {
+            model.selectOnly(target)
+        }
+        return true
     }
 
     /// NSTextView may consume Tab before the page's local key monitor sees it.
@@ -4317,6 +4362,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // Whether it has the keyboard: the model's copy of the page's
             // focus (`TasksPageModel.keyboardFocus`), read as the cell draws.
             focus: AtticRowFocus(binding: focus, id: focusID, isFocused: active && model.keyboardFocus == focusID,
+                                 singleNativeResponder: true,
                                  isActive: { [model, tab] in model.tab == tab && model.isPageShown }),
             isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
             isActive: active

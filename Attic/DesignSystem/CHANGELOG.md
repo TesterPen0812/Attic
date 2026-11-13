@@ -1,3 +1,10 @@
+## 2026-11-13 · Tasks row focus registration
+
+Tasks registers only the current keyboard row with SwiftUI's native focus
+system. The page's existing keyboard order admits each next row before moving
+focus, and a hidden page releases its row. Rows retain their accessibility
+labels and actions; their appearance and focus ring use the existing values.
+
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 
 The note thumbnail keeps the drawing's proportion: 7 pt continuous corners

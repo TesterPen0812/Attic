@@ -366,6 +366,10 @@ struct AtticRowFocus {
     /// ring the moment focus moves (a binding alone let it lag a row
     /// behind, the computer-use review's bug 4).
     let isFocused: Bool
+    /// A Tasks list admits only its currently focused row to native focus.
+    /// The other rows remain fully accessible and keep their mouse actions;
+    /// Calendar continues to use the ordinary native focus registration.
+    let singleNativeResponder: Bool
     /// Whether the row's page is the one that answers the keyboard (round
     /// 12): a page kept built beside it draws its rows but takes no focus
     /// and answers no key. A closure, read when a key arrives: a page shown
@@ -379,15 +383,25 @@ struct AtticRowFocus {
     /// list was built (the Tasks page, deep review P2-04), so the list
     /// keeps a copy and says whether this row has it.
     init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isFocused: Bool,
+         singleNativeResponder: Bool = false,
          isActive: @escaping () -> Bool = { true }) {
         self.binding = binding
         self.id = id
         self.isActive = isActive
         self.isFocused = isFocused
+        self.singleNativeResponder = singleNativeResponder
     }
 }
 
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
+#if ATTIC_UNIT_TEST_HOST
+/// Records which rows offer native focus in the hosted Tasks regression.
+/// The probe is absent from previews and release builds.
+@MainActor enum TasksNativeResponderProbe {
+    static var record: ((AtticRowFocusID, Bool) -> Void)?
+}
+#endif
+
 private struct AtticListTaskFocusModifier: ViewModifier {
     let enabled: Bool
     /// Off while the row's title is edited: the row stays focusable (so
@@ -399,8 +413,15 @@ private struct AtticListTaskFocusModifier: ViewModifier {
     let focus: AtticRowFocus
 
     func body(content: Content) -> some View {
-        content
-            .focusable(enabled)
+        // AX keeps every row's labels, traits, and actions; only the native
+        // focus graph is bounded. The modifier remains type-stable as focus
+        // travels, preserving the row's mounted identity.
+        let rowFocusable = enabled && (!focus.singleNativeResponder || focus.isFocused)
+        #if ATTIC_UNIT_TEST_HOST
+        let _ = TasksNativeResponderProbe.record?(focus.id, rowFocusable)
+        #endif
+        return content
+            .focusable(rowFocusable)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
