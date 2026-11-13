@@ -117,6 +117,11 @@ final class RoundNLeaksTests: XCTestCase {
                 layout: PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520)), addBarFocused: .constant(false))
             gate.shouldFail = true
             page.actions(for: id, in: .now).toggleDone()
+            // The circle acknowledges its visual tick before attempting the
+            // durable save. Observe the resulting failure before releasing
+            // the model; a fixed delay cannot establish that it was reported.
+            let deadline = Date().addingTimeInterval(2)
+            while model.rowFailure == nil && Date() < deadline { settle(0.02) }
             XCTAssertEqual(model.rowFailure?.canRetry, true)
         }
         awaitRelease { probe.value == nil }
