@@ -3864,6 +3864,7 @@ extension NotesPageControllerTests {
         private var failures = 0
         private var thrown = 0
         private var skipPostcommitCollector = false
+        private var expectsCheckpoint = true
 
         var injectedFailures: Int { lock.withLock { thrown } }
         var pendingFailures: Int { lock.withLock { failures } }
@@ -3874,9 +3875,10 @@ extension NotesPageControllerTests {
             super.init()
         }
 
-        func failNextInventory() {
+        func failNextInventory(afterRemoval: Bool = false) {
             lock.withLock {
                 failures += 1
+                expectsCheckpoint = !afterRemoval
                 // The writer makes a best-effort collection read after the
                 // atomic checkpoint write, before its throwing refresh.
                 skipPostcommitCollector = true
@@ -3885,7 +3887,8 @@ extension NotesPageControllerTests {
 
         override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
                                           options mask: FileManager.DirectoryEnumerationOptions = []) throws -> [URL] {
-            if url.standardizedFileURL == root.standardizedFileURL && super.fileExists(atPath: checkpoint.path) {
+            if url.standardizedFileURL == root.standardizedFileURL
+                && super.fileExists(atPath: checkpoint.path) == lock.withLock({ expectsCheckpoint }) {
                 let fail = lock.withLock { () -> Bool in
                     if skipPostcommitCollector {
                         skipPostcommitCollector = false
@@ -3940,6 +3943,37 @@ extension NotesPageControllerTests {
         let protectedCollection = coordinator.ownership.tryAcquire([noteID, staged.id], kind: .collection)
         XCTAssertNil(protectedCollection)
         protectedCollection?.release()
+    }
+
+    func testR4CommittedRetireAndDiscardDoNotThrowForFailedInventory() async throws {
+        for operation in ["retire", "operation-retire", "discard", "archive"] {
+            let root = ownedTemporaryDirectory(prefix: "R4-\(operation)")
+            let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+            let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+            let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: false, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Kept")])),
+                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: .now)
+            let claim = try await journal.writeDurably(entry, staged: [])
+            fault.failNextInventory(afterRemoval: true)
+            do {
+                let saved = NoteRecoverySavedState(document: try XCTUnwrap(NoteContentCodec.decode(entry.content).document), tags: [])
+                switch operation {
+                case "retire": try await journal.retireDurably(noteID: noteID, claim: claim, saved: saved)
+                case "operation-retire": try await journal.retireOperationCheckpoint(noteID: noteID, claim: claim, saved: saved)
+                case "discard": try await journal.discardOwnedDurably(noteID: noteID, claim: claim)
+                default:
+                    try Data("damaged checkpoint".utf8).write(to: root.appendingPathComponent("\(noteID.uuidString).json"))
+                    let details = try await journal.damagedDetailsDurably(noteID: noteID)
+                    let archive = try await journal.archiveDamagedDurably(details.confirmation, to: nil, resolving: true)
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: archive.path))
+                }
+            } catch { XCTFail("\(operation) already committed and must return success: \(error)") }
+            XCTAssertEqual(fault.injectedFailures, 1, operation)
+            XCTAssertEqual(fault.pendingFailures, 0, operation)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("\(noteID.uuidString).json").path))
+            let recovered = try await NoteDraftJournal(directory: root).entriesDurably()
+            XCTAssertTrue(recovered.isEmpty, operation)
+        }
     }
 
     func testDS8PostcommitInventoryFailureStillReturnsClaimAndAllowsLaterCheckpoint() async throws {

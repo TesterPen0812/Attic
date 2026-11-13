@@ -871,26 +871,26 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         let snapshot = try liveSnapshot()
         try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot)
-        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        await publishCommittedInventory(for: snapshot)
     }
     /// The coordinator already proved its complete saved result and payloads.
     /// A replacement checkpoint is independent work, never retired by it.
     func retireOperationCheckpoint(noteID: UUID, claim: NoteRecoveryClaim, saved: NoteRecoverySavedState) async throws {
         let snapshot = try liveSnapshot()
         try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot, preservingReplacement: true)
-        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        await publishCommittedInventory(for: snapshot)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         let snapshot = try liveSnapshot()
         try await io.discardOwned(noteID: noteID, claim: claim, live: snapshot)
-        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        await publishCommittedInventory(for: snapshot)
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await io.listDamaged() }
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails { try await io.damagedDetails(noteID: noteID) }
     func archiveDamagedDurably(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) async throws -> URL {
         let snapshot = try liveSnapshot()
         let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving, live: snapshot)
-        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        await publishCommittedInventory(for: snapshot)
         return archive
     }
 }
