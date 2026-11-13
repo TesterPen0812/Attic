@@ -155,6 +155,10 @@ struct AgentChatThread: View {
     /// Test seam: the distance the last send asked the earlier rows to travel.
     static var lastOutgoingTravel: CGFloat = 0
     static var archivedRowAppearances = 0
+    static var realizedArchivedRows: Set<UUID> = []
+    static var capturesRowGeometry = false
+    static var measuredViewport: CGFloat = 0
+    static var measuredRows: [UUID: CGRect] = [:]
     static var replyTextBuilds = 0
     static var replyWordsBuilt = 0
     #endif
@@ -169,6 +173,9 @@ struct AgentChatThread: View {
     private static let turnTop = "agent-chat-turn"
 
     private var turnStart: Int { model.entries.lastIndex { if case .asked = $0.content { true } else { false } } ?? 0 }
+    private var previousTurnStart: Int {
+        model.entries[..<turnStart].lastIndex { if case .asked = $0.content { true } else { false } } ?? 0
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -178,12 +185,20 @@ struct AgentChatThread: View {
                     // short earlier exchange can be scrolled back into view.
                     Color.clear.frame(height: Self.topInset)
                     if turnStart > 0 {
-                        LazyVStack(alignment: .leading, spacing: Self.gap) {
-                            ForEach(model.entries[..<turnStart]) { entry in
-                                row(entry, viewport: viewport)
-                                    #if DEBUG
-                                    .onAppear { Self.archivedRowAppearances += 1 }
-                                    #endif
+                        VStack(alignment: .leading, spacing: Self.gap) {
+                            if previousTurnStart > 0 {
+                                LazyVStack(alignment: .leading, spacing: Self.gap) {
+                                    ForEach(model.entries[..<previousTurnStart]) { entry in
+                                        archivedRow(entry, viewport: viewport)
+                                    }
+                                }
+                            }
+                            // The leaving turn stays realized while the offset
+                            // brings it through the viewport after scrollToTurn.
+                            VStack(alignment: .leading, spacing: Self.gap) {
+                                ForEach(model.entries[previousTurnStart..<turnStart]) { entry in
+                                    archivedRow(entry, viewport: viewport)
+                                }
                             }
                         }
                         .offset(y: outgoingSlide)
@@ -205,7 +220,12 @@ struct AgentChatThread: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.clear.contentShape(Rectangle()).onTapGesture(perform: onAway))
             }
-            .onGeometryChange(for: CGFloat.self, of: \.size.height) { viewport = $0 }
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) {
+                viewport = $0
+                #if DEBUG
+                Self.measuredViewport = $0
+                #endif
+            }
             .onChange(of: viewport) { old, new in if old == 0, new > 0 { scrollToTurn(proxy, in: new) } }
             .onScrollPhaseChange { _, phase in if phase == .interacting { followsEnd = false } }
             .onChange(of: turnStart, initial: true) { old, new in
@@ -259,12 +279,34 @@ struct AgentChatThread: View {
         }
     }
 
+    private func archivedRow(_ entry: AgentChatEntry, viewport: CGFloat) -> some View {
+        row(entry, viewport: viewport)
+            #if DEBUG
+            .onAppear {
+                Self.archivedRowAppearances += 1
+                Self.realizedArchivedRows.insert(entry.id)
+            }
+            .onDisappear { Self.realizedArchivedRows.remove(entry.id) }
+            #endif
+    }
+
     @ViewBuilder
     private func row(_ entry: AgentChatEntry, viewport: CGFloat) -> some View {
         let dark = design.tokens.context.mode == .dark
         let first = !model.wasShown(entry.id)
         Group {
+            #if DEBUG
+            if Self.capturesRowGeometry {
+                content(entry, first: first, viewport: viewport, dark: dark)
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(AgentChatStage.space)) }) {
+                        Self.measuredRows[entry.id] = $0
+                    }
+            } else {
+                content(entry, first: first, viewport: viewport, dark: dark)
+            }
+            #else
             content(entry, first: first, viewport: viewport, dark: dark)
+            #endif
         }
         .onAppear { model.noteShown(entry.id) }
     }

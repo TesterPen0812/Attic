@@ -1565,6 +1565,65 @@ final class AgentChatHostedTests: XCTestCase {
         spin(0.6)
     }
 
+    func testR6TallPreviousTurnRemainsRealizedDuringSendSlide() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AgentChatThread.capturesRowGeometry = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AgentChatThread.capturesRowGeometry = false
+            AgentChatThread.measuredRows.removeAll()
+        }
+        model.open()
+        spin(0.3)
+        for cycle in 0..<6 {
+            model.newChat()
+            spin(0.05)
+            model.draft = "Tall exchange \(cycle)"
+            model.send()
+            spin(0.05)
+            for index in 0..<30 {
+                let item = AgentStep(id: UUID(), title: "Completed tool \(cycle)-\(index)", kind: .read,
+                                     targets: [], state: .done)
+                model.apply(.stepStarted(item))
+                model.apply(.stepFinished(item))
+            }
+            model.apply(.textDelta("All done."))
+            model.apply(.finished)
+            spin(0.8)
+            let viewport = AgentChatThread.measuredViewport
+            let before = Dictionary(uniqueKeysWithValues: model.entries.compactMap { entry -> (UUID, CGRect)? in
+                guard let frame = AgentChatThread.measuredRows[entry.id], frame.height > 0,
+                      frame.minY >= AgentChatThread.topInset,
+                      frame.maxY <= viewport - AgentChatThread.bottomInset else { return nil }
+                return (entry.id, frame)
+            })
+            XCTAssertGreaterThan(before.count, 5, "The tall turn must have several fully visible rows")
+            model.draft = "Next exchange \(cycle)"
+            let began = ProcessInfo.processInfo.systemUptime
+            model.send()
+            spin(0.02)
+            let travel = AgentChatThread.lastOutgoingTravel
+            XCTAssertGreaterThan(travel, 20, "Exercise the approved outgoing slide")
+            for sample in 0..<4 {
+                // The animation starts after send, so this bounds how far any
+                // old row could have moved. Check only rows still fully visible.
+                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                let shift = travel * CGFloat(AgentEase.curve(0.2, 0.8, 0.2, 1, elapsed / 0.56))
+                let bottom = min(viewport, AgentChatThread.measuredViewport) - AgentChatThread.bottomInset
+                let required = Set(before.filter {
+                    $0.value.minY - shift >= AgentChatThread.topInset && $0.value.maxY <= bottom
+                }.keys)
+                let missing = required.subtracting(AgentChatThread.realizedArchivedRows)
+                print("R6 cycle=\(cycle) sample=\(sample) before=\(before.count) checked=\(required.count) missing=\(missing.count)")
+                XCTAssertTrue(missing.isEmpty, "Visible rows must remain realized during the outgoing slide")
+                if cycle == 0, sample == 0 { try captureAgentReviewWindow(window, name: "R6") }
+                spin(0.015)
+            }
+            model.apply(.finished)
+            spin(0.6)
+        }
+    }
+
     func testTheSecondMessageLandsWhereTheFirstDid() {
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
