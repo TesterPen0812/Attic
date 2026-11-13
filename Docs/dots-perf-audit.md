@@ -98,11 +98,27 @@ The current `PageSwitch` signpost ends through an async main-queue callback from
 3. DP-7 for context clicks only, not ordinary tabs. Cold menu construction remains to investigate. The page-ready-to-frame gap is a measurement interval, not a demonstrated root cause.
 
 
-## Whole-app review
-Not yet reviewed. PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
+## Whole-app review — Notes and MCP checkpoint
+
+### DP-9 (P2, long-note suspect): Folded headings make viewport layout scan the full outline for each visible heading
+- `Attic/Notes/Engine/NoteEditorTextView.swift:962–975` → `Attic/Notes/Engine/NoteBlockLayout.swift:1049–1094, 1097–1114, 1258–1302`.
+- On text-view layout, `updateHeadingControls` obtains visible headings via a binary-searched cached outline. If any heading is folded, each visible heading tests `headingSections.contains` to find a folded enclosing section. That scans the full cached outline until a match; it also sets each visible button's label, frame and `needsDisplay` on the pass. With no folded headings the guard short-circuits, and the outline itself is cached, so this is not an unconditional full document rebuild. It is distinct from the listed PF-10/11 table work and PF-16 Find.
+- Scaling: worst-case O(V × H), V visible headings and H total headings, per qualifying layout, plus O(V) native control updates. The exact number of layouts during scroll/resize and whether a heading's position makes the scan end early must be measured.
+- Smallest fix: cache or index folded section intervals and query the enclosing interval by position, invalidating on outline/fold changes; avoid reassigning unchanged button geometry/AX labels. Preserve nested-fold semantics, glyph positioning and VoiceOver labels.
+- Confidence: high for conditional nested scan, medium for user-visible cost.
+- Mac measurement: add counts for `updateHeadingControls`, visible headings, candidate sections examined, changed/unchanged button properties and layout duration. Scroll and resize a 10/1,000/10,000-heading note with one fold near the end and with none; AX active. Guard test: visible-heading queries should scale near O(V log H) with nested folds and exactly match current visibility/labels; do not use timing thresholds.
+
+### DP-10 (P2, bounded background-work suspect): Awaiting MCP approvals wakes every 100 ms
+- `Attic/Services/AgentServer/MCPRequestHandler.swift:23–35, 151–156` → `Attic/Agent/Actions/AgentActions+MCP.swift:174–191`.
+- An initial tool call waiting on owner approval loops on the main actor, checking state and sleeping 100 ms until resolution or the default 20-second deadline. One unattended request can resume approximately 200 times; concurrent waiting calls multiply wakeups. The loop sleeps rather than busy-spins, is bounded, and this is not PF-34's separate lack of MCP admission bound or PF-40's retained registry growth.
+- Smallest fix: suspend on a one-shot continuation or async notification resolved by approval, refusal, cancellation, run end or one deadline task; retain status-poll and socket-deadline semantics and avoid lost wakeups/double resumes.
+- Confidence: high for the wakeup pattern, low/medium for real battery or perceptible impact absent measurement.
+- Mac measurement: count approval wait resumptions, simultaneous waits, main-actor time and energy/wakeups over a full 20-second unanswered prompt and during active UI work; compare event-driven version. Guard test: zero periodic polls while pending, one completion on each outcome, prompt retry/idempotence preserved, cancellation and timeout tested with a controllable clock.
+
+Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 8 static suspects, four resize, two scroll and two first-touch/context-click; neither is measured on the owner's Mac.
+- DP findings: 10 static suspects, including four resize, two scroll, two first-touch/context-click and two Notes/MCP; neither is measured on the owner's Mac.
 - O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell, island, table and Draw tracing and O-2 list/row instrumentation review; remaining O-1 subpaths, O-2 interactions, O-3 remaining pages and whole-app review still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings/MCP approval polling. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
