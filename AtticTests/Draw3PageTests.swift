@@ -1080,7 +1080,8 @@ final class Draw3PageTests: XCTestCase {
         let rows = model.library.rows
         XCTAssertEqual(rows.filter { $0.canvas != nil }.count, 3)
         let needed = DrawLibraryMetrics.listHeight(rows)
-        XCTAssertGreaterThan(needed, DrawLibraryMetrics.maxListHeight, "The old default scrolls")
+        // Accepted 13 Nov menu rows are 28 pt, so this list now fits the default too.
+        XCTAssertLessThanOrEqual(needed, DrawLibraryMetrics.maxListHeight, "the chosen compact rows fit")
         let room = DrawPageMetrics.menuListRoom(boardHeight: PanelGeometry.minimumHeight, chromeTop: 15.5, chromeBottom: 15.5)
         XCTAssertLessThanOrEqual(needed, room, "At the panel's smallest height the list fits without scrolling")
     }

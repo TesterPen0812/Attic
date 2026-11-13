@@ -9,8 +9,9 @@ import SwiftUI
 // card. The command menus (right-click, ⋯, ⇧⌘I) are glass cards too, drawn
 // by `AtticGlassMenu` on the same metrics and tokens.
 //
-// - `AtticDropdownCard`: a solid card (owner, 28 Oct: the pickers stay
-//   solid) in the Shapes squircle, a hairline rim and a soft shadow.
+// - `AtticDropdownCard`: the active system-menu glass on translucent
+//   surfaces (Accepted 12 Nov evening), with an opaque fallback for Solid
+//   and Reduce Transparency, 18 pt continuous corners and a soft shadow.
 // - `AtticDropdownRow`: a 32 pt row, touching its neighbours; the soft fill
 //   is the whole row. One highlight per list, which the keyboard and the
 //   pointer share (`onHover` moves the list's).
@@ -29,9 +30,9 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: Liquid Glass (`AtticGlassCardFace`, owner's
-/// 12 Nov quick look), with its rim (1 pt under Increase Contrast) and soft
-/// shadow, in the menus' 18 pt squircle.
+/// The card's face: the system menu's active Liquid Glass, with no drawn
+/// outline in normal contrast (1 pt under Increase Contrast) and a soft
+/// shadow, in the menus' 18 pt continuous curve.
 ///
 /// While the card fades in or out (`AtticDropdownReveal`) the face goes
 /// with it, as one piece.
@@ -115,10 +116,12 @@ enum AtticDropdownSmallText {
 struct AtticDropdownSectionHeader: View {
     let title: String
     var ink: AtticInk = .helper
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         let m = AtticDropdownMetrics.self
         AtticText(verbatim: title, style: .dropdownSection, ink: ink)
+            .colour(design.increaseContrast ? nil : design.tokens.ink(.body).withAlpha(0.45))
             .padding(.horizontal, m.rowPadding)
             .padding(.bottom, m.sectionHeaderBottom)
             .frame(maxWidth: .infinity, minHeight: m.sectionHeaderHeight, maxHeight: m.sectionHeaderHeight, alignment: .bottomLeading)
@@ -144,7 +147,7 @@ struct AtticDropdownFieldHeader<Field: View>: View {
 }
 
 /// The card: its rows or fields 6 pt in, on `AtticDropdownSurface`. With
-/// no `width` it is as wide as its content, never under 144 pt; the
+/// no `width` it is as wide as its content, never under 200 pt; the
 /// presenter caps it at the panel's margin (`AtticDropdownLayout.width`).
 struct AtticDropdownCard<Content: View>: View {
     var width: CGFloat?
@@ -157,6 +160,7 @@ struct AtticDropdownCard<Content: View>: View {
     @Environment(\.atticDropdownContentHeightChanged) private var heightChanged
     @Environment(\.atticDropdownContentWidthChanged) private var widthChanged
     @ViewBuilder let content: Content
+    @Namespace private var highlight
 
     init(width: CGFloat? = nil, scrolls: Bool = false, @ViewBuilder content: () -> Content) {
         self.width = width
@@ -175,6 +179,7 @@ struct AtticDropdownCard<Content: View>: View {
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
             .frame(width: widthLimit ?? width, alignment: .leading)
             .background(AtticDropdownSurface())
+            .environment(\.atticMenuHighlight, highlight)
             .modifier(AtticUnfoldCard(cornerRadius: m.cornerRadius))
     }
 }
@@ -625,7 +630,6 @@ struct AtticDropdownRow: View {
         let m = AtticDropdownMetrics.self
         let tokens = design.tokens
         let lit = Self.isLit(highlighted: isHighlighted, hovered: hovered, listOwnsHighlight: onHover != nil)
-        let pill = Self.highlightShape
         HStack(spacing: 0) {
             HStack(spacing: m.columnGap) {
                 if dot != nil, titleFont == nil, match?.isEmpty ?? true {
@@ -680,7 +684,12 @@ struct AtticDropdownRow: View {
         }
         .padding(.horizontal, m.rowPadding)
         .frame(height: m.rowHeight)
-        .background(pill.fill((lit ? tokens.dropdownHighlight : .clear).color))
+        .background {
+            if lit { AtticMenuRowHighlight(color: tokens.dropdownHighlight.color) }
+        }
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange
+                   : .spring(duration: AtticMenuMetrics.highlightDuration, bounce: 0), value: lit)
+        .modifier(AtticMenuRowEntrance(index: max(0, (position ?? 1) - 1)))
         .contentShape(Rectangle())
         // The whole row picks on a click (`AtticDropdownRowPress`).
         .modifier(AtticDropdownRowPress(action: action))
@@ -750,6 +759,29 @@ struct AtticDropdownRow: View {
                                                  weight: AtticTextStyle.dropdownHeading.spec.weight)
         }
         return string
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var atticMenuHighlight: Namespace.ID? = nil
+}
+
+/// One grey highlight travels between the rows of a picker card.
+struct AtticMenuRowHighlight: View {
+    let color: Color
+    @Environment(\.atticMenuHighlight) private var namespace
+
+    var body: some View {
+        Group {
+            if let namespace {
+                AtticDropdownRow.highlightShape.fill(color)
+                    .matchedGeometryEffect(id: "attic.menu.highlight", in: namespace)
+            } else {
+                AtticDropdownRow.highlightShape.fill(color)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -881,7 +913,7 @@ private struct AtticDropdownFieldFocusModifier: ViewModifier {
 enum AtticDropdownLayout {
     enum Side: Equatable, Sendable { case below, above }
 
-    /// A card's width: its content's, never under 144 pt, never wider than
+    /// A card's width: its content's, never under 200 pt, never wider than
     /// `available` (the panel less its 12 pt margins).
     static func width(ideal: CGFloat, available: CGFloat) -> CGFloat {
         min(max(ideal.rounded(.up), AtticDropdownMetrics.minWidth), max(0, available.rounded(.down)))
@@ -1412,8 +1444,9 @@ struct AtticCubicBezier: Equatable, Sendable {
 /// change per frame; the rows never re-run. The clock runs linearly over
 /// the spring's settling time; `frame` samples the spring.
 enum AtticDropdownReveal {
-    /// The spring's settling time (0.30 s perceptual, bounce 0.28).
-    static let openDuration: Double = 0.45
+    /// Keep the clock alive through the last row's spring. The card still
+    /// samples the same .30 s spring in real seconds.
+    static let openDuration: Double = AtticMenuMetrics.maxStagger + 0.45
     static let closeDuration: Double = AtticMenuMetrics.closeFade
     static let springDuration: Double = AtticMenuMetrics.openDuration
     static let springBounce: Double = Double(AtticMenuMetrics.openBounce)
@@ -1627,10 +1660,34 @@ struct AtticUnfoldState: Equatable {
     var fromTop: Bool
     var contentBlur: CGFloat
     var shadow: CGFloat
+    /// Nil at rest and under Reduced. Filtering an open list
+    /// therefore never replays its entrance.
+    var entranceTime: Double? = nil
+    var closing = false
+}
+
+/// Picker rows share the command menu's stagger and spring. The card's
+/// one clock drives the effect; rows need no timers or layout writes.
+struct AtticMenuRowEntrance: ViewModifier {
+    let index: Int
+    @Environment(\.atticUnfold) private var unfold
+    @Environment(\.atticMenuEntranceTime) private var entranceTime
+
+    func body(content: Content) -> some View {
+        let p = CGFloat(entranceTime.map {
+            AtticDropdownReveal.spring(at: $0 - AtticMenuMetrics.stagger(index),
+                                       duration: AtticMenuMetrics.rowDuration,
+                                       bounce: Double(AtticMenuMetrics.rowBounce))
+        } ?? 1)
+        content
+            .opacity(Double(min(1, max(0, p))))
+            .offset(y: (1 - p) * AtticMenuMetrics.rowTravel * (unfold?.fromTop == false ? 1 : -1))
+    }
 }
 
 extension EnvironmentValues {
     @Entry var atticUnfold: AtticUnfoldState? = nil
+    @Entry fileprivate var atticMenuEntranceTime: Double? = nil
 }
 
 /// The unfold on a card, at `clock`: 1 is open; 0 is shut as it starts
@@ -1664,7 +1721,10 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
         let f = AtticDropdownReveal.frame(time: time, closing: closing)
         // At rest, and while wholly clear (the opening's first frame, laid
         // out in the same turn as the open), the card needs no cut or blur.
-        let state = !carriesState || f == .rest || f.opacity <= 0 ? nil : AtticUnfoldState(reveal: f.reveal, fromTop: fromTop, contentBlur: f.contentBlur, shadow: f.shadow)
+        let entrance = !reduced && !closing && time < 1 ? Double(time) * AtticDropdownReveal.openDuration : nil
+        let state = !carriesState || (f == .rest && entrance == nil && !closing) ? nil : AtticUnfoldState(
+            reveal: f.reveal, fromTop: fromTop, contentBlur: f.contentBlur, shadow: f.shadow,
+            entranceTime: entrance, closing: closing)
         // An asymmetric transition stacks its two legs' effects; the one at
         // rest must not clear the moving one's state.
         return content
@@ -1719,11 +1779,30 @@ extension EnvironmentValues {
 struct AtticUnfoldCard: ViewModifier {
     static let space = "attic.unfold.card"
     let cornerRadius: CGFloat
+    @Environment(\.atticUnfold) private var unfold
+    @StateObject private var entrance = AtticMenuEntrancePhase()
 
     func body(content: Content) -> some View {
         content
             .environment(\.atticUnfoldCornerRadius, cornerRadius)
+            .environment(\.atticMenuEntranceTime, entrance.time(for: unfold))
             .coordinateSpace(.named(Self.space))
+    }
+}
+
+/// One opening's last drawn row phase. An early exit freezes that phase
+/// while the whole card fades, so rows still waiting never flash into view.
+/// This derived cache publishes nothing and never invalidates layout.
+@MainActor
+private final class AtticMenuEntrancePhase: ObservableObject {
+    private var lastTime: Double?
+    private var closing = false
+
+    func time(for state: AtticUnfoldState?) -> Double? {
+        if state?.closing == true { closing = true }
+        guard !closing else { return lastTime }
+        lastTime = state?.entranceTime
+        return lastTime
     }
 }
 

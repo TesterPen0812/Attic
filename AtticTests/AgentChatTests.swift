@@ -1145,6 +1145,35 @@ final class AgentChatHostedTests: XCTestCase {
         try inspect("closed", field: false)
     }
 
+    func testAttachmentPickerHasMenuRowsAndPressAttachesTheItem() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let target = AgentTarget(page: .notes, itemID: UUID(), title: "Menu test note")
+        model.searchItems = { _ in [target] }
+        model.open()
+        spin(0.45)
+        model.pickingItem = true
+        spin(0.8)
+        var seen = Set<ObjectIdentifier>()
+        var rows: [AnyObject] = []
+        func walk(_ node: AnyObject) {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return }
+            if node.accessibilityIdentifier?() == "agent-chat-pick-result" { rows.append(node) }
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+        }
+        walk(try XCTUnwrap(window.contentView))
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.accessibilityRole?(), .menuItem)
+        XCTAssertEqual(try XCTUnwrap(row.accessibilityFrame?()).height, 32, accuracy: 1)
+        XCTAssertTrue(row.accessibilityPerformPress?() == true)
+        spin(0.2)
+        XCTAssertEqual(model.attachments, [.item(target)])
+        XCTAssertFalse(model.pickingItem)
+        XCTAssertTrue(model.isOpen)
+    }
+
     func testSA5ComposerPhaseGeometryRespectsReduceMotion() {
         XCTAssertNil(AgentChatComposer.phaseAnimation(alive: false), "Reduce Motion must move composer geometry instantly")
         XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")

@@ -477,15 +477,10 @@ enum AtticDropdownMetrics {
     static let sectionHeaderBottom: CGFloat = 5
     /// A quiet gap between groups (Notes' cards that have no rule).
     static let groupGap: CGFloat = 4
-    /// The width rule: fits its content, never under 150 pt, never past
-    /// the panel's 12 pt margin.
-    static let minWidth: CGFloat = 150
-    /// The two card widths (Dropdown content: answers, owner, 2026-10-24,
-    /// rule 1): 184 pt for a list of commands or choices without a field
-    /// (the priority picker), 224 pt for a card with a field (the date
-    /// card's: the tag picker, Move to Task…) and the `/` list. The link
-    /// card stays 272 pt (`AtticNoteFormatMetrics.linkCardWidth`).
-    static let commandCardWidth: CGFloat = 184
+    /// The picked menu minimum (Accepted 13 Nov), shared by picker cards.
+    /// Date/tag/link cards keep the room required by their specialized content.
+    static let minWidth: CGFloat = AtticMenuMetrics.minWidth
+    static let commandCardWidth: CGFloat = AtticMenuMetrics.minWidth
     static let fieldCardWidth: CGFloat = 224
     static let panelMargin: CGFloat = 12
     /// From the anchor (the caret's line, a strip button) to the card:

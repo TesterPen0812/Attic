@@ -114,8 +114,8 @@ struct TaskMovePickerView: View {
 
 /// Priority as a short list (the strip's Priority): None, ↓ Low,
 /// ! Medium, !! High (follow-up part 2: all four, everywhere), under a
-/// "Priority" header as the tag picker has "Tags", 184 pt wide (Dropdown
-/// content: answers, owner, 2026-10-24, sheet 3).
+/// "Priority" header as the tag picker has "Tags", on the picked 200 pt
+/// minimum (Accepted 13 Nov). Its own 32 pt row height stays.
 struct TaskPriorityPickerView: View {
     let current: TaskPriority?
     let onPick: (TaskPriority) -> Void

@@ -1,3 +1,26 @@
+## 2026-11-13 · Menus conform to the accepted glass, motion and opening rules
+
+Menus and pickers use the same system-menu Liquid Glass face, independent of
+panel key focus, with the chosen 18 pt continuous card, 6 pt inset and 12 pt
+grey highlight. Menus retain 28 pt rows, an 8 pt control gap, 4 pt submenu
+gap, 0.86-to-1 opening spring (0.30 s, bounce 0.28), staggered rows and
+0.12 s eased closing; pickers retain their own 32 pt rows. Draw's Canvas
+and style menus, Settings choice lists and the remaining gallery choice
+menus now open through Attic's glass menu. Requests snapshot their anchor
+before deferral, and switching triggers passes the mouse-down through and
+preserves the latest request if another menu is still tracking. Settings'
+selected choice stays available to VoiceOver through the AXMenuButton value.
+Picker cards share the chosen 200 pt minimum and the command menu's 8 % ink
+hover (16 % under Increase Contrast); their own row heights stay.
+Picker lists and date-grid weeks share the capped row cascade and moving
+highlight; closing early preserves the rows' arrival phase during the fade.
+Draw's canvas list uses the chosen 28 pt rows, continuous hover,
+8 pt gap and shared reveal. Reduced Instant opens/closes command cards
+without animation, while Fade keeps the 0.12 s opacity change. Chat's inline
+attachment chooser uses the picker card and menu-item roles. The Dark opaque
+card's sRGB pixels were already #363637: its test no longer applies a second
+colour conversion to NSBitmapImageRep's calibrated colour result.
+
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 
 The note thumbnail keeps the drawing's proportion: 7 pt continuous corners

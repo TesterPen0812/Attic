@@ -529,6 +529,7 @@ struct AtticDateCard: View {
                                 dayCell(month.cells[index], inMonth: month.inMonth[index], start: start, state: state, proposed: proposed)
                             }
                         }
+                        .modifier(AtticMenuRowEntrance(index: suggestions.count + week))
                     }
                 }
                 // One pointer for the grid (menus fix 1): a press picks the
@@ -555,6 +556,7 @@ struct AtticDateCard: View {
                 if let removeTitle {
                     clearRow(removeTitle, lit: state.lit == .remove)
                         .padding(.top, d.clearGap)
+                        .modifier(AtticMenuRowEntrance(index: suggestions.count + month.weeks))
                 }
             }
             .padding(.horizontal, d.dateBodyInset - d.inset)

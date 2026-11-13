@@ -27,7 +27,7 @@ enum DrawLibraryMetrics {
     static let thumbnailOutdent: CGFloat = 3
 
     static func height(of row: DrawLibraryMenuModel.Row) -> CGFloat {
-        AtticDropdownMetrics.rowHeight + (row.startsSection ? AtticDropdownMetrics.separatorHeight : 0)
+        AtticMenuMetrics.rowHeight + (row.startsSection ? AtticDropdownMetrics.separatorHeight : 0)
     }
 
     /// The list's natural height (known up front, so nothing is measured
@@ -110,12 +110,13 @@ struct DrawLibraryMenu: View {
 }
 
 /// A menu card on the command menus' material (`AtticGlassMenuSurface`:
-/// glass, or the opaque card under Reduce Transparency and the solid
-/// controls setting), with its rows `AtticGlassMenuShape.inset` in.
+/// active system glass, or the opaque card under Reduce Transparency and
+/// the Solid surface setting), with its rows `AtticGlassMenuShape.inset` in.
 struct DrawLibraryCard<Content: View>: View {
     var width: CGFloat?
     @ViewBuilder let content: Content
     @Environment(\.atticDesign) private var design
+    @Namespace private var highlight
 
     var body: some View {
         let style = AtticGlassMenuStyle(design: design)
@@ -124,7 +125,9 @@ struct DrawLibraryCard<Content: View>: View {
             .frame(width: width)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .background(AtticGlassMenuSurface(style: style))
+            .environment(\.atticMenuHighlight, highlight)
             .clipShape(AtticGlassMenuShape.card)
+            .modifier(AtticUnfoldCard(cornerRadius: AtticGlassMenuShape.radius))
             .accessibilityElement(children: .contain)
     }
 }
@@ -177,13 +180,14 @@ struct DrawLibraryRows: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
-                    ForEach(rows) { row in
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if row.startsSection { AtticDropdownRule() }
                         DrawLibraryRowView(row: row, isLit: row.id == litID,
                                            onHover: { inside in hover(row, inside) }) {
                             choose(row)
                         }
                         .id(row.id)
+                        .modifier(AtticMenuRowEntrance(index: index))
                     }
                 }
             }
@@ -217,7 +221,7 @@ struct DrawLibraryRowView: View {
         Button(action: action) {
             HStack(spacing: m.columnGap) {
                 leading(iconInk: iconInk)
-                    .frame(width: DrawLibraryMetrics.thumbnail.width, height: m.rowHeight)
+                    .frame(width: DrawLibraryMetrics.thumbnail.width, height: AtticMenuMetrics.rowHeight)
                     .padding(.leading, row.canvas == nil ? 0 : -DrawLibraryMetrics.thumbnailOutdent)
                     .padding(.trailing, row.canvas == nil ? 0 : DrawLibraryMetrics.thumbnailOutdent)
                 Text(verbatim: row.title)
@@ -245,10 +249,10 @@ struct DrawLibraryRowView: View {
                 }
             }
             .padding(.horizontal, m.rowPadding)
-            .frame(height: m.rowHeight)
+            .frame(height: AtticMenuMetrics.rowHeight)
             .background {
                 if isLit, row.isEnabled {
-                    Squircle(cornerRadius: AtticGlassMenuShape.rowRadius).fill(Color(nsColor: style.highlight))
+                    AtticMenuRowHighlight(color: Color(nsColor: style.highlight))
                 }
             }
             .contentShape(Rectangle())
@@ -256,6 +260,8 @@ struct DrawLibraryRowView: View {
         .buttonStyle(.plain)
         .disabled(!row.isEnabled)
         .onHover { onHover?($0) }
+        .animation(design.reduceMotion ? AtticMotionScale.reducedChange
+                   : .spring(duration: AtticMenuMetrics.highlightDuration, bounce: 0), value: isLit)
         .accessibilityLabel(Text(verbatim: row.title))
         .accessibilityValue(Text(verbatim: row.detail ?? ""))
         .accessibilityAddTraits(row.isOpen ? .isSelected : [])

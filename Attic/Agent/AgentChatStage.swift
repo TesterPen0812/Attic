@@ -780,10 +780,13 @@ struct AgentChatComposer: View {
         let hasText = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return VStack(alignment: .leading, spacing: 3) {
             AgentChatContextChips(model: model)
-            if model.pickingItem {
-                AgentChatItemPicker(model: model, done: { model.pickingItem = false })
-            } else {
-                field
+            ZStack(alignment: .bottomLeading) {
+                if !model.pickingItem { field }
+                AtticUnfoldPresence(value: model.pickingItem ? true : nil, fromTop: false) { _ in
+                    AtticDropdownCard {
+                        AgentChatItemPicker(model: model, done: { model.pickingItem = false })
+                    }
+                }
             }
             HStack(spacing: 1) {
                 addMenu
@@ -1035,39 +1038,24 @@ private struct AgentChatItemPicker: View {
 
     var body: some View {
         let results = model.searchItems(query)
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(results.enumerated()), id: \.offset) { index, target in
-                Button { pick(target) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: target.page == .notes ? "note.text" : "circle")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(TasksPanelDesign.toneInk(.date, tokens: design.tokens).color)
-                            .frame(width: 12)
-                        Text(target.title ?? "")
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                            .foregroundStyle(design.tokens.ink(.heading).color)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 4)
-                    .frame(height: 22)
-                    .background(index == highlighted ? AgentChatFill.quiet(design) : .clear,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { if $0 { highlighted = index } }
-                .accessibilityIdentifier("agent-chat-pick-result")
-                .agentChatUITestTarget("agent-chat-pick-result-\(index)")
+                AtticDropdownRow(title: target.title ?? "", systemName: target.page == .notes ? "note.text" : "circle",
+                                 isHighlighted: index == highlighted,
+                                 onHover: { if $0 { highlighted = index } },
+                                 position: index + 1, itemCount: results.count) { pick(target) }
+                    .accessibilityIdentifier("agent-chat-pick-result")
+                    .agentChatUITestTarget("agent-chat-pick-result-\(index)")
             }
             TextField(String(localized: "Task or note…"), text: $query)
                 .textFieldStyle(.plain)
                 .accessibilityLabel(String(localized: "Find a task or note"))
-                .font(.system(size: 11.5))
+                .font(AtticTextStyle.dropdownRow.font)
                 .foregroundStyle(design.tokens.ink(.heading).color)
                 .focused($focused)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
+                .padding(.horizontal, AtticDropdownMetrics.rowPadding)
+                .frame(height: AtticDropdownMetrics.fieldHeight)
+                .onExitCommand(perform: done)
                 .onChange(of: query) { _, _ in highlighted = 0 }
                 .onKeyPress(.downArrow) { highlighted = min(highlighted + 1, max(0, results.count - 1)); return .handled }
                 .onKeyPress(.upArrow) { highlighted = max(highlighted - 1, 0); return .handled }

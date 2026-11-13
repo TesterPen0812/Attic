@@ -843,7 +843,7 @@ struct AtticGlassMenuStyle {
     }
     /// The highlight: 8 % ink (16 % under Increase Contrast).
     var highlight: NSColor {
-        return title.withAlphaComponent(design.increaseContrast ? AtticMenuMetrics.highlightAlphaIncreased : AtticMenuMetrics.highlightAlpha)
+        tokens.dropdownHighlight.nsColor
     }
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var rim: NSColor {
@@ -1165,6 +1165,7 @@ final class AtticGlassMenuCard {
     /// on the spring while its rows arrive one after another; under Reduce
     /// Motion it only fades.
     func show(animated: Bool, from corner: AtticGlassMenu.Corner) {
+        let animated = animated && (!menu.style.reduceMotion || AtticReducedMotionStyle.current == .fade)
         self.corner = corner
         window.alphaValue = 1
         #if DEBUG
@@ -1200,6 +1201,7 @@ final class AtticGlassMenuCard {
     /// corner it grew from (a fade only under Reduce Motion); at once when
     /// not `animated`.
     func hide(animated: Bool) {
+        let animated = animated && (!menu.style.reduceMotion || AtticReducedMotionStyle.current == .fade)
         guard !isHidden else { return }
         isHidden = true
         let window = self.window

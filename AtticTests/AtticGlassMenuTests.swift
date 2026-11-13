@@ -724,7 +724,9 @@ final class AtticGlassMenuTests: XCTestCase {
     /// only, with no growth and no cascade.
     func testTheCardGrowsAndItsRowsCascadeButReduceMotionOnlyFades() throws {
         let saved = AtticGlassMenu.design
-        defer { AtticGlassMenu.design = saved }
+        let savedStyle = AtticReducedMotionStyle.current
+        AtticReducedMotionStyle.current = .fade
+        defer { AtticGlassMenu.design = saved; AtticReducedMotionStyle.current = savedStyle }
         // GitHub's macOS runners can enable system Reduce Motion. This case
         // exercises both explicit branches regardless of the runner setting.
         var animated = saved
@@ -759,6 +761,20 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertTrue(calmRows.allSatisfy { $0.layer?.animation(forKey: "attic.row.slide") == nil }, "no cascade")
     }
 
+    func testReducedInstantMenuOpensWithoutAnimation() throws {
+        let saved = AtticGlassMenu.design
+        let savedStyle = AtticReducedMotionStyle.current
+        defer { AtticGlassMenu.design = saved; AtticReducedMotionStyle.current = savedStyle }
+        var design = saved
+        design.reduceMotion = true
+        AtticGlassMenu.design = design
+        AtticReducedMotionStyle.current = .instant
+        let menu = open(commands())
+        defer { menu.close(animated: false) }
+        let lift = try XCTUnwrap(menu.cards[0].window.lift.layer)
+        XCTAssertNil(lift.animation(forKey: "attic.open.fade"), "Reduced Instant opens immediately")
+        XCTAssertNil(lift.animation(forKey: "attic.open.grow"))
+    }
 
     /// Accepted 2026-11-12 (evening) · Menus: version 3 on the system
     /// menu's Liquid Glass, with the grey hover. The system glass lenses
