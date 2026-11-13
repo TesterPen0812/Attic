@@ -894,8 +894,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
     }
 
     /// The recheck's single-item reproducer. Delete C, then P (Tasks).
-    /// Restore only P through Recently Deleted. Undo in Tasks twice (P's
-    /// Delete is obsolete, C's Delete brings C back). Undo P's Restore: it
+    /// Restore only P through Recently Deleted. Undo in Tasks skips P's
+    /// obsolete Delete and brings C back (af29d060). Undo P's Restore: it
     /// must not delete P and so C, whose restore it never made.
     func testUndoOfASingleRestoreKeepsAChildRestoredThroughAnotherHistory() throws {
         let family = try makeOwnershipFixture()
@@ -904,8 +904,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertTrue(library.restore(family.parent, in: .library))
         XCTAssertEqual(library.state(of: family.child), .deleted, "the child was deleted on its own")
 
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "P is live already")
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "C comes back")
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "skip the already-live P and bring C back in one command")
+        XCTAssertNil(library.undo.undoStep(in: .tasks), "both Delete steps were consumed")
         XCTAssertEqual(library.state(of: family.child), .live)
 
         XCTAssertEqual(library.undo.undoStep(in: .library), .obsolete, "the restore no longer reaches P")
@@ -923,8 +923,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertTrue(library.delete(family.note))
         XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
 
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertNil(library.undo.undoStep(in: .tasks), "af29d060: the same command skipped P's obsolete Delete")
         XCTAssertEqual(library.state(of: family.child), .live)
 
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied, "the note still goes back")
