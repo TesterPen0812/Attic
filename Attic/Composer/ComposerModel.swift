@@ -199,7 +199,11 @@ final class ComposerModel: ObservableObject {
             || !writing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var canCreate: Bool { !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
+    // Keep Create reachable while Task files prepare, so submission can
+    // explain the wait through the same notice as the detached add bar.
+    var canCreate: Bool {
+        !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty
+    }
 
     // MARK: Opening and closing
 
@@ -479,7 +483,7 @@ final class ComposerModel: ObservableObject {
     /// transaction starts. Keep the exact draft until the write succeeds;
     /// a failure removes the row and restores its text to this card.
     private func submitTaskAcknowledged(openingPage: Bool) {
-        guard isOpen, canCreate else { return }
+        guard isOpen, canCreate, tasks.composerFilesReadyForSubmission() else { return }
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         let day = finished.parts(parser: tasks.parser).dueDay
@@ -541,6 +545,7 @@ final class ComposerModel: ObservableObject {
 
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
+        if kind == .task, !tasks.composerFilesReadyForSubmission() { return false }
         let made = kind == .task
             ? IdleLatencyTrace.span("task_add_submit") { createTask(openingPage: openingPage) }
             : createNote(openingPage: openingPage)

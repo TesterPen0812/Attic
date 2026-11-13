@@ -191,6 +191,22 @@ final class AppSettingsTests: XCTestCase {
     }
 
     @MainActor
+    func testDS13OversizedStoredHotkeyFallsBackWithoutChangingPreferences() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        for key in ["quickCaptureKeyCode", "quickCaptureModifiers"] {
+            for oversized in [Int(UInt32.max) + 1, Int.max] {
+                defaults.set(12, forKey: "quickCaptureKeyCode")
+                defaults.set(0, forKey: "quickCaptureModifiers")
+                defaults.set(oversized, forKey: key)
+                let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+                XCTAssertEqual(settings.quickCaptureShortcut, .newTask)
+                XCTAssertEqual(defaults.object(forKey: key) as? Int, oversized)
+            }
+        }
+    }
+
+    @MainActor
     func testFix18RepeatedQuitCommandDoesNotBypassPendingPreparation() throws {
         var terminationCalls = 0
         let commands = MenuBarCommands.commands(

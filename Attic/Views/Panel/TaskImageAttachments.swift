@@ -272,11 +272,59 @@ enum TaskAttachmentActions {
         Task {
             guard let source = await verifiedURL(reference, store: store, owner: owner) else { return }
             do {
-                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.trashItem(at: destination, resultingItemURL: nil) }
-                try FileManager.default.copyItem(at: source, to: destination)
+                try await exportVerifiedCopy(from: source, to: destination)
             } catch {
                 store.reportAttachmentOpenFailure(named: reference.filename, error: error, owner: owner)
             }
+        }
+    }
+
+    /// Separate file operation so an injected file failure can exercise the
+    /// same replacement path without presenting a system save panel.
+    nonisolated static func exportVerifiedCopy(from source: URL, to destination: URL,
+                                               fileManager: FileManager = .default) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try replaceVerifiedCopy(from: source, to: destination, fileManager: fileManager)
+        }.value
+    }
+
+    nonisolated private static func replaceVerifiedCopy(from source: URL, to destination: URL,
+                                                        fileManager: FileManager) throws {
+        // A save panel grants the selected file, not permission to create
+        // arbitrary siblings. Use the sandbox-safe replacement directory on
+        // its volume, as the Draw export path does.
+        let scratch = try fileManager.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                          appropriateFor: destination, create: true)
+        let staged = scratch.appendingPathComponent(destination.lastPathComponent)
+        defer {
+            try? fileManager.removeItem(at: staged)
+            if (try? fileManager.contentsOfDirectory(atPath: scratch.path))?.isEmpty == true {
+                try? fileManager.removeItem(at: scratch)
+            }
+        }
+        // Stage the complete verified copy before touching the chosen path.
+        try fileManager.copyItem(at: source, to: staged)
+        if fileManager.fileExists(atPath: destination.path) {
+            let shortName = String(decoding: destination.lastPathComponent.utf8.prefix(80), as: UTF8.self)
+            let backupName = "Replaced \(UUID().uuidString) \(shortName)"
+            let backup = destination.deletingLastPathComponent().appendingPathComponent(backupName)
+            do {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: staged, backupItemName: backupName,
+                                                  options: [.withoutDeletingBackupItem])
+            } catch {
+                // Replacement may already have moved the only original.
+                // Restore a missing destination; otherwise retain its backup.
+                if !fileManager.fileExists(atPath: destination.path), fileManager.fileExists(atPath: backup.path) {
+                    try? fileManager.moveItem(at: backup, to: destination)
+                }
+                throw error
+            }
+            // Replacement retains the original without another full copy.
+            // If Trash fails, report it and leave the backup beside the chosen
+            // file, where TemporaryItems cleanup cannot discard the old bytes.
+            try fileManager.trashItem(at: backup, resultingItemURL: nil)
+        } else {
+            try fileManager.moveItem(at: staged, to: destination)
         }
     }
 
