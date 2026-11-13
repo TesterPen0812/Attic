@@ -293,6 +293,61 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertFalse(moved & (direct | retry),
                          'A moved method is still selected from AtticTests by a cost/FKA caller')
 
+    def test_unit_shards_bound_each_test_above_the_longest_measured_ci_test(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        main = workflow.split('      - name: Run macOS unit tests', 1)[1].split('      - name: Run native dropdown timing gates', 1)[0]
+        continuation = workflow.split('  unit-continuation:', 1)[1].split('\n  required:', 1)[0]
+        # Only the test-without-building invocation counts: flags on build-for-testing do nothing.
+        main_run = main.split('Scripts/xcodebuild_locked.sh \\\n', 1)[1].split('test-without-building', 1)[0]
+        continuation_run = continuation.split('Scripts/xcodebuild_locked.sh test-without-building', 1)[1].split('\n      - name:', 1)[0]
+        # 43338111674's xcresults: O14 233.730779 s; main maximum 103.989512 s.
+        for name, run, allowance in [('main', main_run, 240), ('continuation', continuation_run, 360)]:
+            with self.subTest(shard=name):
+                self.assertIn('-test-timeouts-enabled YES', run)
+                self.assertIn(f'-default-test-execution-time-allowance {allowance}', run)
+                self.assertIn(f'-maximum-test-execution-time-allowance {allowance}', run)
+        self.assertIn('timeout-minutes: 60', main)
+        self.assertIn('timeout-minutes: 55', continuation)
+        summary = workflow.split('      - name: Print macOS unit-test summary', 1)[1].split('      - name: Upload macOS unit-test results', 1)[0]
+        self.assertIn('if: always()', summary)
+        # A red summary reports; it must not skip the steps after it. The gate reads unit_tests.outcome.
+        self.assertIn('continue-on-error: true', summary)
+        self.assertIn('ci_required_checks.py --test-summary', summary)
+        summary = continuation.split('      - name: Print continuation unit-test summary', 1)[1].split('      - name: Upload continuation XCTest result', 1)[0]
+        self.assertIn('if: always()', summary)
+        self.assertIn('[ ! -d "$RUNNER_TEMP/AtticUnitContinuation.xcresult" ]', summary)
+        self.assertIn('ci_required_checks.py --test-summary', summary)
+
+    def test_timeout_failure_is_named_in_the_step_summary_with_completed_tests(self):
+        import json
+        import os
+        import subprocess
+        import sys
+        root = Path(__file__).resolve().parent.parent
+        for failed in [False, True]:
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory) / 'tests.json'
+                summary = Path(directory) / 'summary.md'
+                fixture.write_text(json.dumps(dict(
+                    passedTests=1, failedTests=int(failed), skippedTests=0, expectedFailures=0,
+                    testFailures=[dict(testIdentifierString='TimeoutProbe/testATimesOut()',
+                                       failureText='Test exceeded execution time allowance of 600 seconds')]
+                    if failed else [])))
+                env = dict(os.environ, **dict.fromkeys(CHECKS, 'success'),
+                           LANE='full', GITHUB_STEP_SUMMARY=str(summary))
+                result = subprocess.run([sys.executable, str(root / 'Scripts/ci_required_checks.py'),
+                                         '--test-summary', str(fixture)], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, int(failed), result.stderr)
+                report = summary.read_text()
+                self.assertIn('| Passed | 1 |', report)
+                self.assertIn(f'| Failed | {int(failed)} |', report)
+                if failed:
+                    self.assertIn('TimeoutProbe/testATimesOut()', report)
+                    self.assertIn('execution time allowance of 600 seconds', report)
+                    self.assertIn('::error', result.stdout)
+
+
 
 if __name__ == '__main__':
     unittest.main()

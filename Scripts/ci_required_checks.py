@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The final macOS gate uses raw step outcomes, including missing outcomes."""
+import json
 import os
 from pathlib import Path
 import sys
@@ -46,5 +47,29 @@ def gate(env, checks=CHECKS):
     return int(bool(failures))
 
 
+def summarize_tests(result, env):
+    """Publish XCTest failures, including per-test timeouts, after any exit."""
+    passed, failed, skipped = (result[key] for key in ('passedTests', 'failedTests', 'skippedTests'))
+    lines = [
+        '## XCTest results', '', '| Result | Tests |', '|---|---|',
+        f'| Passed | {passed} |', f'| Failed | {failed} |', f'| Skipped | {skipped} |', '',
+    ]
+    print(f'XCTest: {passed} passed, {failed} failed, {skipped} skipped')
+    for failure in result.get('testFailures', []):
+        name = failure.get('testIdentifierString') or failure.get('testName') or 'Unknown test'
+        message = failure.get('failureText', 'Test failed')
+        details = message.replace('\n', ' ')
+        lines.append(f'- `{name}`: {details}')
+        annotation = f'{name}: {message}'.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+        print(f'::error title=XCTest failure::{annotation}')
+    if path := env.get('GITHUB_STEP_SUMMARY'):
+        with Path(path).open('a') as stream:
+            stream.write('\n'.join(lines) + '\n')
+    return int(failed > 0)
+
+
 if __name__ == '__main__':
+    if '--test-summary' in sys.argv:
+        path = Path(sys.argv[sys.argv.index('--test-summary') + 1])
+        sys.exit(summarize_tests(json.loads(path.read_text()), os.environ))
     sys.exit(gate(os.environ, PARALLEL_CHECKS if '--parallel' in sys.argv else CHECKS))
