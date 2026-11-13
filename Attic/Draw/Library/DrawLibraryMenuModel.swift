@@ -110,9 +110,13 @@ final class DrawLibraryMenuModel: ObservableObject {
     private var deletionToastID: UUID?
 
     /// Only the still-offered canvas deletion owns the board's Undo key.
+    var canUndoDeletionIfOffered: Bool {
+        guard let toasts, let deletionToastID else { return false }
+        return toasts.current?.id == deletionToastID && toasts.current?.answersUndoKey == true
+    }
+
     func undoDeletionIfOffered() -> Bool {
-        guard let toasts, let deletionToastID, toasts.current?.id == deletionToastID,
-              toasts.current?.answersUndoKey == true else { return false }
+        guard canUndoDeletionIfOffered, let toasts else { return false }
         _ = toasts.performAction()
         return true
     }

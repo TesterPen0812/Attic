@@ -31,6 +31,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
     private let store: TaskStore
+    private let noteDraft: NoteDraftController
     private let settings: AppSettings
     private var cancellables: Set<AnyCancellable> = []
     private var keyLookAwaitsRelease = false
@@ -48,6 +49,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     init(page: PanelPage, frame: CGRect, pinned: Bool, dependencies deps: PanelPageDependencies) {
         self.page = page
         store = deps.store
+        noteDraft = deps.noteDraft
         settings = deps.settings
         uiState.becomeFloating(on: page)
         uiState.isPanelPinned = pinned
@@ -103,15 +105,14 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
         panel.onUnhandledUndo = { [weak self] redo in
-            guard let self, let history = AtticPanelController.unhandledUndoHistory(for: self.uiState.selectedSection),
-                  let library = self.store.commandLibrary else { return }
-            if history == .calendar { Task { await library.replay(in: history, redo: redo) } }
-            else { _ = redo ? library.redo(in: history) : library.undo(in: history) }
+            guard let self else { return }
+            AtticPanelController.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                store: self.store, notes: self.noteDraft.pages)
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
-            guard let self, let history = AtticPanelController.unhandledUndoHistory(for: self.uiState.selectedSection),
-                  let library = self.store.commandLibrary else { return false }
-            return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
+            guard let self else { return false }
+            return AtticPanelController.canPerformUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                store: self.store, notes: self.noteDraft.pages)
         }
         hostingView.onWindowDragBegan = { [weak self] in
             guard let self else { return }

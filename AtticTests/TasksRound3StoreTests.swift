@@ -505,6 +505,145 @@ final class PanelLifecycleTests: XCTestCase {
 /// keeps its own.
 @MainActor
 final class PanelUndoKeyTests: XCTestCase {
+    private func sendUndoKey(_ redo: Bool, to window: AtticPanel) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: redo ? [.command, .shift] : .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: redo ? "Z" : "z", charactersIgnoringModifiers: "z",
+            isARepeat: false, keyCode: 6)!
+        window.keyDown(with: event)
+    }
+
+    func testNotesLibraryUndoFromNonEditorFocusRestoresThePersistedPin() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let tasks = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let note = try XCTUnwrap(notes.create(title: "Pinned"))
+        let draft = NoteDraftController(noteStore: notes)
+        await draft.pages.startAndWait()
+        XCTAssertTrue(draft.pages.isLibraryPresented)
+        let suite = "PanelUndoNotes.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: tasks, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: draft, settings: AppSettings(defaults: defaults), uiState: uiState)
+        uiState.selectSection(.notes)
+        XCTAssertTrue(draft.pages.setPinned(true, noteID: note.id))
+        XCTAssertTrue(notes.note(withID: note.id)?.isPinned == true)
+
+        let window = controller.panelForTesting
+        XCTAssertTrue(window.canPerformUnhandledUndo?(false) == true, "the Notes library has an undo with no editor focus")
+        sendUndoKey(false, to: window)
+        for _ in 0..<100 where notes.note(withID: note.id)?.isPinned == true { await Task.yield() }
+        XCTAssertEqual(notes.note(withID: note.id)?.isPinned, false, "one ⌘Z restores the stored pin")
+        XCTAssertTrue(window.canPerformUnhandledUndo?(true) == true)
+        sendUndoKey(true, to: window)
+        for _ in 0..<100 where notes.note(withID: note.id)?.isPinned == false { await Task.yield() }
+        XCTAssertEqual(notes.note(withID: note.id)?.isPinned, true, "⇧⌘Z reapplies the pin")
+
+        // Detached panels share the same Notes history and must route the
+        // shortcut even when their header, rather than a note, has focus.
+        let floating = PanelFloatingPanel(page: .notes,
+            frame: CGRect(x: 0, y: 0, width: 440, height: 580), pinned: false,
+            dependencies: PanelPageDependencies(store: tasks, noteStore: notes,
+                canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                noteDraft: draft, settings: AppSettings(defaults: defaults), tasksMemory: nil))
+        XCTAssertTrue(floating.panel.canPerformUnhandledUndo?(false) == true)
+        sendUndoKey(false, to: floating.panel)
+        for _ in 0..<100 where notes.note(withID: note.id)?.isPinned == true { await Task.yield() }
+        XCTAssertEqual(notes.note(withID: note.id)?.isPinned, false, "floating Notes undoes the same pin")
+        sendUndoKey(true, to: floating.panel)
+        for _ in 0..<100 where notes.note(withID: note.id)?.isPinned == false { await Task.yield() }
+        XCTAssertEqual(notes.note(withID: note.id)?.isPinned, true)
+    }
+
+    func testOpenNoteUndoFromHeaderReversesFormattingAndKeepsLibraryHistorySeparate() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let tasks = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let noteID = UUID()
+        _ = try notes.createDocumentNote(id: noteID,
+            document: NoteDocument(blocks: [.text("Title"), .text("Body text")])).get()
+        let draft = NoteDraftController(noteStore: notes)
+        await draft.pages.startAndWait()
+        let suite = "PanelUndoEditor.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: tasks, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: draft, settings: AppSettings(defaults: defaults), uiState: uiState)
+        uiState.selectSection(.notes)
+        let window = controller.panelForTesting
+        XCTAssertTrue(draft.pages.setPinned(true, noteID: noteID))
+        XCTAssertTrue(draft.pages.open(noteID: noteID))
+        draft.pages.dismissLibrary()
+        XCTAssertFalse(draft.pages.isLibraryPresented)
+        let engine = try XCTUnwrap(draft.pages.active?.engine)
+        _ = engine.makeView()
+        let before = engine.document()
+        XCTAssertTrue(engine.perform(.mark(.bold), selection: NSRange(location: 6, length: 4)))
+        let after = engine.document()
+        XCTAssertNotEqual(after, before)
+        XCTAssertTrue(window.canPerformUnhandledUndo?(false) == true)
+        sendUndoKey(false, to: window)
+        for _ in 0..<100 where engine.document() != before { await Task.yield() }
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(window.canPerformUnhandledUndo?(true) == true)
+        sendUndoKey(true, to: window)
+        for _ in 0..<100 where engine.document() != after { await Task.yield() }
+        XCTAssertEqual(engine.document(), after)
+        XCTAssertTrue(draft.pages.showLibrary())
+        XCTAssertTrue(window.canPerformUnhandledUndo?(false) == true)
+        sendUndoKey(false, to: window)
+        for _ in 0..<100 where notes.note(withID: noteID)?.isPinned == true { await Task.yield() }
+        XCTAssertEqual(notes.note(withID: noteID)?.isPinned, false,
+            "the library step remains separate from the note's formatting")
+        XCTAssertEqual(notes.loadDocument(noteID: noteID)?.content.document, after,
+            "leaving the editor kept the formatted document persisted")
+    }
+
+    func testDrawUndoFromNonBoardFocusRestoresTheCanvasObjects() throws {
+        let previousDraw = DrawPageModel.shared
+        let previousEnabled = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        let draw = DrawPageModel(store: DrawInMemoryStore())
+        DrawPageModel.replaceShared(draw)
+        defer {
+            DrawPageModel.replaceShared(previousDraw)
+            AtticDraw.enabledOverride = previousEnabled
+        }
+        draw.start()
+        draw.beginText(at: CGPoint(x: 60, y: 80))
+        draw.typed("Undo me")
+        draw.endEditing()
+        XCTAssertEqual(draw.objects.count, 1)
+        XCTAssertTrue(draw.canUndo)
+
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let tasks = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let suite = "PanelUndoDraw.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: tasks, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes),
+            settings: AppSettings(defaults: defaults), uiState: uiState)
+        uiState.selectSection(.canvas)
+
+        let window = controller.panelForTesting
+        XCTAssertTrue(window.canPerformUnhandledUndo?(false) == true, "Draw has an undo with focus on the panel header")
+        sendUndoKey(false, to: window)
+        XCTAssertTrue(draw.objects.isEmpty, "one ⌘Z removes the text box")
+        XCTAssertTrue(window.canPerformUnhandledUndo?(true) == true)
+        sendUndoKey(true, to: window)
+        XCTAssertEqual(draw.objects.count, 1, "⇧⌘Z restores the text box")
+    }
+
     func testUnhandledCommandZReachesTheHistoryButNeverPastATextView() throws {
         let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 520), styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: true)

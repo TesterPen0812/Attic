@@ -205,11 +205,50 @@ private final class PanelFirstTouchApproach {
 
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
-    /// The history ⌘Z reaches with the keyboard nowhere in a page.
-    private var unhandledUndoHistory: UndoHistoryID? { Self.unhandledUndoHistory(for: uiState.selectedSection) }
-
+    /// The shared histories used for Tasks and Calendar. Notes and Draw have
+    /// their own editors and histories, so they are dispatched below.
     static func unhandledUndoHistory(for section: PanelSection) -> UndoHistoryID? {
         section.isTaskBased ? .tasks : section.isCalendar ? CalendarAgendaCommands.history : nil
+    }
+
+    /// Called only after the focused editor or native field had its chance.
+    /// Use the page's current model so header focus, menus and page changes
+    /// still reach the same Undo command as the page's own controls.
+    static func performUnhandledUndo(redo: Bool, section: PanelSection, store: TaskStore, notes: NotesPageController) {
+        if section.isNotes {
+            if notes.isLibraryPresented {
+                Task { @MainActor in
+                    if redo { _ = await notes.redoLibraryDurably() }
+                    else { _ = await notes.undoLibraryDurably() }
+                }
+            } else if let engine = notes.active?.engine {
+                _ = redo ? engine.redoCommand() : engine.undoCommand()
+            }
+            return
+        }
+        if section.isCanvas && AtticDraw.isEnabled {
+            let draw = DrawPageModel.shared
+            if !redo && draw.library.undoDeletionIfOffered() { return }
+            if redo { draw.redo() } else { draw.undo() }
+            return
+        }
+        guard let history = unhandledUndoHistory(for: section), let library = store.commandLibrary else { return }
+        if history == .calendar { Task { await library.replay(in: history, redo: redo) } }
+        else { _ = redo ? library.redo(in: history) : library.undo(in: history) }
+    }
+
+    static func canPerformUnhandledUndo(redo: Bool, section: PanelSection, store: TaskStore, notes: NotesPageController) -> Bool {
+        if section.isNotes {
+            if notes.isLibraryPresented { return redo ? notes.canRedoLibrary : notes.canUndoLibrary }
+            guard let engine = notes.active?.engine else { return false }
+            return redo ? engine.canRedoCommand : engine.canUndoCommand
+        }
+        if section.isCanvas && AtticDraw.isEnabled {
+            let draw = DrawPageModel.shared
+            return redo ? draw.canRedo : draw.library.canUndoDeletionIfOffered || draw.canUndo
+        }
+        guard let history = unhandledUndoHistory(for: section), let library = store.commandLibrary else { return false }
+        return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
     }
 
     private let panel: AtticPanel
@@ -947,17 +986,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self.requestInteractiveHide()
         }
         // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
-        // say): the Tasks history, the one the Undo toast names.
-        // On Calendar: its own history, where the "+" card's events, tasks
-        // and notes made there are steps (w3 composer).
+        // say) reaches that page's history, including Notes and Draw.
         panel.onUnhandledUndo = { [weak self] redo in
-            guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return }
-            if history == .calendar { Task { await library.replay(in: history, redo: redo) } }
-            else { _ = redo ? library.redo(in: history) : library.undo(in: history) }
+            guard let self else { return }
+            Self.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                store: self.store, notes: self.noteDraft.pages)
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
-            guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }
-            return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
+            guard let self else { return false }
+            return Self.canPerformUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                store: self.store, notes: self.noteDraft.pages)
         }
         // A corner reveal must draw live glass before any click, while the
         // other app keeps activation and the keyboard. Native glass asks the
