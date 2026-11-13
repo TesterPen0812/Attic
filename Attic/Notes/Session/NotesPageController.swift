@@ -634,6 +634,9 @@ final class NotesPageController: ObservableObject {
             if session.usesWorkspaceBinding {
                 // A task owns this leased session. The recovery escape makes
                 // a separate ordinary note, never rekeys the task's editor.
+                // The same gates as the ordinary path apply (stale-base
+                // escape, recovery copy durable, editor idle).
+                guard self.canCommit(session, resolvingConflict: true), self.preserve(session) else { return false }
                 var ordinary = document
                 ordinary.requires.removeAll { $0 == "taskNote" }
                 guard let (copy, bytes) = self.replacementForDeletedNote(ordinary, oldID: session.noteID,
@@ -649,6 +652,7 @@ final class NotesPageController: ObservableObject {
                         detail: String(localized: "Couldn’t save a new note; your text is still in recovery.")))
                     return false
                 }
+                self.adoptStoredVersionAfterKeepingAsNew(session)
                 session.showNotice(NoteNotice(kind: .noteSaved,
                     detail: String(localized: "Your writing was saved as a separate note.")))
                 return true
@@ -657,6 +661,32 @@ final class NotesPageController: ObservableObject {
             return self.keepAsNewNote(stored: stored)
         }
     }
+    /// The copy now holds the person's version, so the task's note takes the
+    /// other (stored) version and leaves the conflict, as the ordinary path's
+    /// rekey does. A second Keep as new note then has nothing to keep.
+    private func adoptStoredVersionAfterKeepingAsNew(_ session: NoteSession) {
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        if !retireRecoveryCopy(noteID: session.noteID, session: session), journal?.requiresAsyncIO != true {
+            session.showNotice(NoteNotice(kind: .copyKept,
+                detail: String(localized: "Your text was saved, but its old recovery copy is being kept until it can be checked.")))
+        }
+        session.recoveryClaim = nil
+        let conflict = session.state
+        session.state = .clean
+        session.baseRevisionID = nil; session.baseContent = nil
+        if let page = session.workspacePage {
+            page.externalRefresh(origin: String(localized: "another editor"))
+        } else {
+            _ = refreshWorkspaceSession(session)
+        }
+        // Still on the old text (deleted note, refused reload): stay in conflict.
+        if session.baseRevisionID == nil || session.baseRevisionID != store.note(withID: session.noteID)?.revisionID {
+            session.state = conflict
+        }
+    }
+
     func deleteNoteDurably(noteID: UUID) async -> Bool {
         // removeNote proves this note's retirement and store save itself.
         // A different session's failed checkpoint cannot change that outcome.
