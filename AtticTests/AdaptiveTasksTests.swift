@@ -262,7 +262,15 @@ final class AdaptiveTasksTests: XCTestCase {
             let plus = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
             XCTAssertEqual(one.minX, insets.leading, accuracy: 0.5)
             let key = try XCTUnwrap(frame(of: "tasks-tag-bar-key", in: host))
-            XCTAssertLessThan(one.width - key.width, 100, "All and #launch after the open \"#\": a short bar")
+            let all = try XCTUnwrap(frame(of: "tasks-tag-bar-all", in: host))
+            let launch = try XCTUnwrap(frame(of: "tasks-tag-bar-launch", in: host))
+            let divider = all.minX - key.maxX
+            print("CI7_TAG_GEOMETRY bar=\(one.width) key=\(key.width) divider=\(divider) trailing=\(one.maxX - launch.maxX)")
+            XCTAssertEqual(divider, 6 + AtticHairline.width, accuracy: 0.5,
+                           "Accepted 13 Nov 1A: the divider and its two 3 pt gaps")
+            XCTAssertEqual(one.maxX - launch.maxX, 3, accuracy: 0.5,
+                           "the bar ends at its last pill's prescribed inset")
+            XCTAssertLessThan(one.width - key.width - divider, 100, "All and #launch after the open \"#\": a short bar")
             _ = store.commit([TaskDraft(title: "Two", tags: ["team"])])
             spin(0.6)
             let two = try XCTUnwrap(frame(of: "tasks-tag-bar", in: host))
