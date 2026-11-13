@@ -55,6 +55,37 @@ final class AgentActionsTests: XCTestCase {
 
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
+    func testPF28MutationUsesTwoDurableWritesAndNeverReencodesSettledInverses() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "PF28JournalCost").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journal)
+        for index in 0..<24 {
+            let request = actions.beginRequest(title: "Recorded change \(index)")
+            _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Task \(index)"],
+                                                 watching: false, requestID: request))
+            actions.sealRequest(request)
+        }
+        print("PF28 24 mutations journalWrites=\(actions.journalWrites) inverseConversions=\(actions.inverseConversions)")
+        XCTAssertEqual(actions.journalWrites, 48, "One required intent and one completed receipt per mutation")
+        XCTAssertEqual(actions.inverseConversions, 24, "Each immutable inverse must be converted only once")
+        XCTAssertEqual(actions.durableChangeSets().count, 24)
+    }
+
+    func testPF40SealedReadOnlyRequestsDoNotGrowResidentMetadata() throws {
+        let tasks = try makeTestStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: ownedTemporaryDirectory(prefix: "PF40").appendingPathComponent("undo.json"))
+        for index in 0..<1_000 {
+            let id = actions.beginRequest(title: "Read only \(index)")
+            actions.sealRequest(id)
+            XCTAssertThrowsError(try actions.setMode(.auto, for: id))
+        }
+        print("PF40 sealed=1000 retainedMetadata=\(actions.retainedRequestMetadataCount)")
+        XCTAssertEqual(actions.retainedRequestMetadataCount, 0,
+                       "A completed read-only run has neither a durable inverse nor remaining admission rights")
+    }
+
     /// Suspends a real fake-backed writer at the await boundary, so an owner
     /// command can commit independently before an agent call resumes.
     private final class HeldAgentCalendarWriter: CalendarEventWriter {
