@@ -3946,11 +3946,12 @@ extension NotesPageControllerTests {
                                                               staged: [staged], replacing: old)
         XCTAssertEqual(fault.injectedFailures, 1)
         XCTAssertEqual(fault.pendingFailures, 0)
-        _ = try await journal.writeDurably(ds8Entry(noteID, "After cancellation", staged: staged),
-                                           staged: [staged], replacing: claimed)
+        // Keep the exact bytes written: rebuilding the fixture allocates a
+        // different file-block placement UUID.
+        let latest = try ds8Entry(noteID, "After cancellation", staged: staged)
+        _ = try await journal.writeDurably(latest, staged: [staged], replacing: claimed)
         let recovered = try await NoteDraftJournal(directory: root).entriesDurably()
-        XCTAssertEqual(recovered.first?.0.content,
-                       try ds8Entry(noteID, "After cancellation", staged: staged).content)
+        XCTAssertEqual(recovered.first?.0.content, latest.content)
     }
     #endif
 }
