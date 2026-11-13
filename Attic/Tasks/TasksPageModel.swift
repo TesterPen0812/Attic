@@ -86,6 +86,8 @@ struct TasksPageServices {
     /// How long a finished row stays in place before it slides to the done
     /// group (spec: about a second).
     var doneHold: Duration = .seconds(AtticMotionPreset.doneHold)
+    /// Frame opportunity before saving an acknowledged command; tests can hold it.
+    var acknowledgementDelay: Duration = .milliseconds(20)
 }
 
 /// One row of a list: a main task with what its row and quick look show.
@@ -1842,8 +1844,8 @@ final class TasksPageModel: ObservableObject {
             settled(outcome)
             return outcome.isApplied
         }
-        Task { @MainActor [self] in
-            try? await Task.sleep(for: .milliseconds(20))
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
+            try? await Task.sleep(for: delay)
             if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
     }
@@ -1983,8 +1985,8 @@ final class TasksPageModel: ObservableObject {
             settled(created)
             return created != nil
         }
-        Task { @MainActor [self] in
-            try? await Task.sleep(for: .milliseconds(20))
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
+            try? await Task.sleep(for: delay)
             if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
         return id
@@ -2069,10 +2071,10 @@ final class TasksPageModel: ObservableObject {
         let index = holdTab.flatMap { rows(for: $0).firstIndex { $0.id == id } }
         if let holdTab, let index { hold(id, tab: holdTab, at: index) }
         completingAfterAcknowledgement.append((id, settled))
-        Task { @MainActor [self] in
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
             // The next main-queue callback is not necessarily a drawn frame.
             // Allow at least one display interval before the blocking save.
-            try? await Task.sleep(for: .milliseconds(20))
+            try? await Task.sleep(for: delay)
             guard completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
             settlePendingCompletionAcknowledgements(through: id)
         }

@@ -29,6 +29,7 @@ final class AppSettingsTests: XCTestCase {
         let deleted = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Delete")])?.first)
         let ticked = try XCTUnwrap(failingStore.commit([TaskDraft(title: "Complete")])?.first)
         let untouched = try XCTUnwrap(unrelatedStore.commit([TaskDraft(title: "Other store")])?.first)
+        for model in [normal, failing, unrelated] { model.services.acknowledgementDelay = .seconds(3_600) }
         var callbacks = 0, unrelatedCallbacks = 0
         normal.deleteAcknowledged([deleted.id]) { outcome in
             XCTAssertTrue(outcome.isApplied)
@@ -65,6 +66,7 @@ final class AppSettingsTests: XCTestCase {
         let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
         defer { coordinator.stop() }
         let page = TasksPageModel(library: coordinator.library)
+        page.services.acknowledgementDelay = .seconds(3_600)
         for durable in [false, true] {
             let task = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Quit immediately")])?.first)
             var settled: CommandOutcome?
