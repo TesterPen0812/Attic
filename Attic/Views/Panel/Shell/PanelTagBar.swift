@@ -82,12 +82,12 @@ final class PanelTagBarState: ObservableObject {
 
     func requestKeyFocus() { keyFocusRequest &+= 1 }
 
-    func noteKeyFocus(_ focused: Bool) {
+    func noteKeyFocus(_ focused: Bool, closeWhenLeaving: Bool = true) {
         guard keyFocused != focused else { return }
         keyFocused = focused
         // The keyboard left the bar (Tab on, a click on a row): a bar it
         // opened closes with it.
-        if !focused, cursor != nil { close() }
+        if !focused, closeWhenLeaving, cursor != nil { close() }
     }
 }
 
@@ -604,6 +604,12 @@ private struct PanelTagKeyFocus: ViewModifier {
                 state.noteKeyFocus(now)
                 requests?.note(PanelTagKeyFocusID(), focused: now)
                 if !now { armed = false }
+            }
+            .onDisappear {
+                // The key and summary replace one another. Release native
+                // ownership, preserving a cursor deliberately opening the bar.
+                state.noteKeyFocus(false, closeWhenLeaving: false)
+                requests?.note(PanelTagKeyFocusID(), focused: false)
             }
     }
 

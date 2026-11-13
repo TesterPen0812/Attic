@@ -95,15 +95,17 @@ extension TasksPageModel {
     func attachComposerFiles(_ files: [TasksComposerFiles], to id: UUID) {
         guard !files.isEmpty else { return }
         let staging = TaskAttachmentStaging(merging: files.map(\.staging))
-        Task { @MainActor [weak self] in
-            guard let self else { staging.discard(); return }
-            guard let owner = self.store.attachmentOwnerID(for: id) else { staging.discard(); return }
-            let added = await self.store.attachStagedFiles(to: owner) { staging }
-            guard let added, !added.isEmpty else { return }
+        let token = UUID()
+        composerAttachmentTasks[token] = Task { @MainActor [self] in
+            defer { composerAttachmentTasks[token] = nil }
+            guard let owner = store.attachmentOwnerID(for: id) else { staging.discard(); return true }
+            let added = await store.attachStagedFiles(to: owner) { staging }
+            guard let added, !added.isEmpty else { return false }
             let title = self.store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")
             ).post()
+            return true
         }
     }
 

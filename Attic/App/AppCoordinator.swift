@@ -1296,6 +1296,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func prepareForTerminationDurably() async -> Bool {
+        guard await prepareTaskWorkForQuitDurably() else { return false }
         let calendar = await CalendarDraftTerminationRegistry.shared.prepareForTerminationResult()
         if case let .refused(owner) = calendar {
             switch owner {
@@ -1331,10 +1332,11 @@ final class AppCoordinator: ObservableObject {
             canvasSession.cancelActiveInteraction()
             canvasSession.flushViewState()
         }
-        return prepareTaskAcknowledgementsForQuit()
+        return await prepareTaskWorkForQuitDurably()
     }
 
     func prepareForTermination() -> Bool {
+        guard prepareTaskAcknowledgementsForQuit() else { return false }
         let canTerminate = AppTerminationPreparation.prepare(
             flushNoteDraft: { noteDraft.prepareToLeave(.quit) },
             commitCanvasTermination: {
@@ -1363,10 +1365,24 @@ final class AppCoordinator: ObservableObject {
 
     private func prepareTaskAcknowledgementsForQuit() -> Bool {
         guard TasksPageModel.prepareForTermination(in: store) else {
-            hoverMonitor.revealProgrammatically(section: .tasks)
+            revealTaskFailureForQuit()
             return false
         }
         return true
+    }
+
+    private func prepareTaskWorkForQuitDurably() async -> Bool {
+        guard await TasksPageModel.prepareForTerminationDurably(in: store) else {
+            revealTaskFailureForQuit()
+            return false
+        }
+        return true
+    }
+
+    private func revealTaskFailureForQuit() {
+        if !panelController.pullOut.bringForward(.tasks, switchesDocked: false) {
+            hoverMonitor.revealProgrammatically(section: .tasks)
+        }
     }
 
     func showPanel() {

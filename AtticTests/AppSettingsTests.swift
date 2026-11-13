@@ -29,6 +29,7 @@ final class AppSettingsTests: XCTestCase {
         let deleted = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Delete")])?.first)
         let ticked = try XCTUnwrap(failingStore.commit([TaskDraft(title: "Complete")])?.first)
         let untouched = try XCTUnwrap(unrelatedStore.commit([TaskDraft(title: "Other store")])?.first)
+        for model in [normal, failing, unrelated] { model.services.acknowledgementDelay = .seconds(3_600) }
         var callbacks = 0, unrelatedCallbacks = 0
         normal.deleteAcknowledged([deleted.id]) { outcome in
             XCTAssertTrue(outcome.isApplied)
@@ -65,6 +66,7 @@ final class AppSettingsTests: XCTestCase {
         let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
         defer { coordinator.stop() }
         let page = TasksPageModel(library: coordinator.library)
+        page.services.acknowledgementDelay = .seconds(3_600)
         for durable in [false, true] {
             let task = try XCTUnwrap(coordinator.store.commit([TaskDraft(title: "Quit immediately")])?.first)
             var settled: CommandOutcome?
@@ -79,6 +81,113 @@ final class AppSettingsTests: XCTestCase {
             page.settlePendingCompletionAcknowledgements()
         }
         print("CATCHUP_R8 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
+    @MainActor
+    func testR10FailedTaskSaveVetoesBeforeAwaitedCalendarAndLeavesItsDraftOpen() async throws {
+        let root = ownedTemporaryDirectory(prefix: "CatchupR10")
+        let suite = "CatchupR10.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        var reject = false
+        let store = TaskStore(container: container, persist: { context in
+            if reject { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        })
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        let task = try XCTUnwrap(store.commit([TaskDraft(title: "Unsaved tick")])?.first)
+        let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        await rows.toggle(writer.event)
+        rows.title = "Keep editing this event"
+        writer.hold = true
+        CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+        var settled: CommandOutcome?
+        page.completeAcknowledged(task.id) { settled = $0 }
+        reject = true
+        var ready: Bool?
+        let quit = Task { @MainActor in ready = await coordinator.prepareForTerminationDurably() }
+        for _ in 0..<200 where writer.gate == nil && ready == nil { await Task.yield() }
+        // On the broken ordering Calendar holds quit while the task timer fails.
+        if writer.gate != nil {
+            for _ in 0..<200 where settled == nil { try await Task.sleep(for: .milliseconds(5)) }
+            XCTAssertNotNil(settled)
+            writer.gate?.resume(); writer.gate = nil
+        }
+        writer.hold = false
+        await quit.value
+        XCTAssertEqual(ready, false, "a save failure during awaited preparation must veto quit")
+        XCTAssertEqual(settled?.isApplied, false)
+        let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(saved.first { $0.id == task.id }?.status, .todo, "the failed completion rolls back")
+        XCTAssertEqual(writer.editCalls, 0, "a Tasks veto must precede other pages ending live editing")
+        XCTAssertNotNil(rows.rowID, "the Calendar draft stays open for a quit that did not happen")
+        writer.hold = false
+        _ = await rows.close()
+        print("CATCHUP_R10 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
+    @MainActor
+    func testR13GoneAcknowledgedCommandsDoNotVetoQuit() throws {
+        for completing in [false, true] {
+            let store = try makeTestStore()
+            let page = TasksPageModel(library: AtticLibrary(tasks: store))
+            page.services.acknowledgementDelay = .seconds(3_600)
+            let task = try XCTUnwrap(store.commit([TaskDraft(title: "Removed elsewhere")])?.first)
+            var outcome: CommandOutcome?
+            if completing { page.completeAcknowledged(task.id) { outcome = $0 } }
+            else { page.deleteAcknowledged([task.id]) { outcome = $0 } }
+            XCTAssertTrue(store.delete(taskIDs: [task.id]))
+            XCTAssertTrue(TasksPageModel.prepareForTermination(in: store), "a gone target is not an unsaved edit")
+            XCTAssertNotNil(outcome)
+            XCTAssertTrue(TasksPageModel.prepareForTermination(in: store), "the obsolete command is drained once")
+        }
+    }
+
+    @MainActor
+    func testR12QuitWaitsForSubmittedComposerAttachments() async throws {
+        let root = ownedTemporaryDirectory(prefix: "CatchupR12")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let suite = "CatchupR12.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite],
+            arguments: [], applicationSupportURL: root)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try AppCoordinator(runtime: runtime, openStore: { container })
+        defer { coordinator.stop() }
+        let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("Files")))
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        page.services.acknowledgementDelay = .seconds(3_600)
+        let composer = ComposerModel(tasks: page)
+        for acknowledged in [true, false] {
+            let name = "Submitted-\(acknowledged).txt"
+            var staging = TaskAttachmentStaging()
+            let stagingRoot = try staging.makeOwnedDirectory()
+            let file = stagingRoot.appendingPathComponent(name)
+            staging.urls = [file]
+            let bytes = Data("File submitted just before quit".utf8)
+            try bytes.write(to: file)
+            composer.open(on: .tasks(.now))
+            page.addBar.text = name
+            page.addBarState.files.append(TasksComposerFiles(staging: staging))
+            if acknowledged { composer.submit() }
+            else { let created = await composer.create(); XCTAssertTrue(created) }
+            let ready = await coordinator.prepareForTerminationDurably()
+            XCTAssertTrue(ready)
+            let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+            let task = try XCTUnwrap(saved.first { $0.title == name })
+            XCTAssertEqual(task.attachments.map(\.filename), [name], "quit approval must include the submitted file")
+            if let attachment = task.attachments.first {
+                let verified = try await store.taskImageFiles.verifiedURL(for: attachment)
+                let url = try XCTUnwrap(verified)
+                XCTAssertEqual(try Data(contentsOf: url), bytes)
+            }
+        }
+        print("CATCHUP_R12 pid=\(ProcessInfo.processInfo.processIdentifier)")
     }
 
     @MainActor

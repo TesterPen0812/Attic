@@ -86,6 +86,8 @@ struct TasksPageServices {
     /// How long a finished row stays in place before it slides to the done
     /// group (spec: about a second).
     var doneHold: Duration = .seconds(AtticMotionPreset.doneHold)
+    /// Frame opportunity before saving an acknowledged command; tests can hold it.
+    var acknowledgementDelay: Duration = .milliseconds(20)
 }
 
 /// One row of a list: a main task with what its row and quick look show.
@@ -269,6 +271,27 @@ final class TasksPageModel: ObservableObject {
         }
         return ready
     }
+
+    /// Await both the acknowledged creation and its submitted files. A new
+    /// command admitted during an import must settle before quit approval too.
+    static func prepareForTerminationDurably(in store: TaskStore) async -> Bool {
+        let models = live.allObjects.filter { $0.store.container === store.container }
+        let failures = models.map { ($0, $0.acknowledgementFailures) }
+        var ready = true
+        while true {
+            guard prepareForTermination(in: store) else { return false }
+            let pending = live.allObjects.filter { $0.store.container === store.container }
+                .flatMap { Array($0.composerAttachmentTasks.values) }
+            guard !pending.isEmpty else {
+                return ready && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
+            }
+            for task in pending {
+                if !(await task.value) { ready = false }
+            }
+        }
+    }
+
+    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
 
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
@@ -953,15 +976,20 @@ final class TasksPageModel: ObservableObject {
         let stayKey = TasksStayKey(view: view, picks: picks)
         var staying: Set<UUID> = filtering && filterStay[tab]?.key == stayKey ? filterStay[tab]?.ids ?? [] : []
         if filtering { staying.formUnion(acknowledgedCreated.map(\.id)) }
+        func sortedByStatus(_ items: [TaskItem]) -> [TaskItem] {
+            scope.statuses.flatMap { status in
+                view.sorted(items.filter { $0.listedStatus == status })
+            }
+        }
         var tasks: [TaskItem]
         if view.isDefault, query.isEmpty, picks.isEmpty {
             tasks = universe
         } else if !query.isEmpty {
             // Find: the open tasks whose title matches (the finished ones
             // are Done's to find), the picked tags too.
-            tasks = view.sorted(universe.filter { $0.status != .done && store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
+            tasks = sortedByStatus(universe.filter { $0.status != .done && store.matchesItemSearch($0, query: query) && picks.matches($0.tags) })
         } else {
-            tasks = view.sorted(universe.filter {
+            tasks = sortedByStatus(universe.filter {
                 (view.includes($0, today: day) && picks.matches($0.tags)) || staying.contains($0.id)
             })
         }
@@ -1839,11 +1867,12 @@ final class TasksPageModel: ObservableObject {
             acknowledgedDeleted = []
             acknowledgementRevision &+= 1
             if !outcome.isApplied { ids.forEach(cancelHold) }
+            recordAcknowledgementFailure(outcome)
             settled(outcome)
             return outcome.isApplied
         }
-        Task { @MainActor [self] in
-            try? await Task.sleep(for: .milliseconds(20))
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
+            try? await Task.sleep(for: delay)
             if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
     }
@@ -1853,9 +1882,13 @@ final class TasksPageModel: ObservableObject {
         guard let command = acknowledgedTaskCommand else { return false }
         acknowledgedTaskCommand = nil
         acknowledgedTaskToken = nil
-        let applied = command()
-        if !applied { acknowledgementFailures &+= 1 }
-        return applied
+        return command()
+    }
+
+    private func recordAcknowledgementFailure(_ outcome: CommandOutcome) {
+        if case let .failed(failure) = outcome, failure != .taskGone {
+            acknowledgementFailures &+= 1
+        }
     }
 
     func setStatusAcknowledged(_ status: TaskStatus, for ids: [UUID],
@@ -1980,11 +2013,12 @@ final class TasksPageModel: ObservableObject {
             let created = save(id)
             acknowledgedCreated = []
             acknowledgementRevision &+= 1
+            if created == nil { acknowledgementFailures &+= 1 }
             settled(created)
             return created != nil
         }
-        Task { @MainActor [self] in
-            try? await Task.sleep(for: .milliseconds(20))
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
+            try? await Task.sleep(for: delay)
             if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
         return id
@@ -2069,10 +2103,10 @@ final class TasksPageModel: ObservableObject {
         let index = holdTab.flatMap { rows(for: $0).firstIndex { $0.id == id } }
         if let holdTab, let index { hold(id, tab: holdTab, at: index) }
         completingAfterAcknowledgement.append((id, settled))
-        Task { @MainActor [self] in
+        Task { @MainActor [self, delay = services.acknowledgementDelay] in
             // The next main-queue callback is not necessarily a drawn frame.
             // Allow at least one display interval before the blocking save.
-            try? await Task.sleep(for: .milliseconds(20))
+            try? await Task.sleep(for: delay)
             guard completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
             settlePendingCompletionAcknowledgements(through: id)
         }
@@ -2089,7 +2123,7 @@ final class TasksPageModel: ObservableObject {
             let next = completingAfterAcknowledgement.removeFirst()
             let outcome = finishCompletion(next.id)
             savedAny = savedAny || outcome.isApplied
-            if !outcome.isApplied { acknowledgementFailures &+= 1 }
+            recordAcknowledgementFailure(outcome)
             next.settled(outcome)
             if next.id == id { break }
         }
