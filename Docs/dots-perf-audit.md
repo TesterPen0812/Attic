@@ -35,6 +35,8 @@ Target: `phase-3/pd-batch17` at `d503231d6d33459e09b158d4e7f34d7ecbfd39cd`; comp
 - Confidence: high for repeated `currentKey` traversal, medium for its frequency and effect; hidden board behavior and `model.isShown` guard matter.
 - Mac measurement: signpost frame-size, coverage computation, object visits, world/detail raster requested/completed/cancelled and frame time; resize a board with 10, 1,000 and 10,000 objects, visible and retained hidden. Guard test: repeated frame sizes with unchanged content visit no scene objects after first cached coverage, and mutation/move invalidates it correctly.
 
+**Floating-panel boundary:** The docked `windowDidResize` path (`AtticPanelController.swift:1230–1235`) updates panel size and island layout; it does not call `PanelPullOutController.place` or move all floating panels. Floating panels are separate windows with their own hosts (`PanelFloatingPanels.swift:24–71`), and their positioning is driven by their own drag/restore paths (`:456–468, 684–695`). Do not count one floating-window frame update per docked resize without a trace. Visible floating windows may still independently respond to shared model changes or window-server composition; measure that separately.
+
 ### O-1 ranking and open questions
 1. Known single-host layout across retained pages: already assigned; no new DP finding. It is likely a major contributor but no resize measurement isolates it.
 2. DP-1 root size publication/invalidation, coupled with actual reflow: likely material, unmeasured.
