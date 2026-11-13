@@ -131,10 +131,18 @@ The current `PageSwitch` signpost ends through an async main-queue callback from
 - Confidence: high for control flow and main-actor placement, medium for copy-on-write cost in an optimized build.
 - Mac measurement: feed identical 10 KB/1 MB argument payloads in 1, 100 and 10,000 deltas, instrument `accept` count/duration, cumulative bytes appended/copied and allocations, main-thread frame hitches and final decode; no content logging. Guard test: resulting decoded arguments and step sequence match for all fragmentations and counted bytes copied/concatenated are linear, not dependent on fragment count squared.
 
+### DP-13 (P2, large fragmented helper-line suspect): Newline framing rescans the accumulated prefix
+- `AtticAgentHelper/main.swift:206–213, 424–433`; `Attic/Agent/Run/AgentHelperClient.swift:285–315`.
+- Both helper input/output framing and the app-side helper client append each chunk to an accumulating buffer, then search for the first newline from the beginning. A long JSON line arriving in many small chunks with no newline yet causes the already-searched prefix to be scanned again at each chunk. Complete lines are copied into `Data` and removed from the front. Each side has a 2,000,000-byte limit, so this is bounded, not an unlimited allocation. Work runs on the helper/client serial queues; delivery of parsed frames to the main actor follows. Distinct from DP-11's JSON-fragment value copying and PF-30's reply rendering.
+- Scaling: with L bytes arriving in K small fragments, the no-newline search can examine O(L×K) bytes (quadratic in L for fixed-size fragments), plus line copies; actual Foundation buffer behavior and read chunk sizes require measurement. Large single-line tool payloads are the stress case.
+- Smallest fix: maintain a newline scan offset across receives and process completed lines with a read cursor, compacting only periodically, while preserving byte limits, UTF-8/JSON validation, ordering and disconnect behavior.
+- Confidence: high for repeated `firstIndex` from the buffer start, medium for real-world cost.
+- Mac measurement: instrument bytes appended, bytes scanned, chunks, copied bytes, time on each serial queue and delay to `received` for 10 KB, 1 MB and near-limit line with 1/100/10,000 chunks; replay real helpers without logging message content. Guard test: fragmented input with embedded consecutive lines delivers identical ordered frames, malformed/oversize input fails closed, and scanned bytes stay O(total input).
+
 Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 12 static suspects, including four resize, three scroll, two first-touch/context-click and three Notes/MCP/agent; neither is measured on the owner's Mac.
+- DP findings: 13 static suspects, including four resize, three scroll, two first-touch/context-click and four Notes/MCP/agent/helper; neither is measured on the owner's Mac.
 - O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
-- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling and agent tool-input streaming. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
+- Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling agent tool-input streaming and helper framing. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
