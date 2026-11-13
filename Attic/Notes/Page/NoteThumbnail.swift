@@ -12,16 +12,19 @@ struct NoteThumbnailContent: Hashable, Sendable {
 
 /// The design's sizes, in points (the drawing is at 2×: px ÷ 2).
 enum NoteThumbnailMetrics {
-    /// The card: 48 × 60 px, concentric with its row (Corners C, Accepted
-    /// 2026-11-13): the row's 16 pt less the 6 pt between them, on Apple's
-    /// continuous curve (nil exponent).
+    /// The card: 48 × 60 px. Its corners keep the drawing's proportion
+    /// (Corners C, Accepted 2026-11-13: 10 pt on the sheet's 36 pt
+    /// thumbnail, so about 7 on this 24 pt mini page; 10 read as a rounded
+    /// blob), on Apple's continuous curve (nil exponent).
     static let size = CGSize(width: 24, height: 30)
-    static let radius: CGFloat = AtticRadius.concentric(outer: NotesLibraryRowMetrics.radius, padding: NotesLibraryRowMetrics.thumbnailInset)
+    static let radius: CGFloat = 7
     static let cornerExponent: CGFloat? = nil
     static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: radius, exponent: cornerExponent) }
-    /// Padding 6 px top and bottom, 5 px at the sides; parts 2 px apart.
-    static let paddingY: CGFloat = 3
-    static let paddingX: CGFloat = 2.5
+    /// Padding 8 px top and bottom, 7 px at the sides (Corners C: the
+    /// content pulled in so nothing touches the rounder corners; was 6 and
+    /// 5 px); parts 2 px apart. Everything is drawn inside that padding.
+    static let paddingY: CGFloat = 4
+    static let paddingX: CGFloat = 3.5
     static let gap: CGFloat = 1
     /// The mini title: 6 px bold on a 7 px line.
     static let titleSize: CGFloat = 3
@@ -122,11 +125,13 @@ final class NoteThumbnailCache {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = graphics
         let inner = card.insetBy(dx: m.paddingX, dy: m.paddingY)
+        // Nothing reaches into the padding, so no text meets a corner.
+        context.clip(to: inner)
         var y = inner.minY
-        // The mini title: one line, cut at the card's edge.
+        // The mini title: one line, cut at the padding.
         let title = key.content.title
         if !title.isEmpty {
-            draw(title, in: CGRect(x: inner.minX, y: y, width: inner.width + m.paddingX, height: m.titleLine),
+            draw(title, in: CGRect(x: inner.minX, y: y, width: inner.width, height: m.titleLine),
                  font: .systemFont(ofSize: m.titleSize, weight: .bold), line: m.titleLine, colour: colours.title, wraps: false)
         }
         y += m.titleLine + m.gap
@@ -136,7 +141,7 @@ final class NoteThumbnailCache {
             y += m.imageHeight + m.gap
         }
         if !key.content.text.isEmpty, y < inner.maxY {
-            draw(key.content.text, in: CGRect(x: inner.minX, y: y, width: inner.width, height: card.maxY - y),
+            draw(key.content.text, in: CGRect(x: inner.minX, y: y, width: inner.width, height: inner.maxY - y),
                  font: .systemFont(ofSize: m.textSize), line: m.textLine, colour: colours.text, wraps: true)
         }
         NSGraphicsContext.restoreGraphicsState()

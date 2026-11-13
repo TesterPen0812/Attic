@@ -175,7 +175,14 @@ final class AtticGlassMenuTests: XCTestCase {
                             let floor = contrast ? 4.5 : 3.0
                             // Disabled rows are the title at 30 % (review #6), below any
                             // floor by design: `testDisabledInkIsTheTitleAtThirtyPercent`.
-                            for ink in [style.detail, style.header] {
+                            // Section headers are the title at 45 %, as the system menu
+                            // draws them (owner, 12 Nov: version 3 of
+                            // menu-versions-drafts.html, the look accepted with the grey
+                            // hover); Increase Contrast keeps the opaque token below.
+                            if !contrast {
+                                XCTAssertEqual(style.header, style.title.withAlphaComponent(0.45), "\(surface), \(controls), \(mode)")
+                            }
+                            for ink in contrast ? [style.detail, style.header] : [style.detail] {
                                 let colour = try XCTUnwrap(ink.usingColorSpace(.sRGB))
                                 let rgba = AtticRGBA(red: colour.redComponent, green: colour.greenComponent,
                                     blue: colour.blueComponent, alpha: colour.alphaComponent)

@@ -9,8 +9,7 @@ enum NotesLibraryRowMetrics {
     static let paddingX: CGFloat = 8
     static let radius: CGFloat = AtticRadius.row
     /// The thumbnail sits as far in from the row's leading edge as from its
-    /// top and bottom, so its 10 pt corners stay concentric with the row's
-    /// 16 (Corners C: 16 − 6 = 10).
+    /// top and bottom: 6 pt (Corners C).
     static let thumbnailInset: CGFloat = paddingY
     static let rowGap: CGFloat = 2
     /// The thumbnail, then 18 px to the text.

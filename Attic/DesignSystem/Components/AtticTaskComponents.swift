@@ -976,7 +976,9 @@ struct AtticOwnFocusRing: ViewModifier {
         case circle(diameter: CGFloat)
         /// A rounded rectangle of this radius; `height` limits it to the
         /// visible chip inside a taller hit area.
-        case rounded(radius: CGFloat, height: CGFloat? = nil, width: CGFloat? = nil)
+        /// `continuous` keeps Apple's continuous curve under the panel
+        /// design's corners (menu and picker rows: Corners B).
+        case rounded(radius: CGFloat, height: CGFloat? = nil, width: CGFloat? = nil, continuous: Bool = false)
     }
 
     let outline: Outline
@@ -1008,8 +1010,8 @@ struct AtticOwnFocusRing: ViewModifier {
         switch outline {
         case let .circle(diameter):
             AtticFocusRing(cornerRadius: diameter / 2).frame(width: diameter, height: diameter)
-        case let .rounded(radius, height, width):
-            AtticFocusRing(cornerRadius: radius).frame(width: width, height: height)
+        case let .rounded(radius, height, width, continuous):
+            AtticFocusRing(cornerRadius: radius, continuous: continuous).frame(width: width, height: height)
         }
     }
 }

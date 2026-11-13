@@ -38,7 +38,7 @@ struct AtticChoiceRow: View {
         let m = AtticPickerMetrics.self
         let height = AtticControlSize.smallHeight
         let fillHeight = height - m.highlightGap
-        let radius = AtticRadius.control(height: fillHeight)
+        let radius = AtticDropdownMetrics.highlightRadius(height: fillHeight)
         let lit = onHover == nil ? (hovered || isHighlighted) : isHighlighted
         let fill: AtticRGBA = lit ? design.tokens.selected : .clear
         Button(action: action) {
@@ -75,7 +75,7 @@ struct AtticChoiceRow: View {
         .focusEffectDisabled()
         // Keyboard focus (Full Keyboard Access) draws Attic's ring, never
         // nothing (round 4), on the fill's shape.
-        .atticOwnFocusRing(.rounded(radius: radius, height: fillHeight))
+        .atticOwnFocusRing(.rounded(radius: radius, height: fillHeight, continuous: true))
         // The whole row answers the pointer (no dead gap between rows). A
         // row moving under a resting pointer as the keyboard scrolls the
         // list is not the pointer moving: the keyboard keeps its highlight.
@@ -95,10 +95,10 @@ struct AtticChoiceRow: View {
         .accessibilityValue(check == .mixed ? String(localized: "some selected tasks") : "")
     }
 
-    /// The lit row's fill: a surface squircle, as the menus' and the
-    /// dropdowns' rows (`AtticDropdownRow.highlightShape`).
+    /// The lit row's fill: continuous, as the menus' and the dropdowns'
+    /// rows (`AtticDropdownRow.highlightShape`; Corners B).
     static func highlightShape(radius: CGFloat) -> AtticControlOutline {
-        AtticControlOutline(cornerRadius: radius, exponent: AtticShape.surfaceExponent)
+        AtticControlOutline(cornerRadius: radius, exponent: nil)
     }
 }
 
