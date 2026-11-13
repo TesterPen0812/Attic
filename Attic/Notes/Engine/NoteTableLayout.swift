@@ -123,6 +123,28 @@ struct NoteTableLayout: Equatable {
                      minimum: (NoteTable.Position) -> CGFloat = { _ in 0 },
                      height: (NoteTable.Position, CGFloat) -> CGFloat) -> NoteTableLayout {
         let viewport = max(M.minColumnWidth, viewport)
+        let widths = resolvedWidths(table, viewport: viewport, natural: { column in
+            table.rows.indices.map { natural(.init(row: $0, column: column)) }.max() ?? 0
+        }, minimum: { column in
+            table.rows.indices.map { minimum(.init(row: $0, column: column)) }.max() ?? 0
+        })
+        let lineHeight = AtticNoteType.body.lineHeight
+        let heights: [CGFloat] = table.rows.indices.map { row in
+            var tallest = lineHeight
+            for column in table.columns.indices {
+                heightVisitCount += 1
+                let text = max(1, widths[column] - 2 * M.cellPaddingH)
+                tallest = max(tallest, height(NoteTable.Position(row: row, column: column), text))
+            }
+            return ceil(tallest) + 2 * M.cellPaddingV
+        }
+        return NoteTableLayout(columnWidths: widths, rowHeights: heights, viewportWidth: viewport)
+    }
+
+    /// Resolve the same stretch/shrink policy using each column's extrema.
+    static func resolvedWidths(_ table: NoteTable, viewport: CGFloat,
+                               natural: (Int) -> CGFloat, minimum: (Int) -> CGFloat) -> [CGFloat] {
+        let viewport = max(M.minColumnWidth, viewport)
         var floors: [CGFloat] = []
         var widths: [CGFloat] = table.columns.enumerated().map { column, value in
             if let set = value.width {
@@ -130,12 +152,7 @@ struct NoteTableLayout: Equatable {
                 floors.append(width)
                 return width
             }
-            var widest: CGFloat = 0, longestWord: CGFloat = 0
-            for row in table.rows.indices {
-                let position = NoteTable.Position(row: row, column: column)
-                widest = max(widest, natural(position))
-                longestWord = max(longestWord, minimum(position))
-            }
+            let widest = natural(column), longestWord = minimum(column)
             let preferred = min(M.maxColumnWidth, max(M.minColumnWidth, ceil(widest + 2 * M.cellPaddingH)))
             floors.append(min(preferred, max(M.minColumnWidth, ceil(longestWord + 2 * M.cellPaddingH))))
             return preferred
@@ -156,17 +173,7 @@ struct NoteTableLayout: Equatable {
             widths = widths.map { ($0 * scale).rounded(.down) }
             widths[widths.count - 1] += viewport - widths.reduce(0, +)
         }
-        let lineHeight = AtticNoteType.body.lineHeight
-        let heights: [CGFloat] = table.rows.indices.map { row in
-            var tallest = lineHeight
-            for column in table.columns.indices {
-                heightVisitCount += 1
-                let text = max(1, widths[column] - 2 * M.cellPaddingH)
-                tallest = max(tallest, height(NoteTable.Position(row: row, column: column), text))
-            }
-            return ceil(tallest) + 2 * M.cellPaddingV
-        }
-        return NoteTableLayout(columnWidths: widths, rowHeights: heights, viewportWidth: viewport)
+        return widths
     }
 }
 
@@ -250,6 +257,10 @@ final class NoteTableTextCache {
 
     private var heights = Measurements()
     private var naturals = Measurements()
+    #if DEBUG
+    static var naturalVisitCount = 0
+    static var minimumVisitCount = 0
+    #endif
     var retainedMeasurementCount: Int { heights.count + naturals.count + minimums.count }
 
     func clear() {
@@ -304,6 +315,9 @@ final class NoteTableTextCache {
     }
 
     func natural(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
+        #if DEBUG
+        Self.naturalVisitCount += 1
+        #endif
         let key = key(cell, header: header, width: 0)
         if let cached = naturals[key] { return cached }
         let text = string()
@@ -332,6 +346,9 @@ final class NoteTableTextCache {
     /// The cell's longest word on one line (the narrowest its column can be
     /// without breaking a word).
     func minimum(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
+        #if DEBUG
+        Self.minimumVisitCount += 1
+        #endif
         let key = key(cell, header: header, width: -1)
         if let cached = minimums[key] { return cached }
         let text = string()
