@@ -212,6 +212,92 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(Set(allIDs), Set([todo.id.uuidString, backlogged.id.uuidString]))
     }
 
+    func testPF35DoneLogMCPListBatchesArchivedChildrenWithoutLosingReplicas() throws {
+        let context = ModelContext(store.container)
+        let clock = Date(timeIntervalSince1970: 1_794_000_000)
+        var expected = Set<String>()
+        for index in 0..<64 {
+            let parent = TaskItem(title: "Archived \(index)", status: .done,
+                                  createdAt: clock, updatedAt: clock, completedAt: clock)
+            parent.doneLoggedAt = clock
+            let child = TaskItem(title: "Checklist \(index)", status: .done,
+                                 createdAt: clock, updatedAt: clock, completedAt: clock,
+                                 parentID: parent.id)
+            child.doneLoggedAt = clock
+            context.insert(parent)
+            context.insert(child)
+            expected.insert(parent.id.uuidString)
+            expected.insert(child.id.uuidString)
+            if index == 0 {
+                let oldReplica = TaskItem(id: child.id, title: "Stale checklist", status: .done,
+                                          createdAt: clock, updatedAt: clock.addingTimeInterval(-100),
+                                          completedAt: clock, parentID: parent.id)
+                oldReplica.doneLoggedAt = clock
+                context.insert(oldReplica)
+            }
+        }
+        let unrelated = TaskItem(title: "Unrelated active parent", status: .todo,
+                                 createdAt: clock, updatedAt: clock)
+        context.insert(unrelated)
+        for index in 0..<512 {
+            context.insert(TaskItem(title: "Unrelated active checklist \(index)", status: .todo,
+                                    createdAt: clock, updatedAt: clock, parentID: unrelated.id))
+        }
+        try context.save()
+        store.refresh()
+
+        let readsBefore = store.doneFamilyReadCount
+        let rowsBefore = store.doneFamilyRowsReadCount
+        let payload = try callTool("list_tasks", arguments: ["status": "done", "include_done_log": true])
+        let rows = try XCTUnwrap(payload["tasks"] as? [[String: Any]])
+        XCTAssertEqual(payload["count"] as? Int, 128)
+        XCTAssertEqual(Set(rows.compactMap { $0["id"] as? String }), expected,
+                       "every parent and canonical child appears exactly once")
+        XCTAssertFalse(rows.contains { $0["title"] as? String == "Stale checklist" })
+        XCTAssertEqual(store.doneFamilyReadCount - readsBefore, 2,
+                       "64 archived families must use exactly two batched queries")
+        XCTAssertEqual(store.doneFamilyRowsReadCount - rowsBefore, 130,
+                       "512 unrelated physical child rows must not be materialized")
+        let firstCost = store.doneFamilyReadCount - readsBefore
+        for step in 1...16 {
+            let before = store.doneFamilyReadCount
+            let rowsBefore = store.doneFamilyRowsReadCount
+            let repeated = try callTool("list_tasks", arguments: ["status": "done", "include_done_log": true])
+            let nextRows = try XCTUnwrap(repeated["tasks"] as? [[String: Any]])
+            XCTAssertEqual(nextRows.compactMap { $0["id"] as? String }, rows.compactMap { $0["id"] as? String },
+                           "archive ordering stays durable on repeat \(step)")
+            XCTAssertEqual(store.doneFamilyReadCount - before, firstCost,
+                           "fetch cost may not grow with repeated requests (iteration \(step))")
+            XCTAssertEqual(store.doneFamilyRowsReadCount - rowsBefore, 130,
+                           "physical rows read stay scoped to archived families on repeat \(step)")
+        }
+    }
+
+    func testPF35DoneLogMCPListFailsClosedOnArchivedFamilyReadError() throws {
+        let context = ModelContext(store.container)
+        let clock = Date(timeIntervalSince1970: 1_794_000_000)
+        let parent = TaskItem(title: "Archive", status: .done,
+                              createdAt: clock, updatedAt: clock, completedAt: clock)
+        parent.doneLoggedAt = clock
+        let child = TaskItem(title: "Archived checklist", status: .done,
+                             createdAt: clock, updatedAt: clock, completedAt: clock,
+                             parentID: parent.id)
+        child.doneLoggedAt = clock
+        context.insert(parent)
+        context.insert(child)
+        try context.save()
+        store.refresh()
+        for completedReads in 0...1 {
+            store.doneFamilyReadsToSkipBeforeFailing = completedReads
+            let response = try send(method: "tools/call", params: [
+                "name": "list_tasks", "arguments": ["include_done_log": true]
+            ])
+            let result = try XCTUnwrap(response["result"] as? [String: Any])
+            XCTAssertEqual(result["isError"] as? Bool, true,
+                           "a failure on family fetch \(completedReads + 1) must not yield an incomplete list")
+        }
+    }
+
     func testUpdateTaskToDoneSetsCompletedAt() throws {
         let task = try XCTUnwrap(store.create(title: "Finish me"))
 
