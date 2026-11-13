@@ -274,6 +274,10 @@ private final class AgentChatCheckpointWriter: @unchecked Sendable {
         }
     }
 
+    /// Termination cannot wait for an actor task to finish the run. Join all
+    /// already admitted checkpoints, including the coalesced pending snapshot.
+    func flush() { queue.sync {} }
+
     func saveRequired(_ snapshot: AgentRunArchive) -> (success: Bool, lastDurable: AgentRunArchive) {
         queue.sync {
             let success = write(snapshot)
@@ -587,6 +591,7 @@ final class AgentRunEngine: AgentRunning {
     func shutdown() {
         if isRunning { endRun(.failed("The agent stopped.")) }
         else { shutdownTransport() }
+        checkpointWriter.flush()
     }
 
     private func run(title: String, prompt: String, id runID: UUID, reopened: Bool) async {

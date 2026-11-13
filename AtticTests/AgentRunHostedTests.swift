@@ -137,6 +137,64 @@ final class AgentRunHostedTests: XCTestCase {
         #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""# + text + #""}}}"#
     }
 
+    func testR3ShutdownDrainsBlockedToolAndTextCheckpointsBeforeReturning() async throws {
+        let url = journalURL()
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let returned = DispatchSemaphore(value: 0)
+        let once = PF29OneShot()
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        defer { returned.signal(); release.signal(); tools.releaseDrain() }
+        let helper = FakeRunHelper()
+        helper.onInput = { line, helper in
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
+            switch obj["method"] as? String {
+            case "initialize": helper.emitLine(#"{"id":1,"result":{}}"#)
+            case "thread/start": helper.emitLine(#"{"id":2,"result":{"thread":{"id":"checkpoint-thread"}}}"#)
+            case "turn/start": helper.emitLine(#"{"id":3,"result":{"turn":{"id":"turn"}}}"#)
+            default: break
+            }
+        }
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper }, tools: { tools },
+                                    journalURL: url, checkpointGate: {
+            if once.take() { entered.signal(); release.wait() }
+        })
+        _ = runner.send("Keep completed steps on quit", watching: false)
+        await wait {
+            helper.inputs.contains { line in
+                guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+                return object["method"] as? String == "turn/start"
+            }
+        }
+        helper.emitLine(#"{"method":"item/started","params":{"item":{"id":"1","type":"mcpToolCall","server":"attic","tool":"list_tasks"}}}"#)
+        helper.emitLine(#"{"method":"item/completed","params":{"item":{"id":"1","type":"mcpToolCall","server":"attic","tool":"list_tasks","status":"completed"}}}"#)
+        await wait { entered.wait(timeout: .now()) == .success }
+        let text = String(repeating: "x", count: 256)
+        helper.emitLine(String(decoding: try JSONSerialization.data(withJSONObject: [
+            "method": "item/agentMessage/delta", "params": ["delta": text]
+        ]), as: UTF8.self))
+        await wait { runner.threadSnapshot().entries.contains { $0.role == "assistant" && $0.text == text } }
+        let expectedTool = try XCTUnwrap(runner.threadSnapshot().entries.first { $0.role == "tool" }?.text)
+        DispatchQueue.global().async {
+            // A fixed shutdown waits here; the original returns while the gate
+            // stays closed until the test has read the on-disk archive.
+            _ = returned.wait(timeout: .now() + 0.25)
+            release.signal()
+        }
+        runner.shutdown()
+        let disk = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let rows = try XCTUnwrap(disk["entries"] as? [[String: Any]])
+        returned.signal()
+        let savedTool = rows.contains { $0["role"] as? String == "tool" && $0["text"] as? String == expectedTool }
+        let savedText = rows.contains { $0["role"] as? String == "assistant" && $0["text"] as? String == text }
+        print("R3 toolDurableAtShutdown=\(savedTool) textDurableAtShutdown=\(savedText)")
+        XCTAssertTrue(savedTool, "Quit must flush a completed tool row before returning")
+        XCTAssertTrue(savedText, "Quit must also flush the pending coalesced text checkpoint")
+        tools.releaseDrain()
+        await wait { !runner.threadSnapshot().isRunning }
+    }
+
     func testPF29FirstDeltaIsDeliveredBeforeBlockedCheckpointCompletes() async throws {
         final class Result: @unchecked Sendable {
             private let lock = NSLock()
