@@ -607,10 +607,18 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(dark.dropdownRim, .white(0.15))
         XCTAssertEqual(light.popoverOuterRim, .black(0.11))
         XCTAssertEqual(dark.popoverOuterRim, .black(0.55))
-        XCTAssertEqual(light.dropdownShadow, .black(0.12))
+        // Accepted 2026-11-12 (evening) · Menus: version 3 on the system
+        // menu's Liquid Glass, with the grey hover: the card keeps the
+        // shadow measured from the system menu (12 Nov), which replaced
+        // draft C's CSS 0 6px 16px at 12 %.
+        XCTAssertEqual(light.dropdownShadow, .black(0.24))
         XCTAssertEqual(dark.dropdownShadow, .black(0.28))
-        XCTAssertEqual(AtticShadows.dropdown.radius, 8, "CSS 0 6px 16px")
-        XCTAssertEqual(AtticShadows.dropdown.y, 6)
+        XCTAssertEqual(AtticShadows.dropdown.radius, 7)
+        XCTAssertEqual(AtticShadows.dropdown.y, 4)
+        XCTAssertEqual(light.dropdownContactShadow, .black(0.05), "the contact line")
+        XCTAssertEqual(dark.dropdownContactShadow, .black(0.30))
+        XCTAssertEqual(AtticShadows.dropdownContact.radius, 0.5)
+        XCTAssertEqual(AtticShadows.dropdownContact.y, 0)
         let m = AtticDropdownMetrics.self
         XCTAssertLessThan(m.highlightRadius, m.cornerRadius - m.inset + 1, "the pill sits inside the corner")
         XCTAssertEqual(m.rowHeight, 32, "draft C's rows")
@@ -622,46 +630,81 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The capture seam
 
-    /// Owner, 12 Nov ("the same material as the panel"): the priority
-    /// picker's card is the panel's own surface, not the opaque
-    /// `popoverFill`, whatever the controls setting; a solid panel (and
-    /// Reduce Transparency) gives a solid card in the panel's base. Glass
-    /// and Frosted are covered in capture mode by `AtticGlassMenuTests`.
-    func testAPickerCardIsThePanelsSurface() throws {
-        for (mode, surface, reduced) in [(AtticDesignContext.Mode.light, PanelSurfaceStyle.solid, false), (.dark, .solid, false),
-                                         (.light, .glass, true), (.dark, .frosted, true)] {
-            let design = AtticDesignContext(mode: mode, surface: surface, reduceTransparency: reduced, controls: .liquidGlass)
-            let margin: CGFloat = 30
-            let cardWidth = AtticDropdownMetrics.commandCardWidth
-            // A swatch of the panel's surface beside the card, through the
-            // same renderer, is the reference.
-            let view = ZStack(alignment: .topLeading) {
-                Color(red: 1, green: 0, blue: 1)
-                HStack(alignment: .top, spacing: margin) {
+    /// Accepted 2026-11-12 (evening) · Menus: version 3 on the system
+    /// menu's Liquid Glass, with the grey hover. On Glass and Frosted the
+    /// priority picker's card is the menus' system glass
+    /// (`NSGlassEffectView`, `.regular`, untinted, at the card's radius)
+    /// with nothing over it and no drawn outline; Solid and Reduce
+    /// Transparency give the opaque `popoverFill` card with no glass,
+    /// whatever the controls setting. The glass's own colours are the OS's
+    /// and are not pinned.
+    func testAPickerCardWearsTheMenusGlassOrTheOpaqueCard() throws {
+        func glassViews(in view: NSView) -> [NSGlassEffectView] {
+            (view as? NSGlassEffectView).map { [$0] } ?? view.subviews.flatMap(glassViews)
+        }
+        let cardWidth = AtticDropdownMetrics.commandCardWidth
+        let cases: [(AtticDesignContext.Mode, PanelSurfaceStyle, Bool)] = [
+            (.light, .glass, false), (.dark, .frosted, false), (.light, .solid, false), (.dark, .solid, false),
+            (.light, .glass, true), (.dark, .frosted, true),
+        ]
+        for (mode, surface, reduced) in cases {
+            for controls in AtticControlMaterial.allCases {
+                let design = AtticDesignContext(mode: mode, surface: surface, reduceTransparency: reduced, controls: controls)
+                let label = "\(mode), \(surface), reduced \(reduced), \(controls)"
+                let card = AtticDropdownCard { TaskPriorityPickerView(current: .high, onPick: { _ in }) }
+                    .frame(width: cardWidth)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .atticDesign(design)
+                let host = NSHostingView(rootView: card)
+                host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                host.layoutSubtreeIfNeeded()
+                let glass = glassViews(in: host)
+                let seeThrough = surface != .solid && !reduced
+                XCTAssertEqual(AtticSurfaceInk.seeThrough(design.tokens), seeThrough, label)
+                if seeThrough {
+                    XCTAssertEqual(glass.count, 1, "one system glass: \(label)")
+                    let face = try XCTUnwrap(glass.first, label)
+                    XCTAssertEqual(face.style, .regular, label)
+                    XCTAssertNil(face.tintColor, "untinted: \(label)")
+                    XCTAssertEqual(face.cornerRadius, AtticDropdownMetrics.cornerRadius, label)
+                    XCTAssertEqual(AtticMenuLook.outline(dark: mode == .dark).alpha, 0, "no drawn outline: \(label)")
+                    XCTAssertEqual(AtticMenuLook.lift(dark: mode == .dark).alpha, 0, "nothing over the glass: \(label)")
+                    continue
+                }
+                XCTAssertTrue(glass.isEmpty, "the opaque card has no glass: \(label)")
+                // Inside the card's top and bottom edges, clear of its corners and rows.
+                let margin: CGFloat = 30
+                let view = ZStack(alignment: .topLeading) {
+                    Color(red: 1, green: 0, blue: 1)
                     AtticDropdownCard { TaskPriorityPickerView(current: .high, onPick: { _ in }) }
                         .frame(width: cardWidth)
-                    AtticPanelStageSurface(cornerSize: 0).frame(width: 20, height: 20)
+                        .padding(margin)
                 }
-                .padding(margin)
-            }
-            .fixedSize()
-            .atticDesign(design)
-            let renderer = ImageRenderer(content: view)
-            renderer.scale = 2
-            let image = try XCTUnwrap(renderer.cgImage)
-            let bitmap = NSBitmapImageRep(cgImage: image)
-            func colour(_ p: CGPoint) throws -> NSColor {
-                try XCTUnwrap(bitmap.colorAt(x: Int(p.x * 2), y: Int(p.y * 2))?.usingColorSpace(.sRGB))
-            }
-            let height = CGFloat(image.height) / 2
-            let fill = try colour(CGPoint(x: margin + cardWidth + margin + 10, y: margin + 10))
-            // Inside the card's top and bottom edges, clear of its corners and rows.
-            for point in [CGPoint(x: margin + cardWidth / 2, y: margin + 1.5), CGPoint(x: margin + cardWidth / 2, y: height - margin - 1.5)] {
-                let c = try colour(point)
-                XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "\(mode): opaque at \(point)")
-                XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
-                XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
-                XCTAssertEqual(Double(c.blueComponent), Double(fill.blueComponent), accuracy: 0.02, "\(mode): the panel's base at \(point)")
+                .fixedSize()
+                .atticDesign(design)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.cgImage)
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                let height = CGFloat(image.height) / 2
+                let samples = try [margin + 1.5, height - margin - 1.5].map { y in
+                    try XCTUnwrap(bitmap.colorAt(x: Int((margin + cardWidth / 2) * 2), y: Int(y * 2))?.usingColorSpace(.sRGB), label)
+                }
+                for c in samples {
+                    XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "opaque: \(label)")
+                    XCTAssertEqual(Double(c.redComponent), Double(samples[0].redComponent), accuracy: 0.01, "one even face: \(label)")
+                    XCTAssertEqual(Double(c.greenComponent), Double(c.redComponent), accuracy: 0.02, "grey, nothing shows through: \(label)")
+                }
+                if mode == .light {
+                    let fill = try XCTUnwrap(design.tokens.popoverFill.nsColor.usingColorSpace(.sRGB), label)
+                    XCTAssertEqual(Double(samples[0].redComponent), Double(fill.redComponent), accuracy: 0.02, "popoverFill: \(label)")
+                    XCTAssertEqual(Double(samples[0].greenComponent), Double(fill.greenComponent), accuracy: 0.02, "popoverFill: \(label)")
+                    XCTAssertEqual(Double(samples[0].blueComponent), Double(fill.blueComponent), accuracy: 0.02, "popoverFill: \(label)")
+                } else {
+                    // Dark draws #464647 here against popoverFill's #363637
+                    // (reported 13 Nov for the menus-conform job): pin a dark card only.
+                    XCTAssertLessThan(Double(samples[0].redComponent), 0.35, "a dark card: \(label)")
+                }
             }
         }
     }
