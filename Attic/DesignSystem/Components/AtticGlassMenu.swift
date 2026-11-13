@@ -2345,23 +2345,39 @@ struct AtticPressShieldView: NSViewRepresentable {
 /// The view behind a SwiftUI view that has a glass context menu.
 struct AtticContextMenuAnchor: NSViewRepresentable {
     let build: () -> [AtticMenuCommand]
+    var holder: AtticMenuAnchor.Holder? = nil
 
     final class AnchorView: NSView {
         var build: (() -> [AtticMenuCommand])?
+        weak var holder: AtticMenuAnchor.Holder?
+        override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if window != nil { AtticContextMenus.register(self) }
+            if window != nil {
+                AtticContextMenus.register(self)
+                holder?.remember(self)
+            }
+        }
+        override func layout() {
+            super.layout()
+            if window != nil { holder?.remember(self) }
         }
     }
 
     func makeNSView(context: Context) -> AnchorView {
         let view = AnchorView()
         view.setAccessibilityElement(false)
+        view.holder = holder
+        holder?.remember(view)
         return view
     }
 
-    func updateNSView(_ view: AnchorView, context: Context) { view.build = build }
+    func updateNSView(_ view: AnchorView, context: Context) {
+        view.build = build
+        view.holder = holder
+        holder?.remember(view)
+    }
 }
 
 extension View {
@@ -2390,8 +2406,7 @@ private struct AtticContextMenuModifier: ViewModifier {
 
     private func anchored(_ content: Content) -> some View {
         content
-            .background(AtticContextMenuAnchor(build: build).accessibilityHidden(true))
-            .background(AtticMenuAnchor(holder: anchor, isMenuTrigger: false).accessibilityHidden(true))
+            .background(AtticContextMenuAnchor(build: build, holder: anchor).accessibilityHidden(true))
             .accessibilityAction(.showMenu) {
                 anchor.open(build(), event: nil)
             }

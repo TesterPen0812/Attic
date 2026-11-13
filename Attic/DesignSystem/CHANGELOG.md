@@ -1,3 +1,10 @@
+## 2026-11-13 · Context menu anchors during large task scrolls (DP-6)
+
+An ordinary row's context-click routing and VoiceOver Show Menu action now
+share one native anchor. The holder still remembers the row's position when
+it mounts, moves or detaches; nested tag context menus continue to use the
+same innermost-anchor routing. The menu appearance and placement stay the same.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
