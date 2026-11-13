@@ -638,6 +638,50 @@ final class AtticDropdownTests: XCTestCase {
     /// Transparency give the opaque `popoverFill` card with no glass,
     /// whatever the controls setting. The glass's own colours are the OS's
     /// and are not pinned.
+    func testPickerGlassRequestsActiveAppearanceInANonKeyWindow() throws {
+        func flag(_ window: NSWindow, _ name: String) throws -> Bool {
+            let selector = NSSelectorFromString(name)
+            XCTAssertTrue(window.responds(to: selector))
+            typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+            let implementation = try XCTUnwrap(window.method(for: selector))
+            return unsafeBitCast(implementation, to: Getter.self)(window, selector)
+        }
+        let selectors = ["_hasActiveAppearanceIgnoringKeyFocus", "_hasActiveControls"]
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 240, height: 200),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: NSRect(x: -2_000_000, y: 400, width: 100, height: 100),
+                             styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        other.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 200))
+        window.contentView = root
+        defer { window.orderOut(nil); window.contentView = nil; window.close(); other.close() }
+        let before = try selectors.map { try flag(window, $0) }
+        let otherBefore = try selectors.map { try flag(other, $0) }
+        XCTAssertEqual(before, [false, false], "the source fixture starts inactive")
+        XCTAssertEqual(otherBefore, [false, false], "the second fixture starts inactive")
+        let key = NSApp.keyWindow
+        let first = AtticMenuLook.glass(frame: root.bounds, cornerRadius: 18)
+        let nested = AtticMenuLook.glass(frame: root.bounds, cornerRadius: 18)
+        root.addSubview(first)
+        root.addSubview(nested)
+        window.orderFront(nil)
+        root.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, [true, true], "a non-key picker has the menu window's active appearance")
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, otherBefore, "other windows retain AppKit's policy")
+        XCTAssertFalse(window.isKeyWindow)
+        XCTAssertTrue(NSApp.keyWindow === key, "appearance never takes the keyboard")
+        first.removeFromSuperview()
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, [true, true], "a nested picker keeps the lease")
+        try XCTUnwrap(other.contentView).addSubview(nested)
+        XCTAssertEqual(try selectors.map { try flag(window, $0) }, before, "reparenting releases the old window")
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, [true, true], "reparenting acquires the new window")
+        other.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertEqual(try selectors.map { try flag(other, $0) }, otherBefore, "replacing the content root releases the last picker")
+        XCTAssertTrue(NSApp.keyWindow === key)
+    }
+
     func testAPickerCardWearsTheMenusGlassOrTheOpaqueCard() throws {
         func glassViews(in view: NSView) -> [NSGlassEffectView] {
             (view as? NSGlassEffectView).map { [$0] } ?? view.subviews.flatMap(glassViews)
@@ -664,6 +708,7 @@ final class AtticDropdownTests: XCTestCase {
                 if seeThrough {
                     XCTAssertEqual(glass.count, 1, "one system glass: \(label)")
                     let face = try XCTUnwrap(glass.first, label)
+                    XCTAssertTrue(face is AtticActiveMenuGlassView, "picker glass leases active menu appearance: \(label)")
                     XCTAssertEqual(face.style, .regular, label)
                     XCTAssertNil(face.tintColor, "untinted: \(label)")
                     XCTAssertEqual(face.cornerRadius, AtticDropdownMetrics.cornerRadius, label)

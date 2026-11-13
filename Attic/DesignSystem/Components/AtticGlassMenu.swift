@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ObjectiveC
 
 // MARK: - Glass menus (Loam's, Accepted 2026-11-10)
 //
@@ -1472,7 +1473,7 @@ enum AtticMenuLook {
     /// and the white wash used to match the menu's brightness over light
     /// backgrounds hid the glass (owner: "but are they glass?").
     static func glass(frame: NSRect, cornerRadius: CGFloat) -> NSGlassEffectView {
-        let glass = NSGlassEffectView(frame: frame)
+        let glass = AtticActiveMenuGlassView(frame: frame)
         glass.style = .regular
         glass.cornerRadius = cornerRadius
         return glass
@@ -1480,6 +1481,81 @@ enum AtticMenuLook {
 
     /// Nothing over the glass.
     static func lift(dark: Bool) -> AtticRGBA { .white(0) }
+}
+
+/// AppKit asks the *window* about activity, even for a glass view embedded
+/// in SwiftUI. Lease that appearance while a picker is attached, without
+/// making its window key or changing the panel's first-mouse policy.
+final class AtticActiveMenuGlassView: NSGlassEffectView {
+    private weak var leasedWindow: NSWindow?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if leasedWindow !== newWindow {
+            if let leasedWindow { AtticMenuGlassActivity.release(leasedWindow) }
+            leasedWindow = nil
+            if let newWindow, !(newWindow is AtticGlassMenuWindow) {
+                AtticMenuGlassActivity.acquire(newWindow)
+                leasedWindow = newWindow
+            }
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+}
+
+/// These are the same private AppKit queries that NSPopupMenuWindow and
+/// AtticGlassMenuWindow answer. The intercept forwards to AppKit unchanged
+/// for every unleased window; a weak, counted lease covers nested pickers.
+/// Keeping the forwarding on NSWindow also covers Settings and mini windows.
+@MainActor
+private enum AtticMenuGlassActivity {
+    private static let leases = NSMapTable<NSWindow, NSNumber>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+    private static let installed: Bool = {
+        let pairs = [("_hasActiveAppearanceIgnoringKeyFocus", "attic_menuHasActiveAppearance"),
+                     ("_hasActiveControls", "attic_menuHasActiveControls")]
+        let methods = pairs.compactMap { original, replacement -> (Method, Method)? in
+            guard let first = class_getInstanceMethod(NSWindow.self, NSSelectorFromString(original)),
+                  let second = class_getInstanceMethod(NSWindow.self, NSSelectorFromString(replacement)) else { return nil }
+            return (first, second)
+        }
+        guard methods.count == pairs.count else { return false }
+        for (first, second) in methods { method_exchangeImplementations(first, second) }
+        return true
+    }()
+
+    static func contains(_ window: NSWindow) -> Bool { (leases.object(forKey: window)?.intValue ?? 0) > 0 }
+
+    static func acquire(_ window: NSWindow) {
+        guard installed else { return }
+        let count = leases.object(forKey: window)?.intValue ?? 0
+        leases.setObject(NSNumber(value: count + 1), forKey: window)
+        if count == 0 { refresh(window) }
+    }
+
+    static func release(_ window: NSWindow) {
+        let count = leases.object(forKey: window)?.intValue ?? 0
+        guard count > 0 else { return }
+        if count == 1 { leases.removeObject(forKey: window); refresh(window) }
+        else { leases.setObject(NSNumber(value: count - 1), forKey: window) }
+    }
+
+    private static func refresh(_ window: NSWindow) {
+        // Joining/leaving a hierarchy can happen in SwiftUI's layout pass.
+        // Ask for the native appearance refresh after that pass has ended.
+        DispatchQueue.main.async { [weak window] in
+            let selector = NSSelectorFromString("_sendForcedWindowChangedKeyState")
+            if let window, window.responds(to: selector) { _ = window.perform(selector) }
+        }
+    }
+}
+
+extension NSWindow {
+    @objc dynamic fileprivate func attic_menuHasActiveAppearance() -> Bool {
+        AtticMenuGlassActivity.contains(self) || attic_menuHasActiveAppearance()
+    }
+
+    @objc dynamic fileprivate func attic_menuHasActiveControls() -> Bool {
+        AtticMenuGlassActivity.contains(self) || attic_menuHasActiveControls()
+    }
 }
 
 /// The system menu's glass in SwiftUI (the picker cards).
