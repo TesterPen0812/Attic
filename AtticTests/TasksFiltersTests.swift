@@ -46,6 +46,53 @@ final class TasksFiltersTests: XCTestCase {
 
     private func titles(_ tab: TasksTab) -> [String] { model.rows(for: tab).map(\.model.title).sorted() }
 
+    func testR1RemovingFocusedTagKeyReleasesKeyboardOwnership() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let state = PanelTagBarState()
+        state.open(cursor: .tag("a"))
+        func bar(_ picks: TagPicks) -> some View {
+            NotesTagBar(tags: ["a"], picks: picks, state: state, onSelect: { _ in })
+                .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true)).frame(width: 360, height: 60)
+        }
+        let host = NSHostingView(rootView: bar(.none))
+        let window = NSWindow(contentRect: CGRect(x: -8_000, y: -8_000, width: 360, height: 60),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // Stand in for the native focus callback, without taking the keyboard.
+        state.noteKeyFocus(true)
+        XCTAssertTrue(state.hasKeyboard)
+        host.rootView = bar(TagPicks(["a"]))
+        host.layoutSubtreeIfNeeded()
+        state.close()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(state.keyFocused, "removing the focused # key releases its ownership")
+        XCTAssertFalse(state.hasKeyboard)
+        for (code, characters) in [(UInt16(49), " "), (UInt16(36), "\r")] {
+            XCTAssertEqual(PanelTagBarKeys.action(keyCode: code, characters: characters, modifiers: [],
+                isOpen: state.isOpen, hasKeyboard: state.hasKeyboard, hasCursor: state.cursor != nil), .none,
+                "typing in Find or Notes must pass through after the focused key disappears")
+        }
+        try captureCatchupView(host, name: "tag-key")
+        // Reopening a focused summary replaces that view too. Its removal
+        // must not close the bar whose logical cursor just opened.
+        state.noteKeyFocus(true)
+        state.open(cursor: .tag("a"))
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(state.isOpen)
+        XCTAssertEqual(state.cursor, .tag("a"))
+        state.close()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertFalse(state.hasKeyboard)
+    }
+
     // MARK: - Picks
 
     func testAnyNeedsOneTagAndAllNeedsEvery() {

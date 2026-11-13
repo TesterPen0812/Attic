@@ -347,3 +347,21 @@ enum NoteTextKitRoundTrip {
         return result
     }
 }
+
+/// Optional offscreen evidence for catchup-1 review fixes. No windows are shown.
+@MainActor
+func captureCatchupView(_ view: NSView, name: String) throws {
+    guard ProcessInfo.processInfo.environment["CATCHUP_CAPTURE_DIR"] != nil else { return }
+    view.layoutSubtreeIfNeeded()
+    let bounds = view.bounds
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2),
+        pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+        isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    bitmap.size = bounds.size
+    view.cacheDisplay(in: bounds, to: bitmap)
+    let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+        uniformTypeIdentifier: "public.png")
+    attachment.name = name + ".png"
+    attachment.lifetime = .keepAlways
+    XCTContext.runActivity(named: "Catchup render: " + name) { $0.add(attachment) }
+}
