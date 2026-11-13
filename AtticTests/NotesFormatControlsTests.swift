@@ -1183,6 +1183,23 @@ final class NotesFormatControlsTests: XCTestCase {
         }
     }
 
+    func testBG24ReturnCommitsTheSuggestionHighlightedByHoverNotTheOpenedLink() {
+        let model = NoteFormatCardModel()
+        let ideas = UUID(), ideasTwo = UUID()
+        model.noteCandidates = {
+            [NoteLinkCandidate(id: ideas, title: "Ideas"), NoteLinkCandidate(id: ideasTwo, title: "Ideas 2")]
+        }
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        model.openLink(url: NoteLinkPolicy.noteURL(ideas))
+        XCTAssertEqual(model.linkSuggestions.map(\.id), [ideas, ideasTwo])
+        // The suggestion rows set the index directly on hover.
+        model.linkSuggestionIndex = 1
+        model.submitLink()
+        XCTAssertEqual(committed, NoteLinkPolicy.noteURL(ideasTwo),
+                       "Return commits the row the person is pointing at, as the highlight and VoiceOver say")
+    }
+
     func testBG24EditingAnUnchangedInternalLinkNamedLikeAWebsiteKeepsItsUUID() {
         let model = NoteFormatCardModel()
         let targetID = UUID()
