@@ -19,6 +19,83 @@ private struct PF5CountedID: Hashable {
 /// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
+
+    func testPF8TagTotalsDoNotEvictActiveDoneSearchBetweenPages() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        for index in 0..<120 {
+            let task = TaskItem(title: index.isMultiple(of: 3) ? "alpha \(index)" : "other \(index)", status: .done)
+            task.doneLoggedAt = Date(timeIntervalSince1970: Double(1_700_000_000 + index))
+            task.tags = [index.isMultiple(of: 2) ? "work" : "home"]
+            seed.insert(task)
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let work = TagPicks(["work"])
+        let home = TagPicks(["home"])
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+
+        let first = store.indexedDoneLogPage(limit: 5, matching: "alpha", tags: work)
+        XCTAssertNil(first.failure)
+        XCTAssertEqual(first.tasks.count, 5)
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "alpha", tags: work), 20)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: work), 60)
+        let second = store.indexedDoneLogPage(from: first.next, limit: 5, matching: "alpha", tags: work)
+        XCTAssertNil(second.failure)
+        XCTAssertEqual(second.tasks.count, 5)
+        XCTAssertTrue(Set(first.tasks.map(\.id)).isDisjoint(with: second.tasks.map(\.id)))
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 240,
+            "One search and one tag-total scan; the next matching page must reuse the first scan")
+        print("PF8_COUNTS first_page_count_second_page_visits=\(store.doneSearchFullScanVisits)")
+        #endif
+
+        // The no-tag total is already O(1), and must not evict a query.
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        let noTagFirst = store.indexedDoneLogPage(limit: 5, matching: "alpha", tags: .none)
+        XCTAssertEqual(store.indexedDoneLogCount(), 120)
+        _ = store.indexedDoneLogPage(from: noTagFirst.next, limit: 5, matching: "alpha", tags: .none)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 120)
+        #endif
+
+        // Tag changes change the cache key; a repeated count for that tag is free.
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 120)
+        store.doneSearchLocaleOverrideForTesting = "perf-test-locale-1"
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        XCTAssertEqual(store.doneSearchFullScanVisits, 240, "Locale changes invalidate cached comparisons")
+        store.doneSearchLocaleOverrideForTesting = nil
+        #endif
+
+        // A change imported from another context invalidates both entries.
+        let external = ModelContext(container)
+        let imported = TaskItem(title: "alpha new", status: .done)
+        imported.doneLoggedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        imported.tags = ["work"]
+        external.insert(imported)
+        try external.save()
+        store.refresh()
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "alpha", tags: work), 21)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: work), 61)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 242,
+            "A changed archived tag invalidates both search and total entries")
+        #endif
+    }
+
     func testPF5BulkDeleteFocusIsLinearAndKeepsSelectionBoundaries() {
         let ids = (0..<120).map { PF5CountedID(value: $0) }
         PF5CountedID.comparisons = 0

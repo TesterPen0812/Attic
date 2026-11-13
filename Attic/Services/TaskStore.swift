@@ -2823,6 +2823,15 @@ final class TaskStore: ObservableObject {
     private var doneSearchEntries: [DoneSearchEntry] = []
     private var doneSearchEntryIDs = Set<UUID>()
     private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
+    /// Count requests for an empty query must not displace the active
+    /// searched page. Bound this to one separate tag-only projection.
+    private var doneTagMatches: (tags: TagPicks, locale: String, ids: [UUID])?
+    #if DEBUG
+    private(set) var doneSearchFullScanVisits = 0
+    var doneSearchLocaleOverrideForTesting: String?
+
+    func resetDoneSearchFullScanVisits() { doneSearchFullScanVisits = 0 }
+    #endif
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         indexItemTasks(winners, replacing: ids)
@@ -2853,19 +2862,35 @@ final class TaskStore: ObservableObject {
             return $0.id.uuidString < $1.id.uuidString
         }
         doneSearchMatches = nil
+        doneTagMatches = nil
     }
 
     private func doneSearchIDs(matching query: String, tags: TagPicks = .none) -> [UUID] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
+        let locale = doneSearchLocaleOverrideForTesting ?? Locale.current.identifier
+        #else
         let locale = Locale.current.identifier
-        if let cached = doneSearchMatches, cached.query == query, cached.tags == tags, cached.locale == locale { return cached.ids }
+        #endif
+        if query.isEmpty {
+            if let cached = doneTagMatches, cached.tags == tags, cached.locale == locale { return cached.ids }
+        } else if let cached = doneSearchMatches, cached.query == query, cached.tags == tags, cached.locale == locale {
+            return cached.ids
+        }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
         let ids = doneSearchEntries.compactMap { entry -> UUID? in
+            #if DEBUG
+            doneSearchFullScanVisits += 1
+            #endif
             if !tags.matches(entry.tags) { return nil }
             return query.isEmpty || entry.title.localizedStandardContains(query) || additionalItemMatch(entry.id, query: query) ? entry.id : nil
         }
-        doneSearchMatches = (query, tags, locale, ids)
+        if query.isEmpty {
+            doneTagMatches = (tags, locale, ids)
+        } else {
+            doneSearchMatches = (query, tags, locale, ids)
+        }
         return ids
     }
 
