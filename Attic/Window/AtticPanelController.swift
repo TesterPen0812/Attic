@@ -224,9 +224,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// still reach the same Undo command as the page's own controls.
     static func performUnhandledUndo(redo: Bool, section: PanelSection, openTaskNoteID: UUID? = nil,
                                      store: TaskStore, notes: NotesPageController) {
-        if let taskID = openTaskNoteID, let library = store.commandLibrary {
-            let history = UndoHistoryID.taskWorkspace(taskID)
-            _ = redo ? library.redo(in: history) : library.undo(in: history)
+        if let taskID = openTaskNoteID {
+            // The page's own Undo: it closes the open typing group and
+            // refuses while a publication, replay or input reservation is pending.
+            let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
+            _ = redo ? history?.redo() : history?.undo()
             return
         }
         if section.isNotes {
@@ -253,9 +255,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     static func canPerformUnhandledUndo(redo: Bool, section: PanelSection, openTaskNoteID: UUID? = nil,
                                         store: TaskStore, notes: NotesPageController) -> Bool {
-        if let taskID = openTaskNoteID, let library = store.commandLibrary {
-            let history = UndoHistoryID.taskWorkspace(taskID)
-            return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
+        if let taskID = openTaskNoteID {
+            let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
+            return (redo ? history?.canRedo : history?.canUndo) ?? false
         }
         if section.isNotes {
             if notes.isLibraryPresented { return redo ? notes.canRedoLibrary : notes.canUndoLibrary }
