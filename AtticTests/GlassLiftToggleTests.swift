@@ -50,6 +50,52 @@ final class GlassLiftToggleTests: XCTestCase {
         XCTAssertEqual(dark.tokens.panel.glassLift(enabled: true), 0)
     }
 
+    // MARK: - Control bands
+
+    /// "Brighten glass: the lift stays out from under the controls"
+    /// (Accepted 2026-11-13, C): 46 pt with no lift at the top and bottom,
+    /// then a 24 pt fade up to the full lift in the middle.
+    func testLiftLeavesTheControlBands() {
+        typealias Bands = AtticSurfaceModel.LiftControlBands
+        XCTAssertEqual(Bands.clear, 46)
+        XCTAssertEqual(Bands.fade, 24)
+        let height: CGFloat = 600
+        let stops = Bands.stops(height: height)
+        XCTAssertEqual(stops.map { $0.location * height }, [0, 46, 70, 530, 554, 600])
+        XCTAssertEqual(stops.map(\.opacity), [0, 0, 1, 1, 0, 0])
+        // Too short for both bands: each ramp stops at the middle.
+        let short = Bands.stops(height: 120)
+        XCTAssertEqual(short.map { $0.location * 120 }, [0, 46, 60, 60, 74, 120])
+        XCTAssertEqual(short[2].opacity, 14.0 / 24, accuracy: 1e-9)
+        XCTAssertEqual(Bands.stops(height: 80).map(\.opacity), [0, 0, 0, 0, 0, 0])
+    }
+
+    /// The drawn lift follows those bands: none in the top and bottom 46 pt,
+    /// half way through the fade, full in the middle.
+    func testBandedLiftDrawsTheBands() throws {
+        let height: CGFloat = 300
+        let view = ZStack {
+            Color.black
+            AtticGlassLift(shape: Rectangle(), strength: 1, leavesControlBands: true)
+        }
+        .frame(width: 40, height: height)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        func level(_ y: Int) -> Double {
+            Double(bitmap.colorAt(x: 20, y: y)?.usingColorSpace(.sRGB)?.redComponent ?? -1)
+        }
+        for y in [2, 23, 44, 255, 276, 297] {
+            XCTAssertEqual(level(y), 0, accuracy: 0.03, "y \(y): no lift in the control bands")
+        }
+        XCTAssertEqual(level(58), 0.5, accuracy: 0.1, "the fade is half way at 12 pt in")
+        XCTAssertEqual(level(241), 0.5, accuracy: 0.1, "the bottom fade is half way at 12 pt in")
+        for y in [72, 150, 227] {
+            XCTAssertEqual(level(y), 1, accuracy: 0.03, "y \(y): the middle keeps the full lift")
+        }
+    }
+
     // MARK: - Genie snapshot
 
     /// Genie draws the panel's material live under the bent snapshot, and
@@ -121,7 +167,8 @@ final class GlassLiftToggleTests: XCTestCase {
         let scene = NSView(frame: CGRect(x: 0, y: 0, width: 680, height: 750))
         scene.wantsLayer = true
         let panel = NSHostingView(rootView: AtticSurfaceBackground(
-            model: context.tokens.panel, shape: Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
+            model: context.tokens.panel, shape: Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent),
+            liftLeavesControlBands: true
         ).frame(width: panelRect.width, height: panelRect.height).atticDesign(context))
         panel.frame = panelRect
         scene.addSubview(panel)
@@ -181,7 +228,8 @@ final class GlassLiftToggleTests: XCTestCase {
         let size = CGSize(width: 320, height: 480)
         let context = AtticDesignContext(mode: .light, surface: surface, brightenGlass: brightenGlass)
         let shape = Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
-        let host = NSHostingView(rootView: AtticSurfaceBackground(model: context.tokens.panel, shape: shape)
+        let host = NSHostingView(rootView: AtticSurfaceBackground(model: context.tokens.panel, shape: shape,
+                                                                  liftLeavesControlBands: true)
             .frame(width: size.width, height: size.height)
             .atticDesign(context))
         host.frame = CGRect(origin: .zero, size: size)

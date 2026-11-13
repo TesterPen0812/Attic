@@ -91,6 +91,30 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// at the same contrast (a normal white fill would fog it).
     static let glassLiftStrength = 0.14
 
+    /// "Brighten glass: the lift stays out from under the controls"
+    /// (Accepted 2026-11-13, C in `lift-controls-drafts.html`): on the panel,
+    /// the lift leaves the top and bottom control bands, `clear` pt with no
+    /// lift and then a `fade` pt ramp up to the full lift in the middle, so
+    /// the controls there measure the same as with the switch off.
+    enum LiftControlBands {
+        static let clear: CGFloat = 46
+        static let fade: CGFloat = 24
+
+        /// The lift's mask down a surface `height` pt tall, as gradient
+        /// stops (opacity 0 = no lift, 1 = the full lift). On a surface too
+        /// short for both bands, each ramp is cut at the middle.
+        static func stops(height: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+            guard height > 0 else { return [(0, 0), (1, 0)] }
+            let half = height / 2
+            let clearEnd = min(clear, half) / height
+            let fadeEnd = min(clear + fade, half) / height
+            let peak = height >= 2 * (clear + fade) ? 1.0
+                : max(0, min(1, Double((half - clear) / fade)))
+            return [(0, 0), (clearEnd, 0), (fadeEnd, peak),
+                    (1 - fadeEnd, peak), (1 - clearEnd, 0), (1, 0)]
+        }
+    }
+
     /// The lift for a surface: `glassLiftStrength` on see-through Light
     /// surfaces (Glass and Frosted) when the setting is on; 0 in Dark, on
     /// Solid (also when Reduce Transparency makes the surface solid) and
