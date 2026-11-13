@@ -21,14 +21,28 @@ final class TaskImageTests: XCTestCase {
     }
 
     /// Intercept Trash so a hosted test never changes the real user's Trash.
-    private final class RecordingExportFileManager: FileManager {
+    private final class RecordingExportFileManager: FileManager, @unchecked Sendable {
         private(set) var trashedData: Data?
         private(set) var trashedName: String?
+        private(set) var copiedSources: [URL] = []
+        private(set) var copiedOnMainThread = false
+        var failTrash = false
+        private(set) var refusedTrashURL: URL?
+
+        override func copyItem(at source: URL, to destination: URL) throws {
+            copiedSources.append(source)
+            copiedOnMainThread = copiedOnMainThread || Thread.isMainThread
+            try super.copyItem(at: source, to: destination)
+        }
 
         override func trashItem(at url: URL,
                                 resultingItemURL result: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
             trashedData = try Data(contentsOf: url)
             trashedName = url.lastPathComponent
+            if failTrash {
+                refusedTrashURL = url
+                throw CocoaError(.fileWriteNoPermission)
+            }
             try removeItem(at: url)
         }
     }
@@ -49,28 +63,31 @@ final class TaskImageTests: XCTestCase {
         override func replaceItem(at originalItemURL: URL, withItemAt newItemURL: URL,
                                   backupItemName: String?, options: FileManager.ItemReplacementOptions = [],
                                   resultingItemURL resultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            if let backupItemName {
+                try copyItem(at: originalItemURL, to: originalItemURL.deletingLastPathComponent().appendingPathComponent(backupItemName))
+            }
             throw CocoaError(.fileWriteOutOfSpace)
         }
     }
 
-    func testEarlierFilesExportCopyFailurePreservesExistingDestination() throws {
+    func testEarlierFilesExportCopyFailurePreservesExistingDestination() async throws {
         let root = ownedTemporaryDirectory(prefix: "ExportCopyReplacement")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         let source = root.appendingPathComponent("source.txt")
         let destination = root.appendingPathComponent("destination.txt")
         try Data("new data".utf8).write(to: source)
         try Data("original data".utf8).write(to: destination)
-        XCTAssertThrowsError(try TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
                                                                             fileManager: FailedExportCopyFileManager()))
         XCTAssertEqual(try Data(contentsOf: destination), Data("original data".utf8))
         let recording = RecordingExportFileManager()
-        try TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: recording)
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: recording)
         XCTAssertEqual(try Data(contentsOf: destination), Data("new data".utf8))
         XCTAssertEqual(recording.trashedData, Data("original data".utf8))
         XCTAssertTrue(recording.trashedName?.contains("destination.txt") == true)
     }
 
-    func testEarlierFilesExportCopyReplacementFailurePreservesExistingDestination() throws {
+    func testEarlierFilesExportCopyReplacementFailurePreservesExistingDestination() async throws {
         let root = ownedTemporaryDirectory(prefix: "ExportCopySwap")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         let source = root.appendingPathComponent("source.txt")
@@ -79,15 +96,56 @@ final class TaskImageTests: XCTestCase {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
         try Data("new data".utf8).write(to: source)
         try Data("original data".utf8).write(to: destination)
-        XCTAssertThrowsError(try TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
                                                                             fileManager: FailedExportReplacementFileManager(ownedScratch: scratch)))
         XCTAssertEqual(try Data(contentsOf: destination), Data("original data".utf8))
         XCTAssertEqual(try Data(contentsOf: source), Data("new data".utf8))
-        XCTAssertTrue(try FileManager.default.contentsOfDirectory(at: scratch,
-            includingPropertiesForKeys: nil).contains { $0.lastPathComponent.hasPrefix("Replaced ") },
-            "If replacement fails, retain the original backup outside the chosen directory")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path),
+            "a failed replacement must clean its scratch directory and redundant bytes")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(),
                        ["destination.txt", "source.txt"])
+    }
+
+    func testR2_3ExportCopyReplacesA255ByteFilename() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2LongExport")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent(String(repeating: "a", count: 251) + ".txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+        XCTAssertEqual(manager.trashedData, Data("old".utf8))
+    }
+
+    func testR2_3ExportCopyDoesNotReadDestinationOrCopyOnMainThread() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2ExportIO")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt"), destination = root.appendingPathComponent("destination.txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager)
+        XCTAssertEqual(manager.copiedSources, [source], "replacement must not make a second full copy or hydrate the destination")
+        XCTAssertFalse(manager.copiedOnMainThread, "export filesystem work must leave the main actor")
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+    }
+
+    func testR2_3ExportCopyTrashFailureReportsDurableBackup() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2ExportTrash")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt"), destination = root.appendingPathComponent("destination.txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        manager.failTrash = true
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager))
+        let backup = try XCTUnwrap(manager.refusedTrashURL)
+        XCTAssertEqual(backup.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL,
+            "untrashed old bytes must stay beside the chosen file, outside purgeable TemporaryItems")
+        XCTAssertEqual(try Data(contentsOf: backup), Data("old".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
     }
 
     func testP3_4ReadmittingCandidateReleasesEveryAdmissionAfterFinish() throws {
