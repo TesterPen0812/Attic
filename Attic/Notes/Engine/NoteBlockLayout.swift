@@ -1461,7 +1461,7 @@ final class NoteDropLineView: NSView {
 /// shadow, which follow the panel's look), so nothing under it shows
 /// through and no text is drawn twice. Moves are Core Animation's.
 final class NoteDragLiftView: NSView {
-    static let cornerRadius: CGFloat = AtticRadius.row
+    static let cornerRadius: CGFloat = AtticRadius.noteRow
     /// The card's room around its snapshot.
     let padding: CGSize
     private let image = CALayer()

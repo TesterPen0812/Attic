@@ -437,8 +437,8 @@ enum AtticDropdownMetrics {
     static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// The rows' highlight: the menus' 12 pt, concentric in the 18 pt card
-    /// (18 − 6), continuous; never rounder than half a row (Corners B).
+    /// The rows' highlight: the menus' 8 pt, continuous (Corners B,
+    /// Accepted 2026-11-13, measured fix); never rounder than half a row.
     static let highlightRadius: CGFloat = AtticMenuMetrics.highlightRadius
     static func highlightRadius(height: CGFloat) -> CGFloat { min(highlightRadius, height / 2) }
     static let iconSize: CGFloat = 13
@@ -558,9 +558,11 @@ enum AtticMenuMetrics {
     /// A hairline, 10 pt in, centred on an 11 pt band between groups.
     static let separatorHeight: CGFloat = 11
     static let separatorInset: CGFloat = 10
-    /// The highlight: a 12 pt rounded fill at 8 % ink (16 % under
-    /// Increase Contrast).
-    static let highlightRadius: CGFloat = 12
+    /// The highlight: an 8 pt continuous fill at 8 % ink (16 % under
+    /// Increase Contrast). Corners B (Accepted 2026-11-13), measured fix: the
+    /// sheet's 24 pt B row drew its corner in a 12 pt box, which 8 pt
+    /// continuous matches; not concentric with the 18 pt card.
+    static let highlightRadius: CGFloat = 8
     static let highlightAlpha: CGFloat = 0.08
     static let highlightAlphaIncreased: CGFloat = 0.16
 
@@ -1214,20 +1216,18 @@ enum AtticPickerMetrics {
 
 /// A task row as the owner's panel design draws it (drawn at 2×; points
 /// here): 7 above and below 15 pt lines, a 1.5 gap before the meta line,
-/// files as 28 pt tiles 4 below it; the row is its own highlight, 16 pt on
-/// Apple's continuous curve, capped at half the row's height (Corners,
-/// Accepted 2026-11-13). The circle's centre (`AtticLayout.circleX` plus
-/// half the 15 pt circle) is 15.5 in from the highlight's leading edge and
-/// 15.5 down: the centre of the one-line row's rounded end.
+/// files as 28 pt tiles 4 below it; the row is its own highlight, 9.5 pt on
+/// Apple's continuous curve at any height (Corners C, Accepted 2026-11-13,
+/// measured fix). The circle's centre (`AtticLayout.circleX` plus half the
+/// 15 pt circle) is 15.5 in from the highlight's leading edge and 15.5
+/// down: square in the one-line row's end, 8 pt clear of its sides.
 enum TasksRowDesign {
     /// 8 (Accepted 2026-11-05, rows "get room to read"; was 7).
     static let paddingY: CGFloat = 8
     static let paddingX: CGFloat = 9
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5
-    static let radius: CGFloat = AtticRadius.row
-    /// The highlight's radius on a row this tall (15.5 on a one-line row).
-    static func radius(height: CGFloat) -> CGFloat { AtticRadius.row(height: height) }
+    static let radius: CGFloat = AtticRadius.taskRow
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1
