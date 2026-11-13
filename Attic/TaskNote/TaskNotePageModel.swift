@@ -909,9 +909,19 @@ final class TaskNotePageModel: ObservableObject {
         pendingReopen = nil
         guard reopenTask() else { return }
         switch request {
-        case let .toggle(id): _ = toggle(id)
+        case let .toggle(id): _ = finishDeferredUncheck(id)
         case .addSubtask: _ = commitNewSubtask()
         }
+    }
+
+    /// The reopen operation may already have unchecked a child completed
+    /// with its parent. This is a requested result, not another relative tap.
+    @discardableResult
+    private func finishDeferredUncheck(_ id: UUID) -> Bool {
+        guard let child = store.listedTask(withID: id) else { return report(.taskGone) }
+        guard child.status == .done else { return true }
+        let outcome = AtticSounds.play(.undone, after: library.updateTask(id, status: .todo, in: historyID))
+        return settle(outcome) { [weak self] in _ = self?.finishDeferredUncheck(id) }
     }
 
     /// Completing from the head (circle, ⇧⌘↩): the toast names the scope

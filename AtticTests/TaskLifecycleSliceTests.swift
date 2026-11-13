@@ -1974,6 +1974,23 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
     }
 
+    func testBG19ReopenAndContinueKeepsAutoCompletedChildUnchecked() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let child = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title == "Write release notes" })
+        XCTAssertEqual(child.status, .todo)
+        XCTAssertTrue(presenter.model.toggleTask())
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .done)
+        XCTAssertFalse(presenter.model.toggle(child.id), "a Done parent requires the reopen confirmation")
+        XCTAssertEqual(presenter.model.pendingReopen, .toggle(child.id))
+
+        presenter.model.continueAfterReopen()
+        XCTAssertEqual(tasks.task(withID: id)?.status, .inProgress)
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .todo,
+                       "reopen already unchecked this child; continuation must not check it again")
+        XCTAssertNil(presenter.model.pendingReopen)
+    }
+
     // Build rules 2026-10-23: the same writing survives circle removal.
     // Owner answer: only children become checkboxes; task details are dropped.
     // Orchestrator decision: Undo is the sole return to the old task.
