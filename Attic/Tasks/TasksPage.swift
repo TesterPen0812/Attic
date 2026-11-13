@@ -4561,6 +4561,14 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }
+        // A lazy cell can reappear at the same geometry. Its disappearance
+        // removed these registrations, so geometry-change callbacks alone
+        // cannot restore the live row and control hit regions.
+        .onAppear { [session, pointer, tab, id, reports] in
+            let row = TasksRowID(tab: tab, id: id)
+            if let frame = reports.frame { pointer.setFrame(frame, for: row, from: reports) }
+            if let controls = reports.controls { session.setControlFrames(controls, for: row, from: reports) }
+        }
         .onDisappear { [session, pointer, tab, id, reports] in
             let row = TasksRowID(tab: tab, id: id)
             session.removeControlFrames(for: row, of: reports)

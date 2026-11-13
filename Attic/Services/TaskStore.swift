@@ -420,6 +420,9 @@ final class TaskStore: ObservableObject {
     private(set) var importActivityTimeoutTask: Task<Void, Never>?
 #endif
     private var snapshotCache: [TaskScope: (revision: UInt64, snapshot: TaskScopeSnapshot)] = [:]
+    #if DEBUG
+    private(set) var scopeSnapshotBuildCount = 0
+    #endif
     /// Family relationships indexed once per revision (see `familyIndex`).
     private var familyIndexCache: FamilyIndex?
 
@@ -3926,6 +3929,19 @@ final class TaskStore: ObservableObject {
         return done
     }
 
+    /// Cross-tab Find counts do not need another page's ordering. Use the
+    /// same canonical roots and listed statuses as its snapshot, without
+    /// hydrating sort keys or sorting a page the person has not opened.
+    func openItemSearchCount(for scope: TaskScope, matching query: String, tags: TagPicks) -> Int {
+        let statuses = scope.countedStatuses
+        return familyIndex.roots.reduce(into: 0) { count, task in
+            guard statuses.contains(task.listedStatus),
+                  tags.isEmpty || tags.matches(task.tags),
+                  matchesItemSearch(task, query: query) else { return }
+            count += 1
+        }
+    }
+
     /// Memoized per revision: SwiftUI evaluates view bodies far more often
     /// than tasks change, so repeated calls between edits are O(1). Every
     /// mutation path goes through save()/reloadTasks(), which bump `revision`.
@@ -3933,6 +3949,10 @@ final class TaskStore: ObservableObject {
         if let cached = snapshotCache[scope], cached.revision == taskDataRevision {
             return cached.snapshot
         }
+
+        #if DEBUG
+        scopeSnapshotBuildCount += 1
+        #endif
 
         // The index already classified roots, so sections read only root
         // keys; each section then sorts its own slice.

@@ -3,6 +3,11 @@
 A dismissing click is consumed over ordinary controls. Switching to another
 registered menu trigger still forwards its full press; context-menu and
 keyboard-only anchors do not make an ordinary row click a menu trigger.
+## 2026-11-13 · Hosted mask diagnostics
+
+Mask-build counters can be scoped to a hosted fixture. The shadow-only
+closing guard now measures its own card while other hosts finish animations;
+its reveal, anchor and resize checks use the same scoped counter.
 
 ## 2026-11-13 · Corners: the measured fix
 

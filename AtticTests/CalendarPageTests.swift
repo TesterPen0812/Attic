@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -600,7 +601,7 @@ final class CalendarPageTests: XCTestCase {
                           "the Day timeline follows the injected local clock")
     }
 
-    func testDatesHuntClockCorrectionImmediatelyRefreshesCalendarToday() throws {
+    func testDatesHuntClockCorrectionImmediatelyRefreshesCalendarToday() async throws {
         let clock = MutableNow(date(2026, 11, 12, 23, 58))
         let model = CalendarPageModel(store: try makeTestStore(), source: CalendarEventSourceStub(events: []),
                                       calendar: calendar, now: { clock.value })
@@ -608,8 +609,15 @@ final class CalendarPageTests: XCTestCase {
         defer { model.setVisible(false) }
         XCTAssertEqual(model.snapshot.today, day(2026, 11, 12))
         clock.value = date(2026, 11, 14, 9)
+        let refreshed = expectation(description: "Clock notification rebuilt Calendar")
+        let expectedToday = day(2026, 11, 14)
+        let observation = model.$snapshot.dropFirst().filter { $0.today == expectedToday }
+            .prefix(1).sink { _ in refreshed.fulfill() }
         NotificationCenter.default.post(name: .NSSystemClockDidChange, object: nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        // The subscriber receives on the main queue; release it rather than
+        // pumping a nested run loop from an XCTest main-queue callback.
+        await fulfillment(of: [refreshed], timeout: 0.1)
+        observation.cancel()
         XCTAssertEqual(model.snapshot.today, day(2026, 11, 14),
                        "a clock jump should update grid and agenda without waiting for the next timer tick")
     }

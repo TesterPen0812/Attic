@@ -3019,6 +3019,7 @@ extension AtticDropdownTests {
 @MainActor
 extension AtticDropdownTests {
     private final class PFCloseFrame: ObservableObject {
+        let diagnosticsOwner = UUID()
         @Published var unfold = AtticUnfoldState(reveal: 1, fromTop: true, contentBlur: 0, shadow: 1)
         @Published var width: CGFloat = 180
     }
@@ -3033,6 +3034,7 @@ extension AtticDropdownTests {
                 }
             }
             .environment(\.atticUnfold, frame.unfold)
+            .environment(\.atticUnfoldDiagnosticsOwner, frame.diagnosticsOwner)
             .atticDesign(AtticDesignContext(mode: .light))
             .frame(width: 240, height: 220, alignment: .topLeading)
         }
@@ -3045,19 +3047,24 @@ extension AtticDropdownTests {
         AtticDropdownDiagnostics.enabled = true
         defer { AtticDropdownDiagnostics.enabled = wasEnabled }
         for fromTop in [true, false] {
-            let initial = AtticDropdownDiagnostics.contentMaskBuilds
+            let frame = PFCloseFrame()
+            let owner = frame.diagnosticsOwner
+            AtticDropdownDiagnostics.contentMaskBuildsByOwner[owner] = 0
+            defer { AtticDropdownDiagnostics.contentMaskBuildsByOwner[owner] = nil }
+            func builds() -> Int { AtticDropdownDiagnostics.contentMaskBuildsByOwner[owner] ?? 0 }
+            let initial = builds()
             let window = makeWindow()
             defer { window.close() }
-            let frame = PFCloseFrame()
             frame.unfold.fromTop = fromTop
             frame.unfold.shadow = AtticDropdownReveal.frame(time: 0.1, closing: true).shadow
             let host = NSHostingView(rootView: PFClosingCard(frame: frame))
             window.contentView = host
             host.layoutSubtreeIfNeeded()
             spin(0.1)
-            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, initial, "the real content mask was rendered")
+            XCTAssertGreaterThan(builds(), initial, "the real content mask was rendered")
 
-            let beforeClose = AtticDropdownDiagnostics.contentMaskBuilds
+            let beforeClose = builds()
+            let allHostsBeforeClose = AtticDropdownDiagnostics.contentMaskBuilds
             let refreshPeriod = 1.0 / 60.0
             let frames = Int(ceil(AtticDropdownReveal.closeDuration / refreshPeriod))
             for index in 1..<frames {
@@ -3065,27 +3072,27 @@ extension AtticDropdownTests {
                 host.layoutSubtreeIfNeeded()
                 spin(refreshPeriod)
             }
-            let closeBuilds = AtticDropdownDiagnostics.contentMaskBuilds - beforeClose
-            print("PF_CLOSE_MASK_BUILDS from_top=\(fromTop) \(closeBuilds)")
+            let closeBuilds = builds() - beforeClose
+            print("PF_CLOSE_MASK_BUILDS from_top=\(fromTop) \(closeBuilds) all_hosts=\(AtticDropdownDiagnostics.contentMaskBuilds - allHostsBeforeClose)")
             XCTAssertEqual(closeBuilds, 0, "shadow opacity does not change the content clip")
 
-            let beforeReveal = AtticDropdownDiagnostics.contentMaskBuilds
+            let beforeReveal = builds()
             frame.unfold.reveal = 0.4
             host.layoutSubtreeIfNeeded()
             spin(refreshPeriod)
-            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeReveal, "opening still updates its clip")
+            XCTAssertGreaterThan(builds(), beforeReveal, "opening still updates its clip")
 
-            let beforeAnchor = AtticDropdownDiagnostics.contentMaskBuilds
+            let beforeAnchor = builds()
             frame.unfold.fromTop.toggle()
             host.layoutSubtreeIfNeeded()
             spin(refreshPeriod)
-            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeAnchor, "a changed anchor still updates its clip")
+            XCTAssertGreaterThan(builds(), beforeAnchor, "a changed anchor still updates its clip")
 
-            let beforeResize = AtticDropdownDiagnostics.contentMaskBuilds
+            let beforeResize = builds()
             frame.width += 20
             host.layoutSubtreeIfNeeded()
             spin(refreshPeriod)
-            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeResize, "a resized card still updates its clip")
+            XCTAssertGreaterThan(builds(), beforeResize, "a resized card still updates its clip")
         }
     }
 }
