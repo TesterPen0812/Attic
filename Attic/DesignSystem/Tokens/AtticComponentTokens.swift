@@ -420,15 +420,18 @@ enum AtticPopoverMetrics {
 /// the `/` list and the rest) and the glass menus (`AtticGlassMenu`).
 /// Every value of the look is here, so it is tuned in one place.
 enum AtticDropdownMetrics {
-    /// The card's corners: the glass menus' 18 pt (Accepted 2026-11-10);
-    /// the contents keep their concentric radii from `AtticRadius.menu`.
+    /// The card's corners: the glass menus' 18 pt (Accepted 2026-11-10).
     static let cornerRadius: CGFloat = AtticMenuMetrics.cardRadius
-    /// Rows and fields sit this far in from the card's edge.
-    static let inset: CGFloat = AtticRadius.menuPadding
+    /// Rows and fields sit this far in from the card's edge: the menus'
+    /// 6 pt (Corners B, Accepted 2026-11-13: picker cards are menu cards;
+    /// was 3).
+    static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// The picker rows retain their 13 pt radius inside the 18 pt Loam card.
-    static let highlightRadius: CGFloat = AtticRadius.menuRow
+    /// The rows' highlight: the menus' 12 pt, concentric in the 18 pt card
+    /// (18 − 6), continuous; never rounder than half a row (Corners B).
+    static let highlightRadius: CGFloat = AtticMenuMetrics.highlightRadius
+    static func highlightRadius(height: CGFloat) -> CGFloat { min(highlightRadius, height / 2) }
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 14
     /// Between a row's columns (dot or icon, name).
@@ -444,18 +447,17 @@ enum AtticDropdownMetrics {
     static let markSlot: CGFloat = 15
     /// The least room before a trailing detail (Fri, 2 Oct).
     static let detailGap: CGFloat = 14
-    /// The field (Date, Tag): 30 pt, 5 pt in from the card's edge and
-    /// concentric with it (16 − 5 = 11 pt corners), in a 40 pt header
-    /// ruled off by a full-width hairline.
+    /// The field (Date, Tag): 30 pt, centred in a 40 pt header ruled off
+    /// by a full-width hairline, its sides on the rows' 6 pt line and
+    /// concentric with the card like their highlights (18 − 6 = 12 pt,
+    /// continuous: Corners B, Accepted 2026-11-13; it was 5 pt in at 11 pt).
     static let fieldHeight: CGFloat = 30
-    static let fieldRadius: CGFloat = AtticRadius.concentric(outer: AtticRadius.menu, padding: inset + fieldInset)
-    /// The field's outline (the Date field and the dropdowns' text fields):
-    /// a surface squircle, concentric with the card like the rows'
-    /// highlights (Shapes, Accepted 2026-10-30).
-    static var fieldShape: AtticControlOutline { AtticControlOutline(cornerRadius: fieldRadius, exponent: AtticShape.surfaceExponent) }
+    static let fieldRadius: CGFloat = AtticRadius.concentric(outer: cornerRadius, padding: inset + fieldInset)
+    /// The field's outline (the Date field and the dropdowns' text fields).
+    static var fieldShape: AtticControlOutline { AtticControlOutline(cornerRadius: fieldRadius, exponent: nil) }
     static let fieldHeaderHeight: CGFloat = 40
-    /// The field is this much further in than the rows (5 pt from the edge).
-    static let fieldInset: CGFloat = 2
+    /// The field's sides beyond the rows' inset: none (on the rows' line).
+    static let fieldInset: CGFloat = 0
     /// The magnifier's slot: text starts 32 pt into the field.
     static let fieldIconLeading: CGFloat = 10
     static let fieldTextLeading: CGFloat = 32
@@ -514,7 +516,7 @@ enum AtticDropdownMetrics {
     static let monthMarkRadius: CGFloat = monthMarkHeight / 2
     static let clearGap: CGFloat = 8
     static let clearHeight: CGFloat = 32
-    /// Clear Date is one of the card's rows: an 11 pt squircle.
+    /// Clear Date is one of the card's rows, lit like them.
     static let clearRadius: CGFloat = highlightRadius
     /// How long a closing card stays in the overlay for its leave motion.
     static let leaveCleanup: TimeInterval = 0.3
@@ -532,20 +534,23 @@ enum AtticMenuMetrics {
     /// System glass, 18 pt continuous corners, 6 pt padding.
     static let cardRadius: CGFloat = 18
     static let cardPadding: CGFloat = 6
-    /// 32 pt rows, 10 pt in; a 20 pt icon column and an 8 pt gap (menu
-    /// review #7, 12 Nov: the icon belongs to its title).
-    static let rowHeight: CGFloat = 32
+    /// 28 pt rows (Menu look picks B, Accepted 2026-11-13), 10 pt in; a
+    /// 20 pt icon column and an 8 pt gap (menu review #7, 12 Nov: the icon
+    /// belongs to its title).
+    static let rowHeight: CGFloat = 28
     static let rowPadding: CGFloat = 10
     static let iconSlot: CGFloat = 20
     static let iconSize: CGFloat = 14
     static let columnGap: CGFloat = 8
     /// 13 pt medium titles; 11 pt values and shortcuts; 11.5 pt semibold
-    /// section titles on a 26 pt band.
+    /// section titles on a 22 pt band, the text 4 pt off its bottom: each
+    /// break keeps its line and its heading, closer together (Menu look
+    /// picks, groups C, Accepted 2026-11-13; was 26 and 5).
     static let titleSize: CGFloat = 13
     static let detailSize: CGFloat = 11
     static let headerSize: CGFloat = 11.5
-    static let headerHeight: CGFloat = 26
-    static let headerBottom: CGFloat = 5
+    static let headerHeight: CGFloat = 22
+    static let headerBottom: CGFloat = 4
     /// A hairline, 10 pt in, centred on an 11 pt band between groups.
     static let separatorHeight: CGFloat = 11
     static let separatorInset: CGFloat = 10
@@ -556,10 +561,11 @@ enum AtticMenuMetrics {
     static let highlightAlphaIncreased: CGFloat = 0.16
 
     // MARK: Size and placement
-    /// As wide as the control that opened it and at least 216 pt; a menu
+    /// As wide as the control that opened it and at least 200 pt (Menu look
+    /// picks B, Accepted 2026-11-13; was 216); a menu
     /// whose rows need more grows to fit them, up to `maxWidth`, past
     /// which a row is cut short.
-    static let minWidth: CGFloat = 216
+    static let minWidth: CGFloat = 200
     static let maxWidth: CGFloat = 280
     /// Kept for the menus that name their own width (Tags ›, Date ›):
     /// the minimum still applies.
@@ -573,6 +579,9 @@ enum AtticMenuMetrics {
     static let pointerGrace: TimeInterval = 0.25
     /// Kept clear of the screen's visible edges.
     static let screenMargin: CGFloat = 6
+    /// Kept this far inside the panel's visible surface when the card fits
+    /// there (placement B, Accepted 2026-11-13).
+    static let panelInset: CGFloat = 8
     /// From the control to the menu.
     static let anchorGap: CGFloat = 8
     /// Room around a card's glass in its window, for its shadow and the
@@ -1201,7 +1210,11 @@ enum AtticPickerMetrics {
 
 /// A task row as the owner's panel design draws it (drawn at 2×; points
 /// here): 7 above and below 15 pt lines, a 1.5 gap before the meta line,
-/// files as 28 pt tiles 4 below it; the row is its own highlight, radius 12.
+/// files as 28 pt tiles 4 below it; the row is its own highlight, 16 pt on
+/// Apple's continuous curve, capped at half the row's height (Corners,
+/// Accepted 2026-11-13). The circle's centre (`AtticLayout.circleX` plus
+/// half the 15 pt circle) is 15.5 in from the highlight's leading edge and
+/// 15.5 down: the centre of the one-line row's rounded end.
 enum TasksRowDesign {
     /// 8 (Accepted 2026-11-05, rows "get room to read"; was 7).
     static let paddingY: CGFloat = 8
@@ -1209,6 +1222,8 @@ enum TasksRowDesign {
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5
     static let radius: CGFloat = AtticRadius.row
+    /// The highlight's radius on a row this tall (15.5 on a one-line row).
+    static func radius(height: CGFloat) -> CGFloat { AtticRadius.row(height: height) }
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1

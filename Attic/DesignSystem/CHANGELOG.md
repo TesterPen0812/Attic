@@ -1,3 +1,37 @@
+## 2026-11-13 · Corners round 2: the mini page and the picker cards
+
+The note thumbnail keeps the drawing's proportion: 7 pt continuous corners
+on the 24 × 30 pt mini page (10 read as a rounded blob), with its title and
+lines drawn inside 4 × 3.5 pt padding, clear of the corners. Picker cards
+(Date, Tags, the `/` list and the rest) are menu cards: 6 pt padding, 12 pt
+continuous highlights capped at half a row, and the field on the rows' 6 pt
+line at 12 pt, still centred in its 40 pt header. Their rows stay 32 pt.
+
+## 2026-11-13 · Menu look picks
+
+The owner's picks from the menu-look sheet are now the permanent values, and
+the DEBUG option seams (`ATTIC_UI_TEST_MENU_ROWS`, `_SECTIONS`, `_WIDTH`,
+`_PLACEMENT`, `_GROUPING`, `_RED`) are gone. Glass menu rows are 28 pt; a
+section keeps its line and its heading, on a 22 pt band with the text 4 pt off
+its bottom; menus are at least 200 pt wide. A menu stays inside the panel when
+it fits without covering the row or control that opened it, and otherwise
+hangs past the panel as before. One task's menu has four groups: Move to
+Backlog (or Now) joins Date, Tags and Priority, and More joins Delete. Delete
+is the system red in Light and Dark. Picker cards keep their own 32 pt rows.
+
+## 2026-11-13 · Corners: C for task and note rows, B for the day card and menus
+
+Rows, the day card and menu highlights move from the surface squircle to
+Apple's continuous curve. `AtticRadius.row` is 16 (was 12), capped at half a
+row's height by `AtticRadius.row(height:)`, so a one-line task row is 15.5 and
+its circle sits centred in the rounded end. Task highlights, the joined
+selection glass, the keyboard ring and the lifted, carried and dragged-out task
+cards follow it. Notes rows are 16 with 10 pt thumbnails 6 pt in (concentric).
+Today's Calendar card stays 24 and is continuous; its events are 17.5
+(24 − 6.5), and their fill and ring are continuous. Glass menu highlights stay
+12 and cap at half the row. The proposal notice and a dragged note block also
+use the row token, so they are now 16 (still squircles).
+
 ## 2026-11-13 · Brighten glass leaves the panel's control bands
 
 With Brighten glass on, the panel's lift fades out over its top and bottom

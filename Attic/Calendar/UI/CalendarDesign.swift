@@ -51,8 +51,9 @@ enum CalendarDesign {
     }
     static let dayGap: CGFloat = 4
     static let dayRadius: CGFloat = AtticRadius.card
-    /// Today's card is a surface: a squircle (Shapes, Accepted 2026-10-30).
-    static let dayCardExponent: CGFloat = AtticShape.surfaceExponent
+    /// Today's card is on Apple's continuous curve (nil: Corners B,
+    /// Accepted 2026-11-13; it was the surface squircle).
+    static let dayCardExponent: CGFloat? = nil
     static let tileToRows: CGFloat = 5
     // Date tile (owner, 2026-10-31: the older agenda): 128 px wide, 4 %
     // heading ink, padding 14 16 16 16 px; concentric inside the day's
@@ -82,7 +83,10 @@ enum CalendarDesign {
     static let eventLine: CGFloat = 15
     static let eventMetaFont: CGFloat = 11
     static let eventMetaTop: CGFloat = 1.5
-    static let eventRadius: CGFloat = AtticRadius.row
+    /// Concentric inside the day card (Corners B, Accepted 2026-11-13):
+    /// 24 − 6.5 = 17.5 on Apple's continuous curve, capped by a short row's
+    /// half height.
+    static let eventRadius: CGFloat = AtticRadius.concentric(outer: dayRadius, padding: dayPadding)
     // Now line: 10 px dot, 2 px line, 18 px time; 4 px above and below.
     static let nowDot: CGFloat = 5
     static let nowLine: CGFloat = 1

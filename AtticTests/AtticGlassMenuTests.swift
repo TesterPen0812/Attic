@@ -150,13 +150,13 @@ final class AtticGlassMenuTests: XCTestCase {
             }
         }
         XCTAssertEqual(kinds, ["Complete", "Disabled", "Date", "—", "Tags", "—", "Delete"], "a separator starts each section")
-        XCTAssertEqual(layout.entries[0].frame.height, 32, "32 pt rows")
+        XCTAssertEqual(layout.entries[0].frame.height, 28, "28 pt rows (Menu look picks B, 2026-11-13)")
         XCTAssertEqual(layout.entries[0].frame.minY, 6, "Loam: 6 pt padding")
         XCTAssertEqual(layout.entries[3].frame.height, 11, "a hairline on an 11 pt band")
-        XCTAssertEqual(layout.size.width, 216, "at least 216 pt")
+        XCTAssertEqual(layout.size.width, 200, "at least 200 pt (Menu look picks B)")
         let submenu = AtticGlassMenuCard.layout(commands()[2].children)
         XCTAssertEqual(submenu.entries.first.map { if case .header = $0.kind { true } else { false } }, true, "a titled section's header")
-        XCTAssertEqual(submenu.entries.first?.frame.height, 26)
+        XCTAssertEqual(submenu.entries.first?.frame.height, 22, "groups C: the heading closer (2026-11-13)")
         // The shortcut sits at the trailing edge (Loam's), and takes room.
         let plain = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title, longer still") {}])
         let hinted = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title, longer still",
@@ -165,6 +165,14 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(AtticMenuCommand(verbatim: "Info", shortcut: KeyboardShortcut("i", modifiers: [.command, .shift])) {}.glassShortcut, "⇧⌘I")
         XCTAssertNil(AtticMenuCommand(verbatim: "Edit", shortcut: KeyboardShortcut(.return, modifiers: [])) {}.glassShortcut,
                      "a bare key is the list's, not drawn")
+    }
+
+    private static func systemRed(dark: Bool) -> NSColor {
+        var red = NSColor.systemRed
+        NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            red = NSColor.systemRed.usingColorSpace(.sRGB) ?? red
+        }
+        return red
     }
 
     /// The card is the panel's material (owner, 12 Nov), so its inks are
@@ -184,7 +192,14 @@ final class AtticGlassMenuTests: XCTestCase {
                             let floor = contrast ? 4.5 : 3.0
                             // Disabled rows are the title at 30 % (review #6), below any
                             // floor by design: `testDisabledInkIsTheTitleAtThirtyPercent`.
-                            for ink in [style.detail, style.header] {
+                            // Section headers are the title at 45 %, as the system menu
+                            // draws them (owner, 12 Nov: version 3 of
+                            // menu-versions-drafts.html, the look accepted with the grey
+                            // hover); Increase Contrast keeps the opaque token below.
+                            if !contrast {
+                                XCTAssertEqual(style.header, style.title.withAlphaComponent(0.45), "\(surface), \(controls), \(mode)")
+                            }
+                            for ink in contrast ? [style.detail, style.header] : [style.detail] {
                                 let colour = try XCTUnwrap(ink.usingColorSpace(.sRGB))
                                 let rgba = AtticRGBA(red: colour.redComponent, green: colour.greenComponent,
                                     blue: colour.blueComponent, alpha: colour.alphaComponent)
@@ -195,8 +210,8 @@ final class AtticGlassMenuTests: XCTestCase {
                             for colour in [style.tokens.tagInk(.pink), style.tokens.ink(.priorityMark)] {
                                 XCTAssertEqual(style.colourInk(colour), colour, "no vivid on a solid card")
                             }
-                            XCTAssertEqual(style.destructive, style.tokens.ink(.dueText).nsColor,
-                                "solid cards keep the original colour, without vivid")
+                            XCTAssertEqual(style.destructive, Self.systemRed(dark: mode == .dark),
+                                "Delete is the system red (Menu look picks B, 2026-11-13)")
                         }
                     }
                 }
@@ -204,52 +219,55 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
-    /// Owner, 12 Nov: "make them the same material as the panel". Every
-    /// menu card's face (the command menus' `AtticGlassMenuSurface` and the
-    /// picker cards' `AtticDropdownSurface`) draws the panel's own surface
-    /// (`AtticPanelStageSurface`'s path) in every appearance: rendered in
-    /// capture mode over the same desktop, the card's middle is the panel's
-    /// middle. A bare `.glassEffect(.regular)` card draws nothing here, so
-    /// the backdrop (magenta) would show through.
-    func testEveryMenuCardWearsThePanelsMaterialInEveryAppearance() throws {
-        let size = CGSize(width: 120, height: 120)
-        let capture = AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey))
-        func middle<V: View>(_ view: V, _ design: AtticDesignContext) throws -> NSColor {
-            let content = view.frame(width: size.width, height: size.height)
-                .padding(40)
-                .background(Color(red: 1, green: 0, blue: 1))
-                .atticDesign(design)
-                .environment(\.atticCapture, capture)
-            let renderer = ImageRenderer(content: content)
-            renderer.scale = 1
-            let image = try XCTUnwrap(renderer.cgImage)
-            let bitmap = NSBitmapImageRep(cgImage: image)
-            return try XCTUnwrap(bitmap.colorAt(x: 40 + Int(size.width / 2), y: 40 + Int(size.height / 2))?.usingColorSpace(.sRGB))
-        }
-        let access: [(contrast: Bool, reduced: Bool)] = [(false, false), (true, false), (false, true)]
-        for mode in AtticDesignContext.Mode.allCases {
-            for palette in AtticPanelTheme.allCases {
-                for surface in PanelSurfaceStyle.allCases {
-                    for tint in [PanelTintLevel.off, .vivid] {
-                        for (contrast, reduced) in access {
-                            for controls in AtticControlMaterial.allCases {
-                                let design = AtticDesignContext(mode: mode, palette: palette, surface: surface, tint: tint,
-                                    increaseContrast: contrast, reduceTransparency: reduced, controls: controls)
-                                let label = "\(design.caption), \(controls)"
-                                let panel = try middle(AtticPanelStageSurface(cornerSize: 0), design)
-                                let cards = [
-                                    ("command menu", try middle(AtticGlassMenuSurface(style: AtticGlassMenuStyle(design: design)), design)),
-                                    ("picker card", try middle(AtticDropdownSurface(), design)),
-                                ]
-                                for (name, card) in cards {
-                                    XCTAssertEqual(Double(card.alphaComponent), Double(panel.alphaComponent), accuracy: 0.01, "\(name): \(label)")
-                                    XCTAssertEqual(Double(card.redComponent), Double(panel.redComponent), accuracy: 0.01, "\(name): \(label)")
-                                    XCTAssertEqual(Double(card.greenComponent), Double(panel.greenComponent), accuracy: 0.01, "\(name): \(label)")
-                                    XCTAssertEqual(Double(card.blueComponent), Double(panel.blueComponent), accuracy: 0.01, "\(name): \(label)")
-                                }
-                            }
-                        }
+    /// Accepted 2026-11-12 (evening) · Menus: version 3 on the system
+    /// menu's Liquid Glass, with the grey hover. On Glass and Frosted every
+    /// command card is AppKit's own system glass (`NSGlassEffectView`,
+    /// `.regular`, untinted, at the card's radius) under its rows, drawn in
+    /// the active look as the system menu's window draws it, with nothing
+    /// over it, no drawn outline and the measured shadow. Solid and Reduce
+    /// Transparency keep the opaque card with no glass. The glass's own
+    /// colours are the OS's and vary by release, so they are not pinned.
+    func testEveryMenuCardWearsTheSystemMenusLiquidGlass() throws {
+        let saved = AtticGlassMenu.design
+        defer { AtticGlassMenu.design = saved }
+        for surface in PanelSurfaceStyle.allCases {
+            for reduced in [false, true] {
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    AtticGlassMenu.design = AtticDesignContext(mode: .light, surface: surface, reduceTransparency: reduced)
+                    let menu = AtticGlassMenu(commands(), appearance: NSAppearance(named: appearance), opener: nil)
+                    menu.open(.point(CGPoint(x: 400, y: 600)), visible: screen, source: nil)
+                    defer { menu.close(animated: false) }
+                    let label = "\(surface), reduced \(reduced), \(appearance.rawValue)"
+                    let style = menu.style
+                    let window = try XCTUnwrap(menu.cards.first?.window, label)
+                    let root = try XCTUnwrap(window.cardView, label)
+                    let glass = root.subviews.compactMap { $0 as? NSGlassEffectView }
+                    XCTAssertEqual(style.isSeeThrough, surface != .solid && !reduced, label)
+                    if style.isSeeThrough {
+                        XCTAssertEqual(glass.count, 1, "one system glass: \(label)")
+                        let face = try XCTUnwrap(glass.first, label)
+                        XCTAssertTrue(root.subviews.first === face, "the glass is under the face and rows: \(label)")
+                        XCTAssertEqual(face.style, .regular, label)
+                        XCTAssertNil(face.tintColor, "untinted: \(label)")
+                        XCTAssertEqual(face.cornerRadius, AtticGlassMenuShape.radius, label)
+                        XCTAssertEqual(face.frame, root.bounds, label)
+                        XCTAssertEqual(style.rim.alphaComponent, 0, "no drawn outline: \(label)")
+                        XCTAssertEqual(AtticMenuLook.lift(dark: style.dark).alpha, 0, "nothing over the glass: \(label)")
+                    } else {
+                        XCTAssertTrue(glass.isEmpty, "the opaque card has no glass: \(label)")
                     }
+                    // The active look: the card's window says it is active,
+                    // as `NSPopupMenuWindow` does, and never takes key.
+                    XCTAssertTrue(window._hasActiveAppearanceIgnoringKeyFocus(), label)
+                    XCTAssertTrue(window._hasActiveControls(), label)
+                    XCTAssertFalse(window.canBecomeKey, label)
+                    // The measured shadow, outside the card.
+                    XCTAssertEqual(window.lift.shadowColor, style.shadow, label)
+                    window.lift.layoutSubtreeIfNeeded()
+                    let caster = try XCTUnwrap(window.lift.subviews.first?.layer?.sublayers?.first { $0.shadowPath != nil }, label)
+                    XCTAssertEqual(caster.shadowRadius, AtticShadows.dropdown.radius, label)
+                    XCTAssertEqual(abs(caster.shadowOffset.height), AtticShadows.dropdown.y, label)
+                    XCTAssertEqual(Double(caster.shadowOpacity), style.dark ? 0.28 : 0.24, accuracy: 0.001, label)
                 }
             }
         }
@@ -273,6 +291,8 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(AtticGlassMenuShape.radius, 18, "Loam's 18 pt menus (Accepted 2026-11-10)")
         XCTAssertEqual(AtticGlassMenuShape.inset, 6)
         XCTAssertEqual(AtticGlassMenuShape.rowRadius, 12, "concentric: 18 − 6")
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: AtticMenuMetrics.rowHeight), 12)
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: 20), 10, "never rounder than half the row (Corners B)")
     }
 
     // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)
@@ -287,9 +307,10 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
-    /// Accepted 2026-11-10: as wide as the control and at least 216 pt;
-    /// rows that need more widen it up to 280 pt, past which they are cut
-    /// short; a menu that names its width keeps it, never under 216 pt.
+    /// Accepted 2026-11-10, minimum 200 pt since the 13 Nov picks: as wide
+    /// as the control and at least 200 pt; rows that need more widen it up
+    /// to 280 pt, past which they are cut short; a menu that names its
+    /// width keeps it, never under 200 pt.
     /// Review #3 (12 Nov): the 0.5 pt hairline, centred on its 11 pt band,
     /// straddled two device pixels at half strength. It sits on the backing
     /// grid: one whole device pixel at 2x, one pixel at 1x.
@@ -336,24 +357,24 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(AtticMenuMetrics.iconSlot, 20, "the column stays")
     }
 
-    func testMenusAreAtLeast216AndAsWideAsTheirControl() {
-        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 216)
+    func testMenusAreAtLeast200AndAsWideAsTheirControl() {
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 200)
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}], minimum: 300).size.width, 300, "as wide as the control")
         let long = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A rather long command title, longer still and more") {}]).size.width
-        XCTAssertGreaterThan(long, 216)
+        XCTAssertGreaterThan(long, 200)
         XCTAssertLessThanOrEqual(long, 280)
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: String(repeating: "Very long ", count: 12)) {}]).size.width,
                        280, "never wider: the row is cut short")
-        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 200).size.width, 216)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 184).size.width, 200)
         XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 224).size.width, 224)
-        // A submenu's card takes its command's width (at least 216 pt).
+        // A submenu's card takes its command's width (at least 200 pt).
         let date = AtticMenuCommand.submenu("Date", width: AtticMenuMetrics.dateMenuWidth, [AtticMenuCommand(verbatim: "Today") {}])
         let menu = open([date])
         defer { menu.close(animated: false) }
         menu.handle(key(125))
         menu.handle(key(36, "\r"))
         XCTAssertEqual(menu.cards.count, 2, "Return opens Date ›")
-        XCTAssertEqual(menu.cards[1].size.width, 216)
+        XCTAssertEqual(menu.cards[1].size.width, 200)
     }
 
     func testDeclaredWideMenuStillGrowsToFitLongTagsUpTo280() {
@@ -416,6 +437,43 @@ final class AtticGlassMenuTests: XCTestCase {
     /// Accepted 2026-11-10: out of the control, 8 pt away, on its leading
     /// edge (trailing on the panel's right half), toward the panel's
     /// middle, growing from the corner by the control.
+    /// Menu look picks, placement B (Accepted 2026-11-13): kept inside the
+    /// panel when it fits, never over the row it was opened from; when it
+    /// can't, it hangs past the panel as before.
+    func testPlacementBKeepsTheMenuInsideThePanelWithoutCoveringItsRow() {
+        let panel = NSRect(x: 900, y: 200, width: 400, height: 600)
+        let size = CGSize(width: 200, height: 160)
+        // Right-clicked low in the panel: no room below, so it opens upward
+        // from the pointer instead of sliding over the row.
+        let low = NSPoint(x: 1000, y: 260)
+        let hanging = (frame: NSRect(x: low.x, y: low.y - size.height, width: size.width, height: size.height),
+                       corner: AtticGlassMenu.Corner.topLeading)
+        let kept = AtticGlassMenu.keptInside(panel: panel, hanging, placement: .point(low))
+        XCTAssertEqual(kept.frame.minY, low.y, "its bottom edge on the pointer")
+        XCTAssertEqual(kept.corner, .bottomLeading)
+        XCTAssertTrue(panel.insetBy(dx: AtticMenuMetrics.panelInset, dy: AtticMenuMetrics.panelInset).contains(kept.frame))
+        // Room below: down from the pointer, as before.
+        let high = NSPoint(x: 1000, y: 700)
+        let below = AtticGlassMenu.keptInside(panel: panel, (NSRect(x: high.x, y: high.y - size.height, width: size.width, height: size.height),
+                                                              .topLeading), placement: .point(high))
+        XCTAssertEqual(below.frame.maxY, high.y)
+        XCTAssertEqual(below.corner, .topLeading)
+        // Near the right edge it flips to the pointer's left.
+        let right = NSPoint(x: 1250, y: 700)
+        let flipped = AtticGlassMenu.keptInside(panel: panel, (NSRect(x: right.x, y: right.y - size.height, width: size.width, height: size.height),
+                                                                .topLeading), placement: .point(right))
+        XCTAssertEqual(flipped.frame.maxX, right.x)
+        XCTAssertEqual(flipped.corner, .topTrailing)
+        // Room neither above nor below the pointer: it hangs past as now.
+        let tall = CGSize(width: 200, height: 400)
+        let middle = NSPoint(x: 1000, y: 500)
+        let placed = (frame: NSRect(x: middle.x, y: middle.y - tall.height, width: tall.width, height: tall.height),
+                      corner: AtticGlassMenu.Corner.topLeading)
+        let unchanged = AtticGlassMenu.keptInside(panel: panel, placed, placement: .point(middle))
+        XCTAssertEqual(unchanged.frame, placed.frame, "never lifted over its own row")
+        XCTAssertEqual(unchanged.corner, placed.corner)
+    }
+
     func testTheMenuComesOutOfItsControlTowardThePanelsMiddle() {
         let size = CGSize(width: 216, height: 200)
         let panel = NSRect(x: 900, y: 200, width: 400, height: 600)
@@ -483,49 +541,36 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertTrue(calmRows.allSatisfy { $0.layer?.animation(forKey: "attic.row.slide") == nil }, "no cascade")
     }
 
-    /// Owner, 12 Nov ("it's not even the same glass"): over the panel the
-    /// card's glass blurred the panel's rows. Each card cuts its place out
-    /// of the panel's page on its own spring, cards chain their cuts, and a
-    /// Solid card cuts nothing.
-    func testACardCutsItsPlaceOutOfThePanelOnTheCardsOwnMotion() throws {
+    /// Accepted 2026-11-12 (evening) · Menus: version 3 on the system
+    /// menu's Liquid Glass, with the grey hover. The system glass lenses
+    /// what lies under the card, the panel included, as the system menu's
+    /// does, so by design no card cuts its place out of the panel: the cut
+    /// stays a preview-only seam (`ATTIC_UI_TEST_MENU_SURFACE=cut`), off in
+    /// every normal run, on every surface, and the panel's page is never
+    /// masked.
+    func testNoCardCutsItsPlaceOutOfThePanel() throws {
         final class Host: NSWindow, AtticMenuBackdropHost {
             let page = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 500))
             var menuBackdropView: NSView? { page }
         }
+        XCTAssertFalse(AtticMenuSurfaceSeam.cutsPanel, "the cut is off by design")
         let window = Host(contentRect: NSRect(x: 100, y: 100, width: 400, height: 500), styleMask: .borderless,
                           backing: .buffered, defer: true)
         window.page.wantsLayer = true
         window.contentView = window.page
         let layer = try XCTUnwrap(window.page.layer)
-        var design = AtticDesignContext(mode: .light, surface: .glass)
-        design.reduceMotion = false
-        let style = AtticGlassMenuStyle(design: design)
         // The test host keeps its windows off screen: place the card by the window.
         let card = NSRect(x: window.frame.minX + 50, y: window.frame.minY + 200, width: 216, height: 200)
-        let root = try XCTUnwrap(AtticMenuBackdropHole.open(under: card, in: window, corner: .topLeading, animated: true, style: style))
-        XCTAssertTrue(layer.mask === root.mask, "the page is masked")
-        XCTAssertEqual(root.cut.frame, window.page.convert(window.convertFromScreen(card), from: nil))
-        let grow = try XCTUnwrap(root.cut.animation(forKey: "attic.open.grow") as? CASpringAnimation)
-        XCTAssertEqual(grow.perceptualDuration, 0.30, accuracy: 0.01)
-        XCTAssertEqual(grow.bounce, 0.28, accuracy: 0.01)
-        XCTAssertEqual(try XCTUnwrap((grow.fromValue as? NSValue)?.caTransform3DValue).m11, 0.86, accuracy: 1e-6)
-        XCTAssertNotNil(root.page.animation(forKey: "attic.open.fade"), "the page fades out under the card")
-        XCTAssertEqual(root.page.opacity, 0)
-
-        let submenu = try XCTUnwrap(AtticMenuBackdropHole.open(under: card.offsetBy(dx: 220, dy: 0), in: window,
-                                                              corner: .topLeading, animated: false, style: style))
-        XCTAssertTrue(root.mask.mask === submenu.mask, "cuts chain")
-        root.close(animated: false, reduceMotion: false)
-        XCTAssertTrue(layer.mask === submenu.mask)
-        XCTAssertNil(submenu.mask.mask)
-        submenu.close(animated: false, reduceMotion: false)
-        XCTAssertNil(layer.mask, "the page is whole again")
-
-        XCTAssertNil(AtticMenuBackdropHole.open(under: card.offsetBy(dx: 2000, dy: 0), in: window, corner: .topLeading,
-                                                animated: false, style: style), "off the panel: nothing to cut")
-        let solid = AtticGlassMenuStyle(design: AtticDesignContext(mode: .light, surface: .solid))
-        XCTAssertNil(AtticMenuBackdropHole.open(under: card, in: window, corner: .topLeading, animated: false, style: solid))
-        XCTAssertNil(layer.mask)
+        for surface in PanelSurfaceStyle.allCases {
+            for animated in [false, true] {
+                var design = AtticDesignContext(mode: .light, surface: surface)
+                design.reduceMotion = false
+                let style = AtticGlassMenuStyle(design: design)
+                XCTAssertNil(AtticMenuBackdropHole.open(under: card, in: window, corner: .topLeading, animated: animated, style: style),
+                             "\(surface): nothing is cut")
+                XCTAssertNil(layer.mask, "\(surface): the panel's page is whole")
+            }
+        }
     }
 
     func testASubmenuOpensBesideItsRowAndFlipsAtTheEdge() {

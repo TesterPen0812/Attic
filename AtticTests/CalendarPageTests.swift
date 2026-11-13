@@ -669,7 +669,8 @@ final class CalendarPageTests: XCTestCase {
                               size: CGSize(width: CalendarDesign.tileWidth, height: 40))
         XCTAssertEqual(try alpha(tile, px: Int((CalendarDesign.tileWidth - 4) * 2), py: 40), CalendarDesign.tileFill,
                        accuracy: 0.01, "an empty day's own grey tile (4 % heading ink)")
-        XCTAssertEqual(CalendarDesign.dayCardExponent, AtticShape.surfaceExponent, "today's card is a squircle surface")
+        XCTAssertNil(CalendarDesign.dayCardExponent, "today's card is on Apple's continuous curve (Corners B, 2026-11-13)")
+        XCTAssertEqual(CalendarDesign.eventRadius, 17.5, "events concentric in the card: 24 − 6.5")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card)
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 18), 5, "36 px radius, 10 px padding")
         XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "the 48 px card: 13 px padding (owner, 2026-10-31)")

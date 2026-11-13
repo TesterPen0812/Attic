@@ -73,21 +73,34 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(PanelCornerSize.defaultValue, 52, "104 px panel")
         XCTAssertEqual(AtticRadius.card, 24, "48 px cards (owner, 2026-10-31)")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card, "Calendar day cards use the card token")
-        XCTAssertEqual(AtticRadius.row, 12)
-        XCTAssertEqual(TasksRowDesign.radius, 12)
-        XCTAssertEqual(NotesLibraryRowMetrics.radius, 12)
+        // Corners (Accepted 2026-11-13): rows 16 on the continuous curve,
+        // never rounder than half their height.
+        XCTAssertEqual(AtticRadius.row, 16)
+        XCTAssertEqual(AtticRadius.row(height: 28), 14)
+        XCTAssertEqual(TasksRowDesign.radius, 16)
+        XCTAssertEqual(NotesLibraryRowMetrics.radius, 16)
+        XCTAssertEqual(NotesLibraryRowMetrics.thumbnailInset, 6)
+        XCTAssertEqual(CalendarDesign.eventRadius, 17.5, "24 − 6.5")
         XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
         XCTAssertEqual(AtticRadius.popover, 16)
         XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 18, "the picker cards: the glass menu's 18 pt (Accepted 2026-11-10)")
-        XCTAssertEqual(AtticDropdownMetrics.inset, 3, "6 px padding")
-        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 13, "concentric rows: 16 − 3")
-        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 13, "Clear Date as a row")
-        XCTAssertEqual(AtticDropdownMetrics.fieldRadius, 11, "the field, 5 pt in: 16 − 5")
+        // Picker cards are menu cards (Corners B, Accepted 2026-11-13).
+        XCTAssertEqual(AtticDropdownMetrics.inset, 6, "the menus' 6 pt padding")
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 12, "concentric rows: 18 − 6")
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius(height: 20), 10, "never rounder than half a row")
+        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 12, "Clear Date as a row")
+        XCTAssertEqual(AtticDropdownMetrics.fieldRadius, 12, "the field on the rows' 6 pt line: 18 − 6")
         XCTAssertEqual(AtticRadius.noteBlock, 10)
         XCTAssertEqual(AtticNoteObjectMetrics.blockRadius, 10)
         XCTAssertEqual(AtticRadius.small, 6)
-        XCTAssertEqual(NoteThumbnailMetrics.radius, 6)
-        XCTAssertEqual(NoteThumbnailMetrics.cornerExponent, AtticShape.surfaceExponent)
+        XCTAssertEqual(NoteThumbnailMetrics.radius, 7, "the drawing's proportion on the 24 pt mini page (10 on its 36 pt)")
+        // The mini page's content stays clear of its corners: the inner
+        // rect's corner lies inside the continuous outline by a point or more.
+        let card = CGRect(origin: .zero, size: NoteThumbnailMetrics.size)
+        let inner = card.insetBy(dx: NoteThumbnailMetrics.paddingX, dy: NoteThumbnailMetrics.paddingY)
+        let outline = NoteThumbnailMetrics.shape.path(in: card)
+        XCTAssertTrue(outline.contains(CGPoint(x: inner.minX - 1, y: inner.minY - 1)), "content clear of the corner")
+        XCTAssertNil(NoteThumbnailMetrics.cornerExponent, "Apple's continuous curve")
         XCTAssertEqual(TasksDesignMetrics.tileRadius, 6)
         // Concentric nesting.
         XCTAssertEqual(AtticRadius.formatSheet, 19, "24 + 14 px")
@@ -213,9 +226,10 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
                        Path(roundedRect: card, cornerRadius: 18, style: .continuous),
                        "the card: the glass menu's continuous 18 pt corners")
-        let row = CGRect(x: 3, y: 3, width: 218, height: 32)
+        // Corners B (Accepted 2026-11-13): rows 6 pt in, 12 pt continuous.
+        let row = CGRect(x: 6, y: 6, width: 212, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       RoundedRectangle(cornerRadius: 13, style: .continuous).path(in: row), "a row: 13 pt continuous")
+                       RoundedRectangle(cornerRadius: 12, style: .continuous).path(in: row), "a row: 12 pt continuous")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)
@@ -748,6 +762,22 @@ final class PanelChromeTests: XCTestCase {
                        file: file, line: line)
     }
 
+    /// Apple's continuous rounded rectangle (Corners, Accepted 2026-11-13),
+    /// told apart from the surface squircle at the same radius.
+    private func assertContinuousOutline(_ shape: AtticControlOutline, in size: CGSize, radius: CGFloat,
+                                         _ name: String, file: StaticString = #filePath, line: UInt = #line) {
+        let rect = CGRect(origin: .zero, size: size)
+        let box = min(radius + 2, size.width / 2, size.height / 2)
+        let expected = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+        let squircle = Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: rect)
+        XCTAssertGreaterThan(cornerDifferences(expected, squircle, in: rect, box: box), 4, "\(name): the grid tells the two apart",
+                             file: file, line: line)
+        XCTAssertNil(shape.exponent, "\(name): continuous", file: file, line: line)
+        XCTAssertEqual(shape.cornerRadius, radius, "\(name): radius", file: file, line: line)
+        XCTAssertEqual(cornerDifferences(shape.path(in: rect), expected, in: rect, box: box), 0, "\(name): the shape",
+                       file: file, line: line)
+    }
+
     private func withSystemLooksStated(_ body: () throws -> Void) rethrows {
         // GitHub's runners turn both on; these shapes must not depend on them.
         AtticMotionPreference.systemReduceMotionOverride = false
@@ -795,15 +825,17 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
-    func testTheDragTilesAreRowSquircles() {
+    func testTheDragTilesAreTheRowsContinuousShape() {
         withSystemLooksStated {
             let surface = AtticShape.surfaceExponent
-            assertOutline(AtticReorderLiftModifier.shape, in: CGSize(width: 288, height: 36), radius: AtticRadius.row,
-                          exponent: surface, "the lifted task")
-            assertOutline(AtticCarryPreview.cardShape, in: CGSize(width: 200, height: 36), radius: AtticRadius.row,
-                          exponent: surface, "the carry card")
-            assertOutline(TasksDragOut.labelShape, in: CGSize(width: 140, height: 28), radius: AtticRadius.row,
-                          exponent: surface, "the drag label")
+            assertContinuousOutline(AtticReorderLiftModifier.shape, in: CGSize(width: 288, height: 36), radius: AtticRadius.row,
+                                    "the lifted task")
+            assertContinuousOutline(AtticCarryPreview.cardShape, in: CGSize(width: 200, height: 36), radius: AtticRadius.row,
+                                    "the carry card")
+            assertContinuousOutline(TasksDragOut.labelShape, in: CGSize(width: 140, height: 28), radius: AtticRadius.row,
+                                    "the drag label")
+            assertContinuousOutline(NoteThumbnailMetrics.shape, in: NoteThumbnailMetrics.size, radius: NoteThumbnailMetrics.radius,
+                                    "the note thumbnail")
             // A file dragged over a note carries the file card's look.
             assertOutline(AtticNoteObjectMetrics.cardShape,
                           in: CGSize(width: AtticNoteObjectMetrics.carryWidth, height: AtticNoteObjectMetrics.carryHeight),
@@ -811,18 +843,16 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
-    func testThePickerFieldIsAConcentricSquircle() {
+    func testThePickerFieldAndRowsAreConcentricAndContinuous() {
         withSystemLooksStated {
             let d = AtticDropdownMetrics.self
-            let surface = AtticShape.surfaceExponent
-            assertOutline(d.fieldShape, in: CGSize(width: 220, height: d.fieldHeight),
-                          // The card's shell took the glass menu's 18 pt; its contents stay as they were.
-                          radius: AtticRadius.concentric(outer: AtticRadius.menu, padding: d.inset + d.fieldInset),
-                          exponent: surface, "the field")
+            // Corners B (Accepted 2026-11-13): the 18 pt card, 6 pt in.
+            assertContinuousOutline(d.fieldShape, in: CGSize(width: 220, height: d.fieldHeight),
+                                    radius: AtticRadius.concentric(outer: d.cornerRadius, padding: d.inset + d.fieldInset), "the field")
             // The composer's short lists light their rows like the menus.
             let fill = AtticControlSize.smallHeight - AtticPickerMetrics.highlightGap
-            assertOutline(AtticChoiceRow.highlightShape(radius: AtticRadius.control(height: fill)),
-                          in: CGSize(width: 140, height: fill), radius: d.highlightRadius, exponent: surface, "a lit row")
+            assertContinuousOutline(AtticChoiceRow.highlightShape(radius: d.highlightRadius(height: fill)),
+                                    in: CGSize(width: 140, height: fill), radius: d.highlightRadius, "a lit row")
         }
     }
 

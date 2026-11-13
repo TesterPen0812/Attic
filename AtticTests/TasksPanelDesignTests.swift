@@ -642,7 +642,13 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(TasksRowDesign.height(twoLine: false, tiles: false), 31, "8 + 15 + 8")
         XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: false), 47.5, "with the meta line")
         XCTAssertEqual(TasksRowDesign.height(twoLine: true, tiles: true), 80.5, "with a line of 28 pt tiles")
-        XCTAssertEqual(TasksRowDesign.radius, 12)
+        XCTAssertEqual(TasksRowDesign.radius, 16, "Corners C (Accepted 2026-11-13)")
+        XCTAssertEqual(TasksRowDesign.radius(height: 31), 15.5, "capped at half the one-line row")
+        XCTAssertEqual(TasksRowDesign.radius(height: 47.5), 16)
+        // The circle sits centred in the one-line highlight's rounded end.
+        XCTAssertEqual(AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticLayout.rowHighlightInset,
+                       TasksRowDesign.radius(height: 31))
+        XCTAssertEqual(TasksRowDesign.paddingY + TasksRowDesign.line / 2, TasksRowDesign.radius(height: 31))
         XCTAssertEqual(AtticTextStyle.taskTitle.spec.size, 12)
         XCTAssertEqual(AtticTextStyle.taskTitle.spec.weight, .medium)
         XCTAssertEqual(AtticTextStyle.taskDate.spec.size, 10)

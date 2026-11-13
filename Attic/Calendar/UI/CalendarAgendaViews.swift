@@ -301,7 +301,7 @@ struct CalendarEventRow: View {
                     .buttonStyle(.plain)
                     .focused($headFocused)
                     .focusEffectDisabled()
-                    .atticFocusRing(headFocused && keyboardFocusVisible, cornerRadius: CalendarDesign.eventRadius)
+                    .atticFocusRing(headFocused && keyboardFocusVisible, cornerRadius: CalendarDesign.eventRadius, continuous: true)
                     .onKeyPress(.return, phases: .down) { press in
                         guard press.modifiers.isEmpty else { return .ignored }
                         toggleRow()
@@ -330,7 +330,7 @@ struct CalendarEventRow: View {
         .background {
             // A block on the hours has its own surface.
             if isOpen, !isBlock {
-                Squircle(cornerRadius: CalendarDesign.eventRadius)
+                RoundedRectangle(cornerRadius: CalendarDesign.eventRadius, style: .continuous)
                     .fill(design.tokens.ink(.heading).withAlpha(0.045).color)
                     .padding(.horizontal, fillInset)
             }
