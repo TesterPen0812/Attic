@@ -10,6 +10,48 @@ import XCTest
 /// Empty All… still taking everything.
 @MainActor
 final class RecentlyDeletedSelectionTests: XCTestCase {
+    /// PF-47: the real Settings scroll column must mount a bounded number
+    /// of rows when one deleted-item section contains 5,000 entries.
+    func testPF47DeletedSectionRealizesOnlyVisibleRows() {
+        let entries = (0..<5_000).map { index in
+            RecentlyDeletedEntry(kind: .canvas, title: "Canvas \(index)", detail: "Deleted today",
+                                 deletedAt: Date(), ownerTitle: nil,
+                                 source: .draw(DrawDeletedItem(canvasID: UUID(), objectID: nil)))
+        }
+        var realized = Set<String>()
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 520, height: 420),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SettingsPage(section: .recentlyDeleted) {
+            ScrollViewReader { proxy in
+                SettingsGroup(title: "Canvases") {
+                    RecentlyDeletedSectionRows(entries: entries) { entry in
+                        Text(entry.title)
+                            .frame(height: 58)
+                            .frame(maxWidth: .infinity)
+                            .onAppear { realized.insert(entry.id) }
+                    }
+                }
+                .onAppear {
+                    // The keyboard uses the same proxy/ID path to bring an
+                    // unrealized last row into the viewport.
+                    DispatchQueue.main.async { proxy.scrollTo(entries[entries.count - 1].id) }
+                }
+            }
+        }.atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 520, height: 420)
+        window.contentView = host
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertGreaterThan(realized.count, 0)
+        XCTAssertLessThan(realized.count, 50,
+                          "a fixed-height Settings viewport may prefetch, but must not realize all 5,000 rows (mounted \(realized.count))")
+        XCTAssertTrue(realized.contains(entries[entries.count - 1].id),
+                      "keyboard scrolling must still reach the last logical entry")
+    }
+
     /// PF-46: stale Draw observation callbacks must not multiply work when
     /// Settings is deactivated/reactivated before the next Draw revision.
     func testPF46RepeatedSettingsActivationsDoNotMultiplyDrawReloads() async throws {
