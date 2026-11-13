@@ -99,14 +99,24 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
         }
     }
 
+    /// The window's own reopen (Restore Note, Move into Note): the page
+    /// remounts in the same native window. `expecting` is the entry whose
+    /// root asked, so a stale root cannot remount a newer window.
+    @discardableResult
+    func reopenFromWindow(_ taskID: UUID, expecting expected: AnyObject? = nil) -> Bool {
+        guard let (_, entry) = entry(taskID), expected == nil || expected === entry,
+              let controller = entry.presenter.page.controller else { return false }
+        return restoreAfterFileMove(taskID, entry: entry, tasks: entry.presenter.model.store, controller: controller)
+    }
+
     private func installRoot(_ entry: Entry) {
         guard let controller = entry.presenter.page.controller else { return }
         let taskID = entry.presenter.taskID
         let root = TaskNoteWindowRoot(presenter: entry.presenter, controller: controller, noteStore: controller.store) { [weak self] in
             Task { @MainActor in _ = await self?.moveToPanel(taskID: taskID) }
         } onReopen: { [weak self, weak entry] in
-            guard let self, let entry, self.entry(taskID)?.value === entry else { return }
-            _ = self.restoreAfterFileMove(taskID, entry: entry, tasks: entry.presenter.model.store, controller: controller)
+            guard let self, let entry else { return }
+            _ = self.reopenFromWindow(taskID, expecting: entry)
         }.environment(\.atticDesign, entry.design)
         let frame = entry.window.frame
         entry.window.contentViewController = NSHostingController(rootView: root)

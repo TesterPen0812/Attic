@@ -97,8 +97,12 @@ final class TaskAttachmentPickerSession {
 
     var isFinished: Bool { completion == nil }
 
+    /// Tests answer the picker without an OS panel; unset in the app.
+    static var presentationOverride: ((_ owner: UUID?, _ completion: @escaping @MainActor ([URL]) -> Void) -> Void)?
+
     static func present(owner: UUID?, parentWindow: NSWindow? = nil, allowedTypes: [UTType] = [.data],
                         allowsMultipleSelection: Bool = true, completion: @escaping @MainActor ([URL]) -> Void) {
+        if let presentationOverride { presentationOverride(owner, completion); return }
         // One at a time by construction: the marks refuse a second picker,
         // and a stale session that somehow survived is cancelled first.
         current?.finish(urls: [])
