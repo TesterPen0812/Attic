@@ -247,6 +247,132 @@ final class PhaseXHunt8Tests: XCTestCase {
         return noteID
     }
 
+    /// keyboard-hunt, 13 Nov. The real panel is hosted in a window that is
+    /// never ordered front or made key. Generated key equivalents and page
+    /// lifecycle operations exercise the retained Notes editor, task page,
+    /// calendar, canvas, composer and chat without a visible test app.
+    func testKeyboardHuntSeededPagesAndHiddenShortcutFocusOwnership() throws {
+        for seed in [UInt64(0x4B42_1601), 0x4B42_1602, 0x4B42_1603] {
+            let panel = try makePanel()
+            defer { release(panel) }
+            let noteID = try openNoteOnNotes(panel, text: "Keyboard note \(seed)")
+            let initialNoteCount = panel.notes.notes.count
+            panel.host.rootView.selectSection(.tasks)
+            spin(0.1)
+            var random = seed
+            func next(_ count: Int) -> Int {
+                random ^= random << 13
+                random ^= random >> 7
+                random ^= random << 17
+                return Int(random % UInt64(count))
+            }
+            let sections = PanelSection.allCases
+            var expectedDraft = ""
+            var shown = false
+            var dispatchedChords = 0
+            for step in 0..<360 {
+                let action = next(19)
+                let label = "seed=\(String(seed, radix: 16)) step=\(step) action=\(action)"
+                switch action {
+                case 0...4:
+                    // Use the panel's actual navigation path, which checks
+                    // whether Notes can leave and hands focus to the new page.
+                    panel.host.rootView.selectSection(sections[action])
+                case 5:
+                    panel.state.beginAdding()
+                    XCTAssertTrue(panel.state.isComposerPresented, label)
+                case 6:
+                    panel.state.endAdding() // Escape on the '+' card.
+                    XCTAssertFalse(panel.state.isComposerPresented, label)
+                case 7:
+                    panel.state.requestPrimaryInputFocus()
+                case 8:
+                    panel.state.requestSearch()
+                case 9:
+                    panel.state.agentChat.draft.append("x")
+                    expectedDraft += "x"
+                case 10:
+                    if shown { panel.state.agentChat.open() }
+                case 11:
+                    panel.state.agentChat.escape()
+                case 12:
+                    if !shown {
+                        panel.state.panelDidReveal()
+                        shown = true
+                    }
+                case 13:
+                    if shown {
+                        panel.state.panelDidHide()
+                        shown = false
+                    }
+                case 14:
+                    panel.state.releasePageContent()
+                case 15:
+                    panel.state.loadPageContent()
+                case 16...18:
+                    // These are the native note key equivalents. They must
+                    // not create/duplicate/toggle a note behind another page.
+                    // An ordered-out window cannot receive a physical key;
+                    // only dispatch while the panel is revealed and built.
+                    if shown, panel.state.isPageContentLoaded, panel.state.selectedSection != .notes {
+                        let keys: [(String, UInt16, NSEvent.ModifierFlags)] = [
+                            ("l", 37, [.command, .shift]), ("d", 2, .command), ("n", 45, .command)
+                        ]
+                        let (characters, code, modifiers) = keys[action - 16]
+                        dispatchedChords += 1
+                        _ = panel.window.performKeyEquivalent(with: try key(characters, code: code, modifiers, in: panel.window))
+                    }
+                default: break
+                }
+                spin(0.012)
+                XCTAssertEqual(panel.state.agentChat.draft, expectedDraft, "Escape and hide preserve typed chat draft: \(label)")
+                if !shown { XCTAssertFalse(panel.state.agentChat.isOpen, "hidden panel has no open chat: \(label)") }
+                if panel.state.isPageContentLoaded {
+                    XCTAssertTrue(panel.state.builtPages.contains(PanelPage(panel.state.selectedSection)),
+                                  "current page is built: \(label)")
+                } else {
+                    XCTAssertTrue(panel.state.builtPages.isEmpty, "released page has no focusable subtree: \(label)")
+                }
+                if panel.state.selectedSection != .notes {
+                    XCTAssertEqual(panel.notes.notes.count, initialNoteCount, "hidden Notes shortcuts did nothing: \(label)")
+                    XCTAssertEqual(panel.noteDraft.pages.active?.noteID, noteID, "hidden Notes session still owns its note: \(label)")
+                    XCTAssertFalse(panel.noteDraft.pages.isLibraryPresented, "hidden Notes cannot show its library: \(label)")
+                }
+                if let view = panel.window.firstResponder as? NSView, view.window === panel.window {
+                    XCTAssertFalse(view.isHiddenOrHasHiddenAncestor, "native keyboard focus is not on a hidden view: \(label)")
+                }
+            }
+            XCTAssertGreaterThan(dispatchedChords, 0, "every seed exercises visible-page shortcuts")
+            print("KEYBOARD_HUNT_PANEL seed=\(String(seed, radix: 16)) steps=360 chords=\(dispatchedChords) never-shown-window")
+        }
+    }
+
+    /// A rapid Notes -> Calendar -> Backlog transition must revoke the
+    /// Notes-only equivalents before SwiftUI finishes its page slide.
+    func testKeyboardHuntNotesShortcutsCannotFireDuringRapidPageChanges() throws {
+        let panel = try makePanel()
+        defer { release(panel) }
+        let noteID = try openNoteOnNotes(panel, text: "Page shortcut owner")
+        let noteCount = panel.notes.notes.count
+        panel.state.panelDidReveal()
+        panel.host.rootView.selectSection(.tasks)
+        spin(0.35)
+        panel.host.rootView.selectSection(.notes)
+        spin(0.012)
+        panel.host.rootView.selectSection(.calendar)
+        spin(0.012)
+        panel.host.rootView.selectSection(.backlog)
+        spin(0.012)
+        XCTAssertEqual(panel.state.selectedSection, .backlog)
+
+        _ = panel.window.performKeyEquivalent(with: try key("l", code: 37, [.command, .shift], in: panel.window))
+        XCTAssertFalse(panel.noteDraft.pages.isLibraryPresented, "hidden Notes must not respond to ⇧⌘L during page motion")
+        _ = panel.window.performKeyEquivalent(with: try key("n", code: 45, .command, in: panel.window))
+        spin(0.1)
+        XCTAssertEqual(panel.notes.notes.count, noteCount, "hidden Notes must not respond to ⌘N")
+        XCTAssertEqual(panel.noteDraft.pages.active?.noteID, noteID)
+    }
+
     /// The Notes page stays built behind Tasks: its note keys (⇧⌘L All
     /// notes, ⌘D Duplicate) must not act on it from there.
     func testCoverageNotesKeysDoNotActFromBehindTasks() throws {

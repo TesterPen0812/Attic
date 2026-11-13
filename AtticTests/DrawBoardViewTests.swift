@@ -35,6 +35,100 @@ final class DrawBoardViewTests: XCTestCase {
         super.tearDown()
     }
 
+    /// keyboard-hunt (13 Nov): real DrawKey actions, in randomized order,
+    /// with a focus and object-liveness check after every action. Nothing is
+    /// shown; the canvas repository and pasteboard are private to this test.
+    func testKeyboardHuntGeneratedDrawCommandsNeverTargetGoneObjects() throws {
+        for seed in [UInt64(0x4B44_1601), 0x4B44_1602, 0x4B44_1603, 0x4B44_1604] {
+            var random = seed
+            func next(_ count: Int) -> Int {
+                random ^= random << 13
+                random ^= random >> 7
+                random ^= random << 17
+                return Int(random % UInt64(count))
+            }
+            let canvas = store.create(name: "Keyboard \(seed)")
+            let shapes = (0..<8).map { index in
+                DrawObject(frame: DrawFrame(x: Double(index % 4) * 80, y: Double(index / 4) * 110,
+                                            width: 36, height: 28), zIndex: Int64(index), content: .shape(.rectangle))
+            }
+            XCTAssertTrue(store.perform(.put(shapes), on: canvas.id).isSaved)
+            model.open(canvas.id)
+            model.setTool(.select)
+            var deleted = Set<UUID>()
+
+            for step in 0..<420 {
+                let action = next(24)
+                let label = "seed=\(String(seed, radix: 16)) step=\(step) action=\(action)"
+                let beforeOrder = model.objectNavigationIDs
+                let before = model.selection
+                let current = before.count == 1 ? beforeOrder.firstIndex(of: before[0]) : nil
+                switch action {
+                case 0...5: // Tab, Shift-Tab, then the four arrows.
+                    let forward = [true, false, false, false, true, true][action]
+                    let leaving = action < 2
+                    let delta = forward ? 1 : -1
+                    let target = current.map { $0 + delta } ?? (forward ? 0 : beforeOrder.count - 1)
+                    let keyCode: UInt16 = [48, 48, 123, 126, 124, 125][action]
+                    let handled = model.handleKey(DrawKey(characters: action < 2 ? "\t" : "",
+                                                          keyCode: keyCode, shift: action == 1))
+                    if beforeOrder.indices.contains(target) {
+                        XCTAssertTrue(handled, label)
+                        XCTAssertEqual(model.selection, [beforeOrder[target]], label)
+                    } else if leaving, !beforeOrder.isEmpty {
+                        XCTAssertFalse(handled, "Tab left the visible board: \(label)")
+                        XCTAssertTrue(model.selection.isEmpty, label)
+                    } else {
+                        XCTAssertEqual(model.selection, before, label)
+                    }
+                case 6: // Escape closes one layer: swatch, then selection.
+                    let hadStrip = model.strip != nil
+                    let wasSelected = !before.isEmpty
+                    let handled = model.handleKey(DrawKey(characters: "\u{1b}", keyCode: 53))
+                    XCTAssertEqual(handled, hadStrip || wasSelected, label)
+                    if hadStrip { XCTAssertNil(model.strip, label); XCTAssertEqual(model.selection, before, label) }
+                    else if wasSelected { XCTAssertTrue(model.selection.isEmpty, label) }
+                case 7...14: // V/P/E/T/R/O/L/A are the advertised tool keys.
+                    let keys = ["v", "p", "e", "t", "r", "o", "l", "a"]
+                    XCTAssertTrue(model.handleKey(DrawKey(characters: keys[action - 7])), label)
+                    let expected: DrawTool = action == 7 ? .select : action == 8 ? .pen : action == 9 ? .eraser : action == 10 ? .text : .shape
+                    XCTAssertEqual(model.tool, expected, label)
+                    if expected != .select { XCTAssertTrue(model.selection.isEmpty, label) }
+                case 15: // Opening a strip changes Escape's next destination.
+                    model.clickSwatch()
+                case 16: // Select all must reach only existing objects.
+                    XCTAssertTrue(model.handleKey(DrawKey(characters: "a", command: true)), label)
+                    XCTAssertEqual(Set(model.selection), Set(beforeOrder), label)
+                case 17: // Delete, including after an earlier deletion.
+                    let handled = model.handleKey(DrawKey(characters: "", keyCode: 51))
+                    XCTAssertEqual(handled, !before.isEmpty, label)
+                    deleted.formUnion(before)
+                    XCTAssertTrue(Set(model.objectNavigationIDs).isDisjoint(with: before), label)
+                case 18: // Return on a shape never starts a text editor.
+                    XCTAssertFalse(model.handleKey(DrawKey(characters: "\r", keyCode: 36)), label)
+                    XCTAssertNil(model.editing, label)
+                case 19: // A modified Tab belongs to the native key loop.
+                    XCTAssertFalse(model.handleKey(DrawKey(characters: "\t", keyCode: 48, control: true)), label)
+                    XCTAssertEqual(model.selection, before, label)
+                case 20: // An unbound shortcut cannot affect the board.
+                    XCTAssertFalse(model.handleKey(DrawKey(characters: "g", command: true)), label)
+                    XCTAssertEqual(model.selection, before, label)
+                case 21, 22: // Shift-1 fit / Shift-0 actual size.
+                    XCTAssertTrue(model.handleKey(DrawKey(characters: action == 21 ? "1" : "0",
+                                                          keyCode: action == 21 ? 18 : 29, shift: true)), label)
+                default: // Focus attempts on objects already deleted do nothing.
+                    let target = shapes[next(shapes.count)].id
+                    model.select([target])
+                    XCTAssertEqual(model.selection, deleted.contains(target) ? [] : [target], label)
+                }
+                let live = Set(model.objectNavigationIDs)
+                XCTAssertEqual(live, Set(shapes.map(\.id)).subtracting(deleted), label)
+                XCTAssertTrue(Set(model.selection).isSubset(of: live), "keyboard focus is on a visible object: \(label)")
+                XCTAssertNil(model.editing, "keyboard never entered a nonexistent text editor: \(label)")
+            }
+        }
+    }
+
     func testAuditB4TabAndArrowsVisitObjectsInReadingOrderWithoutEditingThem() throws {
         let text = DrawObject(frame: DrawFrame(x: 30, y: 100, width: 80, height: 30), zIndex: 9, content: .text("Launch plan"))
         let ink = DrawObject(frame: DrawFrame(x: 200, y: 90, width: 30, height: 20), zIndex: 1,
