@@ -75,6 +75,87 @@ final class NotesV2TablesTests: XCTestCase {
         return try XCTUnwrap(attachment.hostedView, "TextKit hosted the table's view")
     }
 
+    func testNotesTableCanvasRightClickOpensGlassAndAddsARow() async throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        let before = attachment.table.rowCount
+        let point = CGPoint(x: 30, y: 30)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(view.canvas, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: view.canvas, at: point)
+        XCTAssertEqual(commands.map(\.title), ["Add Row Above", "Add Row Below", "Add Column Before",
+                        "Add Column After", "Delete Row", "Delete Column", "Header Row", "Copy as Markdown", "Delete Table"])
+        try XCTUnwrap(commands.first { $0.title == "Add Row Below" }).action()
+        XCTAssertEqual(attachment.table.rowCount, before + 1)
+    }
+
+    /// A real press first passes through the panel-wide context-menu monitor.
+    /// The table canvas must receive it before the enclosing panel's menu can open.
+    func testNotesTableCanvasRightClickIsNotStolenByThePanelMenu() async throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        // Use a plain window for the routing probe: an off-screen TextKit
+        // host hit-tests its enclosing scroll view before attachment views.
+        let bounds = NSRect(x: 0, y: 0, width: 300, height: 300)
+        let window = NSWindow(contentRect: bounds, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        let content = NSView(frame: bounds)
+        window.contentView = content
+        let panelAnchor = AtticContextMenuAnchor.AnchorView(frame: content.bounds)
+        panelAnchor.build = { [AtticMenuCommand(verbatim: "Panel menu") {}] }
+        content.addSubview(panelAnchor)
+        defer { panelAnchor.removeFromSuperview() }
+
+        let hitCanvas = NoteTableCanvas(frame: NSRect(x: 20, y: 20, width: 140, height: 140))
+        hitCanvas.table = view
+        content.addSubview(hitCanvas)
+        defer { hitCanvas.removeFromSuperview() }
+
+        let point = hitCanvas.convert(NSPoint(x: 30, y: 30), to: nil)
+        XCTAssertTrue(content.hitTest(content.convert(point, from: nil)) === hitCanvas,
+                      "the press must actually hit the table canvas")
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point,
+            modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        XCTAssertNotNil(AtticContextMenus.target(for: event), "the enclosing panel anchor is registered")
+
+        let previousDriver = AtticGlassMenu.testDriver
+        let previousOrdering = AtticGlassMenu.ordersCardsFront
+        var opened: [[String]] = []
+        AtticGlassMenu.ordersCardsFront = false
+        AtticGlassMenu.testDriver = { opened.append($0.commands.map(\.title)) }
+        defer {
+            AtticGlassMenu.testDriver = previousDriver
+            AtticGlassMenu.ordersCardsFront = previousOrdering
+        }
+        _ = AtticContextMenus.route(event)
+        for _ in 0..<15 where opened.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(opened.isEmpty, "a table right-click must not open the enclosing panel menu: \(opened)")
+
+        let commands = try await NotesGlassMenuTestSupport.rightClick(view.canvas, at: NSPoint(x: 30, y: 30))
+        XCTAssertEqual(commands.first?.title, "Add Row Above", "the table still owns its glass commands")
+    }
+
+    func testNotesActiveTableCellRightClickOpensGlassWithTextAndTableCommands() async throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .all)
+        let before = attachment.table.columnCount
+        let point = CGPoint(x: 12, y: 9)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(view.editor, at: point)
+        try NotesGlassMenuTestSupport.assertNativeParity(commands, in: view.editor, at: point)
+        XCTAssertEqual(commands.first?.title, "Table")
+        XCTAssertEqual(commands.first?.children.map(\.title),
+            ["Add Row Above", "Add Row Below", "Add Column Before", "Add Column After",
+             "Delete Row", "Delete Column", "Header Row", "Copy as Markdown", "Delete Table"])
+        XCTAssertTrue(commands.contains { $0.title == "Copy" }, "native cell text commands remain present")
+        try XCTUnwrap(commands.first?.children.first { $0.title == "Add Column After" }).action()
+        XCTAssertEqual(attachment.table.columnCount, before + 1)
+    }
+
     private func location(of text: String, in engine: NoteEditorEngine) -> Int {
         (engine.textStorage.string as NSString).range(of: text).location
     }

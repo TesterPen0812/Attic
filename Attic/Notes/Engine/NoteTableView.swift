@@ -839,10 +839,20 @@ final class NoteTableCanvas: NSView {
         }
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
+    private func contextCommands(for event: NSEvent) -> [AtticMenuCommand]? {
         guard let table, let engine = table.engine,
               let cell = table.grid.position(at: convert(event.locationInWindow, from: nil), clamped: true) else { return nil }
-        let commands = engine.tableContextCommands(for: table, at: cell)
+        return engine.tableContextCommands(for: table, at: cell)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let commands = contextCommands(for: event), !commands.isEmpty else { return }
+        AtticGlassMenu.popUpLater(commands, in: self,
+            placement: .point(convert(event.locationInWindow, from: nil)), opener: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let commands = contextCommands(for: event) else { return nil }
         return commands.isEmpty ? nil : AtticNativeMenu.make(commands, title: String(localized: "Table"))
     }
 

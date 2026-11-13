@@ -22,6 +22,14 @@ Today's Calendar card stays 24 and is continuous; its events are 17.5
 (24 − 6.5), and their fill and ring are continuous. Glass menu highlights stay
 12 and cap at half the row. The proposal notice and a dragged note block also
 use the row token, so they are now 16 (still squircles).
+## 2026-11-13 · Brighten glass leaves the panel's control bands
+
+With Brighten glass on, the panel's lift fades out over its top and bottom
+control bands: 46 pt with no lift, then a 24 pt fade up to the full lift
+(`AtticSurfaceModel.LiftControlBands`). The controls there measure the same as
+with the switch off; the middle keeps the full 0.14 lift. Genie's live
+material leaves the same bands. The island, the strength and the rules for
+when the lift applies are unchanged.
 
 ## 2026-11-12 · Task page glass context-menu routing
 

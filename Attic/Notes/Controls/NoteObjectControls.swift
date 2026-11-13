@@ -240,13 +240,20 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         return true
     }
 
-    func objectMenu(for event: NSEvent) -> NSMenu? {
+    func objectContextCommands(for event: NSEvent) -> [AtticMenuCommand]? {
         guard let textView else { return nil }
         let point = textView.convert(event.locationInWindow, from: nil)
         guard let (object, range, _) = object(at: point) else { return nil }
         textView.setSelectedRange(range)
-        let menu = AtticNativeMenu.make(objectCommands(for: object.objectID))
-        menu.appearance = textView.window?.effectiveAppearance
+        return objectCommands(for: object.objectID)
+    }
+
+    /// Kept for callers that inspect or capture an AppKit menu; live
+    /// right-clicks use the commands above in Attic's glass menu.
+    func objectMenu(for event: NSEvent) -> NSMenu? {
+        guard let commands = objectContextCommands(for: event) else { return nil }
+        let menu = AtticNativeMenu.make(commands)
+        menu.appearance = textView?.window?.effectiveAppearance
         return menu
     }
 

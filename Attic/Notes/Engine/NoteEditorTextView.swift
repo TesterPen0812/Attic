@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// The note text view: a stock TextKit 2 `NSTextView` with narrow hooks.
@@ -1769,7 +1770,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func rightMouseDown(with event: NSEvent) {
         calloutIconSession?.cancel(reason: "editor right click", returnFocus: true)
-        super.rightMouseDown(with: event)
+        if let objectCommands = objectInteraction?.objectContextCommands(for: event) {
+            hideBlockHandle()
+            AtticGlassMenu.popUpLater(objectCommands, in: self,
+                placement: .point(convert(event.locationInWindow, from: nil)), opener: event)
+            return
+        }
+        NoteGlassContextMenu.open(menu(for: event), in: self, event: event)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -1922,6 +1929,83 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 }
 
+/// Present an AppKit text context menu through Attic's glass menu. TextKit
+/// owns this menu's system rows (spelling, Look Up, Services, Writing Tools,
+/// Cut/Copy/Paste), while Notes inserts its own Format/Insert/link rows.
+/// Reuse each NSMenuItem as the sender so native selector targets and their
+/// represented objects continue to receive precisely the original action.
+@MainActor
+enum NoteGlassContextMenu {
+    static func open(_ native: NSMenu?, in view: NSView, event: NSEvent) {
+        guard let native else { return }
+        let commands = commands(from: native, in: view, modifiers: event.modifierFlags)
+        guard !commands.isEmpty else { return }
+        AtticGlassMenu.popUpLater(commands, in: view,
+            placement: .point(view.convert(event.locationInWindow, from: nil)), opener: event)
+    }
+
+    private static func commands(from menu: NSMenu, in view: NSView,
+                                 modifiers: NSEvent.ModifierFlags) -> [AtticMenuCommand] {
+        // NSMenu's validation and lazy submenu preparation still belong to
+        // AppKit, even though we present the resulting items in glass.
+        menu.update()
+        var result: [AtticMenuCommand] = []
+        var startsSection = false
+        for item in menu.items {
+            if item.isSeparatorItem {
+                startsSection = true
+                continue
+            }
+            guard !item.isHidden, !item.isAlternate || modifiers.contains(.option),
+                  !item.title.isEmpty else { continue }
+
+            let state: AtticCheckState? = switch item.state {
+            case .on: .on
+            case .mixed: .mixed
+            default: nil
+            }
+            let shortcut: KeyboardShortcut? = item.keyEquivalent.first.map { key in
+                var modifiers: EventModifiers = []
+                let flags = item.keyEquivalentModifierMask
+                if flags.contains(.command) { modifiers.insert(.command) }
+                if flags.contains(.shift) { modifiers.insert(.shift) }
+                if flags.contains(.option) { modifiers.insert(.option) }
+                if flags.contains(.control) { modifiers.insert(.control) }
+                return KeyboardShortcut(KeyEquivalent(key), modifiers: modifiers)
+            }
+            // AppKit occasionally supplies a native custom view in an item
+            // or a lazily populated Services submenu. Its system UI cannot
+            // be drawn as glass rows: choosing that row opens the original
+            // menu and keeps those platform-provided controls reachable.
+            let needsNative = item.view != nil || (item.submenu?.items.isEmpty == true && item.submenu?.delegate != nil)
+            // AtticNativeMenu appends a tab and tick to some attributed
+            // titles for its native layout. Glass draws the tick from state.
+            let title = item.state == .off ? item.title : (item.title.split(separator: "\t", maxSplits: 1).first.map(String.init) ?? item.title)
+            var command = AtticMenuCommand(verbatim: title, shortcut: shortcut,
+                isDisabled: !item.isEnabled, startsSection: startsSection, state: state) { [weak view] in
+                if needsNative {
+                    guard let view else { return }
+                    menu.popUp(positioning: item, at: view.bounds.origin, in: view)
+                } else if let action = item.action {
+                    let target = item.target ?? (view?.responds(to: action) == true ? view : nil)
+                    NSApp.sendAction(action, to: target, from: item)
+                }
+            }
+            command.image = item.image
+            command.identifier = item.identifier?.rawValue
+            if let child = item.submenu, !needsNative {
+                command.children = commands(from: child, in: view, modifiers: modifiers)
+            }
+            if item.action == nil, item.submenu == nil, !item.isEnabled {
+                command.isHeader = true
+            }
+            result.append(command)
+            startsSection = false
+        }
+        return result
+    }
+}
+
 /// The text view's `undoManager`: menu validation and any caller that asks
 /// the responder chain's undo manager reach the engine's own history.
 /// Registrations made on it by the system are accepted and ignored: every
@@ -1959,6 +2043,7 @@ final class NoteUndoManagerShim: UndoManager {
 protocol NoteObjectInteraction: AnyObject {
     func handleMouseDown(_ event: NSEvent) -> Bool
     func objectMenu(for event: NSEvent) -> NSMenu?
+    func objectContextCommands(for event: NSEvent) -> [AtticMenuCommand]?
     func isFileDrag(_ info: any NSDraggingInfo) -> Bool
     /// The operation for a drag of files from elsewhere, or nil when it is
     /// not one (text, or a move within the note).
