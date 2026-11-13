@@ -58,6 +58,9 @@ final class NoteTableAXColumn: NSAccessibilityElement {
 
 @MainActor
 final class NoteTableAXCell: NSAccessibilityElement {
+    #if DEBUG
+    static var creationCount = 0
+    #endif
     private weak var view: NoteTableView?
     let position: NoteTable.Position
     private weak var parentRow: NoteTableAXRow?
@@ -67,6 +70,9 @@ final class NoteTableAXCell: NSAccessibilityElement {
         self.position = NoteTable.Position(row: row, column: column)
         self.parentRow = parentRow
         super.init()
+        #if DEBUG
+        Self.creationCount += 1
+        #endif
         setAccessibilityRole(.cell)
         setAccessibilityParent(parentRow)
     }

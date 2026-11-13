@@ -49,6 +49,10 @@ final class NoteTableAttachment: NoteObjectAttachment {
     @MainActor lazy var textCache = NoteTableTextCache()
     private var layoutCache: NoteTableLayout?
     private var cellHeights: [[CGFloat]] = []
+    private var naturalWidths: [[CGFloat]] = []
+    private var minimumWidths: [[CGFloat]] = []
+    private var widest: [CGFloat] = []
+    private var longestWord: [CGFloat] = []
 
 
     /// The table's layout in a column `width` wide.
@@ -58,13 +62,19 @@ final class NoteTableAttachment: NoteObjectAttachment {
         }
         let table = self.table
         cellHeights = Array(repeating: Array(repeating: 0, count: table.columnCount), count: table.rowCount)
+        naturalWidths = Array(repeating: Array(repeating: 0, count: table.rowCount), count: table.columnCount)
+        minimumWidths = naturalWidths
         let layout = NoteTableLayout.make(table, viewport: width, natural: { position in
             let header = table.headerRow && position.row == 0
             let cell = table[position]
-            return textCache.natural(cell, header: header) { cellString(at: position) }
+            let value = textCache.natural(cell, header: header) { cellString(at: position) }
+            naturalWidths[position.column][position.row] = value
+            return value
         }, minimum: { position in
             let header = table.headerRow && position.row == 0
-            return textCache.minimum(table[position], header: header) { cellString(at: position) }
+            let value = textCache.minimum(table[position], header: header) { cellString(at: position) }
+            minimumWidths[position.column][position.row] = value
+            return value
         }, height: { position, width in
             let header = table.headerRow && position.row == 0
             let cell = table[position]
@@ -72,31 +82,61 @@ final class NoteTableAttachment: NoteObjectAttachment {
             cellHeights[position.row][position.column] = height
             return height
         })
+        widest = naturalWidths.map { $0.max() ?? 0 }
+        longestWord = minimumWidths.map { $0.max() ?? 0 }
         layoutCache = layout
         return layout
     }
 
-    /// Fixed-width columns cannot change their widths after a cell edit.
-    /// Reuse other cells' wrapped heights and update only affected rows.
+    /// Content edits update their metrics and column extrema. Unchanged
+    /// resolved widths retain all other heights; a real width change only
+    /// reflows the columns whose wrapping changed.
     @MainActor private func updateLayout(from old: NoteTable) {
         guard let cached = layoutCache, old.columns == table.columns,
               old.headerRow == table.headerRow, old.rows.count == table.rows.count,
-              table.columns.allSatisfy({ $0.width != nil }),
               cellHeights.count == table.rowCount else { layoutCache = nil; return }
+        var changed: [NoteTable.Position] = []
+        var rescanNatural = Set<Int>(), rescanMinimum = Set<Int>()
         var heights = cached.rowHeights
         for row in table.rows.indices where old.rows[row] != table.rows[row] {
             guard old.rows[row].id == table.rows[row].id,
                   old.rows[row].cells.count == table.columnCount else { layoutCache = nil; return }
             for column in table.columns.indices where old.rows[row].cells[column] != table.rows[row].cells[column] {
                 let position = NoteTable.Position(row: row, column: column)
+                changed.append(position)
+                guard table.columns[column].width == nil else { continue }
                 let header = table.headerRow && row == 0
-                NoteTableLayout.heightVisitCount += 1
-                cellHeights[row][column] = textCache.height(table[position], header: header, width: cached.textWidth(column: column)) { cellString(at: position) }
+                let natural = textCache.natural(table[position], header: header) { cellString(at: position) }
+                let minimum = textCache.minimum(table[position], header: header) { cellString(at: position) }
+                if naturalWidths[column][row] == widest[column], natural < widest[column] { rescanNatural.insert(column) }
+                if minimumWidths[column][row] == longestWord[column], minimum < longestWord[column] { rescanMinimum.insert(column) }
+                naturalWidths[column][row] = natural
+                minimumWidths[column][row] = minimum
+                widest[column] = max(widest[column], natural)
+                longestWord[column] = max(longestWord[column], minimum)
             }
+        }
+        for column in rescanNatural { widest[column] = naturalWidths[column].max() ?? 0 }
+        for column in rescanMinimum { longestWord[column] = minimumWidths[column].max() ?? 0 }
+        let widths = NoteTableLayout.resolvedWidths(table, viewport: cached.viewportWidth,
+                                                  natural: { widest[$0] }, minimum: { longestWord[$0] })
+        let reflow = Set(table.columns.indices.filter { widths[$0] != cached.columnWidths[$0] })
+        var affectedRows = Set(changed.map(\.row))
+        func measure(_ position: NoteTable.Position) {
+            let header = table.headerRow && position.row == 0
+            NoteTableLayout.heightVisitCount += 1
+            cellHeights[position.row][position.column] = textCache.height(table[position], header: header,
+                width: max(1, widths[position.column] - 2 * AtticNoteTableMetrics.cellPaddingH)) { cellString(at: position) }
+        }
+        for position in changed where !reflow.contains(position.column) { measure(position) }
+        for column in reflow {
+            for row in table.rows.indices { measure(.init(row: row, column: column)); affectedRows.insert(row) }
+        }
+        for row in affectedRows {
             heights[row] = ceil(max(AtticNoteType.body.lineHeight, cellHeights[row].max() ?? 0)) + 2 * AtticNoteTableMetrics.cellPaddingV
         }
-        if heights != cached.rowHeights {
-            layoutCache = NoteTableLayout(columnWidths: cached.columnWidths, rowHeights: heights, viewportWidth: cached.viewportWidth)
+        if heights != cached.rowHeights || widths != cached.columnWidths {
+            layoutCache = NoteTableLayout(columnWidths: widths, rowHeights: heights, viewportWidth: cached.viewportWidth)
         }
     }
 

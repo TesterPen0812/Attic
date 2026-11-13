@@ -20,6 +20,121 @@ final class NotesV2TablesTests: XCTestCase {
 
     // MARK: Harness
 
+    /// PF-10: content edits keep the structural AX graph, even when a
+    /// client queries it after every key. Full navigation stays available.
+    func testPF10ContentEditsKeepAXNodesAndClipVisibleElements() throws {
+        let attachment = NoteTableAttachment(table: NoteTable(texts: (0..<500).map { row in
+            (0..<30).map { "r\(row)c\($0)" }
+        }))
+        let view = attachment.tableView
+        view.frame = CGRect(x: 0, y: 0, width: 264, height: 120)
+        let row = try XCTUnwrap(view.accessibilityRows()?.first as? NoteTableAXRow)
+        let cell = try XCTUnwrap(view.axCell(.init(row: 0, column: 0)))
+        let before = NoteTableAXCell.creationCount
+        var replacements = 0
+        for step in 0..<100 {
+            attachment.table[.init(row: 0, column: 0)].text = step.isMultiple(of: 2) ? "x" : "y"
+            if view.axCell(.init(row: 0, column: 0)) !== cell { replacements += 1 }
+        }
+        print("PF10 edits=100 new_cells=\(NoteTableAXCell.creationCount - before) replacements=\(replacements)")
+        XCTAssertEqual(NoteTableAXCell.creationCount - before, 0)
+        XCTAssertEqual(replacements, 0)
+        XCTAssertTrue(view.accessibilityRows()?.first as AnyObject === row)
+        XCTAssertEqual(cell.accessibilityValue() as? String, "y")
+        XCTAssertEqual(view.accessibilityRows()?.count, 500)
+        XCTAssertEqual(view.accessibilityColumns()?.count, 30)
+        let visibleRows = try XCTUnwrap(view.accessibilityVisibleRows() as? [NoteTableAXRow])
+        let visibleColumns = try XCTUnwrap(view.accessibilityVisibleColumns() as? [NoteTableAXColumn])
+        XCTAssertGreaterThan(visibleRows.count, 0)
+        XCTAssertLessThan(visibleRows.count, 10)
+        XCTAssertLessThan(visibleColumns.count, 30)
+        view.setScrollOffset(200)
+        XCTAssertGreaterThan(try XCTUnwrap((view.accessibilityVisibleColumns() as? [NoteTableAXColumn])?.first).column, 0)
+        XCTAssertNotNil(view.accessibilityCell(forColumn: 29, row: 499))
+        attachment.table.rows.swapAt(0, 1)
+        XCTAssertEqual(view.axCell(.init(row: 0, column: 0))?.accessibilityValue() as? String, "r1c0")
+        XCTAssertFalse(view.axCell(.init(row: 0, column: 0)) === cell)
+        XCTAssertTrue(attachment.table.removeRow(at: 2))
+        XCTAssertEqual(view.accessibilityRows()?.count, 499)
+        attachment.table.insertRow(at: 2)
+        XCTAssertEqual(view.accessibilityRows()?.count, 500)
+    }
+
+    /// PF-11: unchanged automatic widths visit one cell, at either size.
+    func testPF11AutomaticWidthsKeepUnchangedCellHeights() {
+        for rows in [100, 500] {
+            var table = NoteTable(texts: (0..<rows).map { row in
+                (0..<30).map { _ in row == 0 ? "unchanged widest content" : "x" }
+            })
+            table.headerRow = false
+            let attachment = NoteTableAttachment(table: table)
+            _ = attachment.layout(width: 340)
+            let before = NoteTableLayout.heightVisitCount
+            let naturalBefore = NoteTableTextCache.naturalVisitCount
+            let minimumBefore = NoteTableTextCache.minimumVisitCount
+            for step in 0..<100 {
+                attachment.table[.init(row: rows / 2, column: 3)].text = step.isMultiple(of: 2) ? "y" : "x"
+                _ = attachment.layout(width: 340)
+            }
+            let visits = NoteTableLayout.heightVisitCount - before
+            print("PF11 rows=\(rows) columns=30 edits=100 height_visits=\(visits) natural_visits=\(NoteTableTextCache.naturalVisitCount - naturalBefore) minimum_visits=\(NoteTableTextCache.minimumVisitCount - minimumBefore)")
+            XCTAssertEqual(visits, 100)
+            XCTAssertEqual(NoteTableTextCache.naturalVisitCount - naturalBefore, 100)
+            XCTAssertEqual(NoteTableTextCache.minimumVisitCount - minimumBefore, 100)
+            let incremental = attachment.layout(width: 340)
+            attachment.invalidateLayout()
+            XCTAssertEqual(incremental, attachment.layout(width: 340))
+        }
+    }
+
+    func testPF11SeededGeometryMatchesFullRebuildThroughEditsAndReplay() throws {
+        for seed: UInt64 in [16, 613, 20261113] {
+            var state = seed
+            func pick(_ limit: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 32) % UInt64(limit))
+            }
+            let initial = NoteTable(texts: (0..<24).map { _ in (0..<6).map { _ in "a few words" } })
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .table(initial)]))
+            let attachment = try tableAttachment(engine)
+            var width: CGFloat = 340
+            func verify(_ step: Int) {
+                let incremental = attachment.layout(width: width)
+                let reference = NoteTableAttachment(table: attachment.table)
+                reference.style = attachment.style
+                XCTAssertEqual(incremental, reference.layout(width: width), "seed=\(seed) step=\(step)")
+            }
+            verify(0)
+            for step in 1...240 {
+                let position = NoteTable.Position(row: pick(attachment.table.rowCount), column: pick(attachment.table.columnCount))
+                switch pick(10) {
+                case 0: _ = engine.history.undo()
+                case 1: _ = engine.history.redo()
+                case 2: width = [264, 340, 720][pick(3)]
+                default:
+                    let operation = pick(7)
+                    let text = ["", "x", "longestwordwithoutabreak", "many short words that wrap over several lines", "line\nnext", "é 👩🏽‍💻"][pick(6)]
+                    XCTAssertTrue(engine.changeTable(attachment, name: "Seeded table edit") { table in
+                        switch operation {
+                        case 0: table.headerRow.toggle()
+                        case 1: table.columns[position.column].width = table.columns[position.column].width == nil ? 90 : nil
+                        case 2: _ = table.moveRow(from: position.row, to: (position.row + 1) % table.rowCount)
+                        case 3: _ = table.moveColumn(from: position.column, to: (position.column + 1) % table.columnCount)
+                        case 4: table.columns[position.column].align = table.columns[position.column].align == .left ? .right : .left
+                        default: table[position] = NoteTable.Cell(text, marks: text.isEmpty ? [] : [NoteMark(.bold, offset: 0, length: (text as NSString).length)])
+                        }
+                    } || attachment.table[position].text == text)
+                }
+                verify(step)
+                let document = engine.document()
+                let bytes = try NoteContentCodec.encode(document)
+                guard case let .editable(reopened) = NoteContentCodec.decode(bytes) else { return XCTFail("seed=\(seed) step=\(step)") }
+                XCTAssertEqual(reopened, document)
+            }
+            print("PF11 seed=\(seed) steps=240 geometry_and_reopen=equal")
+        }
+    }
+
     /// An editor in the draft's 264 pt column (a 320 pt panel, 28 in).
     private func makeEngine(_ blocks: [NoteBlock], height: CGFloat = 520) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
