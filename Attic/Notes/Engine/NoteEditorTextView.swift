@@ -1129,6 +1129,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     /// General navigation needs exact preceding layout: TextKit's estimated
     /// positions can differ when paragraphs wrap at 340/420.
+    #if DEBUG
+    /// Headless guard: count full-prefix layout requests during note reveals.
+    private(set) var prefixLayoutRequestCount = 0
+    #endif
+
     override func scrollRangeToVisible(_ range: NSRange) {
         revealTextRange(range, resolvePrefixLayout: true)
     }
@@ -1153,10 +1158,23 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             visible.map { rect.maxY >= $0.minY && rect.minY <= $0.maxY } == true
         } == true
         if !caretIsVisible, let layout = textLayoutManager, let target = engine.textRange(for: range) {
-            let needed = (resolvePrefixLayout
-                ? NSTextRange(location: layout.documentRange.location, end: target.endLocation)
-                : nil) ?? target
-            layout.ensureLayout(for: needed)
+            // An already-laid-out selection entirely inside the viewport has
+            // no preceding layout to resolve. Keep the full-prefix path for
+            // cold/offscreen matches: TextKit's estimated Y can otherwise drift.
+            let selectionIsVisible = range.length > 0
+                && layout.textViewportLayoutController.viewportRange?.intersects(target) == true
+                && engine.rect(for: range).map { rect in
+                    visible.map { rect.minY >= $0.minY && rect.maxY <= $0.maxY } == true
+                } == true
+            if !selectionIsVisible {
+                #if DEBUG
+                if resolvePrefixLayout { prefixLayoutRequestCount += 1 }
+                #endif
+                let needed = (resolvePrefixLayout
+                    ? NSTextRange(location: layout.documentRange.location, end: target.endLocation)
+                    : nil) ?? target
+                layout.ensureLayout(for: needed)
+            }
         }
         super.scrollRangeToVisible(range)
         rangeToRevealAfterLayout = range
