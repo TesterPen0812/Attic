@@ -1741,8 +1741,7 @@ final class AtticGlassMenuView: NSView {
         switch entry.kind {
         case .separator:
             style.separator.setFill()
-            let line = AtticHairline.width
-            NSRect(x: frame.minX + m.separatorInset, y: frame.midY - line / 2, width: frame.width - m.separatorInset * 2, height: line).fill()
+            Self.separatorRect(in: frame, scale: window?.backingScaleFactor ?? layer?.contentsScale ?? 2).fill()
         case let .header(title):
             let font = AtticGlassMenuStyle.headerFont
             let y = frame.maxY - m.headerBottom - (font.ascender - font.descender)
@@ -1751,6 +1750,19 @@ final class AtticGlassMenuView: NSView {
         case let .item(command):
             drawItem(command, in: frame, card: card, style: style)
         }
+    }
+
+    /// A separator's hairline, `separatorInset` in from the band's sides
+    /// and centred on it, on the backing pixel grid (menu review #3, 12 Nov:
+    /// centred at y 5.25 on its 11 pt band, the 0.5 pt line straddled two
+    /// device pixels at half strength). The band's own origin is whole
+    /// points, so whole device pixels here are whole pixels in the layer.
+    static func separatorRect(in frame: NSRect, scale: CGFloat) -> NSRect {
+        let m = AtticMenuMetrics.self
+        let scale = max(scale, 1)
+        let height = max((AtticHairline.width * scale).rounded(), 1) / scale
+        let y = ((frame.midY - height / 2) * scale).rounded(.down) / scale
+        return NSRect(x: frame.minX + m.separatorInset, y: y, width: frame.width - m.separatorInset * 2, height: height)
     }
 
     private func drawItem(_ command: AtticMenuCommand, in frame: NSRect, card: AtticGlassMenuCard, style: AtticGlassMenuStyle) {
