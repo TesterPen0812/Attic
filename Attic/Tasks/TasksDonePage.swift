@@ -77,7 +77,7 @@ struct TasksDonePage<Cell: View>: View {
         .onAppear { if drawn { model.loadDoneLogIfNeeded() } }
         .onChange(of: model.doneSearch) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
         // The tag bar filters Done too (T6).
-        .onChange(of: model.tagFilter) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
+        .onChange(of: model.tagPicks) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
         .onChange(of: drawn) { _, drawn in if drawn { model.loadDoneLogIfNeeded() } }
         .background {
             if drawn {
@@ -91,6 +91,18 @@ struct TasksDonePage<Cell: View>: View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
+                // The picked tags never hide finished tasks silently (13
+                // Nov, drawn in 4c): what is shown, how many are hidden, and
+                // Show All. Done has no status or date filter.
+                if model.showsDoneViewLine {
+                    let parts = TasksPanelDesign.viewLine(view: TasksViewOptions(), picks: model.tagPicks,
+                                                          hidden: model.filterHiddenCount(for: .done))
+                    AtticViewLine(summary: parts.map(\.plain).joined(), parts: parts,
+                                  actionTitle: String(localized: "Show All")) {
+                        model.showAll(on: .done)
+                    }
+                    .accessibilityIdentifier("tasks-done-view-line")
+                }
                 // One line a day heading or a row, each drawn by its slot's
                 // view (`TasksDoneSlots`); a row is scrolled to by its slot.
                 ForEach(lines) { line in
@@ -128,8 +140,8 @@ struct TasksDonePage<Cell: View>: View {
                     // A no-match line sits on the search's text column, as
                     // its count does (U-12).
                     // The owner's panel design's empty state.
-                    TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, filtered: false, tag: model.tagFilter),
-                                    clear: { model.typeDoneSearch(""); model.chooseTagChip(nil) },
+                    TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, view: TasksViewOptions(), picks: model.tagPicks),
+                                    clear: { model.typeDoneSearch(""); model.showAll(on: .done) },
                                     // T3: no results here, the other tabs' matches as links.
                                     elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: .done),
                                     follow: { model.followSearch(from: .done, to: $0) })

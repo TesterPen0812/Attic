@@ -38,6 +38,8 @@ struct NotesEditorPage: View {
     /// once for every page (owner, 2026-10-31); here they are a stand-in.
     @Environment(\.panelSharedChrome) private var sharedChrome
     @Environment(\.panelComposer) private var panelComposer
+    /// The tag bar's open state when the page draws its own bar.
+    @StateObject private var ownTagBar = PanelTagBarState()
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
@@ -356,7 +358,7 @@ struct NotesEditorPage: View {
                              onOpen: { id in openFromLibrary(id) },
                              onDelete: { id in delete(id) },
                              onBack: { toggleLibrary() },
-                             onCreate: { title, tag in newNote(title: title, tag: tag) })
+                             onCreate: { title, tags in newNote(title: title, tags: tags) })
                 .transition(slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
             NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
@@ -464,7 +466,7 @@ struct NotesEditorPage: View {
                 NoteFindTopRowField(find: find, onAllNotes: searchAllNotes)
                     .transition(PanelTopRowLayout.fieldTransition)
             } else if shown {
-                AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tag: library.tagFilter),
+                AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tags: library.tagPicks),
                                      text: $library.query, isFocused: $searchFocused, floating: true,
                                      onEscape: endTopSearch, header: true)
                     .accessibilityIdentifier("notes-search")
@@ -544,10 +546,11 @@ struct NotesEditorPage: View {
         .panelRowGivesWayToCard()
         .panelBottomBar(.notes,
                         look: PanelBottomBarLook(middle: .tags(tags: library.recentTags(store: noteStore),
-                                                               selection: library.tagFilter, idPrefix: "notes-tag-bar",
-                                                               shown: true),
+                                                               picks: library.tagPicks, idPrefix: "notes-tag-bar",
+                                                               shown: controller.isLibraryPresented),
                                                  plus: PanelBottomBarLook.notesPlus, shown: controller.isLibraryPresented),
-                        actions: PanelBottomBarActions(selectTag: { [library] tag in library.tagFilter = tag },
+                        actions: PanelBottomBarActions(selectTag: { [library] tag in library.toggleTag(tag) },
+                                                       setTagMatch: { [library] match in library.setTagMatch(match) },
                                                        plus: { newNoteFromPlus() }))
     }
 
@@ -585,9 +588,10 @@ struct NotesEditorPage: View {
     private var ownLibraryBar: some View {
         HStack(spacing: NotesBarMetrics.gap) {
             // The page switch is the Tall island (Accepted 2026-10-31).
-            NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
-                library.tagFilter = tag
-            }
+            NotesTagBar(tags: library.recentTags(store: noteStore), picks: library.tagPicks, state: ownTagBar,
+                        shown: controller.isLibraryPresented,
+                        onSelect: { [library] tag in library.toggleTag(tag) },
+                        onMatch: { [library] match in library.setTagMatch(match) })
             AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: "New note", size: NotesBarMetrics.size,
                               help: String(localized: "New note (⌘N)"),
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
@@ -834,6 +838,8 @@ struct NotesEditorPage: View {
 
     private func newNoteFromPlus() {
         if let panelComposer {
+            // A note made while tags are picked starts with them (13 Nov).
+            panelComposer.startTags(library.tagPicks.tags)
             panelComposer.open(on: .notes)
         } else {
             newNote()
@@ -859,8 +865,8 @@ struct NotesEditorPage: View {
 
     /// "New note “kyoto”" (in #launch) from All notes: the note the search
     /// named, its caret at the end of the title.
-    private func newNote(title: String, tag: String?) {
-        guard controller.requestNewNote(title: title, tags: tag.map { [$0] } ?? []) else { return }
+    private func newNote(title: String, tags: [String]) {
+        guard controller.requestNewNote(title: title, tags: tags) else { return }
         AtticSounds.play(.created)
         library.clearSearch()
         DispatchQueue.main.async { chrome.focusText() }
@@ -1045,8 +1051,8 @@ struct NotesEditorPage: View {
     /// and the library's background menu (`historyCommands`) still has them.
     private func rowCommands(_ id: UUID) -> [AtticMenuCommand] {
         Self.libraryRowCommands(id, noteStore: noteStore, controller: controller, taskStore: taskStore,
-                                activeTag: library.tagFilter, hue: tagColouring.hue(for:),
-                                filter: { [library] tag in library.tagFilter = tag },
+                                picked: library.tagPicks, hue: tagColouring.hue(for:),
+                                filter: { [library] tag in library.toggleTag(tag) },
                                 open: { openFromLibrary($0) }, delete: { delete($0) })
     }
 
@@ -1074,8 +1080,8 @@ struct NotesEditorPage: View {
     }
 
     static func libraryRowCommands(_ id: UUID, noteStore: NoteStore, controller: NotesPageController, taskStore: TaskStore?,
-                                   activeTag: String?, hue: @escaping (String) -> AtticTagHue?,
-                                   filter: @escaping (String?) -> Void, open: @escaping (UUID) -> Void,
+                                   picked: TagPicks, hue: @escaping (String) -> AtticTagHue?,
+                                   filter: @escaping (String) -> Void, open: @escaping (UUID) -> Void,
                                    delete: @escaping (UUID) -> Void) -> [AtticMenuCommand] {
         let stored = noteStore.note(withID: id)
         let pinned = stored?.isPinned ?? false
@@ -1094,7 +1100,7 @@ struct NotesEditorPage: View {
             controller.setPinned(!pinned, noteID: id)
         }
         if stored == nil { pin = pin.disabled(because: notSaved) }
-        var filterByTag = NotesLibraryView.tagsSubmenu(tags: tags, activeTag: activeTag, hue: hue, onSelect: filter)
+        var filterByTag = NotesLibraryView.tagsSubmenu(tags: tags, picked: picked, hue: hue, onSelect: filter)
         if tags.isEmpty { filterByTag.disabledReason = String(localized: "No tags") }
         var duplicate = AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                                          identifier: NotesLibraryView.duplicateIdentifier) {

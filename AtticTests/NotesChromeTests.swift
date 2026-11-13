@@ -241,14 +241,17 @@ final class NotesChromeTests: XCTestCase {
 
             // Choosing a tag filters the list.
             let model2 = try XCTUnwrap(library(), "the library model")
+            // Collapsed by default (Accepted 2026-11-13): "#" opens the bar.
+            XCTAssertTrue(try XCTUnwrap(element("notes-tag-bar-key", in: host)).accessibilityPerformPress?() ?? false)
+            spin(0.3)
             let books = try XCTUnwrap(element("notes-tag-bar-books", in: host), "the #books pill")
             XCTAssertTrue(books.accessibilityPerformPress?() ?? false)
             spin(0.3)
-            XCTAssertEqual(model2.tagFilter, "books")
+            XCTAssertEqual(model2.tagPicks, TagPicks(["books"]))
             let all = try XCTUnwrap(element("notes-tag-bar-all", in: host))
             XCTAssertTrue(all.accessibilityPerformPress?() ?? false)
             spin(0.3)
-            XCTAssertNil(model2.tagFilter, "All shows every note")
+            XCTAssertTrue(model2.tagPicks.isEmpty, "All shows every note")
 
             // The search filters All notes through the library's query.
             let searchButton = try XCTUnwrap(element("notes-search-button", in: host))

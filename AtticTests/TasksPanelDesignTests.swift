@@ -381,26 +381,36 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(model.setPriority(.high, for: [b]).isApplied)
         model.select(tab: .now)
         model.chooseTagChip("home")
-        XCTAssertEqual(model.tagFilter, "home")
+        XCTAssertEqual(model.tagPicks, TagPicks(["home"]))
         XCTAssertEqual(Set(titles(.now)), ["Pay rent", "Pay gym"])
         XCTAssertTrue(model.narrows(.now), "a tag narrows the list (reorders move among what is shown)")
         var view = model.viewOptions(for: .now)
         view.priority = .highOnly
         model.setViewOptions(view, for: .now)
         XCTAssertEqual(titles(.now), ["Pay gym"], "the tag and the View options both match")
-        model.showAll(on: .now)
+        view.priority = .any
+        model.setViewOptions(view, for: .now)
         model.setSearchQuery("rent", for: .now)
         XCTAssertEqual(titles(.now), ["Pay rent"], "the tag and the search both match")
         model.setSearchQuery("flights", for: .now)
         XCTAssertEqual(titles(.now), [], "the search alone would show Book flights")
         model.setSearchQuery("", for: .now)
+        // Several tags (Accepted 2026-11-13, 2B): a click adds a tag; Any
+        // shows a task with either, All only one with both.
         model.chooseTagChip("travel")
-        XCTAssertEqual(titles(.now), ["Book flights"], "one tag at a time")
+        XCTAssertEqual(model.tagPicks, TagPicks(["home", "travel"]))
+        XCTAssertEqual(Set(titles(.now)), ["Pay rent", "Pay gym", "Book flights"], "Any: either tag")
+        model.setTagMatch(.all)
+        XCTAssertEqual(titles(.now), [], "All: no task has both")
         model.chooseTagChip("travel")
-        XCTAssertNil(model.tagFilter, "the chosen tag again clears it")
+        XCTAssertEqual(model.tagPicks, TagPicks(["home"]), "a picked tag again leaves the pick")
+        XCTAssertEqual(model.tagPicks.match, .any, "one tag left: the switch goes, back to Any")
         model.chooseTagChip("home")
+        XCTAssertTrue(model.tagPicks.isEmpty, "the last picked tag again clears it")
+        model.chooseTagChip("home")
+        model.chooseTagChip("travel")
         model.chooseTagChip(nil)
-        XCTAssertNil(model.tagFilter, "All clears it")
+        XCTAssertTrue(model.tagPicks.isEmpty, "All clears every pick")
         XCTAssertEqual(titles(.now).count, 3)
     }
 
@@ -413,22 +423,22 @@ final class TasksPanelDesignTests: XCTestCase {
         tag(b, "travel")
         model.chooseTagChip("home")
         XCTAssertTrue(library.renameTag("home", to: "house"))
-        XCTAssertEqual(model.tagFilter, "house", "a rename follows")
-        model.pruneTagFilter()
-        XCTAssertEqual(model.tagFilter, "house")
+        XCTAssertEqual(model.tagPicks, TagPicks(["house"]), "a rename follows")
+        model.pruneTagPicks()
+        XCTAssertEqual(model.tagPicks, TagPicks(["house"]))
         XCTAssertEqual(titles(.now), ["Pay rent"])
         XCTAssertTrue(library.deleteTag("house"))
-        model.pruneTagFilter()
-        XCTAssertNil(model.tagFilter, "a deleted tag clears it")
+        model.pruneTagPicks()
+        XCTAssertTrue(model.tagPicks.isEmpty, "a deleted tag clears it")
         XCTAssertEqual(titles(.now).count, 2)
         model.chooseTagChip("travel")
         XCTAssertTrue(library.mergeTags(["travel"], into: "trips"))
-        XCTAssertEqual(model.tagFilter, "trips", "a merge follows too")
+        XCTAssertEqual(model.tagPicks, TagPicks(["trips"]), "a merge follows too")
         tag(b, "trips") // its only task loses it
         let settled = expectation(description: "the change has been seen")
         DispatchQueue.main.async { DispatchQueue.main.async { settled.fulfill() } }
         wait(for: [settled], timeout: 2)
-        XCTAssertNil(model.tagFilter, "the last task losing the tag clears it on its own")
+        XCTAssertTrue(model.tagPicks.isEmpty, "the last task losing the tag clears it on its own")
     }
 
     /// Changing the shared tag while Now is visible must not invalidate
@@ -495,7 +505,9 @@ final class TasksPanelDesignTests: XCTestCase {
         spin()
         XCTAssertEqual(model.rows(for: .now).count, 3)
         let open = try XCTUnwrap(top())
-        XCTAssertEqual(open, shut, accuracy: 1, "no chip row opens under the top row")
+        // Accepted 2026-11-13: the view line names the picked tags too, so a
+        // tag filter adds that one line; still no chip row under the top row.
+        XCTAssertEqual(open, shut + AtticLayout.rowPitch, accuracy: 1, "only the view line, no chip row")
         model.chooseTagChip(nil)
         spin()
         let closed = try XCTUnwrap(top())
@@ -514,12 +526,23 @@ final class TasksPanelDesignTests: XCTestCase {
                        "closing near the end: never past the end")
     }
 
+    /// Accepted 2026-11-13: the empty state names the filter and lists the rest.
     func testTheTagEmptyStateUsesTheDesignsWording() {
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false, tag: "home"),
-                       .init(title: "No results", body: "No tasks in #home in this view.", canClear: true))
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "milk", filtered: false, tag: "home").body,
+        let home = TagPicks(["home"])
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", view: TasksViewOptions(), picks: home).title,
+                       "Nothing in #home")
+        XCTAssertTrue(TasksPanelDesign.empty(tab: .now, query: "", view: TasksViewOptions(), picks: home).canClear)
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "milk", view: TasksViewOptions(), picks: home).body,
                        "No tasks match “milk”.", "the search's wording first")
-        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: true, tag: nil).body, "Nothing in this view.")
+        let both = TasksPanelDesign.empty(tab: .now, query: "",
+                                          view: TasksViewOptions(status: .inProgress, show: .overdueOnly),
+                                          picks: TagPicks(["work", "home"], match: .all))
+        XCTAssertEqual(both.title, "Nothing in progress")
+        XCTAssertEqual(both.body, "in #work and #home, overdue")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", view: TasksViewOptions(status: .toDo), picks: .none).title,
+                       "Nothing to do")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", view: TasksViewOptions(show: .overdueOnly), picks: .none).title,
+                       "No overdue tasks")
     }
 
     // MARK: - Fidelity (spec audit, 2026-10-28)

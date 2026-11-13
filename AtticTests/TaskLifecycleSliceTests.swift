@@ -826,7 +826,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(row.title, "Live task name")
         XCTAssertTrue(row.spoken.contains("Live task name"))
         XCTAssertFalse(row.spoken.contains("Finalize launch checklist"), "VoiceOver must not read the stale title snapshot")
-        model.tagFilter = "live-tag"
+        model.tagPicks = TagPicks(["live-tag"])
         XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).contains { $0.id == noteID })
         XCTAssertEqual(try rows(noteID).first?.content, before)
     }
@@ -2871,9 +2871,9 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "Live title", tags: ["effective"]))
         let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, taskStore: tasks)
         XCTAssertEqual(model.recentTags(store: notes.store), ["effective"])
-        model.tagFilter = "legacy"
+        model.tagPicks = TagPicks(["legacy"])
         XCTAssertTrue(model.groups(store: notes.store, drafts: []).isEmpty)
-        model.tagFilter = "effective"
+        model.tagPicks = TagPicks(["effective"])
         XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).map(\.id), [id])
         XCTAssertEqual(try storedDocument(id).title, "Tags", "rename does not rewrite compatibility bytes")
         XCTAssertEqual(library.title(of: AtticItemRef(.note, id)), "Live title", "references through the writing alias resolve the live item title")

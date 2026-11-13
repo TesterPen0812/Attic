@@ -214,12 +214,23 @@ struct AtticEmptyLine: View {
 /// line; VoiceOver reads the summary, then the button.
 struct AtticViewLine: View {
     let summary: String
+    /// The same words as pieces, each tag in its colour (Tasks' filters,
+    /// 13 Nov); nil draws `summary` plain.
+    var parts: [TagPhrasePart]? = nil
     let actionTitle: String
     let action: () -> Void
 
     var body: some View {
         HStack(spacing: AtticSpacing.s8) {
-            AtticText(verbatim: summary, style: .rowMeta, ink: .helper, truncates: true)
+            Group {
+                if let parts {
+                    PanelTagPhraseText(parts: parts, size: 11.5, weight: .regular, ink: .helper)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else {
+                    AtticText(verbatim: summary, style: .rowMeta, ink: .helper, truncates: true)
+                }
+            }
                 .help(summary)
                 .layoutPriority(-1)
             Spacer(minLength: 0)

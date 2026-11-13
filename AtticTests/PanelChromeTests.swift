@@ -426,15 +426,19 @@ final class PanelChromeTests: XCTestCase {
             // The tag bar filters the list.
             let model = tasksState.model(for: store, toasts: nil)
             XCTAssertEqual(model.rows(for: .now).count, 2)
+            // Collapsed by default (Accepted 2026-11-13): "#" opens the bar.
+            XCTAssertNil(element("tasks-tag-bar-books", in: host), "the tags wait behind \"#\"")
+            XCTAssertTrue(try XCTUnwrap(element("tasks-tag-bar-key", in: host)).accessibilityPerformPress?() ?? false)
+            spin(0.3)
             let books = try XCTUnwrap(element("tasks-tag-bar-books", in: host), "the #books tag")
             XCTAssertTrue(books.accessibilityPerformPress?() ?? false)
             spin(0.3)
-            XCTAssertEqual(model.tagFilter(on: .now), "books")
+            XCTAssertEqual(model.tagPicks(on: .now), TagPicks(["books"]))
             XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["Return books"])
             let all = try XCTUnwrap(element("tasks-tag-bar-all", in: host))
             XCTAssertTrue(all.accessibilityPerformPress?() ?? false)
             spin(0.3)
-            XCTAssertNil(model.tagFilter(on: .now))
+            XCTAssertTrue(model.tagPicks(on: .now).isEmpty)
 
             // Search: Pin, the switch and ••• fold away; the field fills the row.
             let searchButton = try XCTUnwrap(element("tasks-find-button", in: host))
@@ -537,6 +541,9 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(notesTop[2].maxX, host.bounds.width - insets.trailing, accuracy: 0.5)
             let notesBottom = try assertRow(["notes-tag-bar", "notes-new-note"], in: host)
             XCTAssertEqual(notesBottom[0].minX, insets.leading, accuracy: 0.5)
+            // Collapsed to "#" (Accepted 2026-11-13, 1A): the tags show open.
+            XCTAssertTrue(try XCTUnwrap(element("notes-tag-bar-key", in: host)).accessibilityPerformPress?() ?? false)
+            spin(0.6)
             let tag = try XCTUnwrap(frame(of: "notes-tag-bar-launch", in: host))
             XCTAssertEqual(tag.height, 21, accuracy: 0.5, "21 pt tags")
 
@@ -1201,7 +1208,7 @@ final class PanelChromeTests: XCTestCase {
             state.selectSection(.tasks)
             spin(1.0)
             let plusFrame = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
-            XCTAssertNotNil(element("tasks-tag-bar-books", in: host))
+            XCTAssertNotNil(element("tasks-tag-bar-key", in: host), "the tag bar, collapsed (13 Nov)")
             ComposerOverlay.corners = []
             PanelComposerRoom.lastSet = nil
             XCTAssertTrue(try XCTUnwrap(element("tasks-new-task", in: host)).accessibilityPerformPress?() ?? false)
@@ -1212,7 +1219,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(card.maxX, plusFrame.maxX, accuracy: 0.5, "it grows from the \"+\" corner")
             XCTAssertEqual(card.maxY, plusFrame.maxY, accuracy: 0.5, "its bottom edge is the bar's bottom edge")
             XCTAssertEqual(card.height, ComposerMetrics.height, accuracy: 1)
-            XCTAssertNil(element("tasks-tag-bar-books", in: host), "the tag pills go under the card")
+            XCTAssertNil(element("tasks-tag-bar-key", in: host), "the tag bar goes under the card")
             XCTAssertNil(element("tasks-new-task", in: host), "and so does \"+\"")
             let room = try XCTUnwrap(PanelComposerRoom.lastSet)
             XCTAssertTrue(room.open)
@@ -1224,7 +1231,7 @@ final class PanelChromeTests: XCTestCase {
             state.selectSection(.tasks)
             spin(0.5)
             XCTAssertNil(element("composer-card", in: host))
-            XCTAssertNotNil(element("tasks-tag-bar-books", in: host), "folding gives the row back")
+            XCTAssertNotNil(element("tasks-tag-bar-key", in: host), "folding gives the row back")
             XCTAssertNotNil(element("tasks-new-task", in: host))
             XCTAssertEqual(PanelComposerRoom.lastSet?.height, 0)
             XCTAssertEqual(PanelComposerRoom.lastSet?.open, false)

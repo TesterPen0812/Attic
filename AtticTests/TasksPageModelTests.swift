@@ -183,6 +183,12 @@ final class TasksPageModelTests: XCTestCase {
                 let backlogTasks = all.filter { $0.listedStatus == .backlog }
                 let view = page.viewOptions(for: .now)
                 let expectedNow = Set(nowTasks.filter { view.includes($0, today: today) }.map(\.id))
+                // A task just changed stays in view until the view changes
+                // (Accepted 2026-11-13, "a task you just changed stays
+                // visible"): every match shows now, and exactly the matches
+                // once the view settles.
+                XCTAssertTrue(expectedNow.isSubset(of: Set(page.rows(for: .now).map(\.id))), label)
+                page.releaseFilterStay()
                 XCTAssertEqual(Set(page.rows(for: .now).map(\.id)), expectedNow, label)
                 XCTAssertEqual(Set(page.rows(for: .backlog).map(\.id)), Set(backlogTasks.map(\.id)), label)
                 let grouping = page.sections(for: .now).groups

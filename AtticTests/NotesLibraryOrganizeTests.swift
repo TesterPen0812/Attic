@@ -102,14 +102,14 @@ final class NotesLibraryOrganizeTests: XCTestCase {
                                         store: store)
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [launch, both, other, untagged])
 
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [launch, both], "only the tag's notes")
 
         library.query = "kyoto"
         await settle(library)
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [launch, both],
                        "a search inside a filter never shows a note outside it")
-        library.tagFilter = nil
+        library.tagPicks = .none
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [launch, both, other],
                        "clearing the filter shows every match again, with no new search")
     }
@@ -123,7 +123,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [tagged, plain])
         library.query = "kyoto"
         XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [tagged, plain], "earlier results stay meanwhile")
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         XCTAssertFalse(ids(library.groups(store: store, drafts: [])).contains(plain),
                        "a note outside the new filter is never shown")
         library.clearSearch()
@@ -134,7 +134,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         try create("Beta")
         let library = NotesLibraryModel(search: { _ in [] }, store: store)
         library.highlightedID = a
-        library.tagFilter = "x"
+        library.tagPicks = TagPicks(["x"])
         XCTAssertNil(library.highlightedID, "the rows change: ↑ ↓ start again")
     }
 
@@ -151,13 +151,13 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(library.recentTags(store: store), ["launch", "home", "work", "archive"],
                        "by the latest edit of a note carrying the tag, ties by name")
         XCTAssertEqual(library.tagTabs(store: store, limit: 2), ["launch", "home"])
-        library.tagFilter = "archive"
+        library.tagPicks = TagPicks(["archive"])
         XCTAssertEqual(library.tagTabs(store: store, limit: 2), ["archive", "launch"],
                        "the active tag is always shown, right after All notes")
         library.toggleTag("archive")
-        XCTAssertNil(library.tagFilter, "choosing the active tag again shows every note")
+        XCTAssertTrue(library.tagPicks.isEmpty, "choosing the active tag again shows every note")
         library.toggleTag("work")
-        XCTAssertEqual(library.tagFilter, "work")
+        XCTAssertEqual(library.tagPicks, TagPicks(["work"]))
     }
 
     func testRecentTagsFollowAnEdit() throws {
@@ -175,17 +175,17 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         let plain = try create("Plain")
         let library = NotesLibraryModel(search: { _ in [] }, store: store)
 
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         library.reconcileFilter(store: store, selected: tagged)
-        XCTAssertEqual(library.tagFilter, "launch", "the note you came from is shown: the filter stays")
+        XCTAssertEqual(library.tagPicks, TagPicks(["launch"]), "the note you came from is shown: the filter stays")
         library.reconcileFilter(store: store, selected: nil)
-        XCTAssertEqual(library.tagFilter, "launch", "from a new draft: the filter stays")
+        XCTAssertEqual(library.tagPicks, TagPicks(["launch"]), "from a new draft: the filter stays")
         library.reconcileFilter(store: store, selected: plain)
-        XCTAssertNil(library.tagFilter, "the filter would hide the note you came from: every note")
+        XCTAssertTrue(library.tagPicks.isEmpty, "the filter would hide the note you came from: every note")
 
-        library.tagFilter = "gone"
+        library.tagPicks = TagPicks(["gone"])
         library.reconcileFilter(store: store, selected: nil)
-        XCTAssertNil(library.tagFilter, "no note carries the tag any more: every note")
+        XCTAssertTrue(library.tagPicks.isEmpty, "no note carries the tag any more: every note")
     }
 
     func testShowingAllNotesFromAnUntaggedNoteResetsTheFilterBeforeTheListIsBuilt() async throws {
@@ -196,23 +196,23 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
         XCTAssertTrue(controller.open(noteID: tagged))
         XCTAssertTrue(controller.showLibrary())
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         controller.dismissLibrary()
         XCTAssertTrue(controller.showLibrary())
-        XCTAssertEqual(library.tagFilter, "launch", "back from the tagged note: the filter is restored")
+        XCTAssertEqual(library.tagPicks, TagPicks(["launch"]), "back from the tagged note: the filter is restored")
         controller.dismissLibrary()
         XCTAssertTrue(controller.open(noteID: plain))
         XCTAssertTrue(controller.showLibrary())
-        XCTAssertNil(library.tagFilter, "it would hide the note you came from: every note")
+        XCTAssertTrue(library.tagPicks.isEmpty, "it would hide the note you came from: every note")
     }
 
     func testAFilterWithNoNotesLeftKeepsItsLineUntilYouLeave() throws {
         let only = try create("Only", tags: ["launch"])
         let library = NotesLibraryModel(search: { _ in [] }, store: store)
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: only))))
         XCTAssertTrue(library.groups(store: store, drafts: []).isEmpty)
-        XCTAssertEqual(library.tagFilter, "launch", "kept while All notes shows, so Undo brings the note back into it")
+        XCTAssertEqual(library.tagPicks, TagPicks(["launch"]), "kept while All notes shows, so Undo brings the note back into it")
     }
 
     // MARK: Search reaches displayed dates
@@ -248,27 +248,33 @@ final class NotesLibraryOrganizeTests: XCTestCase {
     }
 
     func testARowsTagsMenuFiltersToATagAndTicksTheActiveOne() {
-        var chosen: [String?] = []
-        let menu = NotesLibraryView.tagsSubmenu(tags: ["launch", "work"], activeTag: "work") { chosen.append($0) }
+        var chosen: [String] = []
+        let menu = NotesLibraryView.tagsSubmenu(tags: ["launch", "work"], picked: TagPicks(["work"])) { chosen.append($0) }
         XCTAssertEqual(menu.children.map(\.title), ["#launch", "#work"])
         XCTAssertEqual(menu.children.map(\.state), [nil, .on])
         menu.children[0].action()
         menu.children[1].action()
-        XCTAssertEqual(chosen, ["launch", nil], "a tag filters; the active one again shows every note")
-        XCTAssertTrue(NotesLibraryView.tagsSubmenu(tags: [], activeTag: nil) { _ in }.isDisabled, "no tags: dimmed")
+        // Several tags (Accepted 2026-11-13): each choice toggles its tag,
+        // as its pill does.
+        XCTAssertEqual(chosen, ["launch", "work"], "each choice toggles its tag in the pick")
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        library.tagPicks = TagPicks(["work"])
+        for tag in chosen { library.toggleTag(tag) }
+        XCTAssertEqual(library.tagPicks, TagPicks(["launch"]), "launch joins, the picked work leaves")
+        XCTAssertTrue(NotesLibraryView.tagsSubmenu(tags: [], picked: .none) { _ in }.isDisabled, "no tags: dimmed")
     }
 
     // MARK: Words
 
     func testTheSearchWordsNameTheFilter() {
-        XCTAssertEqual(NotesLibraryModel.placeholder(count: 13, tag: nil), "Search 13 notes")
-        XCTAssertEqual(NotesLibraryModel.placeholder(count: 1, tag: nil), "Search 1 note")
-        XCTAssertEqual(NotesLibraryModel.placeholder(count: 13, tag: "launch"), "Search #launch")
-        XCTAssertEqual(NotesLibraryModel.noMatches(query: "kyoto", tag: nil), "No notes match “kyoto”.")
-        XCTAssertEqual(NotesLibraryModel.noMatches(query: "kyoto", tag: "launch"), "No notes match “kyoto” in #launch.")
-        XCTAssertEqual(NotesLibraryModel.newNoteTitle(query: "kyoto", tag: nil), "New note “kyoto”")
-        XCTAssertEqual(NotesLibraryModel.newNoteTitle(query: "kyoto", tag: "launch"), "New note “kyoto” in #launch")
-        XCTAssertEqual(NotesLibraryModel.emptyFilter(tag: "launch"), "No notes in #launch")
+        XCTAssertEqual(NotesLibraryModel.placeholder(count: 13, tags: .none), "Search 13 notes")
+        XCTAssertEqual(NotesLibraryModel.placeholder(count: 1, tags: .none), "Search 1 note")
+        XCTAssertEqual(NotesLibraryModel.placeholder(count: 13, tags: TagPicks(["launch"])), "Search #launch")
+        XCTAssertEqual(NotesLibraryModel.noMatches(query: "kyoto", tags: .none), "No notes match “kyoto”.")
+        XCTAssertEqual(NotesLibraryModel.noMatches(query: "kyoto", tags: TagPicks(["launch"])), "No notes match “kyoto” in #launch.")
+        XCTAssertEqual(NotesLibraryModel.newNoteTitle(query: "kyoto", tags: .none), "New note “kyoto”")
+        XCTAssertEqual(NotesLibraryModel.newNoteTitle(query: "kyoto", tags: TagPicks(["launch"])), "New note “kyoto” in #launch")
+        XCTAssertEqual(NotesLibraryModel.emptyFilter(tags: TagPicks(["launch"])), "No notes in #launch")
     }
 
     // MARK: Query-created notes
@@ -395,7 +401,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         let afterTags = clock.measure { _ = library.groups(store: store, drafts: []) }
         XCTAssertEqual(library.bodyDecodeCount, count, "a tag change re-reads no body")
 
-        library.tagFilter = "launch"
+        library.tagPicks = TagPicks(["launch"])
         let filtered = clock.measure { groups = library.groups(store: store, drafts: []) }
         XCTAssertEqual(groups.reduce(0) { $0 + $1.rows.count }, count / tags.count + (count % tags.count > 0 ? 1 : 0))
         let recent = clock.measure { _ = library.recentTags(store: store) }

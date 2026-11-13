@@ -387,7 +387,8 @@ struct AtticPanelView: View {
 
     private var composerRoute: PanelComposerRoute {
         PanelComposerRoute(open: { [composerState] page, kind in composerState.model?.open(on: page, as: kind) },
-                           isOpen: { [composerState] in composerState.model?.isOpen ?? false })
+                           isOpen: { [composerState] in composerState.model?.isOpen ?? false },
+                           startTags: { [composerState] tags in composerState.model?.startTags(tags) })
     }
 
     /// The card's kind for this page; nil where it has none (Canvas).
@@ -607,11 +608,20 @@ struct AtticPanelView: View {
             .onChange(of: uiState.openTaskNoteID) { _, taskID in
                 // Task pages own Back's bottom row, including when opened by
                 // a shortcut or agent rather than an outside mouse press.
-                if taskID != nil { composerState.model?.close(atOnce: true) }
+                if taskID != nil {
+                    composerState.model?.close(atOnce: true)
+                    sharedChrome.tagBar.close()
+                }
             }
+            // The tag bar starts collapsed each time the panel opens
+            // (Accepted 2026-11-13, 1A); the picked tags stay.
+            .onChange(of: uiState.revealCount) { _, _ in sharedChrome.tagBar.close() }
+            .onChange(of: uiState.hideCount) { _, _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.selectedSection) { _, _ in
                 // Gone whole, at once: never folding over the sliding pages.
                 composerState.model?.close(atOnce: true)
+                // Another page's bar starts collapsed too.
+                sharedChrome.tagBar.close()
                 syncBottomControlsHeight()
                 syncTopRowFootprint()
                 releaseTaskEntryInteractionLocks()

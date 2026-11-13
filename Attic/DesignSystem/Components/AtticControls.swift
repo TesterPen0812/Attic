@@ -2375,7 +2375,7 @@ struct AtticMenuButton: View {
 
 /// The menu button's dot: 5 pt in the accent, 6 pt in from the control's
 /// top trailing corner, on the glyph's corner.
-private struct AtticMenuButtonDot: View {
+struct AtticMenuButtonDot: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {

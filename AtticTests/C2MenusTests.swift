@@ -238,7 +238,7 @@ final class C2MenusTests: XCTestCase {
 
     private func rowCommands(_ id: UUID, opened: Box<[UUID]>? = nil, deleted: Box<[UUID]>? = nil) -> [AtticMenuCommand] {
         NotesEditorPage.libraryRowCommands(id, noteStore: notes.store, controller: notes, taskStore: tasks,
-                                           activeTag: nil, hue: { _ in nil }, filter: { _ in },
+                                           picked: .none, hue: { _ in nil }, filter: { _ in },
                                            open: { opened?.value.append($0) }, delete: { deleted?.value.append($0) })
     }
 
@@ -320,10 +320,10 @@ final class C2MenusTests: XCTestCase {
         XCTAssertFalse(row.preview.localizedCaseInsensitiveContains("task note"), row.preview)
         XCTAssertFalse(row.spoken.localizedCaseInsensitiveContains("task note"), row.spoken)
         XCTAssertTrue(row.preview.hasPrefix("Draft 3"), row.preview)
-        model.tagFilter = "launch"
+        model.tagPicks = TagPicks(["launch"])
         XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).map(\.id), [seeded.notes[0]],
                        "the item's tags filter All notes")
-        model.tagFilter = "old"
+        model.tagPicks = TagPicks(["old"])
         XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).isEmpty,
                       "a note-only tag is not the item's while it is in Tasks")
     }

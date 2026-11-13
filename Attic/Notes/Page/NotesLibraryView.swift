@@ -34,7 +34,7 @@ struct NotesLibraryView: View {
     let onDelete: (UUID) -> Void
     let onBack: () -> Void
     /// "New note “kyoto”" after no matches: the title, and the filter's tag.
-    var onCreate: (_ title: String, _ tag: String?) -> Void = { _, _ in }
+    var onCreate: (_ title: String, _ tags: [String]) -> Void = { _, _ in }
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
@@ -246,6 +246,9 @@ struct NotesLibraryView: View {
         // The library remains mounted under the shared '+' composer. Do not
         // interpret its title keystrokes as type-to-search or row shortcuts.
         guard isCurrent, controller.isLibraryPresented, panelComposer?.isOpen() != true else { return false }
+        // The tag bar holds the keys it uses while it has the keyboard, and
+        // Esc while it is open (13 Nov).
+        if PanelTagBarState.ownsKeys || (event.keyCode == 53 && PanelTagBarState.ownsEscape) { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
         let groups = model.navigable(all, layout: model.layout, store: store)
@@ -270,7 +273,7 @@ struct NotesLibraryView: View {
                 onOpen(id)
             } else if !event.modifierFlags.contains(.command), fieldFocused, let title = model.queryForNewNote(in: all) {
                 // Nothing matched: Return makes the note the search names.
-                onCreate(title, model.tagFilter)
+                onCreate(title, model.tagPicks.tags)
             } else {
                 return false
             }
@@ -305,11 +308,14 @@ struct NotesLibraryView: View {
     /// ticked and choosing it again shows every note. Dimmed with none. It
     /// says it filters, since the task menu's Tags › edits (Dropdown
     /// content: answers, owner, 2026-10-24, sheet 2).
-    static func tagsSubmenu(tags: [String], activeTag: String?, hue: (String) -> AtticTagHue? = { _ in nil },
-                            onSelect: @escaping (String?) -> Void) -> AtticMenuCommand {
+    /// Several tags can be picked (Accepted 2026-11-13): each picked one is
+    /// ticked, and choosing a tag adds it to the pick or takes it out, as
+    /// its pill in the tag bar does.
+    static func tagsSubmenu(tags: [String], picked: TagPicks, hue: (String) -> AtticTagHue? = { _ in nil },
+                            onSelect: @escaping (String) -> Void) -> AtticMenuCommand {
         var command = AtticMenuCommand.submenu(String(localized: "Filter by Tag"), width: AtticMenuMetrics.wideWidth, tags.map { tag in
-            AtticMenuCommand(verbatim: "#\(tag)", state: tag == activeTag ? .on : nil, swatch: hue(tag)) {
-                onSelect(tag == activeTag ? nil : tag)
+            AtticMenuCommand(verbatim: "#\(tag)", state: picked.contains(tag) ? .on : nil, swatch: hue(tag)) {
+                onSelect(tag)
             }
         })
         command.identifier = "notes-row-tags"
@@ -549,7 +555,7 @@ struct NotesLibraryView: View {
                 LazyVStack(alignment: .leading, spacing: NotesBoardMetrics.cardGap) {
                     ForEach(columns[index]) { row in
                         PreparedNotesBoardCard(library: model, store: store, revision: store.revision,
-                            tagFilter: model.tagFilter, row: row,
+                            tagFilter: model.tagPicks, row: row,
                             isSelected: row.id == selected && model.highlightedID == nil,
                             isHighlighted: row.id == model.highlightedID,
                             commands: { rowCommands(row.id) }, anchors: anchors,
@@ -591,13 +597,13 @@ struct NotesLibraryView: View {
                         AtticLoadingRows(count: 2).accessibilityIdentifier("notes-library-searching")
                     }
                 } else {
-                    emptyLine(NotesLibraryModel.noMatches(query: model.matchedQuery, tag: model.tagFilter))
+                    emptyLine(NotesLibraryModel.noMatches(query: model.matchedQuery, tags: model.tagPicks))
                     if let title = model.queryForNewNote(in: groups) {
-                        newNoteButton(title: title, tag: model.tagFilter)
+                        newNoteButton(title: title, tags: model.tagPicks)
                     }
                 }
-            } else if let tag = model.tagFilter {
-                emptyLine(NotesLibraryModel.emptyFilter(tag: tag))
+            } else if !model.tagPicks.isEmpty {
+                emptyLine(NotesLibraryModel.emptyFilter(tags: model.tagPicks))
             } else {
                 emptyLine(String(localized: "No notes yet"))
             }
@@ -605,12 +611,12 @@ struct NotesLibraryView: View {
     }
 
     /// The next step after no matches (Return does the same from the field).
-    private func newNoteButton(title: String, tag: String?) -> some View {
-        Button { onCreate(title, tag) } label: {
+    private func newNoteButton(title: String, tags: TagPicks) -> some View {
+        Button { onCreate(title, tags.tags) } label: {
             HStack(spacing: AtticNoteMetrics.countGap + 2) {
                 AtticIcon(systemName: "square.and.pencil", size: AtticNoteMetrics.countIconSize + 2,
                           weight: .regular, ink: .body)
-                AtticText(verbatim: NotesLibraryModel.newNoteTitle(query: title, tag: tag), style: .listBody,
+                AtticText(verbatim: NotesLibraryModel.newNoteTitle(query: title, tags: tags), style: .listBody,
                           ink: .body, truncates: true)
             }
             .frame(height: AtticLayout.rowPitch)
@@ -737,7 +743,7 @@ private struct PreparedNotesBoardCard: View, Equatable {
     let store: NoteStore
     let revision: UInt64
     /// The first tag a card shows is never the one the list is filtered by.
-    let tagFilter: String?
+    let tagFilter: TagPicks
     let row: AtticNoteRowModel
     let isSelected: Bool
     let isHighlighted: Bool

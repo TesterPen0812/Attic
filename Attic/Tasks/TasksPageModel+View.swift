@@ -6,8 +6,16 @@ import SwiftUI
 /// manual order is never changed by a sort: choosing Manual Order again
 /// shows it as it was.
 struct TasksViewOptions: Equatable, Codable, Sendable {
+    /// The Date group ("Show" until 13 Nov): Any Date, Due or Overdue,
+    /// Overdue Only.
     enum Show: String, Codable, CaseIterable, Sendable {
         case all, dueOrOverdue, overdueOnly
+    }
+
+    /// The Status group (Accepted 2026-11-13, 3A), on Now only: Any Status,
+    /// In Progress, To Do. It combines with the date and the priority.
+    enum Status: String, Codable, CaseIterable, Sendable {
+        case any, inProgress, toDo
     }
 
     enum Priority: String, Codable, CaseIterable, Sendable {
@@ -18,18 +26,47 @@ struct TasksViewOptions: Equatable, Codable, Sendable {
         case manual, dueDate, priority
     }
 
+    var status = Status.any
     var show = Show.all
     var priority = Priority.any
     var sort = Sort.manual
 
+    init(status: Status = .any, show: Show = .all, priority: Priority = .any, sort: Sort = .manual) {
+        self.status = status
+        self.show = show
+        self.priority = priority
+        self.sort = sort
+    }
+
+    private enum CodingKeys: String, CodingKey { case status, show, priority, sort }
+
+    /// A view saved before a group existed reads that group as its default
+    /// (views remembered before 13 Nov have no status).
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        status = try values.decodeIfPresent(Status.self, forKey: .status) ?? .any
+        show = try values.decodeIfPresent(Show.self, forKey: .show) ?? .all
+        priority = try values.decodeIfPresent(Priority.self, forKey: .priority) ?? .any
+        sort = try values.decodeIfPresent(Sort.self, forKey: .sort) ?? .manual
+    }
+
     /// Something is hidden: the button's dot and the "Show All" line.
-    var filters: Bool { show != .all || priority != .any }
+    var filters: Bool { status != .any || show != .all || priority != .any }
     var isDefault: Bool { self == TasksViewOptions() }
+
+    /// The view with its filters gone and its order kept (Show All, Clear
+    /// Filters).
+    var unfiltered: TasksViewOptions { TasksViewOptions(sort: sort) }
 
     /// Whether an open task is shown. Finished tasks (Now's "Completed
     /// today") are never filtered: the view is about what is left to do.
     func includes(_ task: TaskItem, today: DueDay) -> Bool {
         guard task.status != .done else { return true }
+        switch status {
+        case .any: break
+        case .inProgress: guard task.status == .inProgress else { return false }
+        case .toDo: guard task.status == .todo else { return false }
+        }
         switch show {
         case .all: break
         case .dueOrOverdue: guard task.dueDay != nil else { return false }
@@ -70,9 +107,23 @@ struct TasksViewOptions: Equatable, Codable, Sendable {
     /// The quiet line under the tabs while something is filtered ("Due or
     /// overdue · by due date"), and what VoiceOver hears.
     var summary: String {
+        var parts = filterWords
+        if parts.isEmpty { parts.append(String(localized: "All tasks")) }
+        if let order = orderWords { parts.append(order) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Each filter that is on, in the menu's order ("In progress", "Due or
+    /// overdue", "High priority only").
+    var filterWords: [String] {
         var parts: [String] = []
+        switch status {
+        case .any: break
+        case .inProgress: parts.append(String(localized: "In progress"))
+        case .toDo: parts.append(String(localized: "To do"))
+        }
         switch show {
-        case .all: if priority == .any { parts.append(String(localized: "All tasks")) }
+        case .all: break
         case .dueOrOverdue: parts.append(String(localized: "Due or overdue"))
         case .overdueOnly: parts.append(String(localized: "Overdue only"))
         }
@@ -81,12 +132,16 @@ struct TasksViewOptions: Equatable, Codable, Sendable {
         case .mediumAndHigh: parts.append(String(localized: "Medium and high priority"))
         case .highOnly: parts.append(String(localized: "High priority only"))
         }
+        return parts
+    }
+
+    /// The order, when it is not the manual one ("by due date").
+    var orderWords: String? {
         switch sort {
-        case .manual: break
-        case .dueDate: parts.append(String(localized: "by due date"))
-        case .priority: parts.append(String(localized: "by priority"))
+        case .manual: nil
+        case .dueDate: String(localized: "by due date")
+        case .priority: String(localized: "by priority")
         }
-        return parts.joined(separator: " · ")
     }
 
     /// The View Options button's VoiceOver value ("All tasks, manual
@@ -113,7 +168,11 @@ extension TaskPriority {
 extension TasksPageModel {
     /// The page's view (Now and Later; Done's is always the default).
     func viewOptions(for tab: TasksTab) -> TasksViewOptions {
-        tab == .done ? TasksViewOptions() : (viewOptionsByTab[tab] ?? TasksViewOptions())
+        guard tab != .done else { return TasksViewOptions() }
+        var options = viewOptionsByTab[tab] ?? TasksViewOptions()
+        // Status is on Now only: Backlog holds only backlog tasks.
+        if tab == .backlog { options.status = .any }
+        return options
     }
 
     /// A choice in View Options (or Show All, Reset View): only that page
@@ -139,21 +198,69 @@ extension TasksPageModel {
     }
 
     func setViewOptions(_ options: TasksViewOptions, for tab: TasksTab) {
+        var options = options
+        if tab == .backlog { options.status = .any }
         guard tab != .done, options != viewOptions(for: tab) else { return }
         viewOptionsByTab[tab] = options.isDefault ? nil : options
         memory?.saveViewOptions(viewOptionsByTab)
         pruneInvisibleSelection(on: tab)
-        AccessibilityNotification.Announcement(options.filters || options.sort != .manual
-            ? String(localized: "Showing \(options.spokenValue)")
-            : String(localized: "Showing all tasks")).post()
+        announceView(on: tab)
     }
 
-    /// "Show All": the filters go, the order stays.
+    /// What VoiceOver hears after the view changed: "Showing in-progress
+    /// tasks in work or home" (the drawing's line), or "Showing all tasks".
+    func announceView(on tab: TasksTab) {
+        AccessibilityNotification.Announcement(spokenView(on: tab)).post()
+    }
+
+    func spokenView(on tab: TasksTab) -> String {
+        let options = viewOptions(for: tab), picks = tagPicks(on: tab)
+        guard options.filters || options.sort != .manual || !picks.isEmpty else { return String(localized: "Showing all tasks") }
+        var words: String
+        switch options.status {
+        case .any: words = String(localized: "tasks")
+        case .inProgress: words = String(localized: "in-progress tasks")
+        case .toDo: words = String(localized: "to-do tasks")
+        }
+        if !picks.isEmpty { words += " " + String(localized: "in \(picks.spokenPhrase)") }
+        var rest = options.filterWords
+        if options.status != .any { rest.removeFirst() }
+        if let order = options.orderWords { rest.append(order) }
+        let detail = ([words] + rest.map { $0.lowercased() }).joined(separator: ", ")
+        return String(localized: "Showing \(detail)")
+    }
+
+    /// "Show All" and Clear Filters: the filters and the picked tags go,
+    /// the order stays.
     func showAll(on tab: TasksTab) {
-        var options = viewOptions(for: tab)
-        options.show = .all
-        options.priority = .any
-        setViewOptions(options, for: tab)
+        let options = viewOptions(for: tab).unfiltered
+        if !tagPicks.isEmpty { tagPicks = .none }
+        if options != viewOptions(for: tab) {
+            setViewOptions(options, for: tab)
+        } else {
+            pruneInvisibleSelection(on: tab)
+            announceView(on: tab)
+        }
+    }
+
+    /// Reset View (•••): everything back, the order and the tags too.
+    func resetView(on tab: TasksTab) {
+        if !tagPicks.isEmpty { tagPicks = .none }
+        if tab != .done, !viewOptions(for: tab).isDefault {
+            setViewOptions(TasksViewOptions(), for: tab)
+        } else {
+            announceView(on: tab)
+        }
+    }
+
+    /// Done's view line: tags picked and no search (the search has its count).
+    var showsDoneViewLine: Bool {
+        !tagPicks.isEmpty && doneSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Whether anything filters the page (the view line, ••• dot).
+    func filtered(on tab: TasksTab) -> Bool {
+        viewOptions(for: tab).filters || !tagPicks(on: tab).isEmpty
     }
 
     /// Drag, ⌘↑ ⌘↓ and Move Up/Down work only in Manual Order: a sorted
@@ -165,15 +272,15 @@ extension TasksPageModel {
     /// Whether the page shows fewer tasks than it has (a filter or a Find):
     /// a reorder then moves among what is shown (`moveVisible`).
     func narrows(_ tab: TasksTab) -> Bool {
-        viewOptions(for: tab).filters || !searchQuery(for: tab).isEmpty || tagFilter(on: tab) != nil
+        viewOptions(for: tab).filters || !searchQuery(for: tab).isEmpty || !tagPicks(on: tab).isEmpty
     }
 
     // MARK: Tag chips (owner, 2026-10-28)
 
-    /// The tag chip filtering `tab`: one for every tab, Done included (T6,
+    /// The tags filtering `tab`: the same for every tab, Done included (T6,
     /// Accepted 2026-11-01, which removed Done's exception).
-    func tagFilter(on tab: TasksTab) -> String? {
-        tagFilter
+    func tagPicks(on tab: TasksTab) -> TagPicks {
+        tagPicks
     }
 
     /// The chips after All: the tags on the tasks that exist (Now's,
@@ -200,20 +307,31 @@ extension TasksPageModel {
         return tags
     }
 
-    /// A click on a chip: a tag shows only its tasks; the chosen tag again,
-    /// or All (nil), clears it. Rows it hides leave the selection.
+    /// A click on a pill (Accepted 2026-11-13, 2B): a tag joins the pick or
+    /// leaves it; All (nil) clears it. Rows it hides leave the selection.
     func chooseTagChip(_ tag: String?) {
-        let next = TasksPanelDesign.tagFilter(choosing: tag, current: tagFilter)
-        guard next != tagFilter else { return }
-        tagFilter = next
-        pruneInvisibleSelection(on: tab)
+        setTagPicks(tagPicks.toggling(tag))
     }
 
-    /// The chosen tag left every task (deleted, removed, or renamed and then
-    /// undone): the filter clears, so the list never waits on a tag that
-    /// no longer exists.
-    func pruneTagFilter() {
-        if let tag = tagFilter, !tagChips().contains(tag) { tagFilter = nil }
+    /// The Any · All switch, shown with two or more tags picked.
+    func setTagMatch(_ match: TagPicks.Match) {
+        setTagPicks(tagPicks.matching(match))
+    }
+
+    func setTagPicks(_ picks: TagPicks) {
+        guard picks != tagPicks else { return }
+        tagPicks = picks
+        pruneInvisibleSelection(on: tab)
+        announceView(on: tab)
+    }
+
+    /// A picked tag that left every task (deleted, removed, or renamed and
+    /// then undone) drops out of the pick, one by one; with none left the
+    /// filter ends, so the list never waits on a tag that no longer exists.
+    func pruneTagPicks() {
+        guard !tagPicks.isEmpty else { return }
+        let kept = tagPicks.keeping(tagChips())
+        if kept != tagPicks { tagPicks = kept }
     }
 
     // MARK: Find
@@ -262,10 +380,10 @@ extension TasksPageModel {
     func searchMatchesElsewhere(from tab: TasksTab) -> [TasksElsewhereCount] {
         let query = trimmedQuery(for: tab)
         guard !query.isEmpty else { return [] }
-        let key = TasksElsewhereKey(revision: store.revision, query: query, tag: tagFilter, from: tab)
+        let key = TasksElsewhereKey(revision: store.revision, query: query, tag: tagPicks, from: tab)
         if let cache = elsewhereCountsCache, cache.key == key { return cache.counts }
-        let tag = tagFilter
-        let tagged: (TaskItem) -> Bool = { task in tag.map(task.tags.contains) ?? true }
+        let tag = tagPicks
+        let tagged: (TaskItem) -> Bool = { task in tag.matches(task.tags) }
         var counts: [TasksElsewhereCount] = []
         for other in TasksTab.allCases where other != tab {
             let count: Int
@@ -277,7 +395,7 @@ extension TasksPageModel {
                 }
             case .done:
                 count = store.doneTodayTasks().filter { tagged($0) && store.matchesItemSearch($0, query: query) }.count
-                    + store.indexedDoneLogCount(matching: query, tag: tag)
+                    + store.indexedDoneLogCount(matching: query, tags: tag)
             }
             if count > 0 { counts.append(TasksElsewhereCount(tab: other, count: count)) }
         }
@@ -389,7 +507,7 @@ struct TasksElsewhereCount: Equatable {
 struct TasksElsewhereKey: Equatable {
     let revision: UInt64
     let query: String
-    let tag: String?
+    let tag: TagPicks
     let from: TasksTab
 }
 
@@ -405,4 +523,11 @@ extension TasksPageModel {
             return (id, view.convert(frame, to: nil))
         }
     }
+}
+
+/// A filtered view, as far as "stays until the view changes" goes: its
+/// filters, its order and its tags (`TasksPageModel.buildRows`).
+struct TasksStayKey: Equatable {
+    let view: TasksViewOptions
+    let picks: TagPicks
 }

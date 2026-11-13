@@ -467,13 +467,13 @@ final class PhaseXHunt1bTests: XCTestCase {
         let id = try create(store, title: "Old title", body: "First\nSecond", tags: ["work"])
         let other = try create(store, title: "Other", body: "Second", tags: ["home"])
         let library = NotesLibraryModel(search: { try await store.searchNoteIDs(matching: $0) }, store: store)
-        library.tagFilter = "work"; library.query = "#work"
+        library.tagPicks = TagPicks(["work"]); library.query = "#work"
         await library.waitForSearch(); XCTAssertEqual(rows(library, store).map(\.id), [id])
         let current = try XCTUnwrap(store.note(withID: id))
         _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Renamed"), .text("Second"), .text("First")]),
                                    baseRevisionID: current.revisionID, tags: ["home"]).get()
         await library.waitForSearch(); XCTAssertTrue(rows(library, store).isEmpty)
-        library.tagFilter = nil; library.query = "Renamed"
+        library.tagPicks = .none; library.query = "Renamed"
         await library.waitForSearch(); XCTAssertEqual(rows(library, store).map(\.id), [id])
         let renamedRow = try XCTUnwrap(rows(library, store).first)
         XCTAssertEqual(renamedRow.preview, "Title: Renamed", "Accepted 2026-11-05: title matches explain the result")
@@ -599,7 +599,7 @@ final class PhaseXHunt1bTests: XCTestCase {
             expected[id] = value
             let filter: String? = [nil, "alpha", "beta"][next(3)]
             let query = ["", "needle", "Renamed", "alpha", "no-match"][next(5)]
-            library.tagFilter = filter; library.query = query
+            library.tagPicks = TagPicks(filter.map { [$0] } ?? []); library.query = query
             if !query.isEmpty { library.retry() }
             await library.waitForSearch()
             let wanted = Set(expected.compactMap { id, row -> UUID? in

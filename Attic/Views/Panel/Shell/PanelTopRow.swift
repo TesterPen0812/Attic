@@ -523,6 +523,8 @@ struct PanelTopRowSearchButton: View {
 struct PanelTopRowMoreButton: View {
     var shared = false
     let page: PanelPage
+    /// A filter is on: the dot (13 Nov).
+    var filtered = false
     let commands: () -> [AtticMenuCommand]
 
     @Environment(\.atticDesign) private var design
@@ -544,8 +546,12 @@ struct PanelTopRowMoreButton: View {
                 AtticNativeMenu.popUp(commands(), in: view)
             }
             .atticDesignCorners()
+            .overlay(alignment: .topTrailing) {
+                if filtered { AtticMenuButtonDot().allowsHitTesting(false) }
+            }
             .background(AtticMenuAnchor(holder: anchor).allowsHitTesting(false).accessibilityHidden(true))
             .accessibilityHint(String(localized: "Opens a menu"))
+            .accessibilityValue(filtered ? String(localized: "Filters on") : "")
             .accessibilityIdentifier("panel-more-button")
         }
     }

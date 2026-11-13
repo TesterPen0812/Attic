@@ -108,6 +108,10 @@ enum AtticTaskShortcut {
     static let priorityMedium = KeyboardShortcut("2", modifiers: [.command, .option])
     static let priorityHigh = KeyboardShortcut("3", modifiers: [.command, .option])
     static let priorities = [priorityNone, priorityLow, priorityMedium, priorityHigh]
+    /// ⌥⌘T opens the tag bar on its first tag, and closes it (Accepted
+    /// 2026-11-13, "Tag bar collapsed, several tags, status filters"), on
+    /// Tasks and in Notes' All notes (`PanelTagBarKeys`).
+    static let tagBar = KeyboardShortcut("t", modifiers: [.command, .option])
 
     /// The number row's key codes (ANSI), 0 to 9.
     private static let digitKeyCodes: [Int: UInt16] = [0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25]

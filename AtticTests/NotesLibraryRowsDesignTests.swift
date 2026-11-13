@@ -44,10 +44,10 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
     // MARK: Line two
 
     func testTheRowShowsTheFirstTagSkippingTheFilteredOne() throws {
-        XCTAssertEqual(NotesLibraryModel.firstTag(["launch", "work"], filter: nil), "launch")
-        XCTAssertEqual(NotesLibraryModel.firstTag(["launch", "work"], filter: "launch"), "work")
-        XCTAssertNil(NotesLibraryModel.firstTag(["launch"], filter: "launch"))
-        XCTAssertNil(NotesLibraryModel.firstTag([], filter: nil))
+        XCTAssertEqual(NotesLibraryModel.firstTag(["launch", "work"], filter: .none), "launch")
+        XCTAssertEqual(NotesLibraryModel.firstTag(["launch", "work"], filter: TagPicks(["launch"])), "work")
+        XCTAssertNil(NotesLibraryModel.firstTag(["launch"], filter: TagPicks(["launch"])))
+        XCTAssertNil(NotesLibraryModel.firstTag([], filter: .none))
 
         let id = try create("Launch plan", "Kyoto offsite agenda", tags: ["launch", "work"])
         let model = library()
@@ -56,7 +56,7 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
         XCTAssertEqual(details.tag, "launch")
         XCTAssertEqual(details.row.preview, "Kyoto offsite agenda")
         XCTAssertEqual(details.thumbnail, NoteThumbnailContent(title: "Launch plan", text: "Kyoto offsite agenda", hasImages: false))
-        model.tagFilter = "launch"
+        model.tagPicks = TagPicks(["launch"])
         details = model.libraryRow(row, store: store)
         XCTAssertEqual(details.tag, "work")
     }
@@ -102,7 +102,7 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
     private func rowCommands(_ id: UUID, controller: NotesPageController, tasks: TaskStore? = nil,
                              delete: @escaping (UUID) -> Void) -> [AtticMenuCommand] {
         NotesEditorPage.libraryRowCommands(id, noteStore: store, controller: controller, taskStore: tasks,
-            activeTag: nil, hue: { _ in nil }, filter: { _ in }, open: { _ in }, delete: delete)
+            picked: .none, hue: { _ in nil }, filter: { _ in }, open: { _ in }, delete: delete)
     }
 
     func testOrdinaryNoteHoverMenuUsesRealLibraryCommands() async throws {

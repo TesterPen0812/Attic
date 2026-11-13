@@ -168,13 +168,23 @@ final class IslandTopRowRefineTests: XCTestCase {
                        "\(change.frames.map(\.start))")
     }
 
-    private final class TagHolder: ObservableObject { @Published var tag: String? }
+    @MainActor
+    private final class TagHolder: ObservableObject {
+        @Published var tag: String?
+        /// The bar open (collapsed by default since 13 Nov).
+        let bar: PanelTagBarState = {
+            let bar = PanelTagBarState()
+            bar.open()
+            return bar
+        }()
+    }
 
     private struct TagsHost: View {
         @ObservedObject var holder: TagHolder
 
         var body: some View {
-            NotesTagBar(tags: ["aaaa", "bbbb", "cccc", "dddd"], selection: holder.tag, onSelect: { holder.tag = $0 })
+            NotesTagBar(tags: ["aaaa", "bbbb", "cccc", "dddd"], picks: TagPicks(holder.tag.map { [$0] } ?? []),
+                        state: holder.bar, onSelect: { holder.tag = $0 })
         }
     }
 

@@ -2793,7 +2793,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var doneSearchEntries: [DoneSearchEntry] = []
-    private var doneSearchMatches: (query: String, tag: String?, locale: String, ids: [UUID])?
+    private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         indexItemTasks(winners, replacing: ids)
@@ -2817,27 +2817,28 @@ final class TaskStore: ObservableObject {
         doneSearchMatches = nil
     }
 
-    private func doneSearchIDs(matching query: String, tag: String? = nil) -> [UUID] {
+    private func doneSearchIDs(matching query: String, tags: TagPicks = .none) -> [UUID] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let locale = Locale.current.identifier
-        if let cached = doneSearchMatches, cached.query == query, cached.tag == tag, cached.locale == locale { return cached.ids }
+        if let cached = doneSearchMatches, cached.query == query, cached.tags == tags, cached.locale == locale { return cached.ids }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
         let ids = doneSearchEntries.compactMap { entry -> UUID? in
-            if let tag, !entry.tags.contains(tag) { return nil }
+            if !tags.matches(entry.tags) { return nil }
             return query.isEmpty || entry.title.localizedStandardContains(query) || additionalItemMatch(entry.id, query: query) ? entry.id : nil
         }
-        doneSearchMatches = (query, tag, locale, ids)
+        doneSearchMatches = (query, tags, locale, ids)
         return ids
     }
 
-    func indexedDoneLogOffset(of id: UUID, matching query: String, tag: String? = nil) -> Int? {
-        doneSearchIDs(matching: query, tag: tag).firstIndex(of: id)
+    func indexedDoneLogOffset(of id: UUID, matching query: String, tags: TagPicks = .none) -> Int? {
+        doneSearchIDs(matching: query, tags: tags).firstIndex(of: id)
     }
 
-    func indexedDoneLogCount(matching query: String = "", tag: String? = nil) -> Int {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tag == nil
-            ? doneSearchEntries.count : doneSearchIDs(matching: query, tag: tag).count
+    /// `tags`: the tag bar's picks (several since 13 Nov, Any or All).
+    func indexedDoneLogCount(matching query: String = "", tags: TagPicks = .none) -> Int {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tags.isEmpty
+            ? doneSearchEntries.count : doneSearchIDs(matching: query, tags: tags).count
     }
 
     /// Every tag on a task in the Done log, from the index (no read).
@@ -2851,9 +2852,9 @@ final class TaskStore: ObservableObject {
     /// page is hydrated; no SQL string predicate or full-log count on typing.
     /// The raw physical cursor above remains available to command clients.
     func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
-                            matching query: String = "", tag: String? = nil) -> DoneLogPage {
+                            matching query: String = "", tags: TagPicks = .none) -> DoneLogPage {
         donePageReadCount += 1
-        let ids = doneSearchIDs(matching: query, tag: tag)
+        let ids = doneSearchIDs(matching: query, tags: tags)
         let start = min(cursor.rowOffset, ids.count)
         let end = min(start + max(0, limit), ids.count)
         let pageIDs = Array(ids[start..<end])

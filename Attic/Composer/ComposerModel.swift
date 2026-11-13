@@ -30,6 +30,11 @@ enum ComposerPage: Equatable {
     case calendar(selected: DueDay)
     case notes
 
+    /// The Tasks tab the card opened on, if it opened on Tasks.
+    var tasksTab: TasksTab? {
+        if case let .tasks(tab) = self { tab } else { nil }
+    }
+
     /// Events only on the Calendar page (Accepted 2026-10-30): Task · Note
     /// on Tasks, Task · Event · Note on Calendar.
     var kinds: [ComposerKind] {
@@ -196,6 +201,13 @@ final class ComposerModel: ObservableObject {
     var canCreate: Bool { !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
 
     // MARK: Opening and closing
+
+    /// An empty draft starts with `tags` (a filtered page's picked tags),
+    /// so what is made there stays in view.
+    func startTags(_ tags: [String]) {
+        guard !tags.isEmpty, tasks.addBar == TaskAddBarText(), writing.isEmpty else { return }
+        tasks.addBar.picked.tags = tags
+    }
 
     /// "+" opens on the page's own kind unless a note draft was kept; ⇧⌘N
     /// asks for Note. A kept event draft is a task outside Calendar.
@@ -470,6 +482,8 @@ final class ComposerModel: ObservableObject {
         AtticSounds.play(made ? .created : .failed)
         guard made else { return false }
         clearDraft()
+        // The next task starts with the picked tags too (13 Nov).
+        if kind == .task, case .tasks = page { tasks.startDraftFromFilter() }
         saveKeptDraft()
         if openingPage {
             isOpen = false
@@ -486,10 +500,14 @@ final class ComposerModel: ObservableObject {
         let day = finished.parts(parser: tasks.parser).dueDay
         // Later makes an undated put-off task; Done (and a dated task from
         // Later) creates in Now.
-        let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog : .todo
+        // In Progress while Now shows only that (13 Nov), so the task
+        // doesn't vanish as you make it.
+        let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog
+            : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
         guard let draft = finished.draft(parser: tasks.parser, status: status),
               let task = tasks.library.createTask(draft, writing: writing, in: page.history) else { return false }
         tasks.attachComposerFiles(to: task.id)
+        if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
         if openingPage {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {

@@ -217,6 +217,7 @@ shared_mobile_sources = [
   'Models/DueDay.swift',
   'Models/ItemLink.swift',
   'Models/TaskItem.swift',
+  'Models/TagPicks.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
   'Services/CanvasStore.swift',

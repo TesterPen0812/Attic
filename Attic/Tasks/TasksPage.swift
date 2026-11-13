@@ -35,6 +35,9 @@ struct TasksPage: View {
     @Environment(\.atticTagColouring) private var tagColouring
     /// In the panel, "+" opens the shell's card instead of the add bar.
     @Environment(\.panelComposer) private var panelComposer
+    /// The shell's shared controls; its tag bar is a stop in the Tab order.
+    @Environment(\.panelSharedChrome) private var sharedChrome
+    private var tagBarState: PanelTagBarState? { sharedChrome?.tagBar }
     @Environment(\.panelPageTransit) private var panelPageTransit
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
@@ -547,6 +550,10 @@ struct TasksPage: View {
             // after the press, when the current event may have moved on).
             pointer.menuBegan(with: (note.userInfo?[AtticGlassMenu.openerKey] as? NSEvent) ?? NSApp.currentEvent)
         }
+        // ••• wears its dot while a filter is on, the tags too (13 Nov).
+        .onChange(of: model.tab == .done ? !model.tagPicks.isEmpty : model.filtered(on: model.tab), initial: true) { _, filtered in
+            sharedChrome?.setFiltered(filtered, for: .tasks)
+        }
         .onChange(of: model.tab) { _, _ in
             IdleLatencyTrace.point("task_tab_observed")
             cancelTransientState()
@@ -722,6 +729,7 @@ struct TasksPage: View {
     private func rowPlace(_ id: UUID, in tab: TasksTab) -> (top: CGFloat, height: CGFloat)? {
         var top: CGFloat = 0
         if tab == .done {
+            if model.showsDoneViewLine { top += AtticLayout.rowPitch }
             for day in model.doneDays() {
                 top += TasksDesignMetrics.groupHeaderHeight
                 for row in day.rows {
@@ -733,7 +741,7 @@ struct TasksPage: View {
             return nil
         }
         let sections = model.sections(for: tab)
-        if model.viewOptions(for: tab).filters, model.trimmedQuery(for: tab).isEmpty { top += AtticLayout.rowPitch }
+        if model.filtered(on: tab), model.trimmedQuery(for: tab).isEmpty { top += AtticLayout.rowPitch }
         // Each date group's header, then its rows (none while folded).
         for group in sections.groups {
             if group.showsHeader { top += TasksDesignMetrics.groupHeaderHeight }
@@ -886,11 +894,7 @@ struct TasksPage: View {
     private func clearFilters(on tab: TasksTab) {
         model.setSearchQuery("", for: tab)
         searchFocused = false
-        model.chooseTagChip(nil)
-        var view = model.viewOptions(for: tab)
-        view.show = .all
-        view.priority = .any
-        model.setViewOptions(view, for: tab)
+        model.showAll(on: tab)
     }
 
     /// A date group's (or a Done day's) header was clicked: its body closes
@@ -953,8 +957,21 @@ struct TasksPage: View {
                 model.setViewOptions(next, for: tab)
             }
         }
-        var list: [AtticMenuCommand] = [.header(String(localized: "Show"))]
-        let shows: [(TasksViewOptions.Show, String)] = [(.all, String(localized: "All Tasks")),
+        var list: [AtticMenuCommand] = []
+        // Status (Accepted 2026-11-13, 3A), on Now only: Backlog holds only
+        // backlog tasks. One pick per group; the groups combine.
+        if tab == .now {
+            list.append(.header(String(localized: "Status")))
+            let statuses: [(TasksViewOptions.Status, String)] = [(.any, String(localized: "Any Status")),
+                                                                 (.inProgress, String(localized: "In Progress")),
+                                                                 (.toDo, String(localized: "To Do"))]
+            list += statuses.map { status, title in
+                AtticMenuCommand(verbatim: title, state: view.status == status ? .on : .off, action: set { $0.status = status })
+            }
+        }
+        // "Show" became Date (13 Nov).
+        list.append(.header(String(localized: "Date")))
+        let shows: [(TasksViewOptions.Show, String)] = [(.all, String(localized: "Any Date")),
                                                         (.dueOrOverdue, String(localized: "Due or Overdue")),
                                                         (.overdueOnly, String(localized: "Overdue Only"))]
         list += shows.map { show, title in
@@ -963,7 +980,7 @@ struct TasksPage: View {
         let priorities: [(TasksViewOptions.Priority, String)] = [(.any, String(localized: "Any Priority")),
                                                                  (.mediumAndHigh, String(localized: "Medium and High")),
                                                                  (.highOnly, String(localized: "High Only"))]
-        // Show, Priority and Sort By each under a header; choices carry no
+        // Status, Date, Priority and Sort By each under a header; choices carry no
         // icon (Dropdown content: answers, owner, 2026-10-24, sheet 5).
         list.append(.header(String(localized: "Priority")))
         list += priorities.map { entry in
@@ -976,8 +993,10 @@ struct TasksPage: View {
         list += sorts.map { sort, title in
             AtticMenuCommand(verbatim: title, state: view.sort == sort ? .on : .off, action: set { $0.sort = sort })
         }
-        list.append(AtticMenuCommand(verbatim: String(localized: "Reset View"), isDisabled: view.isDefault, startsSection: true) {
-            [model] in model.setViewOptions(TasksViewOptions(), for: tab)
+        // Reset View puts back everything, the picked tags too (13 Nov).
+        list.append(AtticMenuCommand(verbatim: String(localized: "Reset View"),
+                                     isDisabled: view.isDefault && model.tagPicks(on: tab).isEmpty, startsSection: true) {
+            [model] in model.resetView(on: tab)
         })
         return list
     }
@@ -1116,7 +1135,9 @@ struct TasksPage: View {
         let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
         return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
                                    strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled,
-                                   plus: panelComposer != nil)
+                                   plus: panelComposer != nil,
+                                   tagKey: panelComposer != nil && !model.tagChips().isEmpty && !selectionBarShown,
+                                   tagMatch: tagBarState?.isOpen == true && model.tagPicks(on: tab).showsMatch)
     }
 
     /// Where the keyboard is among `stops`, if it is on one.
@@ -1124,6 +1145,10 @@ struct TasksPage: View {
         if searchFocused { return .find }
         if addBarFocused { return .addBar }
         if focusRequests.current?.base is PanelPlusFocusID { return .plus }
+        if focusRequests.current?.base is PanelTagKeyFocusID {
+            if case .match = tagBarState?.cursor, stops.contains(.tagMatch) { return .tagMatch }
+            return .tagKey
+        }
         if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
         if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
         if let id = focusedID { return .row(id) }
@@ -1172,7 +1197,20 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
+            tagBarState?.setCursor(nil)
             tabTarget.queueControlFocus(PanelPlusFocusID(), for: stop, in: tab, model: model, requests: focusRequests)
+        case .tagKey, .tagMatch:
+            // "#" before "+", then the Any · All switch while it shows
+            // (Accepted 2026-11-13, keyboard).
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            if stop == .tagMatch {
+                tagBarState?.setCursor(.match(model.tagPicks(on: tab).match))
+            } else if case .match = tagBarState?.cursor {
+                tagBarState?.setCursor(nil)
+            }
+            tabTarget.queueControlFocus(PanelTagKeyFocusID(), for: stop, in: tab, model: model, requests: focusRequests)
         }
     }
 
@@ -1210,7 +1248,9 @@ struct TasksPage: View {
               model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
               !AtticTextInput.hasKeyboard, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
               model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
-              !addBarFocused, !searchFocused, metaPopover == nil else { return false }
+              !addBarFocused, !searchFocused, metaPopover == nil,
+              // An open tag bar takes Esc first (it closes).
+              !PanelTagBarState.ownsEscape else { return false }
         let visible = visibleIDs()
         return handleEscape(visible: visible, current: keyboardRow(visible: visible))
     }
@@ -1564,8 +1604,14 @@ struct TasksPage: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     // An active filter never hides silently (item 6): what
                     // is shown, and Show All.
-                    if view.filters, query.isEmpty {
-                        AtticViewLine(summary: view.summary, actionTitle: String(localized: "Show All")) {
+                    if query.isEmpty, model.filtered(on: tab) {
+                        // Every filter, the tags too, and how many are
+                        // hidden; Show All clears them and keeps the order
+                        // (Accepted 2026-11-13).
+                        let parts = TasksPanelDesign.viewLine(view: view, picks: model.tagPicks(on: tab),
+                                                              hidden: model.filterHiddenCount(for: tab))
+                        AtticViewLine(summary: parts.map(\.plain).joined(), parts: parts,
+                                      actionTitle: String(localized: "Show All")) {
                             model.showAll(on: tab)
                         }
                         .accessibilityIdentifier("tasks-view-line")
@@ -1630,7 +1676,7 @@ struct TasksPage: View {
                             .padding(.leading, TasksDesignMetrics.textX)
                     } else if sections.open.isEmpty, sections.groups.isEmpty {
                         // The owner's panel design's empty states.
-                        let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters, tag: model.tagFilter(on: tab))
+                        let empty = TasksPanelDesign.empty(tab: tab, query: query, view: view, picks: model.tagPicks(on: tab))
                         TasksEmptyState(empty: empty, clear: { clearFilters(on: tab) },
                                         action: tab == .now && model.offersLater && !empty.canClear
                                             ? (String(localized: "Choose from Backlog"), { model.select(tab: .backlog) }) : nil,
@@ -3364,12 +3410,16 @@ struct TasksPage: View {
             // selected (T2, Accepted 2026-11-01): the selection bar takes
             // the tag bar's place instead of stacking over it.
             TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
-                           tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
+                           tags: model.tagChips(), tagPicks: model.tagPicks(on: model.tab),
                            onSelectTag: {
                                IdleLatencyTrace.controlDispatched(.tagFilter)
                                model.chooseTagChip($0)
-                           }, onPlus: {
+                           }, onTagMatch: { model.setTagMatch($0) }, onPlus: {
                                IdleLatencyTrace.controlDispatched(.addBarFocus)
+                               // A new task starts with the picked tags (and
+                               // In Progress while that filter is on), so it
+                               // doesn't vanish as you make it (13 Nov).
+                               model.startDraftFromFilter()
                                if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
                            }, selectionBar: selectionBarShown ? AnyView(selectionBar) : nil) {
                 addBar
@@ -3486,12 +3536,19 @@ struct TasksPage: View {
                 ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } })
                 : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Backlog", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
-        ], summary: selectionSummary(ids), inBar: true, filterTag: model.tagFilter(on: model.tab).map { tag in
-            (TasksPanelDesign.tagChipTitle(tag),
-             TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: tagColouring.hue(for: tag)),
-                                                                dark: design.mode == .dark).text, tokens: design.tokens).color)
-        })
+        ], summary: selectionSummary(ids), inBar: true, filterTag: selectionFilterTag())
         .accessibilityIdentifier("tasks-selection-bar")
+    }
+
+    /// "in #work" after the selection's count: the picked tag in its colour;
+    /// several picked read "in #work or #home" in the bar's grey.
+    private func selectionFilterTag() -> (title: String, color: Color)? {
+        let picks = model.tagPicks(on: model.tab)
+        guard let tag = picks.tags.first else { return nil }
+        guard picks.count == 1 else { return (picks.phrase, design.tokens.color(.helper)) }
+        return (TasksPanelDesign.tagChipTitle(tag),
+                TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: tagColouring.hue(for: tag)),
+                                                                   dark: design.mode == .dark).text, tokens: design.tokens).color)
     }
 
     /// The selection bar's Date or Tags picker, while open (round 10).
@@ -5397,6 +5454,10 @@ enum TasksTabStop: Hashable {
     case strip(AtticStripFocusID)
     /// In the panel: the shared bar's "+" (the card replaces the add bar).
     case plus
+    /// The tag bar's "#" (or its picked tags), before "+" (13 Nov).
+    case tagKey
+    /// The open tag bar's Any · All switch, while it shows.
+    case tagMatch
 }
 
 /// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
@@ -5408,13 +5469,19 @@ enum TasksTabStop: Hashable {
 /// the last stop goes round to the first: never to an unseen stop.
 enum TasksTabOrder {
     static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool,
-                      plus: Bool = false) -> [TasksTabStop] {
+                      plus: Bool = false, tagKey: Bool = false, tagMatch: Bool = false) -> [TasksTabStop] {
         var stops: [TasksTabStop] = find ? [.find] : []
         for row in rows {
             stops.append(.row(row.id))
             stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
         }
         if plus {
+            // The bottom bar, left to right: "#" (and the open bar's
+            // Any · All), then "+".
+            if tagKey {
+                stops.append(.tagKey)
+                if tagMatch { stops.append(.tagMatch) }
+            }
             stops.append(.plus)
             return stops
         }

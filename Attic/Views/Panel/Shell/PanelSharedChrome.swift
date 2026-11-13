@@ -25,6 +25,10 @@ final class PanelSharedChrome: ObservableObject {
     /// middle (the tag pills, Today) and "+" fade out under it as it opens
     /// and come back as it folds.
     @Published var plusHandedOver = false
+    /// The shared tag bar's open state (one bar, the current page's). It
+    /// starts collapsed each time the panel opens and on each page
+    /// (Accepted 2026-11-13, 1A).
+    let tagBar = PanelTagBarState()
 
     /// What the controls do, per page. Not observable: only a click reads them.
     private var barActions: [PanelPage: PanelBottomBarActions] = [:]
@@ -79,6 +83,12 @@ final class PanelSharedChrome: ObservableObject {
 
     func search(on page: PanelPage) { searchActions[page]?() }
 
+    func setFiltered(_ filtered: Bool, for page: PanelPage) {
+        var look = topRows[page] ?? .placeholder(for: page)
+        look.filtered = filtered
+        if topRows[page] != look { topRows[page] = look }
+    }
+
     /// What ••• offers on `page`, built when it opens.
     func setMore(_ commands: @escaping () -> [AtticMenuCommand], for page: PanelPage) {
         moreCommands[page] = commands
@@ -104,9 +114,10 @@ final class PanelSharedChrome: ObservableObject {
 struct PanelBottomBarLook: Equatable {
     enum Middle: Equatable {
         case none
-        /// The tag bar card: All and the tags; `shown` false fades it out
-        /// in place, where Tasks' selection bar takes its turn (T2).
-        case tags(tags: [String], selection: String?, idPrefix: String, shown: Bool)
+        /// The tag bar card: "#", and open All and the tags; `shown` false
+        /// fades it out in place, where Tasks' selection bar takes its turn
+        /// (T2), and closes it.
+        case tags(tags: [String], picks: TagPicks, idPrefix: String, shown: Bool)
         /// Calendar: Today, shown only while another day is selected.
         case today(shown: Bool)
     }
@@ -138,8 +149,8 @@ struct PanelBottomBarLook: Equatable {
     /// A page's bar before it reports: its usual controls, no tags yet.
     static func placeholder(for page: PanelPage) -> PanelBottomBarLook {
         switch page {
-        case .tasks: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "tasks-tag-bar", shown: true), plus: tasksPlus)
-        case .notes: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "notes-tag-bar", shown: true), plus: notesPlus)
+        case .tasks: PanelBottomBarLook(middle: .tags(tags: [], picks: .none, idPrefix: "tasks-tag-bar", shown: true), plus: tasksPlus)
+        case .notes: PanelBottomBarLook(middle: .tags(tags: [], picks: .none, idPrefix: "notes-tag-bar", shown: true), plus: notesPlus)
         case .calendar: PanelBottomBarLook(middle: .none, plus: calendarPlus)
         case .canvas: AtticDraw.isEnabled ? PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus) : PanelBottomBarLook()
         }
@@ -147,7 +158,10 @@ struct PanelBottomBarLook: Equatable {
 }
 
 struct PanelBottomBarActions {
+    /// A pill: a tag joins or leaves the pick; All (nil) clears it.
     var selectTag: (String?) -> Void = { _ in }
+    /// The Any · All switch.
+    var setTagMatch: (TagPicks.Match) -> Void = { _ in }
     var today: () -> Void = {}
     var plus: () -> Void = {}
     /// The page's own Tab order, which reaches "+" after its last row.
@@ -194,6 +208,9 @@ struct PanelTopRowLook: Equatable {
     var shown: Bool
     var searchLabel: String
     var searchIdentifier: String
+    /// A filter is on: ••• wears its dot (Accepted 2026-11-13, "••• keeps
+    /// its dot"), so filtered tasks never look lost.
+    var filtered = false
 
     static func placeholder(for page: PanelPage) -> PanelTopRowLook {
         switch page {
@@ -375,8 +392,9 @@ struct PanelSharedBottomBar: View {
         switch middle {
         case .none:
             Spacer(minLength: 0)
-        case let .tags(tags, selection, idPrefix, shown):
-            PanelTagBar(tags: tags, selection: selection, idPrefix: idPrefix, onSelect: actions.selectTag)
+        case let .tags(tags, picks, idPrefix, shown):
+            PanelTagBar(tags: tags, picks: picks, idPrefix: idPrefix, state: chrome.tagBar, shown: shown && !hidden,
+                        focusRequests: actions.focusRequests, onSelect: actions.selectTag, onMatch: actions.setTagMatch)
                 .opacity(shown ? 1 : 0)
                 .allowsHitTesting(shown)
                 .accessibilityHidden(!shown || hidden)
@@ -433,7 +451,7 @@ private struct PanelSharedTopControlsObserver: View {
         HStack(spacing: PanelTopRowLayout.gap) {
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
                              preservesUnfoldedAccessibility: page == .canvas) {
-                PanelTopRowMoreButton(shared: true, page: page) { chrome.more(on: page) }
+                PanelTopRowMoreButton(shared: true, page: page, filtered: look.filtered) { chrome.more(on: page) }
             }
             PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
                              preservesUnfoldedAccessibility: page == .canvas) {

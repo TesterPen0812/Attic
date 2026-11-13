@@ -68,8 +68,8 @@ final class AdaptiveTasksTests: XCTestCase {
             spin(0.5)
             XCTAssertNil(element("tasks-selection-bar", in: host))
             XCTAssertEqual(try XCTUnwrap(frame(of: "tasks-tag-bar", in: host)), bar, "the tag bar is back as it was")
-            XCTAssertEqual(model.tagFilter(on: .now), "launch", "with its filter")
-            XCTAssertNotNil(element("tasks-tag-bar-launch", in: host))
+            XCTAssertEqual(model.tagPicks(on: .now), TagPicks(["launch"]), "with its filter")
+            XCTAssertNotNil(element("tasks-tag-bar-picked", in: host), "collapsed, the bar shows the picked tag (1A)")
         }
     }
 
@@ -192,11 +192,11 @@ final class AdaptiveTasksTests: XCTestCase {
         model.loadDoneLogIfNeeded()
         XCTAssertEqual(model.doneDays().flatMap(\.rows).count, 4)
         model.chooseTagChip("launch")
-        XCTAssertEqual(model.tagFilter(on: .done), "launch", "Done has no exception")
+        XCTAssertEqual(model.tagPicks(on: .done), TagPicks(["launch"]), "Done has no exception")
         model.loadDoneLogIfNeeded()
         let titles = Set(model.doneDays().flatMap(\.rows).map(\.model.title))
         XCTAssertEqual(titles, ["Launch date", "Launch post"], "the paged Done log is filtered")
-        XCTAssertEqual(store.indexedDoneLogCount(tag: "launch"), 2)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: TagPicks(["launch"])), 2)
         model.doneSearch = "post"
         model.loadDoneLogIfNeeded()
         XCTAssertEqual(model.doneDays().flatMap(\.rows).map(\.model.title), ["Launch post"], "with the search")
@@ -234,10 +234,15 @@ final class AdaptiveTasksTests: XCTestCase {
 
         try withPanel(seed: [TaskDraft(title: "One", tags: ["launch"])]) { host, state, tasksState, store, draft in
             let insets = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size).chromeInsets
+            // The bar starts collapsed as "#" (Accepted 2026-11-13, 1A); its
+            // width is measured open.
+            XCTAssertTrue(try XCTUnwrap(element("tasks-tag-bar-key", in: host)).accessibilityPerformPress?() ?? false)
+            spin(0.6)
             let one = try XCTUnwrap(frame(of: "tasks-tag-bar", in: host))
             let plus = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
             XCTAssertEqual(one.minX, insets.leading, accuracy: 0.5)
-            XCTAssertLessThan(one.width, 100, "All and #launch: a short bar")
+            let key = try XCTUnwrap(frame(of: "tasks-tag-bar-key", in: host))
+            XCTAssertLessThan(one.width - key.width, 100, "All and #launch after the open \"#\": a short bar")
             _ = store.commit([TaskDraft(title: "Two", tags: ["team"])])
             spin(0.6)
             let two = try XCTUnwrap(frame(of: "tasks-tag-bar", in: host))
@@ -259,6 +264,10 @@ final class AdaptiveTasksTests: XCTestCase {
             spin(0.8)
             _ = draft.pages.showLibrary()
             spin(0.8)
+            if element("notes-tag-bar-all", in: host) == nil {
+                XCTAssertTrue(try XCTUnwrap(element("notes-tag-bar-key", in: host)).accessibilityPerformPress?() ?? false)
+                spin(0.6)
+            }
             let notes = try XCTUnwrap(frame(of: "notes-tag-bar", in: host), "Notes has the same bar")
             XCTAssertEqual(notes.minX, one.minX, accuracy: 0.5, "the page switch keeps the left edge")
             XCTAssertLessThan(notes.width, many.width, "only the width changes")

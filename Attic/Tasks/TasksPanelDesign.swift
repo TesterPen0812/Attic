@@ -175,23 +175,29 @@ enum TasksPanelDesign {
     struct Empty: Equatable {
         let title: String
         let body: String
-        /// "Clear filters" shows (a search or a filter hides tasks).
+        /// Clear Filters shows (a search or a filter hides tasks).
         let canClear: Bool
+        /// The title and sentence as pieces, each picked tag in its colour
+        /// (empty: the plain words above).
+        var titleParts: [TagPhrasePart] = []
+        var bodyParts: [TagPhrasePart] = []
     }
 
     /// Empty views retain result descriptions; unfiltered pages have no helper sentence.
-    static func empty(tab: TasksTab, query: String, filtered: Bool, tag: String? = nil) -> Empty {
+    static func empty(tab: TasksTab, query: String, filtered: Bool) -> Empty {
+        empty(tab: tab, query: query, view: filtered ? TasksViewOptions(show: .dueOrOverdue) : TasksViewOptions(), picks: .none)
+    }
+
+    /// The empty state names the filter ("Nothing in progress", "Nothing
+    /// to do", "No overdue tasks") and says what else is on ("in #work and
+    /// #home, overdue"), with Clear Filters (Accepted 2026-11-13).
+    static func empty(tab: TasksTab, query: String, view: TasksViewOptions, picks: TagPicks) -> Empty {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             return Empty(title: String(localized: "No results"), body: String(localized: "No tasks match “\(query)”."), canClear: true)
         }
-        if let tag {
-            return Empty(title: String(localized: "No results"),
-                         body: String(localized: "No tasks in \(tagChipTitle(tag)) in this view."), canClear: true)
-        }
-        if filtered {
-            // The View options' filters.
-            return Empty(title: String(localized: "No results"), body: String(localized: "Nothing in this view."), canClear: true)
+        if view.filters || !picks.isEmpty {
+            return filteredEmpty(view: view, picks: picks)
         }
         switch tab {
         case .now:
@@ -206,17 +212,84 @@ enum TasksPanelDesign {
         }
     }
 
+    private static func filteredEmpty(view: TasksViewOptions, picks: TagPicks) -> Empty {
+        // The title names the first filter on, in the menu's order; the
+        // sentence lists the rest, the tags first.
+        var rest: [String] = []
+        var title: [TagPhrasePart]
+        switch view.status {
+        case .inProgress: title = [.text(String(localized: "Nothing in progress"))]
+        case .toDo: title = [.text(String(localized: "Nothing to do"))]
+        case .any: title = []
+        }
+        func dateWords() -> String? {
+            switch view.show {
+            case .all: nil
+            case .dueOrOverdue: String(localized: "due or overdue")
+            case .overdueOnly: String(localized: "overdue")
+            }
+        }
+        func priorityWords() -> String? {
+            switch view.priority {
+            case .any: nil
+            case .mediumAndHigh: String(localized: "medium and high priority")
+            case .highOnly: String(localized: "high priority only")
+            }
+        }
+        if title.isEmpty {
+            switch view.show {
+            case .dueOrOverdue: title = [.text(String(localized: "Nothing due"))]
+            case .overdueOnly: title = [.text(String(localized: "No overdue tasks"))]
+            case .all: break
+            }
+        } else if let date = dateWords() {
+            rest.append(date)
+        }
+        if title.isEmpty {
+            switch view.priority {
+            case .mediumAndHigh: title = [.text(String(localized: "No medium or high priority tasks"))]
+            case .highOnly: title = [.text(String(localized: "No high-priority tasks"))]
+            case .any: break
+            }
+        } else if let priority = priorityWords() {
+            rest.append(priority)
+        }
+        var body: [TagPhrasePart] = []
+        if title.isEmpty {
+            // Only tags: they are the title.
+            title = [.text(String(localized: "Nothing in "))] + picks.phraseParts
+        } else if !picks.isEmpty {
+            body = [.text(String(localized: "in "))] + picks.phraseParts
+        }
+        for (index, words) in rest.enumerated() {
+            body.append(.text(body.isEmpty && index == 0 ? words.prefix(1).uppercased() + words.dropFirst() : ", " + words))
+        }
+        return Empty(title: title.map(\.plain).joined(), body: body.map(\.plain).joined(), canClear: true,
+                     titleParts: title, bodyParts: body)
+    }
+
+    /// The line under the tabs while a filter is on (Accepted 2026-11-13):
+    /// every filter, the tags too, the order, and how many are hidden
+    /// ("In progress · #work or #home · 9 hidden").
+    static func viewLine(view: TasksViewOptions, picks: TagPicks, hidden: Int?) -> [TagPhrasePart] {
+        var groups: [[TagPhrasePart]] = view.filterWords.map { [.text($0)] }
+        if !picks.isEmpty { groups.append(picks.phraseParts) }
+        if groups.isEmpty { groups.append([.text(String(localized: "All tasks"))]) }
+        if let order = view.orderWords { groups.append([.text(order)]) }
+        if let hidden, hidden > 0 { groups.append([.text(String(localized: "\(hidden) hidden"))]) }
+        var parts: [TagPhrasePart] = []
+        for (index, group) in groups.enumerated() {
+            if index > 0 { parts.append(.text(" · ")) }
+            parts += group
+        }
+        return parts
+    }
+
     // MARK: - Tag chips (owner, 2026-10-28)
 
     /// A tag chip's title: the row pills' wording.
     static func tagChipTitle(_ tag: String) -> String { "#" + tag }
 
-    /// The tag a chip's click leaves chosen (the design's `listFilter`):
-    /// one at a time; the chosen tag again, or All (nil), clears it.
-    static func tagFilter(choosing chip: String?, current: String?) -> String? {
-        guard let chip, chip != current else { return nil }
-        return chip
-    }
 }
 
 extension TasksPanelDesign.GroupKind {

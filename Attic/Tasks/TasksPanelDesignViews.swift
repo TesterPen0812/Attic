@@ -366,8 +366,9 @@ struct TasksBottomBar<AddBar: View>: View {
     let addFocused: Bool
     let tab: TasksTab
     let tags: [String]
-    let tagSelection: String?
+    let tagPicks: TagPicks
     let onSelectTag: (String?) -> Void
+    var onTagMatch: (TagPicks.Match) -> Void = { _ in }
     let onPlus: () -> Void
     /// Two or more tasks selected (T2, Accepted 2026-11-01): the selection
     /// bar takes the tag bar's place, as wide as its own content, and "+"
@@ -383,6 +384,8 @@ struct TasksBottomBar<AddBar: View>: View {
     @Environment(\.panelSharedChrome) private var sharedChrome
     /// The page's Tab order, lent to the shared "+" (`TasksTabStop.plus`).
     @Environment(\.atticFocusRequests) private var focusRequests
+    /// The tag bar's open state when the page draws its own bar.
+    @StateObject private var ownTagBar = PanelTagBarState()
 
     var body: some View {
         let hasDraft = !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -400,7 +403,8 @@ struct TasksBottomBar<AddBar: View>: View {
                 } else {
                     // The page switch is the Tall island (Accepted
                     // 2026-10-31): the tag bar sits on the left.
-                    PanelTagBar(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar", onSelect: onSelectTag)
+                    PanelTagBar(tags: tags, picks: tagPicks, idPrefix: "tasks-tag-bar", state: ownTagBar, shown: tagsShown && !folded,
+                                focusRequests: focusRequests, onSelect: onSelectTag, onMatch: onTagMatch)
                         .opacity(tagsShown ? 1 : 0)
                         .allowsHitTesting(tagsShown)
                         .accessibilityHidden(!tagsShown)
@@ -446,10 +450,11 @@ struct TasksBottomBar<AddBar: View>: View {
         }
         .animation(Self.foldAnimation(reduceMotion: design.reduceMotion), value: folded)
         .panelBottomBar(.tasks,
-                        look: PanelBottomBarLook(middle: .tags(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar",
+                        look: PanelBottomBarLook(middle: .tags(tags: tags, picks: tagPicks, idPrefix: "tasks-tag-bar",
                                                                shown: tagsShown),
                                                  plus: PanelBottomBarLook.tasksPlus, folded: folded),
-                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus, focusRequests: focusRequests))
+                        actions: PanelBottomBarActions(selectTag: onSelectTag, setTagMatch: onTagMatch, plus: onPlus,
+                                                       focusRequests: focusRequests))
     }
 
     /// "+" expanding into the field and back: the bar's fold token.
@@ -474,22 +479,33 @@ struct TasksEmptyState: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(verbatim: empty.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .modifier(TasksInk(.heading))
+                if empty.titleParts.isEmpty {
+                    Text(verbatim: empty.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .modifier(TasksInk(.heading))
+                } else {
+                    // The filter by name, its tags in their colours (13 Nov).
+                    PanelTagPhraseText(parts: empty.titleParts, size: 11, weight: .semibold)
+                }
                 TasksElsewhereLinks(elsewhere: elsewhere, follow: follow)
             }
             .lineLimit(1)
             if !empty.body.isEmpty {
-                Text(verbatim: empty.body)
-                    .font(.system(size: 10))
-                    .multilineTextAlignment(.center)
-                    .modifier(TasksInk(.helper))
-                    .frame(maxWidth: 190)
-                    .padding(.top, 3)
+                Group {
+                    if empty.bodyParts.isEmpty {
+                        Text(verbatim: empty.body)
+                            .font(.system(size: 10))
+                            .modifier(TasksInk(.helper))
+                    } else {
+                        PanelTagPhraseText(parts: empty.bodyParts, size: 10, weight: .regular, ink: .helper)
+                    }
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 190)
+                .padding(.top, 3)
             }
             if empty.canClear, let clear {
-                AtticRaisedButton(systemName: nil, title: "Clear filters", height: 22,
+                AtticRaisedButton(systemName: nil, title: "Clear Filters", height: 22,
                                   cornerRadius: TasksDesignMetrics.innerRadius, action: clear)
                     .padding(.top, 11)
                     .accessibilityIdentifier("tasks-clear-filters")

@@ -8,6 +8,8 @@ struct PanelComposerRoute {
     let open: (ComposerPage, ComposerKind?) -> Void
     /// Whether the card is open (it then keeps Tab to itself).
     var isOpen: () -> Bool = { false }
+    /// An empty draft starts with these tags (Notes' picked tags, 13 Nov).
+    var startTags: ([String]) -> Void = { _ in }
 
     func open(on page: ComposerPage, as kind: ComposerKind? = nil) { open(page, kind) }
 }

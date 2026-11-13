@@ -112,12 +112,14 @@ final class NotesLibraryModel: ObservableObject {
     @Published private(set) var showsLoading = false
     /// The row the keyboard's ↑ ↓ are on.
     @Published var highlightedID: UUID?
-    /// The tag All notes shows (nil: every note). A search looks inside it.
-    /// It stays while the library is away and comes back with it, unless the
-    /// note you come back from would be hidden (`reconcileFilter`).
-    @Published var tagFilter: String? {
+    /// The tags All notes shows (none: every note), several since 13 Nov
+    /// with Any · All (Accepted 2026-11-13: Notes uses the same bar, with
+    /// its own picks). A search looks inside them. They stay while the
+    /// library is away and come back with it, unless the note you come back
+    /// from would be hidden (`reconcileFilter`).
+    @Published var tagPicks: TagPicks = .none {
         didSet {
-            guard tagFilter != oldValue else { return }
+            guard tagPicks != oldValue else { return }
             highlightedID = nil
         }
     }
@@ -203,7 +205,7 @@ final class NotesLibraryModel: ObservableObject {
         let drafts: [UUID]
         let day: Int
         let dateEnvironment: DatePresentationEnvironment
-        let tag: String?
+        let tag: TagPicks
         let prepareSummaries: Bool
     }
 
@@ -384,7 +386,7 @@ final class NotesLibraryModel: ObservableObject {
                           matchedQuery: searching ? matchedQuery : "", attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
                           dateEnvironment: DatePresentationEnvironment(calendar: calendar),
-                          tag: tagFilter, prepareSummaries: prepareSummaries)
+                          tag: tagPicks, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
         navigationGeneration &+= 1
 
@@ -414,14 +416,15 @@ final class NotesLibraryModel: ObservableObject {
             }
         }
         let allNotes = notes
-        if let tag = tagFilter {
-            notes = notes.filter { tags(of: $0).contains(tag) }
-            unsaved = unsaved.filter { $0.engine.tags.contains(tag) }
+        let picks = tagPicks
+        if !picks.isEmpty {
+            notes = notes.filter { picks.matches(tags(of: $0)) }
+            unsaved = unsaved.filter { picks.matches($0.engine.tags) }
         }
         if searching {
             // The earlier rows stay while a search runs, but only rows of
             // this filter (review S4-R2).
-            guard let matches else { return cache.flatMap { $0.key.tag == tagFilter ? $0.groups : nil } ?? [] }
+            guard let matches else { return cache.flatMap { $0.key.tag == tagPicks ? $0.groups : nil } ?? [] }
             notes = notes.filter { matches.contains($0.id) }
         }
         let draftRows = unsaved.map { draftRow($0) }
@@ -484,51 +487,60 @@ final class NotesLibraryModel: ObservableObject {
             .map(\.key)
     }
 
-    /// The top line's tags after "All notes": the active tag first (always
+    /// The top line's tags after "All notes": the picked tags first (always
     /// shown), then the most recent others, up to `limit` in all.
     func tagTabs(store: NoteStore, limit: Int) -> [String] {
         let recent = recentTags(store: store)
-        var tabs = tagFilter.map { [$0] } ?? []
-        for tag in recent where tabs.count < limit && tag != tagFilter { tabs.append(tag) }
+        var tabs = tagPicks.tags
+        for tag in recent where tabs.count < limit && !tagPicks.contains(tag) { tabs.append(tag) }
         return tabs
     }
 
-    /// Clicking a tag: filter to it, or back to every note when it is the
-    /// active one. A search in progress stays and now looks inside it.
-    func toggleTag(_ tag: String) {
-        tagFilter = tagFilter == tag ? nil : tag
+    /// Clicking a tag: it joins the pick, or leaves it when picked; All
+    /// (nil) shows every note. A search in progress stays and now looks
+    /// inside them.
+    func toggleTag(_ tag: String?) {
+        tagPicks = tagPicks.toggling(tag)
+    }
+
+    /// The Any · All switch, with two or more tags picked.
+    func setTagMatch(_ match: TagPicks.Match) {
+        tagPicks = tagPicks.matching(match)
     }
 
     /// Opening All notes keeps the earlier filter only when it still shows
-    /// the note you came from (and still has a note); otherwise every note.
+    /// the note you came from; a picked tag no note carries any more drops
+    /// out (per tag); otherwise every note.
     func reconcileFilter(store: NoteStore, selected: UUID?) {
-        guard let tag = tagFilter else { return }
+        guard !tagPicks.isEmpty else { return }
         taskMetadata = readTaskMetadata(store)
-        let carriers = store.notes.filter { $0.deletedAt == nil && tags(of: $0).contains(tag) }
-        if carriers.isEmpty { tagFilter = nil; return }
-        if let selected, let note = store.note(withID: selected), !tags(of: note).contains(tag) { tagFilter = nil }
+        var carried = Set<String>()
+        for note in store.notes where note.deletedAt == nil { carried.formUnion(tags(of: note)) }
+        let kept = tagPicks.keeping(carried)
+        if kept != tagPicks { tagPicks = kept }
+        if let selected, let note = store.note(withID: selected), !tagPicks.matches(tags(of: note)) { tagPicks = .none }
     }
 
     // MARK: Words
 
     /// The search field's placeholder: the count, or the tag searched in.
-    static func placeholder(count: Int, tag: String?) -> String {
-        if let tag { return String(localized: "Search #\(tag)") }
+    static func placeholder(count: Int, tags: TagPicks) -> String {
+        if !tags.isEmpty { return String(localized: "Search \(tags.phrase)") }
         return count == 1 ? String(localized: "Search 1 note") : String(localized: "Search \(count) notes")
     }
 
     /// The line where the rows would be when a search finds nothing.
-    static func noMatches(query: String, tag: String?) -> String {
-        if let tag { return String(localized: "No notes match “\(query)” in #\(tag).") }
+    static func noMatches(query: String, tags: TagPicks) -> String {
+        if !tags.isEmpty { return String(localized: "No notes match “\(query)” in \(tags.phrase).") }
         return String(localized: "No notes match “\(query)”.")
     }
 
     /// The filter's line when no note carries the tag (any more).
-    static func emptyFilter(tag: String) -> String { String(localized: "No notes in #\(tag)") }
+    static func emptyFilter(tags: TagPicks) -> String { String(localized: "No notes in \(tags.phrase)") }
 
     /// The next step after no matches: a new note named for the search.
-    static func newNoteTitle(query: String, tag: String?) -> String {
-        if let tag { return String(localized: "New note “\(query)” in #\(tag)") }
+    static func newNoteTitle(query: String, tags: TagPicks) -> String {
+        if !tags.isEmpty { return String(localized: "New note “\(query)” in \(tags.phrase)") }
         return String(localized: "New note “\(query)”")
     }
 
@@ -628,15 +640,15 @@ final class NotesLibraryModel: ObservableObject {
     func libraryRow(_ row: AtticNoteRowModel, store: NoteStore) -> RowDetails {
         let prepared = preparedRow(row, store: store)
         let tags = store.note(withID: row.id).map { self.tags(of: $0) } ?? []
-        return RowDetails(row: prepared, tag: Self.firstTag(tags, filter: tagFilter),
+        return RowDetails(row: prepared, tag: Self.firstTag(tags, filter: tagPicks),
                           thumbnail: NoteThumbnailContent(title: prepared.title, text: prepared.preview,
                                                           hasImages: prepared.images > 0))
     }
 
-    /// The tag a row shows: its first, skipping the one the list is
-    /// filtered by (every row there has it).
-    static func firstTag(_ tags: [String], filter: String?) -> String? {
-        tags.first { $0 != filter }
+    /// The tag a row shows: its first, skipping the picked ones (the list
+    /// is filtered by them).
+    static func firstTag(_ tags: [String], filter: TagPicks) -> String? {
+        tags.first { !filter.contains($0) }
     }
 
     /// The rows in list order, for ↑ ↓.
