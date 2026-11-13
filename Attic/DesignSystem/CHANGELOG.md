@@ -1,3 +1,10 @@
+## 2026-11-13 · Tag picker large-list performance
+
+The tag picker now mounts rows lazily within its existing six-row viewport,
+using stable tag names for highlighted-row scrolling and keeping the original
+row height, width, focus, checks and card motion. The fixed-width rule no
+longer allocates thousands of tag names and details on each body evaluation.
+
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 
 The note thumbnail keeps the drawing's proportion: 7 pt continuous corners

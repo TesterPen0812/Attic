@@ -324,6 +324,36 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 30), 6, "six rows, then it scrolls")
     }
 
+    /// PF-43: a six-row viewport must not mount an entire 2,000-tag
+    /// inventory, even when repeatedly evaluated in a real hosting view.
+    func testPF43LargeTagPickerRealizesOnlyViewportRows() {
+        let window = makeWindow()
+        defer { window.close() }
+        let tags = (0..<2_000).map { AtticTagPicker.Tag(name: String(format: "tag-%04d", $0), state: .off) }
+        var realized = Set<String>()
+        let host = NSHostingView(rootView: TagList(tags: tags, highlighted: nil,
+                                                  onRowAppear: { realized.insert($0) })
+            .atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertGreaterThan(realized.count, 0, "the first viewport must show tags")
+        XCTAssertLessThan(realized.count, 40,
+                          "six visible rows may prefetch, but must not mount all \(tags.count) tags (mounted \(realized.count))")
+
+        // Changing the keyboard's logical highlight must scroll to an
+        // unrealized row without forcing intermediate rows into the tree.
+        realized.removeAll()
+        host.rootView = TagList(tags: tags, highlighted: tags.count - 1,
+                                onRowAppear: { realized.insert($0) })
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertTrue(realized.contains("tag-1999"), "keyboard highlight must reach the last logical tag")
+        XCTAssertLessThan(realized.count, 70, "scroll-to-last cannot mount the full tag inventory")
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {
@@ -447,10 +477,11 @@ final class AtticDropdownTests: XCTestCase {
     struct TagList: View {
         let tags: [AtticTagPicker.Tag]
         let highlighted: Int?
+        var onRowAppear: ((String) -> Void)? = nil
         @FocusState private var focused: AtticDropdownFocusTarget?
         var body: some View {
             AtticTagPicker(query: .constant(""), tags: tags, highlighted: highlighted, onToggle: { _ in }, onCreate: { _ in },
-                           focus: $focused)
+                           focus: $focused, onRowAppear: onRowAppear)
                 .frame(width: 200)
         }
     }

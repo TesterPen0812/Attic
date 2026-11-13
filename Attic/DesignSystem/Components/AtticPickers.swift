@@ -890,6 +890,9 @@ struct AtticTagPicker: View {
     var onFieldEscape: (() -> Void)? = nil
     var onFieldMove: ((Int) -> Void)? = nil
     var onFieldSubmit: (() -> Void)? = nil
+    /// A row entered the mounted viewport; used to count real view
+    /// realization in hosted performance regression tests.
+    var onRowAppear: ((String) -> Void)? = nil
 
     /// The rows the list shows: the tags, then "New tag" when there is one.
     /// The one count the list's keyboard stop, Tab and the keys use.
@@ -948,7 +951,10 @@ struct AtticTagPicker: View {
                         rows
                             .frame(height: normalHeight, alignment: .top)
                     } else {
-                        AtticDropdownViewport(height: listHeight) { rows }
+                        AtticDropdownViewport(height: listHeight,
+                                              highlighted: highlighted.flatMap { tags.indices.contains($0) ? tags[$0].name : nil }) {
+                            rows
+                        }
                     }
                 }
                 createRow(count: count)
@@ -959,13 +965,13 @@ struct AtticTagPicker: View {
         // card still measures its natural height: the list's full room.
         .atticDropdownHeightGivenUp(normalHeight - listHeight)
         // 224 pt, fixed (sheet 3): a longer name is cut short.
-        .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create, details: tags.compactMap(\.detail)))
+        .atticDropdownIdealWidth(Self.fixedRowsWidth)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }
 
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
                 // Each tag's colour on its dot alone (O14-07, owner
                 // 2026-10-14: in a dropdown the # and the name keep the text
@@ -977,7 +983,8 @@ struct AtticTagPicker: View {
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }
-                .id(index)
+                .id(tag.name)
+                .onAppear { onRowAppear?(tag.name) }
             }
             if tags.isEmpty {
                 AtticText(verbatim: create == nil ? String(localized: "No tags yet") : String(localized: "No tag matches"), style: .dropdownRow, ink: AtticDropdownSmallText.ink)
@@ -1015,8 +1022,12 @@ struct AtticTagPicker: View {
     /// The rows' width, the card's insets excluded: the card is 224 pt
     /// whatever the names (Dropdown content: answers, owner, 2026-10-24,
     /// sheet 3: "fixed at 224 pt"); a longer name is cut short.
-    static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
+    static var fixedRowsWidth: CGFloat {
         AtticDropdownMetrics.fieldCardWidth - AtticDropdownMetrics.inset * 2
+    }
+
+    static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
+        fixedRowsWidth
     }
 }
 
