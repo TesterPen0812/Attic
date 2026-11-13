@@ -81,14 +81,14 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(NotesLibraryRowMetrics.radius, 16)
         XCTAssertEqual(NotesLibraryRowMetrics.thumbnailInset, 6)
         XCTAssertEqual(CalendarDesign.eventRadius, 17.5, "24 − 6.5")
-        XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
         XCTAssertEqual(AtticRadius.popover, 16)
         XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 18, "the picker cards: the glass menu's 18 pt (Accepted 2026-11-10)")
         // Picker cards are menu cards (Corners B, Accepted 2026-11-13).
         XCTAssertEqual(AtticDropdownMetrics.inset, 6, "the menus' 6 pt padding")
-        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 12, "concentric rows: 18 − 6")
-        XCTAssertEqual(AtticDropdownMetrics.highlightRadius(height: 20), 10, "never rounder than half a row")
-        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 12, "Clear Date as a row")
+        // Row highlights 8 pt continuous (Accepted 2026-11-13 Corners, measured fix).
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 8, "the menus' row highlight")
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius(height: 12), 6, "never rounder than half a row")
+        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 8, "Clear Date as a row")
         XCTAssertEqual(AtticDropdownMetrics.fieldRadius, 12, "the field on the rows' 6 pt line: 18 − 6")
         XCTAssertEqual(AtticRadius.noteBlock, 10)
         XCTAssertEqual(AtticNoteObjectMetrics.blockRadius, 10)
@@ -104,7 +104,6 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(TasksDesignMetrics.tileRadius, 6)
         // Concentric nesting.
         XCTAssertEqual(AtticRadius.formatSheet, 19, "24 + 14 px")
-        XCTAssertEqual(AtticRadius.concentric(outer: AtticRadius.menu, padding: AtticRadius.menuPadding), AtticRadius.menuRow)
         // A day card's padding grows with its radius (10 px at 36 px).
         XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "48 px radius: 13 px padding")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 32), 8.5, "64 px: 17 px")
@@ -226,10 +225,11 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
                        Path(roundedRect: card, cornerRadius: 18, style: .continuous),
                        "the card: the glass menu's continuous 18 pt corners")
-        // Corners B (Accepted 2026-11-13): rows 6 pt in, 12 pt continuous.
+        // Corners B (Accepted 2026-11-13 Corners, measured fix): rows 6 pt
+        // in, 8 pt continuous.
         let row = CGRect(x: 6, y: 6, width: 212, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       RoundedRectangle(cornerRadius: 12, style: .continuous).path(in: row), "a row: 12 pt continuous")
+                       RoundedRectangle(cornerRadius: 8, style: .continuous).path(in: row), "a row: 8 pt continuous")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)

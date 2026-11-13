@@ -2682,19 +2682,20 @@ final class AtticDateCardTests: XCTestCase {
     }
 
     /// Picker contents retain their own metrics. Accepted 13 Nov replaces
-    /// the old card geometry with 18/6/12 pt corners/inset/highlight and a
+    /// the old card geometry with 18/6/8 pt corners/inset/highlight and a
     /// 200 pt minimum; it does not change the date grid or 32 pt rows.
     func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
         XCTAssertEqual(m.cornerRadius, 18, "Accepted 2026-11-10: Loam's 18 pt continuous glass card")
         // Accepted 2026-11-13, Corners B: picker cards share menu padding
-        // and concentric highlights, retaining their own row heights.
+        // and highlights, retaining their own row heights. The highlight is
+        // 8 pt continuous (Accepted 2026-11-13 Corners, measured fix).
         XCTAssertEqual(m.inset, 6)
         XCTAssertEqual(m.rowPadding, 10)
-        XCTAssertEqual(m.highlightRadius, 12)
+        XCTAssertEqual(m.highlightRadius, 8)
         XCTAssertEqual(m.highlightRadius, AtticMenuMetrics.highlightRadius,
-                       "picker rows use the Accepted concentric 12 pt radius inside the 18 pt card")
+                       "picker rows light like the menus' rows (Corners B, measured fix)")
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
         XCTAssertEqual(m.inset + m.fieldInset, 6, "the field shares the Accepted 6 pt card inset")

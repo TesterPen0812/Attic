@@ -76,12 +76,6 @@ enum AtticRadius {
     /// Note rows: 16 pt on Apple's continuous curve (Corners C, Accepted
     /// 2026-11-13; was 12 pt on the squircle).
     static let noteRow: CGFloat = 16
-    /// Menus and popovers: 32 px (owner, 2026-10-31: "back to what it
-    /// was", the 16 pt of b74eee51), with 6 px padding; rows concentric,
-    /// 32 − 6 = 26 px.
-    static let menu: CGFloat = 16
-    static let menuPadding: CGFloat = 3
-    static let menuRow: CGFloat = concentric(outer: menu, padding: menuPadding)
     /// Note blocks: 20 px.
     static let noteBlock: CGFloat = 10
     /// Small objects (thumbnails, file tiles): 12 px.
@@ -115,7 +109,9 @@ enum AtticRadius {
         (height * controlFraction * 2).rounded() / 2
     }
 
-    static let popover: CGFloat = menu
+    /// Popovers: 32 px (owner, 2026-10-31: "back to what it was", the
+    /// 16 pt of b74eee51).
+    static let popover: CGFloat = 16
     /// Settings' group cards are cards (Shapes; owner, 2026-10-31).
     static let groupCard: CGFloat = card
     static let contentCard: CGFloat = 10

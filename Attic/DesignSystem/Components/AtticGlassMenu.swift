@@ -888,14 +888,13 @@ struct AtticGlassMenuStyle {
 }
 
 /// The menus' shape (Accepted 2026-11-10): 18 pt continuous corners, 6 pt
-/// padding and 12 pt rows' highlight.
+/// padding and 8 pt rows' highlight (Corners B, measured fix).
 enum AtticGlassMenuShape {
     static let radius: CGFloat = AtticMenuMetrics.cardRadius
     static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowRadius: CGFloat = AtticMenuMetrics.highlightRadius
-    /// The highlight on a row this tall: 12 pt, or half the row when that
-    /// is smaller (Corners B, Accepted 2026-11-13), so a shorter row (the
-    /// DEBUG row-height seam) stays a capsule at most.
+    /// The highlight on a row this tall: 8 pt, or half the row when that
+    /// is smaller, so a very short row stays a capsule at most.
     static func rowRadius(height: CGFloat) -> CGFloat { min(rowRadius, height / 2) }
     /// Loam's card: Apple's continuous rounded rectangle at 18 pt. Attic's
     /// surface squircle at 18 pt read as tight, ~8 pt corners (owner, 11 Nov).

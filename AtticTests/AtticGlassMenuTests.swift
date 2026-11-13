@@ -508,9 +508,12 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(mask.path?.boundingBoxOfPath, root.bounds, "scrolling rows remain within a capped card")
         XCTAssertEqual(AtticGlassMenuShape.radius, 18, "Loam's 18 pt menus (Accepted 2026-11-10)")
         XCTAssertEqual(AtticGlassMenuShape.inset, 6)
-        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 12, "concentric: 18 − 6")
-        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: AtticMenuMetrics.rowHeight), 12)
-        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: 20), 10, "never rounder than half the row (Corners B)")
+        // Accepted 2026-11-13 Corners, measured fix: the sheet's B menu row
+        // (24 pt, its corner in a 12 pt box) is 8 pt continuous.
+        XCTAssertEqual(AtticMenuMetrics.highlightRadius, 8)
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 8)
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: AtticMenuMetrics.rowHeight), 8, "the 28 pt row keeps the drawn corner")
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius(height: 12), 6, "never rounder than half the row")
     }
 
     // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)

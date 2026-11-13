@@ -437,8 +437,8 @@ enum AtticDropdownMetrics {
     static let inset: CGFloat = AtticMenuMetrics.cardPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// The rows' highlight: the menus' 12 pt, concentric in the 18 pt card
-    /// (18 − 6), continuous; never rounder than half a row (Corners B).
+    /// The rows' highlight: the menus' 8 pt, continuous (Corners B,
+    /// Accepted 2026-11-13, measured fix); never rounder than half a row.
     static let highlightRadius: CGFloat = AtticMenuMetrics.highlightRadius
     static func highlightRadius(height: CGFloat) -> CGFloat { min(highlightRadius, height / 2) }
     static let iconSize: CGFloat = 13
@@ -558,9 +558,11 @@ enum AtticMenuMetrics {
     /// A hairline, 10 pt in, centred on an 11 pt band between groups.
     static let separatorHeight: CGFloat = 11
     static let separatorInset: CGFloat = 10
-    /// The highlight: a 12 pt rounded fill at 8 % ink (16 % under
-    /// Increase Contrast).
-    static let highlightRadius: CGFloat = 12
+    /// The highlight: an 8 pt continuous fill at 8 % ink (16 % under
+    /// Increase Contrast). Corners B (Accepted 2026-11-13), measured fix: the
+    /// sheet's 24 pt B row drew its corner in a 12 pt box, which 8 pt
+    /// continuous matches; not concentric with the 18 pt card.
+    static let highlightRadius: CGFloat = 8
     static let highlightAlpha: CGFloat = 0.08
     static let highlightAlphaIncreased: CGFloat = 0.16
 
