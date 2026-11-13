@@ -433,6 +433,17 @@ final class AtticPanel: NSPanel {
             // cards and bars included (2 Nov).
             if Self.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }
             super.sendEvent(event)
+            if event.type == .keyDown, event.keyCode == 48 {
+                // A retained SwiftUI page can hide during Tab/Shift-Tab
+                // while AppKit's native field editor remains first responder.
+                // Its delegate is the page's actual focus owner; check that
+                // view as well as ordinary native responders after dispatch.
+                let focus = (firstResponder as? NSTextView)?.delegate as? NSView
+                    ?? firstResponder as? NSView
+                if let focus, focus.window === self, focus.isHiddenOrHasHiddenAncestor {
+                    makeFirstResponder(nil)
+                }
+            }
             // Native AppKit tracking may consume mouse-up inside mouseDown,
             // bypassing a separate sendEvent(.leftMouseUp) callback.
             if tracingIdlePress, Self.takesFirstPress(event.type), trackingConsumedRelease {

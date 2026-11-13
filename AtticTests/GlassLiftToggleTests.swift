@@ -194,6 +194,24 @@ final class GlassLiftToggleTests: XCTestCase {
         standIn.layoutSubtreeIfNeeded()
         windows.island.contentView?.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        // Offscreen SwiftUI glass can publish its backing layers after the
+        // first layout (CI saw the stand-in with no lift). Observe the three
+        // actual lift layers before capturing; the exact-count and pixel
+        // assertions below still reject missing or duplicated glass.
+        if brightenGlass {
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                scene.layoutSubtreeIfNeeded()
+                panel.displayIfNeeded()
+                standIn.displayIfNeeded()
+                windows.island.contentView?.displayIfNeeded()
+                let roots = [panel.layer, standIn.layer, windows.island.contentView?.layer]
+                if roots.allSatisfy({ $0.map { Self.layers(in: $0).contains(where: PanelGenieView.isAdditive) } == true }) {
+                    break
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+        }
         let root = try XCTUnwrap(scene.layer)
         let panelLayer = try XCTUnwrap(panel.layer)
         let islandLayer = try XCTUnwrap(standIn.layer)
