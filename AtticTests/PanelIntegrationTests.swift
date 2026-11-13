@@ -602,6 +602,65 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    func testBG61NewHideAfterRevealOwnsItsOwnCompletion() async throws {
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .calendar), .shown)
+        spin(0.5)
+        let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        await rows.toggle(writer.event)
+        rows.title = "Save before hiding"
+        writer.hold = true
+        CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+        var first: [PanelHideCompletion] = [], second: [PanelHideCompletion] = []
+        XCTAssertTrue(rig.controller.requestHide { first.append($0) }.isAccepted)
+        for _ in 0..<200 where writer.gate == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let gate = try XCTUnwrap(writer.gate)
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+        XCTAssertTrue(rig.controller.requestHide { second.append($0) }.isAccepted)
+        gate.resume(); writer.gate = nil; writer.hold = false
+        for _ in 0..<200 where second.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(first, [.superseded], "the original save no longer owns a hide")
+        XCTAssertEqual(second, [.hidden], "a later hide still completes exactly once")
+        XCTAssertFalse(rig.controller.isPanelVisible)
+        XCTAssertEqual(writer.editCalls, 1, "the new hide waits for the committed edit")
+    }
+
+    func testBG61RevealingDuringCalendarSaveSupersedesTheOldHide() async throws {
+        for error: CalendarEventWriteError? in [nil, .eventChanged] {
+            let rig = try makePanel()
+            XCTAssertEqual(rig.monitor.revealProgrammatically(section: .calendar), .shown)
+            spin(0.5)
+            let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+            let rows = CalendarEventRowState(makeWriter: { writer })
+            await rows.toggle(writer.event)
+            rows.title = "Changed while open"
+            writer.hold = true
+            writer.error = error
+            CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+            var outcome: PanelHideCompletion?
+            XCTAssertTrue(rig.controller.requestHide { outcome = $0 }.isAccepted)
+            for _ in 0..<200 where writer.gate == nil { try await Task.sleep(for: .milliseconds(10)) }
+            let gate = try XCTUnwrap(writer.gate)
+            // New presentation intent while the earlier durable write is held.
+            XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks), .shown)
+            gate.resume()
+            writer.gate = nil
+            writer.hold = false
+            for _ in 0..<200 where rows.busy { try await Task.sleep(for: .milliseconds(10)) }
+            spin(0.5)
+            XCTAssertEqual(outcome, .superseded)
+            XCTAssertTrue(rig.controller.isPanelVisible, "a completed old save cannot hide the explicit reveal")
+            XCTAssertEqual(rig.uiState.selectedSection, .tasks, "an old failure cannot select Calendar over newer intent")
+            // Keep the failed draft until explicit recovery, then let tearDown close.
+            if error != nil {
+                XCTAssertEqual(rows.title, "Changed while open")
+                writer.error = nil
+                _ = await rows.close()
+            }
+        }
+    }
+
     func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false
