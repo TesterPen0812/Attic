@@ -9,6 +9,23 @@ import Foundation
 @MainActor
 enum DrawLibraryHub {
     private static weak var registered: (any DrawStoreProtocol)?
+    private struct Page {
+        weak var model: DrawPageModel?
+    }
+    private static var pages: [Page] = []
+
+    static func register(_ page: DrawPageModel) {
+        pages.removeAll { $0.model == nil }
+        pages.append(Page(model: page))
+    }
+
+    /// Agent snapshots must include input still waiting for the page's
+    /// bounded save timers. Match the actual store, including injected stores.
+    static func flushLiveInput(for store: any DrawStoreProtocol) {
+        pages.removeAll { $0.model == nil }
+        let models = pages.compactMap(\.model).filter { $0.store === store }
+        for model in models { model.flushLiveInput() }
+    }
 
     static func register(_ store: (any DrawStoreProtocol)?) {
         registered = store
