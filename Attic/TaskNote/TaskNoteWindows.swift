@@ -104,7 +104,8 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     /// root asked, so a stale root cannot remount a newer window.
     @discardableResult
     func reopenFromWindow(_ taskID: UUID, expecting expected: AnyObject? = nil) -> Bool {
-        guard let (_, entry) = entry(taskID), expected == nil || expected === entry,
+        // A close or move that already owns the entry will end this window.
+        guard let (id, entry) = entry(taskID), !closing.contains(id), expected == nil || expected === entry,
               let controller = entry.presenter.page.controller else { return false }
         return restoreAfterFileMove(taskID, entry: entry, tasks: entry.presenter.model.store, controller: controller)
     }
