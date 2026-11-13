@@ -4,7 +4,7 @@ Target: `review/pro-13nov`, commit `42f9b5707d06f78c0c6bc3fb99d135d6f38fcb44`. S
 
 ## Coverage and checkpoint
 
-Inventory: 375 Swift files under Attic, 259 under AtticTests/AtticUITests, 807 files total across Attic, tests, Scripts and .github. Counted with `find`. Initial searches covered type names, asset filenames and build flags, but this is not an exhaustive audit. Detailed inspection so far: development contract, resources inventory, Draw metadata/search paths, Calendar agenda/search pipeline, HTTP request parser and part of agent-server lifecycle. All other areas remain to review. No completion or absence-of-bugs claim is justified.
+Inventory: 375 Swift files under Attic, 259 under AtticTests/AtticUITests, 807 files total across Attic, tests, Scripts and .github. Counted with `find`. Initial searches covered type names, asset filenames and build flags, but this is not an exhaustive audit. Detailed inspection so far: development contract, resources inventory, Draw metadata/search paths, Calendar agenda/search pipeline, HTTP request parser, agent-server lifecycle and partial script/CI test discovery. All other areas remain to review. No completion or absence-of-bugs claim is justified.
 
 ## Part 1: dead code
 
@@ -26,6 +26,10 @@ No safe removal has yet been established. An automated identifier-frequency pass
 
 ### Size baseline, not a finding
 `find Attic/Resources -type f -printf '%s %p\\n' | sort -nr` reports the largest individual resource as `Sounds/done.wav` at 28,844 bytes; the entire `Attic/Resources` directory is about 308 KiB on this checkout (`du -sh`). WAV cues are loaded by enum raw value in `Attic/Services/AtticSounds.swift:103–111`, so a literal filename search alone would falsely label them unused. These filesystem numbers are not a built app size or compressed bundle measurement.
+
+## Script test checkpoint
+
+Ran `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_*.py'` on Linux. The runner reported 173 tests and one setup error, with no assertion failures reported: `test_cost_gate_plumbing.CostGatePlumbingTests.setUpClass` requires `xcrun`, which is unavailable on this non-Mac host. The shell wrapper then printed the log and returned 0, so that wrapper exit status must not be mistaken for a passing suite. Mac-only tests and this class remain unverified. Test discovery globs in `.github/workflows/macos-ci.yml:294–301, 863–868` show why lack of an exact filename reference is not proof that a Python test is unused. A hash scan found duplicate fixture bytes, but no evidence those fixtures can be merged safely; retained.
 
 ## Part 3: bugs
 
