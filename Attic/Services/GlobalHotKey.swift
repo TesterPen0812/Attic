@@ -134,15 +134,16 @@ struct GlobalHotKeyCombination: Equatable {
         return chords([
             kVK_ANSI_N, kVK_ANSI_F, kVK_ANSI_P, kVK_ANSI_Z,
             kVK_ANSI_I, kVK_ANSI_L, kVK_ANSI_S, kVK_ANSI_X, kVK_ANSI_K,
-            kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9
+            kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9, kVK_ANSI_Equal
         ], modifiers: UInt32(cmdKey | shiftKey))
         + chords([
             kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3,
             kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_T, kVK_ANSI_S,
-            kVK_UpArrow, kVK_DownArrow, kVK_RightArrow
+            kVK_ANSI_V, kVK_UpArrow, kVK_DownArrow, kVK_RightArrow
         ], modifiers: UInt32(cmdKey | optionKey))
         + chords([kVK_ANSI_C, kVK_ANSI_V], modifiers: UInt32(cmdKey | optionKey | shiftKey))
         + chords([kVK_ANSI_H], modifiers: UInt32(cmdKey | controlKey))
+        + chords([kVK_Space, kVK_ANSI_T, kVK_UpArrow, kVK_DownArrow], modifiers: UInt32(optionKey))
     }()
 }
 
