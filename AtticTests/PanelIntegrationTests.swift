@@ -1131,4 +1131,48 @@ final class PanelIntegrationTests: XCTestCase {
             print("A11Y_SEEDED seed=\(seed) steps=\(stepsPerSeed) keyboard=Tab,Shift-Tab,Escape,Return,AXPress")
         }
     }
+
+    /// A native focused view can become hidden while handling a Tab key,
+    /// such as when SwiftUI swaps a retained page during keyboard travel.
+    /// The window must not leave that hidden view owning the next keystroke.
+    func testKeyboardTraversalDoesNotKeepFocusInViewHiddenDuringKeyDispatch() throws {
+        final class NativeEditor: NSTextView {
+            weak var ownerView: NSView?
+            var receivedTab = false
+            override func keyDown(with event: NSEvent) {
+                if event.keyCode == 48 {
+                    receivedTab = true
+                    // AppKit's field editor stays live when its SwiftUI
+                    // delegate leaves the visible page.
+                    ownerView?.isHidden = true
+                } else { super.keyDown(with: event) }
+            }
+        }
+        final class EditorOwner: NSView, NSTextViewDelegate {}
+        let window = AtticPanel(contentRect: CGRect(x: -6_000, y: -6_000, width: 200, height: 100),
+                                styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        let owner = EditorOwner(frame: CGRect(x: 0, y: 0, width: 100, height: 50))
+        let editor = NativeEditor(frame: CGRect(x: 0, y: 0, width: 100, height: 50))
+        editor.ownerView = owner
+        editor.delegate = owner
+        root.addSubview(owner)
+        root.addSubview(editor)
+        window.contentView = root
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let tab = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+                        isARepeat: false, keyCode: 48))
+        window.sendEvent(tab)
+        XCTAssertTrue(editor.receivedTab, "Tab reached the active native control")
+        XCTAssertTrue(owner.isHiddenOrHasHiddenAncestor, "the native editor's owner became hidden")
+        let focusTarget = (window.firstResponder as? NSTextView)?.delegate as? NSView
+            ?? window.firstResponder as? NSView
+        XCTAssertFalse(focusTarget?.isHiddenOrHasHiddenAncestor == true,
+                       "keyboard focus must leave a hidden native control")
+    }
 }
