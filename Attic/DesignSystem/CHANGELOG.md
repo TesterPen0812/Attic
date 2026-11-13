@@ -1,3 +1,10 @@
+## 2026-11-13 · Command menu accessibility on macOS 27
+
+The detached AppKit view used for command-menu VoiceOver representation now
+returns its live AXMenuButton name and role directly. This restores exact
+names on macOS 27; Press and Show Menu open through the attached control's
+anchor. The menu's appearance and pointer/keyboard behavior are unchanged.
+
 ## 2026-11-12 · Task page glass context-menu routing
 
 An AppKit text view could claim a pointer above its own bounds and hide the

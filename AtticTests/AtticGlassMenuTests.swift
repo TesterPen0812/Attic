@@ -107,18 +107,35 @@ final class AtticGlassMenuTests: XCTestCase {
 
         var seen = Set<ObjectIdentifier>()
         var named = [String]()
+        var openers = [AnyObject]()
         func walk(_ node: AnyObject) {
             guard seen.insert(ObjectIdentifier(node)).inserted else { return }
             if node.accessibilityRole?() == .menuButton {
                 let label = node.accessibilityLabel?() ?? ""
                 XCTAssertFalse(label.isEmpty, "Every AXMenuButton needs a label")
                 named.append(label)
+                openers.append(node)
             }
             for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
         }
         walk(try XCTUnwrap(window.contentView))
         XCTAssertEqual(named.count, labels.count, "Every command menu has one accessible opener")
         XCTAssertEqual(Set(named), Set(labels), "icon-only, text and history menu openers are named")
+
+        // The AX representation can be detached from the window. VoiceOver's
+        // Show Menu action still needs to open from the rendered control.
+        var opened = 0
+        AtticGlassMenu.testDriver = { menu in
+            opened += 1
+            XCTAssertEqual(menu.commands.map(\.title), ["Example"])
+        }
+        let opener = try XCTUnwrap(openers.first as? NSView)
+        XCTAssertTrue(opener.accessibilityPerformShowMenu())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(opened, 1, "Show Menu opens the real menu from its on-window anchor")
+        XCTAssertTrue(opener.accessibilityPerformPress())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(opened, 2, "Press also opens the real menu")
     }
 
     // MARK: Layout

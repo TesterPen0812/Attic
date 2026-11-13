@@ -1901,7 +1901,12 @@ struct AtticCommandMenu<Label: View>: View {
             // A menu button for VoiceOver and Full Keyboard Access, as the
             // native menu's opener was: Press and Show Menu open it.
             .accessibilityRepresentation {
-                AtticMenuButtonAccessibility(label: accessibilityLabel) { view in AtticNativeMenu.popUp(commands, in: view) }
+                AtticMenuButtonAccessibility(label: accessibilityLabel) { _ in
+                    // SwiftUI can expose the AX representation without attaching
+                    // its AppKit view to the window. Open from the rendered anchor.
+                    guard let view = anchor.view else { return }
+                    AtticNativeMenu.popUp(commands, in: view)
+                }
                     .accessibilityLabel(accessibilityLabel)
             }
         }
@@ -1915,8 +1920,17 @@ struct AtticMenuButtonAccessibility: NSViewRepresentable {
     let open: (NSView) -> Void
 
     final class ButtonView: NSView {
+        var menuLabel = ""
         var open: ((NSView) -> Void)?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        // On macOS 27 the AX representation is a detached ButtonView. The
+        // default NSView setters lose the name in that virtual AX tree, even
+        // though the menuButton role survives. Return the live name directly.
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .menuButton }
+        override func accessibilityLabel() -> String? { menuLabel }
+        override func accessibilityTitle() -> String? { menuLabel }
+        override func accessibilityHelp() -> String? { String(localized: "Opens a menu") }
         override func accessibilityPerformPress() -> Bool {
             guard let open else { return false }
             open(self)
@@ -1928,11 +1942,7 @@ struct AtticMenuButtonAccessibility: NSViewRepresentable {
     func makeNSView(context: Context) -> ButtonView { ButtonView() }
 
     func updateNSView(_ view: ButtonView, context: Context) {
-        view.setAccessibilityElement(true)
-        view.setAccessibilityRole(.menuButton)
-        view.setAccessibilityLabel(label)
-        view.setAccessibilityTitle(label)
-        view.setAccessibilityHelp(String(localized: "Opens a menu"))
+        view.menuLabel = label
         view.open = open
     }
 }
