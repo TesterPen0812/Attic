@@ -147,4 +147,134 @@ final class CalendarProBugTests: XCTestCase {
         XCTAssertEqual(source.requests, 1)
     }
 
+    func testBG41DiscardReleasesTheRealNavigationBarrierWithoutWriting() async throws {
+        let writer = CalendarProHeldWriter(start: date(29, hour: 9))
+        let source = CalendarEventSourceStub(events: [writer.event])
+        let model = CalendarPageModel(store: try makeTestStore(), source: source, calendar: calendar,
+            now: { self.date(29, hour: 12) }, makeWriter: { writer })
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        await model.eventRows.toggle(writer.event)
+        model.eventRows.title = "Retained edit"
+        writer.error = .eventMissing
+        source.replace([])
+        var navigated = false
+        let destination = DueDay(year: 2026, month: 10, day: 31)!
+        model.navigateAfterClosingEvent { model.select(destination); navigated = true }
+        for _ in 0..<100 where model.eventRows.failure == nil { await Task.yield() }
+        XCTAssertNotNil(model.eventRows.failure)
+        XCTAssertFalse(navigated)
+        XCTAssertEqual(model.snapshot.selected.day, 29)
+        let writes = writer.editCalls
+        model.eventRows.discardChanges()
+        model.navigateAfterClosingEvent { model.select(destination); navigated = true }
+        for _ in 0..<100 where !navigated { await Task.yield() }
+        XCTAssertTrue(navigated)
+        XCTAssertEqual(model.snapshot.selected, destination)
+        XCTAssertEqual(writer.editCalls, writes)
+    }
+
+    func testBG41DiscardCannotRaceAHeldSaveOrLoseNewerTyping() async throws {
+        let writer = CalendarProHeldWriter(start: date(29, hour: 9))
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        await rows.toggle(writer.event)
+        rows.title = "Submitted edit"
+        writer.hold = true
+        writer.error = .accessDenied
+        let save = Task { await rows.close() }
+        for _ in 0..<100 where writer.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(writer.gate)
+        rows.title = "Newer typing"
+        rows.discardChanges()
+        XCTAssertNotNil(rows.rowID)
+        XCTAssertEqual(rows.title, "Newer typing")
+        gate.resume(); writer.gate = nil
+        let closed = await save.value
+        XCTAssertFalse(closed)
+        XCTAssertEqual(rows.title, "Newer typing")
+        XCTAssertNotNil(rows.failure)
+        rows.discardChanges()
+        XCTAssertNil(rows.rowID)
+        XCTAssertEqual(writer.editCalls, 1)
+    }
+
+    func testBG41FailedEditCanBeDiscardedEvenWhenItsRowDisappears() async throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        for error in [CalendarEventWriteError.eventMissing, .accessDenied, .eventChanged] {
+            let writer = CalendarProHeldWriter(start: date(29, hour: 9))
+            let store = try makeTestStore()
+            let source = CalendarEventSourceStub(events: [writer.event])
+            let model = CalendarPageModel(store: store, source: source, calendar: calendar,
+                now: { self.date(29, hour: 12) }, makeWriter: { writer })
+            let layout = PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 320, height: 600))
+            let (_, host) = mount(CalendarPage(model: model, layout: layout,
+                taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }), onNewTask: { _ in })
+                .atticDesign(AtticDesignContext(mode: .light)))
+            await model.eventRows.toggle(writer.event)
+            model.eventRows.title = "Keep my draft"
+            writer.error = error
+            source.replace([])
+            let closed = await model.eventRows.close()
+            XCTAssertFalse(closed)
+            XCTAssertEqual(model.eventRows.title, "Keep my draft")
+            XCTAssertNotNil(model.eventRows.owned)
+            settle()
+            host.layoutSubtreeIfNeeded()
+            guard let discard = elements(host).first(where: { $0.accessibilityIdentifier?() == "calendar-event-discard" }) else {
+                XCTFail("no reachable discard after \(error)"); continue
+            }
+            XCTAssertTrue(discard.accessibilityPerformPress?() ?? false)
+            settle()
+            XCTAssertNil(model.eventRows.rowID)
+            XCTAssertNil(model.eventRows.owned)
+            let canClose = await model.eventRows.close()
+            XCTAssertTrue(canClose)
+            model.select(DueDay(year: 2026, month: 10, day: 31)!)
+            XCTAssertEqual(model.snapshot.selected.day, 31)
+            XCTAssertEqual(writer.editCalls, 1, "discard never writes")
+        }
+    }
+}
+
+@MainActor
+final class CalendarProHeldWriter: CalendarEventWriter {
+    var saved: CalendarOwnedEvent
+    var error: CalendarEventWriteError?
+    var hold = false
+    var gate: CheckedContinuation<Void, Never>?
+    var editCalls = 0
+    var lastError: CalendarEventWriteError? { error }
+    init(start: Date) {
+        saved = CalendarOwnedEvent(id: UUID(), occurrenceID: "pro-owned", draft: CalendarEventDraft(
+            title: "Meeting", start: start, length: 3600, calendarID: "home", timeZoneID: "Europe/London"))
+    }
+    var event: CalendarEvent {
+        CalendarEvent(id: saved.occurrenceID, title: saved.draft.title, start: saved.draft.start, end: saved.draft.end,
+            isAllDay: false, location: nil, calendarTitle: "Home", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+    }
+    func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
+    func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? { saved }
+    func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
+    func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+        editCalls += 1
+        if hold { await withCheckedContinuation { gate = $0 } }
+        if let error { throw error }
+        saved.draft = draft
+        return saved
+    }
+    // Support the displayed-baseline writer contract now on the integration
+    // branch, while this job remains built against its assigned base.
+    func edit(_ id: UUID, draft: CalendarEventDraft, expecting baseline: CalendarEventDraft?) async throws -> CalendarOwnedEvent {
+        if let baseline, baseline != saved.draft { throw CalendarEventWriteError.eventChanged }
+        return try await edit(id, draft: draft)
+    }
+    func delete(_ id: UUID, expecting baseline: CalendarEventDraft?) async throws {
+        if let baseline, baseline != saved.draft { throw CalendarEventWriteError.eventChanged }
+        try await delete(id)
+    }
+    func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+    func openInCalendar(_ id: String) async throws {}
 }

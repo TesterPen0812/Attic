@@ -79,6 +79,8 @@ struct CalendarPage: View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 Color.clear.frame(height: layout.headerBottom)
+                CalendarEventEditRecovery(rows: model.eventRows)
+                    .padding(.horizontal, layout.contentInsets.leading)
                 CalendarWeekdayRow()
                 if showsDay {
                     CalendarDayView(model: model, snapshot: snapshot, eventRows: model.eventRows, taskRows: model.taskRows,
@@ -664,5 +666,31 @@ private struct CalendarNativeScrollReader: NSViewRepresentable {
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// Lives outside occurrence rows: an externally removed event must not remove
+/// the only route out of its retained, unsaved editor.
+private struct CalendarEventEditRecovery: View {
+    @ObservedObject var rows: CalendarEventRowState
+
+    var body: some View {
+        if rows.canEdit, let failure = rows.failure {
+            HStack(spacing: AtticSpacing.s8) {
+                AtticText(verbatim: failure, style: .controlLabel, ink: .helper)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Discard changes") { rows.discardChanges() }
+                    .font(AtticTextStyle.controlLabel.font)
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .focusable(true, interactions: .activate)
+                    .focusEffectDisabled()
+                    .atticOwnFocusRing(.rounded(radius: 9, height: 18))
+                    .accessibilityIdentifier("calendar-event-discard")
+                    .disabled(rows.busy)
+            }
+            .padding(.vertical, AtticSpacing.s8)
+            .atticAnnounceErrors([failure])
+        }
     }
 }

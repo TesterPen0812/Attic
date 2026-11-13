@@ -209,6 +209,13 @@ final class CalendarEventRowState: ObservableObject {
         }
     }
 
+    /// An explicit recovery route when the source can no longer accept a save.
+    /// Never abandon a draft while its durable write is still in flight.
+    func discardChanges() {
+        guard !busy else { return }
+        clear()
+    }
+
     private func clear() {
         selectionGeneration &+= 1
         rowID = nil
