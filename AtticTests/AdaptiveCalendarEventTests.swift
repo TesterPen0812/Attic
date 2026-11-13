@@ -31,11 +31,11 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         func writableCalendars() async throws -> [CalendarWriteCalendar] { try base.writableCalendars() }
         func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? { try base.ownedEvent(matching: id) }
         func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { try base.create(draft) }
-        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent {
             if hold { await withCheckedContinuation { gate = $0 } }
-            return try base.edit(id, draft: draft)
+            return try base.edit(id, draft: draft, expecting: expecting)
         }
-        func delete(_ id: UUID) async throws { try base.delete(id) }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws { try base.delete(id, expecting: expecting) }
         func openInCalendar(_ id: String) async throws { try base.openInCalendar(id) }
     }
 
@@ -52,12 +52,13 @@ final class AdaptiveCalendarEventTests: XCTestCase {
             id == saved.occurrenceID ? saved : nil
         }
         func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
-        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent {
             guard id == saved.id else { throw CalendarEventWriteError.notOwned }
+            guard expecting == nil || expecting == saved.draft else { throw CalendarEventWriteError.eventChanged }
             saved.draft = draft
             return saved
         }
-        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws { throw CalendarEventWriteError.notOwned }
         func openInCalendar(_ id: String) async throws { throw CalendarEventWriteError.openFailed }
     }
 
@@ -67,8 +68,8 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         func writableCalendars() async throws -> [CalendarWriteCalendar] { [] }
         func ownedEvent(matching id: String) async throws -> CalendarOwnedEvent? { nil }
         func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
-        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
-        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws { throw CalendarEventWriteError.notOwned }
         func openInCalendar(_ id: String) async throws {
             await withCheckedContinuation { gate = $0 }
             throw CalendarEventWriteError.openFailed

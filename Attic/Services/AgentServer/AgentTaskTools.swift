@@ -765,7 +765,9 @@ final class AgentTaskTools {
         return day
     }
 
-    private func createTask(_ arguments: [String: Any]) throws -> String {
+    /// Pure semantic planning, shared with the agent's write-ahead journal.
+    /// A rejected creation must never leave a durable mutation intent.
+    func taskCreationDraft(_ arguments: [String: Any]) throws -> TaskDraft {
         let arguments = try withStateAlias(arguments)
         guard let title = arguments["title"] as? String,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -780,7 +782,7 @@ final class AgentTaskTools {
         let due = try dueDay(from: arguments, allowingClear: false) ?? nil
         // The title is kept literally (agents' titles are not shorthand); the
         // draft step applies the same creation rules as every other path.
-        let draft = TaskDraft(
+        return TaskDraft(
             title: title,
             tags: tags,
             dueDay: due,
@@ -788,6 +790,10 @@ final class AgentTaskTools {
             status: status,
             parentID: parentID
         )
+    }
+
+    private func createTask(_ arguments: [String: Any]) throws -> String {
+        let draft = try taskCreationDraft(arguments)
         guard let task = library.createTasks([draft])?.first else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
         }

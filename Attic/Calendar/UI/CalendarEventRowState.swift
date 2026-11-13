@@ -180,7 +180,7 @@ final class CalendarEventRowState: ObservableObject {
             if draft != owned.draft {
                 busy = true
                 defer { busy = false }
-                let saved = try await writer.edit(owned.id, draft: draft)
+                let saved = try await writer.edit(owned.id, draft: draft, expecting: owned.draft)
                 self.owned = saved
                 didWrite(String(localized: "Event changed"))
                 // A held save cannot close or overwrite newer typing.
@@ -201,7 +201,7 @@ final class CalendarEventRowState: ObservableObject {
         busy = true
         defer { busy = false }
         do {
-            try await writer.delete(owned.id)
+            try await writer.delete(owned.id, expecting: owned.draft)
             clear()
             didWrite(String(localized: "Event deleted"))
         } catch {

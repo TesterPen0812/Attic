@@ -180,8 +180,8 @@ final class PanelPullOutHostedTests: XCTestCase {
             return nil
         }
         func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.invalidDraft }
-        func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
-        func delete(_ id: UUID) async throws { throw CalendarEventWriteError.notOwned }
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent { throw CalendarEventWriteError.notOwned }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws { throw CalendarEventWriteError.notOwned }
         func openInCalendar(_ occurrenceID: String) async throws { throw CalendarEventWriteError.openFailed }
     }
 

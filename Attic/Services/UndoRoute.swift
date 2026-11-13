@@ -89,6 +89,17 @@ struct UndoStep {
 /// here, not in views, so releasing a view loses nothing.
 @MainActor
 final class UndoRoute: ObservableObject {
+    /// Exact handles recorded by one command task, including across awaits.
+    /// Other main-actor tasks and older recovered commands do not own them.
+    @MainActor
+    final class ActionRecording {
+        let routeID: UUID
+        private(set) var steps: [(history: UndoHistoryID, id: UUID)] = []
+        init(routeID: UUID) { self.routeID = routeID }
+        func append(history: UndoHistoryID, id: UUID) { steps.append((history, id)) }
+    }
+    @TaskLocal static var actionRecording: ActionRecording?
+
     private struct History {
         var undo: [UndoStep] = []
         var redo: [UndoStep] = []
@@ -167,6 +178,9 @@ final class UndoRoute: ObservableObject {
     func record(_ step: UndoStep, in history: UndoHistoryID) {
         if let capture = captures.last { capture(step); return }
         let history = resolved(history)
+        if let recording = Self.actionRecording, recording.routeID == ownershipID {
+            recording.append(history: history, id: step.id)
+        }
         if replaying.contains(history) {
             pendingRecords[history, default: []].append(step)
             return
@@ -417,7 +431,11 @@ final class UndoRoute: ObservableObject {
         replaying.insert(key)
         defer {
             replaying.remove(key)
-            for step in pendingRecords.removeValue(forKey: key) ?? [] { record(step, in: key) }
+            // Ownership was captured when these records were admitted, before
+            // replay deferred publication. Never attribute them a second time.
+            Self.$actionRecording.withValue(nil) {
+                for step in pendingRecords.removeValue(forKey: key) ?? [] { record(step, in: key) }
+            }
             evictInactiveHistories()
         }
         var committed = false

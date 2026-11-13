@@ -55,6 +55,319 @@ final class AgentActionsTests: XCTestCase {
 
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
+    /// Suspends a real fake-backed writer at the await boundary, so an owner
+    /// command can commit independently before an agent call resumes.
+    private final class HeldAgentCalendarWriter: CalendarEventWriter {
+        let base: EventKitCalendarEventWriter
+        var holdList = false
+        var holdWrite = false
+        var holdCommittedWrite = false
+        private var committedWrite: CheckedContinuation<Void, Never>?
+        private var committedObserver: CheckedContinuation<Void, Never>?
+        var holdLookup = false
+        private var heldLookup: CheckedContinuation<Void, Never>?
+        private var lookupObserver: CheckedContinuation<Void, Never>?
+        private var heldList: CheckedContinuation<Void, Never>?
+        private var heldWrite: CheckedContinuation<Void, Never>?
+        private var listObserver: CheckedContinuation<Void, Never>?
+        private var writeObserver: CheckedContinuation<Void, Never>?
+
+        init(_ base: EventKitCalendarEventWriter) { self.base = base }
+        var lastError: CalendarEventWriteError? { base.lastError }
+        func writableCalendars() async throws -> [CalendarWriteCalendar] {
+            if holdList {
+                await withCheckedContinuation { continuation in
+                    heldList = continuation
+                    listObserver?.resume()
+                    listObserver = nil
+                }
+            }
+            return try base.writableCalendars()
+        }
+        func waitForListHold() async {
+            if heldList != nil { return }
+            await withCheckedContinuation { listObserver = $0 }
+        }
+        func resumeList() { holdList = false; heldList?.resume(); heldList = nil }
+        private func beforeWrite() async {
+            if holdWrite {
+                await withCheckedContinuation { continuation in
+                    heldWrite = continuation
+                    writeObserver?.resume()
+                    writeObserver = nil
+                }
+            }
+        }
+        func waitForWriteHold() async {
+            if heldWrite != nil { return }
+            await withCheckedContinuation { writeObserver = $0 }
+        }
+        func resumeWrite() { holdWrite = false; heldWrite?.resume(); heldWrite = nil }
+        func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent? {
+            if holdLookup {
+                await withCheckedContinuation { continuation in
+                    heldLookup = continuation
+                    lookupObserver?.resume()
+                    lookupObserver = nil
+                }
+            }
+            return try base.ownedEvent(matching: occurrenceID)
+        }
+        func waitForLookupHold() async {
+            if heldLookup != nil { return }
+            await withCheckedContinuation { lookupObserver = $0 }
+        }
+        func resumeLookup() { holdLookup = false; heldLookup?.resume(); heldLookup = nil }
+        private func current(_ id: UUID) throws -> CalendarOwnedEvent? { try base.ownedEvent(id: id) }
+        func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent? { try current(id) }
+        func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent {
+            await beforeWrite()
+            let saved = try base.create(draft)
+            if holdCommittedWrite {
+                await withCheckedContinuation { continuation in
+                    committedWrite = continuation
+                    committedObserver?.resume()
+                    committedObserver = nil
+                }
+            }
+            return saved
+        }
+        func waitForCommittedWrite() async {
+            if committedWrite != nil { return }
+            await withCheckedContinuation { committedObserver = $0 }
+        }
+        func resumeCommittedWrite() { holdCommittedWrite = false; committedWrite?.resume(); committedWrite = nil }
+        func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft? = nil) async throws -> CalendarOwnedEvent {
+            await beforeWrite()
+            return try base.edit(id, draft: draft, expecting: expecting)
+        }
+        func delete(_ id: UUID, expecting: CalendarEventDraft? = nil) async throws {
+            await beforeWrite()
+            try base.delete(id, expecting: expecting)
+        }
+        func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
+                             restore: CalendarEventDraft?) async throws {
+            try applyInverse(id, expected: expected, restore: restore)
+        }
+        private func applyInverse(_ id: UUID, expected: CalendarEventDraft?,
+                                  restore: CalendarEventDraft?) throws {
+            try base.undoAgentChange(id, expected: expected, restore: restore)
+        }
+        func openInCalendar(_ occurrenceID: String) async throws { try base.openInCalendar(occurrenceID) }
+    }
+
+    private func heldCalendarFixture(journalURL: URL? = nil) throws -> (Fixture, HeldAgentCalendarWriter) {
+        let store = try makeTestStore()
+        let library = AtticLibrary(tasks: store)
+        let backend = FakeCalendarEventWriteStore()
+        backend.availableCalendars = [CalendarWriteCalendar(
+            id: "home", title: "Home", colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+            sourceID: "local", sourceTitle: "Local", isWritable: true)]
+        let writer = HeldAgentCalendarWriter(EventKitCalendarEventWriter(
+            store: backend, record: try CalendarOwnershipRecord(), undoRoute: library.undo))
+        let source = CalendarEventSourceStub()
+        let draw = DrawInMemoryStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: store, library: library),
+                                   calendarSource: source, calendarWriter: writer, draw: draw, journalURL: journalURL)
+        return (Fixture(actions: actions, store: store, library: library,
+                        draw: draw, backend: backend, source: source), writer)
+    }
+
+    func testReadOnlyAgentCallDoesNotCaptureConcurrentOwnerUndo() async throws {
+        let (f, writer) = try heldCalendarFixture()
+        let id = try XCTUnwrap(f.library.createTasks([TaskDraft(title: "Owner original")])?.first?.id)
+        let request = f.actions.beginRequest(title: "Read calendars")
+        writer.holdList = true
+        let read = Task { try await f.actions.call(name: "calendar_list_calendars",
+                                                   arguments: [:], watching: false, requestID: request) }
+        await writer.waitForListHold()
+        _ = f.library.updateTask(id, title: "Owner newer")
+        writer.resumeList()
+        let result = try performed(await read.value)
+        if let set = result.changeSet { _ = await f.actions.undo(changeSet: set.id) }
+        XCTAssertNil(f.actions.changeSet(for: request), "A Calendar read owns no Task Undo step")
+        XCTAssertEqual(f.store.task(withID: id)?.title, "Owner newer")
+    }
+
+    func testSeededSuspendedCalendarActionsPreserveOwnerUndo() async throws {
+        let seeds: [UInt64] = [0xD51, 0xD52]
+        for seed in seeds {
+            let (f, writer) = try heldCalendarFixture()
+            let id = try XCTUnwrap(f.library.createTasks([TaskDraft(title: "Initial")])?.first?.id)
+            var random = seed
+            for index in 0..<300 {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                let writing = (random >> 32) % 2 == 0
+                let request = f.actions.beginRequest(title: "Seed \(seed) step \(index)")
+                let previous = f.store.task(withID: id)?.title
+                let title = "Owner \(seed)-\(index)"
+                if writing {
+                    let pending = try approval(await f.actions.call(name: "calendar_create", arguments: [
+                        "title": "Agent event", "calendar_id": "home",
+                        "start": iso(Date(timeIntervalSince1970: 1_793_361_600))
+                    ], watching: false, requestID: request))
+                    writer.holdWrite = true
+                    let call = Task { try await f.actions.resolve(approval: pending.id, allow: true) }
+                    await writer.waitForWriteHold()
+                    XCTAssertTrue(f.library.updateTask(id, title: title).isApplied)
+                    writer.resumeWrite()
+                    _ = try await call.value
+                } else {
+                    writer.holdList = true
+                    let call = Task { try await f.actions.call(name: "calendar_list_calendars", arguments: [:],
+                                                               watching: false, requestID: request) }
+                    await writer.waitForListHold()
+                    XCTAssertTrue(f.library.updateTask(id, title: title).isApplied)
+                    writer.resumeList()
+                    _ = try await call.value
+                    XCTAssertNil(f.actions.changeSet(for: request))
+                }
+                let ownerHead = f.library.undo.undoStepID(in: .tasks)
+                let undone = await f.actions.undo(changeSet: request)
+                XCTAssertEqual(undone.undone, writing ? 1 : 0, "seed \(seed), step \(index)")
+                XCTAssertTrue(f.backend.events.isEmpty)
+                XCTAssertEqual(f.store.task(withID: id)?.title, title)
+                XCTAssertEqual(f.library.undo.undoStepID(in: .tasks), ownerHead)
+                if index % 13 == 0 {
+                    XCTAssertTrue(f.library.undo.undo(in: .tasks))
+                    XCTAssertEqual(f.store.task(withID: id)?.title, previous)
+                    XCTAssertTrue(f.library.undo.redo(in: .tasks))
+                    XCTAssertEqual(f.store.task(withID: id)?.title, title)
+                }
+            }
+            print("AGENT_CALENDAR_OWNERSHIP_SEED=\(seed) STEPS=300")
+        }
+    }
+
+    func testCalendarAgentUndoOnlyReversesItsOwnCommittedStep() async throws {
+        let (f, writer) = try heldCalendarFixture()
+        let id = try XCTUnwrap(f.library.createTasks([TaskDraft(title: "Owner original")])?.first?.id)
+        let request = f.actions.beginRequest(title: "Create calendar event")
+        let args: [String: Any] = ["title": "Agent event", "calendar_id": "home",
+                                   "start": iso(Date(timeIntervalSince1970: 1_793_361_600))]
+        let pending = try approval(await f.actions.call(name: "calendar_create", arguments: args,
+                                                         watching: false, requestID: request))
+        writer.holdWrite = true
+        let create = Task { try await f.actions.resolve(approval: pending.id, allow: true) }
+        await writer.waitForWriteHold()
+        _ = f.library.updateTask(id, title: "Owner newer")
+        writer.resumeWrite()
+        let created = try await create.value
+        XCTAssertNotNil(created)
+        XCTAssertEqual(f.backend.events.count, 1)
+        let undone = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1, "Only the Calendar command belongs to the agent")
+        XCTAssertTrue(f.backend.events.isEmpty)
+        XCTAssertEqual(f.store.task(withID: id)?.title, "Owner newer")
+    }
+
+    func testCalendarAgentUndoSealsItsCommittedDraftBeforeAnOwnerEdit() async throws {
+        let (f, writer) = try heldCalendarFixture()
+        let request = f.actions.beginRequest(title: "Create then owner edit")
+        let pending = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Agent event", "calendar_id": "home",
+            "start": iso(Date(timeIntervalSince1970: 1_793_361_600))
+        ], watching: false, requestID: request))
+        writer.holdCommittedWrite = true
+        let call = Task { try await f.actions.resolve(approval: pending.id, allow: true) }
+        await writer.waitForCommittedWrite()
+        let committed = try XCTUnwrap(f.backend.events.values.first)
+        let event = try XCTUnwrap(writer.base.ownedEvent(matching: committed.occurrenceID))
+        var owner = event.draft
+        owner.title = "Owner newer"
+        _ = try writer.base.edit(event.id, draft: owner)
+        writer.resumeCommittedWrite()
+        _ = try await call.value
+        let undone = await f.actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 0, "A newer owner draft cannot become the agent's Undo baseline")
+        XCTAssertFalse(undone.failures.isEmpty)
+        XCTAssertEqual(f.backend.events.values.first?.draft, owner)
+    }
+
+    func testCalendarAgentWriteRejectsOwnerChangeAfterBaselineRead() async throws {
+        for notesOnly in [false, true] {
+            for deleting in [false, true] {
+                let journal = ownedTemporaryDirectory(prefix: "AgentCalendarRefusal").appendingPathComponent("undo.json")
+                let (f, writer) = try heldCalendarFixture(journalURL: journal)
+                let original = try writer.base.create(CalendarEventDraft(title: "Approved",
+                    start: Date(timeIntervalSince1970: 1_793_361_600), length: 3600,
+                    calendarID: "home"))
+                let request = f.actions.beginRequest(title: "Concurrent Calendar change")
+                let name = deleting ? "calendar_delete" : "calendar_update"
+                let args: [String: Any] = deleting ? ["id": original.id.uuidString]
+                    : ["id": original.id.uuidString, "title": "Agent overwrite"]
+                let pending = try approval(await f.actions.call(name: name, arguments: args,
+                                                                 watching: false, requestID: request))
+                writer.holdWrite = true
+                let pendingWrite = Task { try await f.actions.resolve(approval: pending.id, allow: true) }
+                await writer.waitForWriteHold()
+                var owner = original.draft
+                if notesOnly { owner.notes = "Owner's newer writing" }
+                else { owner.title = "Owner's newer edit" }
+                _ = try writer.base.edit(original.id, draft: owner)
+                let commitsAfterOwner = f.backend.commits
+                writer.resumeWrite()
+                do {
+                    _ = try await pendingWrite.value
+                    XCTFail("An approved \(name) must reject a newer committed owner edit")
+                } catch {
+                    XCTAssertTrue(String(describing: error).contains("eventChanged") ||
+                                  error.localizedDescription.contains("changed"), "\(error)")
+                }
+                XCTAssertEqual(f.backend.events.values.first?.draft, owner)
+                XCTAssertEqual(f.backend.commits, commitsAfterOwner)
+                XCTAssertNil(f.actions.changeSet(for: request))
+                _ = try performed(await f.actions.call(name: "create_task", arguments: ["title": "After refusal"],
+                                                       watching: false, requestID: request))
+                let reopened = TaskStore(container: f.store.container)
+                let actions = AgentActions(tasks: AgentTaskTools(store: reopened,
+                    library: AtticLibrary(tasks: reopened)), journalURL: journal)
+                let later = actions.beginRequest(title: "After refusal and relaunch")
+                _ = try performed(await actions.call(name: "create_task", arguments: ["title": "After relaunch"],
+                                                     watching: false, requestID: later))
+                XCTAssertEqual(Set(reopened.tasks.map(\.title)), ["After refusal", "After relaunch"])
+            }
+        }
+    }
+
+    func testCalendarRecoveryHistoryDoesNotBelongToTheReadingOrWritingAgent() async throws {
+        for mutating in [false, true] {
+            let store = try makeTestStore()
+            let library = AtticLibrary(tasks: store)
+            let backend = FakeCalendarEventWriteStore()
+            backend.availableCalendars = [CalendarWriteCalendar(id: "home", title: "Home",
+                colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+                sourceID: "local", sourceTitle: "Local", isWritable: true)]
+            let record = try CalendarOwnershipRecord()
+            let writer = EventKitCalendarEventWriter(store: backend, record: record, undoRoute: library.undo)
+            let date = Date(timeIntervalSince1970: 1_793_361_600)
+            let original = try writer.create(CalendarEventDraft(title: "Original", start: date,
+                                                               length: 3600, calendarID: "home"))
+            let actions = AgentActions(tasks: AgentTaskTools(store: store, library: library), calendarWriter: writer)
+            let request = actions.beginRequest(title: "Calendar after owner recovery")
+            let pending = mutating ? try approval(await actions.call(name: "calendar_update",
+                arguments: ["id": original.id.uuidString, "title": "Agent edit"],
+                watching: false, requestID: request)) : nil
+            let recoveredID = UUID()
+            let staged = try backend.stageCreate(CalendarEventDraft(title: "Owner recovered", start: date,
+                                                                    length: 3600, calendarID: "home"))
+            try record.prepare(id: recoveredID, before: nil, after: staged)
+            try backend.commit()
+            if let pending { _ = try await actions.resolve(approval: pending.id, allow: true) }
+            else { _ = try performed(await actions.call(name: "calendar_list_calendars", arguments: [:],
+                                                         watching: false, requestID: request)) }
+            XCTAssertEqual(actions.changeSet(for: request)?.count ?? 0, mutating ? 1 : 0)
+            let undone = await actions.undo(changeSet: request)
+            XCTAssertEqual(undone.undone, mutating ? 1 : 0)
+            XCTAssertEqual(backend.events.count, 2, "Agent Undo must retain the recovered owner's event")
+            XCTAssertEqual(backend.events.values.first { $0.itemIdentifier == staged.itemIdentifier }?.draft.title,
+                           "Owner recovered")
+            XCTAssertTrue(library.undo.undo(in: .calendar), "Recovered owner Undo must remain available")
+            XCTAssertEqual(backend.events.count, 1)
+            XCTAssertEqual(backend.events.values.first?.draft.title, original.draft.title)
+        }
+    }
+
     private func mcp(_ handler: MCPRequestHandler, _ method: String,
                      params: [String: Any] = [:], token: String? = nil) async throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: [
@@ -1793,6 +2106,247 @@ final class AgentActionsTests: XCTestCase {
         print("AGENT_REALISTIC_REQUEST_MCP_TOOL_CALLS=\(callCount)")
         XCTAssertEqual(callCount, 5)
     }
+    func testCalendarJournalFailureRefusesBeforeStoreCommitAndRetry() async throws {
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        for brokenFile in [false, true] {
+            for name in ["calendar_create", "calendar_update", "calendar_delete"] {
+                let store = try makeTestStore()
+                let library = AtticLibrary(tasks: store)
+                let backend = FakeCalendarEventWriteStore()
+                backend.availableCalendars = [CalendarWriteCalendar(id: "home", title: "Home",
+                    colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+                    sourceID: "local", sourceTitle: "Local", isWritable: true)]
+                let writer = EventKitCalendarEventWriter(store: backend,
+                    record: try CalendarOwnershipRecord(), undoRoute: library.undo)
+                let existing = name == "calendar_create" ? nil : try writer.create(
+                    CalendarEventDraft(title: "Existing", start: date,
+                                       length: 3600, calendarID: "home"))
+                let initialState = backend.events
+                let initialCommits = backend.commits
+                let root = ownedTemporaryDirectory(prefix: "AgentCalendarJournalFailure")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let journal: URL
+                if brokenFile {
+                    journal = root.appendingPathComponent("undo.json")
+                    try Data("{damaged-journal}".utf8).write(to: journal)
+                } else {
+                    let blockingFile = root.appendingPathComponent("unwritable-parent")
+                    try Data("not-a-directory".utf8).write(to: blockingFile)
+                    journal = blockingFile.appendingPathComponent("undo.json")
+                }
+                let actions = AgentActions(tasks: AgentTaskTools(store: store, library: library),
+                    calendarWriter: writer, journalURL: journal)
+                let request = actions.beginRequest(title: "Cannot write Undo")
+                let args: [String: Any]
+                switch name {
+                case "calendar_create":
+                    args = ["title": "No duplicate", "start": iso(date), "calendar_id": "home"]
+                case "calendar_update":
+                    args = ["id": try XCTUnwrap(existing?.id).uuidString, "title": "No overwrite"]
+                default:
+                    args = ["id": try XCTUnwrap(existing?.id).uuidString]
+                }
+                for _ in 0..<(name == "calendar_create" ? 2 : 1) {
+                    let pending = try approval(await actions.call(name: name, arguments: args,
+                        watching: false, requestID: request))
+                    do {
+                        _ = try await actions.resolve(approval: pending.id, allow: true)
+                        XCTFail("\(name) with brokenFile=\(brokenFile) committed without Undo")
+                    } catch {
+                        XCTAssertTrue(error.localizedDescription.contains("Undo") ||
+                            error.localizedDescription.contains("journal"), "\(error)")
+                    }
+                    XCTAssertEqual(backend.commits, initialCommits, "\(name) committed before Undo was ready")
+                    XCTAssertEqual(backend.events, initialState, "\(name) changed a Calendar event")
+                    XCTAssertNil(actions.changeSet(for: request))
+                }
+            }
+        }
+    }
+
+    func testEveryAgentToolHasAnExplicitDataMutationOrReadOnlyPolicy() throws {
+        let definitions = AgentTaskTools.registeredCommands.map(\.definition)
+            + AgentSettingsTools.definitions + AgentActions.extraDefinitions
+        let names = Set(definitions.compactMap { $0["name"] as? String })
+        let presentation: Set<String> = ["show", "open_page"]
+        for name in names {
+            let policies = [AgentActions.isMutation(name), AgentActions.isReadOnlyAction(name), presentation.contains(name)]
+            XCTAssertEqual(policies.filter { $0 }.count, 1, "\(name) needs exactly one explicit policy")
+        }
+        XCTAssertTrue(AgentActions.mutationNames.isSubset(of: names))
+    }
+
+    func testRejectedCreateDoesNotStrandDurableAgentIntent() async throws {
+        let store = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "AgentRejectedCreate")
+            .appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: store,
+            library: AtticLibrary(tasks: store)), journalURL: journal)
+        let request = actions.beginRequest(title: "Rejected then valid")
+        do {
+            _ = try await actions.call(name: "create_task", arguments: ["title": "   "],
+                                       watching: false, requestID: request)
+            XCTFail("Blank task titles must be refused")
+        } catch {
+            XCTAssertTrue((error as? AgentToolError)?.message.contains("non-empty") == true, "\(error)")
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Valid now"],
+                                             watching: false, requestID: request))
+        let reopened = TaskStore(container: store.container)
+        let afterRestart = AgentActions(tasks: AgentTaskTools(store: reopened,
+            library: AtticLibrary(tasks: reopened)), journalURL: journal)
+        let later = afterRestart.beginRequest(title: "Valid after restart")
+        _ = try performed(await afterRestart.call(name: "create_task", arguments: ["title": "Valid later"],
+                                                 watching: false, requestID: later))
+        XCTAssertEqual(Set(reopened.tasks.map(\.title)), ["Valid now", "Valid later"])
+    }
+
+    func testUnverifiedCalendarCommitKeepsIntentAndPreventsRetryAcrossRestart() async throws {
+        let failures: [CalendarEventWriteError] = [.eventChanged, .calendarReadOnly]
+        for failure in failures {
+            for lands in [false, true] {
+                let store = try makeTestStore()
+                let library = AtticLibrary(tasks: store)
+                let backend = FakeCalendarEventWriteStore()
+                backend.availableCalendars = [CalendarWriteCalendar(id: "home", title: "Home",
+                    colour: .init(red: 0.2, green: 0.5, blue: 0.8),
+                    sourceID: "local", sourceTitle: "Local", isWritable: true)]
+                let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(),
+                                                         undoRoute: library.undo)
+                let journal = ownedTemporaryDirectory(prefix: "AgentCalendarUnverified").appendingPathComponent("undo.json")
+                let actions = AgentActions(tasks: AgentTaskTools(store: store, library: library),
+                                           calendarWriter: writer, journalURL: journal)
+                let request = actions.beginRequest(title: "Unverified Calendar write")
+                let pending = try approval(await actions.call(name: "calendar_create", arguments: [
+                    "title": "One event", "calendar_id": "home",
+                    "start": iso(Date(timeIntervalSince1970: 1_793_361_600))
+                ], watching: false, requestID: request))
+                if lands { backend.withholdReadsAfterCommit = true }
+                else { backend.commitError = failure }
+                do {
+                    _ = try await actions.resolve(approval: pending.id, allow: true)
+                    XCTFail("Unverified commits must remain held")
+                } catch {
+                    guard case .saveFailed? = error as? CalendarEventWriteError else {
+                        XCTFail("An attempted commit must not escape as a pre-write refusal: \(error)")
+                        continue
+                    }
+                }
+                backend.accessState = .denied
+                do {
+                    _ = try await actions.call(name: "calendar_list_calendars", arguments: [:],
+                                               watching: false, requestID: request)
+                    XCTFail("The read must report denied access")
+                } catch { XCTAssertEqual(error as? CalendarEventWriteError, .accessDenied) }
+                let reloaded = AgentActions(tasks: AgentTaskTools(store: store, library: library), journalURL: journal)
+                for model in [actions, reloaded] {
+                    let later = model.beginRequest(title: "Cannot retry uncertain write")
+                    do {
+                        _ = try await model.call(name: "create_task", arguments: ["title": "Must wait"],
+                                                 watching: false, requestID: later)
+                        XCTFail("An uncertain Calendar intent must block blind retries")
+                    } catch { XCTAssertTrue(error.localizedDescription.contains("unfinished Undo receipt"), "\(error)") }
+                }
+                XCTAssertEqual(backend.events.count, lands ? 1 : 0)
+                XCTAssertTrue(store.tasks.isEmpty)
+            }
+        }
+    }
+
+    func testRoundedInvalidCalendarCreateDoesNotStrandMutationIntent() async throws {
+        let journal = ownedTemporaryDirectory(prefix: "AgentCalendarRoundedRefusal").appendingPathComponent("undo.json")
+        let (f, _) = try heldCalendarFixture(journalURL: journal)
+        let request = f.actions.beginRequest(title: "Sub-minute create")
+        let pending = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Rounds to zero length", "calendar_id": "home",
+            "start": "2026-10-30T12:00:01Z", "end": "2026-10-30T12:00:02Z"
+        ], watching: false, requestID: request))
+        do {
+            _ = try await f.actions.resolve(approval: pending.id, allow: true)
+            XCTFail("A zero-length rounded event must be refused")
+        } catch { XCTAssertEqual(error as? CalendarEventWriteError, .invalidDraft) }
+        XCTAssertEqual(f.backend.commits, 0)
+        _ = try performed(await f.actions.call(name: "create_task", arguments: ["title": "After rounded refusal"],
+                                               watching: false, requestID: request))
+        let reopened = TaskStore(container: f.store.container)
+        let actions = AgentActions(tasks: AgentTaskTools(store: reopened,
+            library: AtticLibrary(tasks: reopened)), journalURL: journal)
+        let later = actions.beginRequest(title: "After relaunch")
+        _ = try performed(await actions.call(name: "create_task", arguments: ["title": "After relaunch"],
+                                             watching: false, requestID: later))
+        XCTAssertEqual(Set(reopened.tasks.map(\.title)), ["After rounded refusal", "After relaunch"])
+    }
+
+    func testCalendarProviderRefusalDoesNotStrandMutationIntent() async throws {
+        for expected in [CalendarEventWriteError.accessDenied, .calendarMissing, .calendarReadOnly] {
+            let journal = ownedTemporaryDirectory(prefix: "AgentCalendarProviderRefusal").appendingPathComponent("undo.json")
+            let (f, _) = try heldCalendarFixture(journalURL: journal)
+            let request = f.actions.beginRequest(title: "Provider refused before commit")
+            let pending = try approval(await f.actions.call(name: "calendar_create", arguments: [
+                "title": "No Calendar write", "calendar_id": "home",
+                "start": iso(Date(timeIntervalSince1970: 1_793_361_600))
+            ], watching: false, requestID: request))
+            switch expected {
+            case .accessDenied: f.backend.accessState = .denied
+            case .calendarMissing: f.backend.availableCalendars = []
+            default: f.backend.availableCalendars[0].isWritable = false
+            }
+            do {
+                _ = try await f.actions.resolve(approval: pending.id, allow: true)
+                XCTFail("The provider must refuse before any commit")
+            } catch { XCTAssertEqual(error as? CalendarEventWriteError, expected) }
+            XCTAssertEqual(f.backend.commits, 0)
+            XCTAssertTrue(f.backend.events.isEmpty)
+            _ = try performed(await f.actions.call(name: "create_task", arguments: ["title": "After provider refusal"],
+                                                   watching: false, requestID: request))
+            let reopened = TaskStore(container: f.store.container)
+            let actions = AgentActions(tasks: AgentTaskTools(store: reopened,
+                library: AtticLibrary(tasks: reopened)), journalURL: journal)
+            let later = actions.beginRequest(title: "After relaunch")
+            _ = try performed(await actions.call(name: "create_task", arguments: ["title": "After relaunch"],
+                                                 watching: false, requestID: later))
+            XCTAssertEqual(Set(reopened.tasks.map(\.title)), ["After provider refusal", "After relaunch"])
+        }
+    }
+
+    func testCalendarIntentAdmissionIsRecheckedAfterAwaitedBaseline() async throws {
+        let journal = ownedTemporaryDirectory(prefix: "AgentCalendarIntentAdmission").appendingPathComponent("undo.json")
+        let (f, writer) = try heldCalendarFixture(journalURL: journal)
+        let original = try writer.base.create(CalendarEventDraft(title: "Owner original",
+            start: Date(timeIntervalSince1970: 1_793_361_600), length: 3600, calendarID: "home"))
+        let first = f.actions.beginRequest(title: "Held baseline")
+        let edit = try approval(await f.actions.call(name: "calendar_update", arguments: [
+            "id": original.id.uuidString, "title": "Must wait for the other receipt"
+        ], watching: false, requestID: first))
+        writer.holdLookup = true
+        let pendingEdit = Task { try await f.actions.resolve(approval: edit.id, allow: true) }
+        await writer.waitForLookupHold()
+        let second = f.actions.beginRequest(title: "Held committed receipt")
+        let create = try approval(await f.actions.call(name: "calendar_create", arguments: [
+            "title": "Other agent event", "calendar_id": "home",
+            "start": iso(Date(timeIntervalSince1970: 1_793_361_600))
+        ], watching: false, requestID: second))
+        writer.holdCommittedWrite = true
+        let pendingCreate = Task { try await f.actions.resolve(approval: create.id, allow: true) }
+        await writer.waitForCommittedWrite()
+        writer.resumeLookup()
+        do {
+            _ = try await pendingEdit.value
+            XCTFail("A baseline await must not bypass another unfinished mutation receipt")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("unfinished Undo receipt"), "\(error)") }
+        writer.resumeCommittedWrite()
+        _ = try await pendingCreate.value
+        XCTAssertNil(f.actions.changeSet(for: first))
+        XCTAssertEqual(f.actions.changeSet(for: second)?.count, 1)
+        let undone = await f.actions.undo(changeSet: second)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertEqual(f.backend.events.count, 1)
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, original.draft.title)
+        _ = try performed(await f.actions.call(name: "create_task", arguments: ["title": "After both calls"],
+                                               watching: false, requestID: first))
+    }
+
     func testMalformedUndoJournalRefusesMutationsWithoutReplacingBadFile() async throws {
         let tasks = try makeTestStore()
         let journal = ownedTemporaryDirectory(prefix: "AgentBrokenUndo").appendingPathComponent("undo.json")

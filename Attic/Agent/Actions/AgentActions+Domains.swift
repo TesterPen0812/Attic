@@ -215,10 +215,12 @@ extension AgentActions {
          "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
     }
 
-    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID) async throws -> (String, AgentStep) {
-        func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget]) -> (String, AgentStep) {
+    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID,
+                        beforeMutation: () throws -> Void) async throws -> (String, AgentStep, CalendarEventDraft?) {
+        func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget],
+                    savedDraft: CalendarEventDraft? = nil) -> (String, AgentStep, CalendarEventDraft?) {
             (text, AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
-                             kind: kind, targets: targets, state: .done))
+                             kind: kind, targets: targets, state: .done), savedDraft)
         }
         switch name {
         case "calendar_search":
@@ -278,25 +280,30 @@ extension AgentActions {
             let draft = CalendarEventDraft(title: title, start: start, end: end,
                                            isAllDay: allDay,
                                            calendarID: calendarID, timeZoneID: zone, notes: args["notes"] as? String)
+            try (name == "calendar_create" ? draft.roundedToMinutes : draft).validateForWrite()
             let saved: CalendarOwnedEvent
             if name == "calendar_create" {
                 try guardMode(name, requestID: requestID)
+                try beforeMutation()
                 saved = try await writer.create(draft)
             }
             else {
-                try await verifyCalendarBaseline(args, using: writer)
+                let expected = try await verifyCalendarBaseline(args, using: writer)
                 try guardMode(name, requestID: requestID)
-                saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft)
+                try beforeMutation()
+                saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft, expecting: expected)
             }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
                                      externalID: saved.occurrenceID)
-            return try result(Self.json(Self.ownedCalendarRow(saved)), name == "calendar_create" ? .create : .update, [target])
+            return try result(Self.json(Self.ownedCalendarRow(saved)), name == "calendar_create" ? .create : .update,
+                              [target], savedDraft: saved.draft)
         case "calendar_delete":
             guard let writer = calendarWriter else { throw AgentActionsError.invalid("Calendar writer unavailable.") }
             let id = try Self.uuid(args["id"], "id")
-            try await verifyCalendarBaseline(args, using: writer)
+            let expected = try await verifyCalendarBaseline(args, using: writer)
             try guardMode(name, requestID: requestID)
-            try await writer.delete(id)
+            try beforeMutation()
+            try await writer.delete(id, expecting: expected)
             return try result(Self.json(["deleted": id.uuidString, "status": "deleted",
                                          "title": args["_resolved_title"] ?? "",
                                          "occurrence_id": args["occurrence_id"] ?? ""]), .delete,
@@ -307,14 +314,17 @@ extension AgentActions {
         }
     }
 
-    private func verifyCalendarBaseline(_ args: [String: Any], using writer: any CalendarEventWriter) async throws {
+    private func verifyCalendarBaseline(_ args: [String: Any], using writer: any CalendarEventWriter) async throws -> CalendarEventDraft {
         guard let encoded = args["_expected_draft"] as? String,
               let data = Data(base64Encoded: encoded),
               let expected = try? JSONDecoder().decode(CalendarEventDraft.self, from: data),
-              let occurrence = args["occurrence_id"] as? String else { return }
+              let occurrence = args["occurrence_id"] as? String else {
+            throw AgentActionsError.invalid("An approved Calendar baseline is required.")
+        }
         guard let current = try await writer.ownedEvent(matching: occurrence), current.draft == expected else {
             throw AgentActionsError.invalid("This event changed while approval was pending. Call calendar_search to get its current occurrence_id, then retry the change.")
         }
+        return expected
     }
 
     func drawAction(_ name: String, _ args: [String: Any], beforeMutation: () throws -> Void) throws -> (String, AgentStep, DrawSnapshot?) {

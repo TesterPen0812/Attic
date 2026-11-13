@@ -295,7 +295,7 @@ final class AgentActions {
         }
     }
 
-    private func requireDurableUndoBeforeMutation() throws {
+    private func requireDurableUndoBeforeMutation(checkpoint: Bool = true) throws {
         guard journalURL != nil else { return }
         guard journalWritable else {
             throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? "journal unavailable")")
@@ -306,6 +306,7 @@ final class AgentActions {
         if let checkpoint = undoInFlight.values.first {
             throw AgentActionsError.refused("Attic can't safely record another change while Undo of \(checkpoint.name) is unfinished. Review that step first.")
         }
+        if !checkpoint { return }
         do { try saveJournal() } catch {
             throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
         }
@@ -313,6 +314,9 @@ final class AgentActions {
 
     private func recordMutationIntent(_ name: String, arguments: [String: Any], requestID: UUID) throws {
         guard journalURL != nil else { return }
+        // Preparation may have awaited since admission. Recheck atomically
+        // with installing the intent; its write provides the IO checkpoint.
+        try requireDurableUndoBeforeMutation(checkpoint: false)
         let target = (arguments["id"] as? String) ?? (arguments["canvas_id"] as? String)
         pendingActions[requestID] = PendingAction(name: name, targetID: target)
         do { try saveJournal() } catch {
@@ -552,9 +556,20 @@ final class AgentActions {
     /// Failed calls keep previously committed steps in the same request.
     private func execute(name: String, arguments: [String: Any], watching: Bool,
                          requestID: UUID) async throws -> AgentActionResult {
+        let recording = Self.isMutation(name)
+            ? UndoRoute.ActionRecording(routeID: tasks.library.undo.ownershipID) : nil
+        return try await UndoRoute.$actionRecording.withValue(recording) {
+            try await execute(name: name, arguments: arguments, watching: watching,
+                              requestID: requestID, recording: recording)
+        }
+    }
+
+    private func execute(name: String, arguments: [String: Any], watching: Bool,
+                         requestID: UUID, recording: UndoRoute.ActionRecording?) async throws -> AgentActionResult {
         try checkOpen(requestID)
         try guardMode(name, requestID: requestID)
         if Self.isMutation(name) { try requireDurableUndoBeforeMutation() }
+        if name == "create_task" { _ = try tasks.taskCreationDraft(arguments) }
         let route = tasks.library.undo
         let before = Dictionary(uniqueKeysWithValues: route.retainedHistories.map {
             ($0, route.steps(in: $0, redo: false).map(\.id))
@@ -580,7 +595,7 @@ final class AgentActions {
                 batchTaskBefore[id] = snapshot
             }
         }
-        if Self.isMutation(name) && !name.hasPrefix("draw_") {
+        if Self.isMutation(name) && !name.hasPrefix("draw_") && !name.hasPrefix("calendar_") {
             try recordMutationIntent(name, arguments: arguments, requestID: requestID)
         }
         var step: AgentStep
@@ -600,13 +615,31 @@ final class AgentActions {
         } else if name == "search_items" {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
-            (text, step) = try await calendarAction(name, arguments, requestID: requestID)
+            let savedDraft: CalendarEventDraft?
+            var ownsIntent = false
+            do {
+                (text, step, savedDraft) = try await calendarAction(name, arguments, requestID: requestID) {
+                    try recordMutationIntent(name, arguments: arguments, requestID: requestID)
+                    ownsIntent = true
+                }
+            } catch {
+                // Only this call's proven precommit refusal can release its
+                // marker. A later read must not clear an older held write.
+                if ownsIntent, pendingActions[requestID] != nil,
+                   let refusal = error as? CalendarEventWriteError, refusal.isPrecommitRefusal {
+                    pendingActions[requestID] = nil
+                    try saveJournal()
+                }
+                throw error
+            }
             if ["calendar_create", "calendar_update", "calendar_delete"].contains(name),
                let id = step.targets.first?.itemID {
                 let old = (arguments["_expected_draft"] as? String)
                     .flatMap { Data(base64Encoded: $0) }
                     .flatMap { try? JSONDecoder().decode(CalendarEventDraft.self, from: $0) }
-                let after = name == "calendar_delete" ? nil : try await calendarWriter?.ownedEvent(id: id)?.draft
+                // Seal this operation's receipt, never a later owner edit read
+                // after the writer's committed result crosses an await.
+                let after = name == "calendar_delete" ? nil : savedDraft
                 if name == "calendar_create" || old != nil {
                     if name == "calendar_delete" || after != nil {
                         extraEntries.append(.calendar(id, before: old, after: after, name: step.title))
@@ -702,18 +735,8 @@ final class AgentActions {
         }
         step.title = AgentActionWords.completed(name, arguments, response: text, targets: step.targets,
                                                previousNoteBody: noteBefore?.body)
-        var entries: [UndoEntry] = []
-        for history in route.retainedHistories {
-            let current = route.steps(in: history, redo: false)
-            let old = before[history] ?? []
-            let ids = current.map(\.id)
-            if ids.starts(with: old) {
-                for added in current.dropFirst(old.count) {
-                    entries.append(.history(history, added.id, step.title))
-                }
-            } else if ids != old {
-                entries.append(.unavailable("\(step.title): history changed during the action"))
-            }
+        var entries: [UndoEntry] = (recording?.steps ?? []).map {
+            .history($0.history, $0.id, step.title)
         }
         // An editable task transition can be replayed after the session's
         // closure-only UndoRoute is gone. Seal the full physical replica set
@@ -1010,14 +1033,20 @@ final class AgentActions {
         return .read
     }
 
-    private static func isMutation(_ name: String) -> Bool {
-        name.hasPrefix("create_") || name.hasPrefix("update_") || name.hasPrefix("delete_") ||
-        name.hasPrefix("duplicate_") || name.hasPrefix("move_") || name.hasPrefix("restore_") ||
-        name == "link" || AgentTaskTools.asyncToolNames.contains(name) ||
-        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas",
-                                         "draw_create_canvas", "draw_duplicate_canvas", "draw_delete_object",
-                                         "draw_restyle_object", "draw_resize_object"].contains(name)
-    }
+    /// Reviewed write tools share admission, write-ahead intent and receipt
+    /// finalization. A definition-coverage test guards optional domains too.
+    static let mutationNames: Set<String> = [
+        "create_task", "create_tasks", "update_task", "update_tasks", "delete_task", "duplicate_task", "move_subtask",
+        "create_note", "update_note", "update_note_table", "delete_note",
+        "delete_item", "restore_item", "restore_items", "update_tags", "link", "update_settings",
+        "make_subtask", "make_note_checkbox", "make_task_from_note", "add_to_tasks", "remove_from_tasks",
+        "restore", "move_files_into_note", "calendar_create", "calendar_update", "calendar_delete",
+        "draw_create_canvas", "draw_duplicate_canvas", "draw_rename_canvas", "draw_delete_canvas",
+        "draw_add_text", "draw_add_shape", "draw_add_strokes", "draw_edit_text", "draw_move_object",
+        "draw_delete_object", "draw_restyle_object", "draw_resize_object"
+    ]
+
+    static func isMutation(_ name: String) -> Bool { mutationNames.contains(name) }
 
     private func noteSnapshot(for arguments: [String: Any]) -> (
         id: UUID, title: String, body: String, document: NoteDocument?

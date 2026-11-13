@@ -61,6 +61,21 @@ struct CalendarEventDraft: Codable, Equatable, Sendable {
         rounded.end = Date(timeIntervalSinceReferenceDate: (end.timeIntervalSinceReferenceDate / 60).rounded() * 60)
         return rounded
     }
+
+    func validateForWrite() throws {
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              start.timeIntervalSinceReferenceDate.isFinite,
+              end.timeIntervalSinceReferenceDate.isFinite,
+              end > start, let zone = TimeZone(identifier: timeZoneID) else {
+            throw CalendarEventWriteError.invalidDraft
+        }
+        if isAllDay {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            guard calendar.startOfDay(for: start) == start,
+                  calendar.startOfDay(for: end) == end else { throw CalendarEventWriteError.invalidDraft }
+        }
+    }
 }
 
 enum CalendarEventWriteError: Error, Equatable {
@@ -76,6 +91,18 @@ enum CalendarEventWriteError: Error, Equatable {
     case recordFailed(String)
     case openFailed
     case undoUnavailable
+
+    /// Writers guarantee these refusals did not attempt a commit. After an
+    /// attempted commit they reconcile first and report an unverified result
+    /// as saveFailed, even if EventKit originally returned a semantic error.
+    /// eventMissing may arise after a save and is deliberately excluded.
+    var isPrecommitRefusal: Bool {
+        switch self {
+        case .accessDenied, .invalidDraft, .calendarMissing, .calendarReadOnly,
+             .notOwned, .eventChanged, .repeatingEvent, .undoUnavailable: return true
+        default: return false
+        }
+    }
 }
 
 /// This local UUID survives delete/Undo, even when EventKit assigns new IDs.
@@ -94,8 +121,9 @@ protocol CalendarEventWriter: AnyObject {
     func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent?
     func ownedEvent(id: UUID) async throws -> CalendarOwnedEvent?
     func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
-    func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
-    func delete(_ id: UUID) async throws
+    /// A displayed/approved baseline is checked inside the serialized command.
+    func edit(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft?) async throws -> CalendarOwnedEvent
+    func delete(_ id: UUID, expecting: CalendarEventDraft?) async throws
     /// Reapply an agent's sealed inverse after relaunch. The writer verifies
     /// owned identity and the exact last saved draft before touching EventKit.
     func undoAgentChange(_ id: UUID, expected: CalendarEventDraft?,
