@@ -1580,9 +1580,22 @@ final class WorkspaceCommitTests: XCTestCase {
             try await self.coordinator.finishLaunch()
             done.value = true
         }
-        // Count yields, not time: a correct launch needs a handful.
-        var yields = 0
-        while !done.value && yields < 2_000 { await Task.yield(); yields += 1 }
+        // Wait on progress, not a raw yield count: the launch awaits real
+        // off-main I/O before its first batch, which a slow runner can delay
+        // for any number of main-actor yields. Once reconciliation is lost
+        // after a batch, a correct launch finishes within a few yields; a spin
+        // shows as no batch and no row read for a long run of yields. The
+        // outer bound is only a safety net, and nothing here reads a clock.
+        var stalledYields = 0, safety = 0
+        var lastProgress = (coordinator.launchPruneBatches.count, coordinator.receiptPruneFamilyRowsRead)
+        while !done.value && safety < 5_000_000 {
+            await Task.yield(); safety += 1
+            let progress = (coordinator.launchPruneBatches.count, coordinator.receiptPruneFamilyRowsRead)
+            if progress == lastProgress && flipped && !coordinator.startupReconciled { stalledYields += 1 }
+            else { stalledYields = 0 }
+            lastProgress = progress
+            if stalledYields >= 1_000 { break }
+        }
         let ended = done.value
         if !ended {
             // Let the spinning loop finish so it cannot outlive this test.
