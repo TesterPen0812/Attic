@@ -295,7 +295,7 @@ final class AgentActions {
         }
     }
 
-    private func requireDurableUndoBeforeMutation() throws {
+    private func requireDurableUndoBeforeMutation(checkpoint: Bool = true) throws {
         guard journalURL != nil else { return }
         guard journalWritable else {
             throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? "journal unavailable")")
@@ -306,6 +306,7 @@ final class AgentActions {
         if let checkpoint = undoInFlight.values.first {
             throw AgentActionsError.refused("Attic can't safely record another change while Undo of \(checkpoint.name) is unfinished. Review that step first.")
         }
+        if !checkpoint { return }
         do { try saveJournal() } catch {
             throw AgentActionsError.refused("Attic can't save Undo for this change, so it didn't make it: \(journalIssue ?? error.localizedDescription)")
         }
@@ -313,6 +314,9 @@ final class AgentActions {
 
     private func recordMutationIntent(_ name: String, arguments: [String: Any], requestID: UUID) throws {
         guard journalURL != nil else { return }
+        // Preparation may have awaited since admission. Recheck atomically
+        // with installing the intent; its write provides the IO checkpoint.
+        try requireDurableUndoBeforeMutation(checkpoint: false)
         let target = (arguments["id"] as? String) ?? (arguments["canvas_id"] as? String)
         pendingActions[requestID] = PendingAction(name: name, targetID: target)
         do { try saveJournal() } catch {
@@ -590,7 +594,7 @@ final class AgentActions {
                 batchTaskBefore[id] = snapshot
             }
         }
-        if Self.isMutation(name) && !name.hasPrefix("draw_") {
+        if Self.isMutation(name) && !name.hasPrefix("draw_") && !name.hasPrefix("calendar_") {
             try recordMutationIntent(name, arguments: arguments, requestID: requestID)
         }
         var step: AgentStep
@@ -611,7 +615,22 @@ final class AgentActions {
             (text, step) = try searchItems(arguments)
         } else if name.hasPrefix("calendar_") {
             let savedDraft: CalendarEventDraft?
-            (text, step, savedDraft) = try await calendarAction(name, arguments, requestID: requestID)
+            var ownsIntent = false
+            do {
+                (text, step, savedDraft) = try await calendarAction(name, arguments, requestID: requestID) {
+                    try recordMutationIntent(name, arguments: arguments, requestID: requestID)
+                    ownsIntent = true
+                }
+            } catch {
+                // Only this call's proven precommit refusal can release its
+                // marker. A later read must not clear an older held write.
+                if ownsIntent, pendingActions[requestID] != nil,
+                   let refusal = error as? CalendarEventWriteError, refusal.isPrecommitRefusal {
+                    pendingActions[requestID] = nil
+                    try saveJournal()
+                }
+                throw error
+            }
             if ["calendar_create", "calendar_update", "calendar_delete"].contains(name),
                let id = step.targets.first?.itemID {
                 let old = (arguments["_expected_draft"] as? String)
@@ -1011,14 +1030,20 @@ final class AgentActions {
         return .read
     }
 
-    private static func isMutation(_ name: String) -> Bool {
-        name.hasPrefix("create_") || name.hasPrefix("update_") || name.hasPrefix("delete_") ||
-        name.hasPrefix("duplicate_") || name.hasPrefix("move_") || name.hasPrefix("restore_") ||
-        name == "link" || AgentTaskTools.asyncToolNames.contains(name) ||
-        name.hasPrefix("draw_add_") || ["draw_edit_text", "draw_move_object", "draw_rename_canvas", "draw_delete_canvas",
-                                         "draw_create_canvas", "draw_duplicate_canvas", "draw_delete_object",
-                                         "draw_restyle_object", "draw_resize_object"].contains(name)
-    }
+    /// Reviewed write tools share admission, write-ahead intent and receipt
+    /// finalization. A definition-coverage test guards optional domains too.
+    static let mutationNames: Set<String> = [
+        "create_task", "create_tasks", "update_task", "update_tasks", "delete_task", "duplicate_task", "move_subtask",
+        "create_note", "update_note", "update_note_table", "delete_note",
+        "delete_item", "restore_item", "restore_items", "update_tags", "link", "update_settings",
+        "make_subtask", "make_note_checkbox", "make_task_from_note", "add_to_tasks", "remove_from_tasks",
+        "restore", "move_files_into_note", "calendar_create", "calendar_update", "calendar_delete",
+        "draw_create_canvas", "draw_duplicate_canvas", "draw_rename_canvas", "draw_delete_canvas",
+        "draw_add_text", "draw_add_shape", "draw_add_strokes", "draw_edit_text", "draw_move_object",
+        "draw_delete_object", "draw_restyle_object", "draw_resize_object"
+    ]
+
+    static func isMutation(_ name: String) -> Bool { mutationNames.contains(name) }
 
     private func noteSnapshot(for arguments: [String: Any]) -> (
         id: UUID, title: String, body: String, document: NoteDocument?

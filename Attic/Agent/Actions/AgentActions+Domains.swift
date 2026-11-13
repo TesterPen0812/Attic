@@ -215,7 +215,8 @@ extension AgentActions {
          "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
     }
 
-    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID) async throws -> (String, AgentStep, CalendarEventDraft?) {
+    func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID,
+                        beforeMutation: () throws -> Void) async throws -> (String, AgentStep, CalendarEventDraft?) {
         func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget],
                     savedDraft: CalendarEventDraft? = nil) -> (String, AgentStep, CalendarEventDraft?) {
             (text, AgentStep(id: UUID(), title: name.replacingOccurrences(of: "_", with: " ").capitalized,
@@ -279,14 +280,17 @@ extension AgentActions {
             let draft = CalendarEventDraft(title: title, start: start, end: end,
                                            isAllDay: allDay,
                                            calendarID: calendarID, timeZoneID: zone, notes: args["notes"] as? String)
+            try (name == "calendar_create" ? draft.roundedToMinutes : draft).validateForWrite()
             let saved: CalendarOwnedEvent
             if name == "calendar_create" {
                 try guardMode(name, requestID: requestID)
+                try beforeMutation()
                 saved = try await writer.create(draft)
             }
             else {
                 let expected = try await verifyCalendarBaseline(args, using: writer)
                 try guardMode(name, requestID: requestID)
+                try beforeMutation()
                 saved = try await writer.edit(Self.uuid(args["id"], "id"), draft: draft, expecting: expected)
             }
             let target = AgentTarget(page: .calendar, itemID: saved.id, title: saved.draft.title,
@@ -298,6 +302,7 @@ extension AgentActions {
             let id = try Self.uuid(args["id"], "id")
             let expected = try await verifyCalendarBaseline(args, using: writer)
             try guardMode(name, requestID: requestID)
+            try beforeMutation()
             try await writer.delete(id, expecting: expected)
             return try result(Self.json(["deleted": id.uuidString, "status": "deleted",
                                          "title": args["_resolved_title"] ?? "",

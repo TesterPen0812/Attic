@@ -456,18 +456,7 @@ final class CalendarEventTransactions {
     }
 
     private func validate(_ draft: CalendarEventDraft) throws {
-        guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              draft.start.timeIntervalSinceReferenceDate.isFinite,
-              draft.end.timeIntervalSinceReferenceDate.isFinite,
-              draft.end > draft.start, let zone = TimeZone(identifier: draft.timeZoneID) else {
-            throw CalendarEventWriteError.invalidDraft
-        }
-        if draft.isAllDay {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            guard calendar.startOfDay(for: draft.start) == draft.start,
-                  calendar.startOfDay(for: draft.end) == draft.end else { throw CalendarEventWriteError.invalidDraft }
-        }
+        try draft.validateForWrite()
         try requireWritable(draft.calendarID)
     }
 
@@ -550,6 +539,9 @@ final class CalendarEventTransactions {
             // A verified landed operation must register/advance Undo normally.
             // Pre-commit failures and ambiguous outcomes retain the typed error.
             if attemptedCommit && resolution.landed { return }
+            if let refusal = error as? CalendarEventWriteError, refusal.isPrecommitRefusal {
+                throw CalendarEventWriteError.saveFailed("The Calendar commit result could not be verified.")
+            }
             throw error
         }
     }
