@@ -3286,7 +3286,7 @@ final class NotesPageController: ObservableObject {
             item = await Self.loadFile(url, type: type.identifier)
         }
         guard isReviewSessionCurrent(session), session.engine === engine,
-              session.accepts(stamp), !session.isReadOnly,
+              session.hasSameBinding(stamp), !session.isReadOnly,
               case .importFailed = engine.objectState(objectID), session.noteID == noteID,
               !session.isPersisted || store.note(withID: noteID) != nil else { return false }
         return engine.replaceFailedFile(objectID, with: item)
