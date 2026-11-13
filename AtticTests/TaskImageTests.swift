@@ -49,6 +49,8 @@ final class TaskImageTests: XCTestCase {
 
     private final class FailedExportReplacementFileManager: FileManager {
         private let ownedScratch: URL
+        var installReplacementBeforeFailure = false
+        private(set) var backupURL: URL?
 
         init(ownedScratch: URL) { self.ownedScratch = ownedScratch; super.init() }
 
@@ -64,7 +66,12 @@ final class TaskImageTests: XCTestCase {
                                   backupItemName: String?, options: FileManager.ItemReplacementOptions = [],
                                   resultingItemURL resultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
             if let backupItemName {
-                try copyItem(at: originalItemURL, to: originalItemURL.deletingLastPathComponent().appendingPathComponent(backupItemName))
+                let backup = originalItemURL.deletingLastPathComponent().appendingPathComponent(backupItemName)
+                backupURL = backup
+                try moveItem(at: originalItemURL, to: backup)
+                if installReplacementBeforeFailure {
+                    try moveItem(at: newItemURL, to: originalItemURL)
+                }
             }
             throw CocoaError(.fileWriteOutOfSpace)
         }
@@ -104,6 +111,45 @@ final class TaskImageTests: XCTestCase {
             "a failed replacement must clean its scratch directory and redundant bytes")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(),
                        ["destination.txt", "source.txt"])
+    }
+
+    func testR3_1ExportCopyFailureRestoresMovedOriginal() async throws {
+        try await checkR3_1PartialExportFailure(installedReplacement: false)
+    }
+
+    func testR3_1ExportCopyFailureRetainsBackupWhenDestinationExists() async throws {
+        try await checkR3_1PartialExportFailure(installedReplacement: true)
+    }
+
+    private func checkR3_1PartialExportFailure(installedReplacement: Bool) async throws {
+        let root = ownedTemporaryDirectory(prefix: "R3PartialExport")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent("destination.txt")
+        let scratch = root.appendingPathComponent("scratch")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        let original = Data("the user's original bytes".utf8)
+        let replacement = Data("exported bytes".utf8)
+        try replacement.write(to: source)
+        try original.write(to: destination)
+        let manager = FailedExportReplacementFileManager(ownedScratch: scratch)
+        manager.installReplacementBeforeFailure = installedReplacement
+
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(
+            from: source, to: destination, fileManager: manager))
+
+        let backup = try XCTUnwrap(manager.backupURL)
+        let originalLocation = installedReplacement ? backup : destination
+        XCTAssertEqual(try Data(contentsOf: originalLocation), original,
+            "partial replacement failure must restore or retain the only copy of the original")
+        XCTAssertEqual(try Data(contentsOf: source), replacement)
+        if installedReplacement {
+            XCTAssertEqual(try Data(contentsOf: destination), replacement,
+                "restoration must not overwrite a destination that still exists")
+        } else {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
     }
 
     func testR2_3ExportCopyReplacesA255ByteFilename() async throws {

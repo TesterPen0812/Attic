@@ -312,7 +312,11 @@ enum TaskAttachmentActions {
                 _ = try fileManager.replaceItemAt(destination, withItemAt: staged, backupItemName: backupName,
                                                   options: [.withoutDeletingBackupItem])
             } catch {
-                try? fileManager.removeItem(at: backup)
+                // Replacement may already have moved the only original.
+                // Restore a missing destination; otherwise retain its backup.
+                if !fileManager.fileExists(atPath: destination.path), fileManager.fileExists(atPath: backup.path) {
+                    try? fileManager.moveItem(at: backup, to: destination)
+                }
                 throw error
             }
             // Replacement retains the original without another full copy.
