@@ -3,10 +3,38 @@ import SwiftData
 import XCTest
 @testable import Attic
 
+private struct PF5CountedID: Hashable {
+    let value: Int
+    nonisolated(unsafe) static var comparisons = 0
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        comparisons += 1
+        return lhs.value == rhs.value
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(value / 2) }
+}
+
 /// Scaling costs compare three interleaved runs with the same-job reference
 /// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
+    func testPF5BulkDeleteFocusIsLinearAndKeepsSelectionBoundaries() {
+        let ids = (0..<120).map { PF5CountedID(value: $0) }
+        PF5CountedID.comparisons = 0
+        let chosen = TaskDeletionFocus.next(visible: ids, deleting: ids.filter { $0.value.isMultiple(of: 2) || $0.value == 119 })
+        XCTAssertEqual(chosen?.value, 117)
+        XCTAssertLessThanOrEqual(PF5CountedID.comparisons, 120 * 8,
+                                 "Deleting many selected rows must not perform nested linear searches")
+        print("PF5_COUNTS comparisons=\(PF5CountedID.comparisons)")
+
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2, 3], deleting: [1]), 2)
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [0, 2]), 1)
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [999]), 1)
+        XCTAssertNil(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [0, 1, 2]))
+        XCTAssertNil(TaskDeletionFocus.next(visible: [0], deleting: [0]))
+    }
+
 
     func testR04BulkAcknowledgementsRollBackEveryReplicaAndPreserveOneUndoStep() async throws {
         struct Rejected: Error {}
