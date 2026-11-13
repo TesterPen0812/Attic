@@ -62,9 +62,17 @@ Both Now/Later (`TasksPage.swift:1665–1693`) and Done (`TasksDonePage.swift:90
 - Confidence: high for two unconditional representable backgrounds per rendered row; medium for measured effect under AX and actual reuse.
 - Mac measurement: instrument `makeNSView`, `viewDidMoveToWindow`, `dismantle`, active anchor count, Focus/AX registration and row-body evaluations; use Instruments' SwiftUI and Time Profiler while scrolling 100/1,000/10,000 rows with AX active. Guard test: an ordinary page with N realized rows has O(1) shared anchor views after the change, context/AX actions target the correct row and nested tag menu remains reachable. No wall-clock thresholds.
 
+### DP-12 (P2, tag-heavy scroll/resize suspect): The fitted tag line constructs and measures all tags before collapsing
+- `Attic/DesignSystem/Components/AtticTaskComponents.swift:2081–2097, 2119–2127, 2920–2935` → `Attic/DesignSystem/Tokens/AtticTagHue.swift:150–157`.
+- A realized task's inline tag line gives `ViewThatFits` a first candidate containing `ForEach(tags)`; only later candidates show the first tag and a count. Each tag's colour-menu modifier computes a command array (when colouring is enabled) before attaching a context menu. SwiftUI must evaluate/measure candidates to determine fit; the exact number of candidate bodies and native anchors actually mounted is framework-dependent. This concerns inline row tags, not PF-43's separate tag picker.
+- Scaling: at least source-level candidate construction with tag count per realized, tag-bearing row; command construction can add six palette choices plus a header for each applicable tag. In a narrow panel, most may not appear in the final rendering. Impact depends on tags per task and SwiftUI's optimization.
+- Smallest fix: cache intrinsic tag widths and preselect an equivalent full/first-plus-count/truncated representation for the available width; create colour commands lazily when the chosen tag's menu opens. Preserve exact tag appearance, fitting and nested right-click/VoiceOver semantics; do not hide additional tags or change the accepted look.
+- Confidence: high for source-level full candidate and eager `colourCommands`, medium for actual runtime evaluation and cost.
+- Mac measurement: count `AtticTagColourMenu.body`, `colourCommands`, tag label size measurements, native anchor creations and allocations per realized row while scrolling and resizing with 1/5/50 tags per task, AX active. Guard test: compare fitted output at width boundaries; count that only displayed tag controls and menu commands are materialized, while right-click and accessibility behavior remain identical.
+
 ### O-2 preliminary ranking and open questions
 1. Known H-01 focus-responder population and shared-host AX layout: already assigned, no new finding; impact on scroll needs an A/B trace.
-2. DP-6 row realization/native anchor/AX setup; DP-5 geometry callbacks per realized moving row. Order is unmeasured and may vary with scrolling velocity and retained-cell count.
+2. DP-6 row realization/native anchor/AX setup; DP-5 geometry callbacks per realized moving row; DP-12 where tasks have many tags. Order is unmeasured and may vary with scrolling velocity and retained-cell count.
 3. Known PF-7 scroll offset persistence. Do not double-count it as DP-5.
 Compare the input event → clip bounds → geometry callbacks → realized row construction → `panel_host_layout`/AX → frame delivery. Trace per-row tags, thumbnails, selection and drag when active; measure expandable Completed Today separately. No timing attribution is established.
 
@@ -126,7 +134,7 @@ The current `PageSwitch` signpost ends through an async main-queue callback from
 Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue are exclusions, not newly discovered findings.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 11 static suspects, including four resize, two scroll, two first-touch/context-click and three Notes/MCP/agent; neither is measured on the owner's Mac.
+- DP findings: 12 static suspects, including four resize, three scroll, two first-touch/context-click and three Notes/MCP/agent; neither is measured on the owner's Mac.
 - O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
 - Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling and agent tool-input streaming. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
