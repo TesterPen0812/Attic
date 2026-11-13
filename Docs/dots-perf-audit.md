@@ -571,7 +571,7 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Mac measurement: signpost gesture began, hit-test/ancestor visits, decision, first content scroll and first presentation, comparing vertical swipes in Tasks with different realized rows and AX on/off; count once per gesture versus per changed event. Guard test: one ownership resolution at most per gesture and none for changed events, with correct horizontal/vertical behavior and fresh target resolution for the next gesture.
 
 ### DP-80 (P1, active-AX hit-test suspect): Panel accessibility hit testing walks intersecting descendants after the framework hit test
-- Chain: an accessibility client requests hit-testing on `AtticPanelHostingView` → `accessibilityHitTest` (`Attic/Window/AtticPanel.swift:2118–2121`) calls `super.accessibilityHitTest(point)`, then `topmostElement` (`:2125–2155`). That explicitly traverses accessibility children in tree order, requests each child’s frame, descends into every frameless or point-containing branch, and for a framed child calls `isPlaceholder`, which can request its children again. Recursive visits are capped at depth 64 and 20,000 nodes, although an already-entered parent can still inspect later siblings after that cap. This is a general AX-client path, distinct from DP-30: Calendar itself also explicitly calls AX hit-test for ordinary clicks, making this same traversal reachable without an external point query in that case. DP-78 is the separate ordinary native hit test. Active accessibility alone does not prove a client sends an AX hit-test for every click.
+- Chain: an accessibility client requests hit-testing on `AtticPanelHostingView` → `accessibilityHitTest` (`Attic/Window/AtticPanel.swift:2118–2121`) calls `super.accessibilityHitTest(point)`, then `topmostElement` (`:2125–2155`). That explicitly traverses accessibility children in tree order, requests each child’s frame, descends into every frameless or point-containing branch, and for a framed child calls `isPlaceholder`, which can request its children again. Recursive visits are capped at depth 64 and 20,000 nodes, although an already-entered parent can still inspect later siblings after that cap. This is a general AX-client path, distinct from DP-30: Calendar itself also explicitly calls AX hit-test for ordinary clicks, making this same traversal reachable without an external point query in that case. DP-78 is the separate ordinary native hit test. Active accessibility alone does not prove a client sends an AX hit-test for every click. The same host override and traversal are present at comparison commit `0261cd21`.
 - Scaling: O(V) inspected point-intersecting/frameless AX descendants, with recursive visits capped at 20,000 but remaining sibling inspections not necessarily bounded by that cap, and potentially repeated `accessibilityChildren` requests and whatever SwiftUI does to materialize each response, plus the initial framework hit test. Multiple retained pages may or may not be exposed by SwiftUI’s `accessibilityHidden`; count actual nodes and do not assume the full stored task count or hidden tree is visited. Cost per query and call frequency are unmeasured.
 - Smallest fix: avoid the second child enumeration within a traversal, and use an invalidated spatial/z-order index or a targeted top-chrome hit-test before falling back to the framework result, preserving exact topmost actionable hit, real accessibility traversal and accessibility names/roles. Validate first with the 20k cap, scrolled-under-bar cases, frameless groups and overlay stacking; do not disable accessibility or return an arbitrary element for speed.
 - Confidence: high for the explicit traversal, cap and preceding framework call; medium for whether a given assistive/automation client invokes it on the slow interaction.
@@ -582,22 +582,22 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
 
 1. **DP-38:** row selection broadcasts to all realized task cells, a residual click suspect.
-2. **DP-78:** each ordinary press explicitly hit-tests before AppKit dispatch.
-3. **DP-1:** each resize step publishes shell size and can trigger root reflow.
-4. **DP-5:** task scrolling reports geometry for moving realized rows.
-5. **DP-6:** Tasks rows mount native menu anchors and associated AX work.
-6. **DP-30:** Calendar performs an AX hit test on ordinary clicks, even on matched event rows.
-7. **DP-33:** Calendar task rows retain H-01-style focus responders on the comparison branch.
-8. **DP-8:** synchronous first-touch warmup may overlap an input.
-9. **DP-3:** resizing a mounted large Notes table remeasures cells.
-10. **DP-46:** Draw gesture flushes synchronously encode/write the recovery archive on main.
-11. **DP-21:** multi-paragraph edits can force full Notes projection at autosave.
-12. **DP-40:** each table-cell edit searches earlier document attachment runs.
-13. **DP-19:** Draw text edits can rebuild the full AX navigation graph.
-14. **DP-65:** the chat item picker can redo full fuzzy search on hover and model updates.
-15. **DP-66:** batch imports repeatedly verify their growing staged recovery payload.
+2. **DP-80:** accessibility point queries traverse intersecting panel descendants after the framework hit-test.
+3. **DP-78:** each ordinary press explicitly hit-tests before AppKit dispatch.
+4. **DP-1:** each resize step publishes shell size and can trigger root reflow.
+5. **DP-5:** task scrolling reports geometry for moving realized rows.
+6. **DP-6:** Tasks rows mount native menu anchors and associated AX work.
+7. **DP-30:** Calendar performs an AX hit test on ordinary clicks, even on matched event rows.
+8. **DP-33:** Calendar task rows retain H-01-style focus responders on the comparison branch.
+9. **DP-8:** synchronous first-touch warmup may overlap an input.
+10. **DP-3:** resizing a mounted large Notes table remeasures cells.
+11. **DP-46:** Draw gesture flushes synchronously encode/write the recovery archive on main.
+12. **DP-21:** multi-paragraph edits can force full Notes projection at autosave.
+13. **DP-40:** each table-cell edit searches earlier document attachment runs.
+14. **DP-19:** Draw text edits can rebuild the full AX navigation graph.
+15. **DP-65:** the chat item picker can redo full fuzzy search on hover and model updates.
 
-Close contenders depend on usage: DP-35 makes expanded quick-look command generation quadratic, DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
+Close contenders depend on usage: DP-66 repeatedly verifies growing batch-import recovery payloads, DP-35 makes expanded quick-look command generation quadratic, DP-43 retains source data for visited live notes, and DP-24 reconstructs due-task Calendar presentations on task revisions.
 
 **O-1 order:** first instrument/fix known shared-host work, then DP-1; compare DP-3 and DP-4 under relevant retained content, then DP-2 and DP-63. Each may explain a meaningful part only under its trigger; individual contributions are unknown. **O-2:** measure H-01/host, DP-5/DP-6, then PF-7 and tag-heavy DP-12; DP-20 is a small bounded per-event cost. **O-3:** use the hosting-layout fix as the baseline, then isolate DP-38 for row clicks, DP-75 for page switches, DP-78 for ordinary press hit-testing, DP-80 for client AX hit-testing, DP-77 when many native editors have been focused, DP-8, DP-16/DP-17 and Calendar click-specific DP-30 and residual Calendar focus registration DP-33 under their triggers; DP-7 is only a context-click path. None explains the remaining 220–240 ms or the ~100 ms frame-opportunity interval without measurement.
 
