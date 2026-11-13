@@ -259,12 +259,14 @@ final class DrawImageActions: DrawImageSeam {
     }
 
     private func copyOriginal(_ image: DrawImage) {
+        guard let pasteboard = model?.pasteboard else { return }
+        let changeCount = pasteboard.changeCount
         copyGeneration &+= 1
         let generation = copyGeneration
         let original = image.original, type = NSPasteboard.PasteboardType(image.contentType)
         lastTask = Task { @MainActor [weak self] in
             let png = type == .png ? nil : await Task.detached(priority: .userInitiated) { Self.png(of: original) }.value
-            guard let self, self.copyGeneration == generation, let pasteboard = self.model?.pasteboard else { return }
+            guard let self, self.copyGeneration == generation, pasteboard.changeCount == changeCount else { return }
             pasteboard.clearContents()
             let item = NSPasteboardItem()
             item.setData(original, forType: type)
@@ -309,13 +311,15 @@ final class DrawImageActions: DrawImageSeam {
     }
 
     private func copy(_ objects: [DrawObject]) {
+        guard let pasteboard = model?.pasteboard else { return }
+        let changeCount = pasteboard.changeCount
         copyGeneration &+= 1
         let generation = copyGeneration
         let dark = Self.isDark
         lastTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let png = await self.copyRenderer(objects, dark)
-            guard self.copyGeneration == generation, let png, let pasteboard = self.model?.pasteboard else { return }
+            guard self.copyGeneration == generation, pasteboard.changeCount == changeCount, let png else { return }
             pasteboard.clearContents()
             pasteboard.setData(png, forType: .png)
         }

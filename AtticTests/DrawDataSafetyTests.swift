@@ -234,6 +234,51 @@ final class DrawDataSafetyTests: XCTestCase {
         }
     }
 
+    func testClipboardOlderImageCopyCannotOverwriteLaterCopyCutOrExternalChange() async throws {
+        for later in ["copy", "cut", "external", "beforeTaskStarts"] {
+            let page = DrawPageModel(store: DrawInMemoryStore())
+            page.start()
+            let object = DrawObject(content: .shape(.rectangle))
+            XCTAssertTrue(page.perform(.put([object])).isSaved)
+            page.select([object.id])
+            let pb = NSPasteboard(name: .init("DrawClipboard-\(UUID())"))
+            page.pasteboard = pb
+            let gate = Draw3Gate()
+            page.images.copyRenderer = { _, _ in await gate.wait(); return Data([1, 2, 3]) }
+            page.images.copyAsImage([object])
+            let task = page.images.lastTask
+            if later != "beforeTaskStarts" { await Task.yield() }
+            switch later {
+            case "copy": page.copySelection()
+            case "cut": page.cutSelection()
+            default:
+                pb.clearContents()
+                pb.setString("Newer external copy", forType: .string)
+            }
+            let expectedTypes = pb.types
+            let expected = expectedTypes?.map { pb.data(forType: $0) }
+            gate.open()
+            await task?.value
+            XCTAssertEqual(pb.types, expectedTypes, later)
+            XCTAssertEqual(pb.types?.map { pb.data(forType: $0) }, expected, later)
+            pb.releaseGlobally()
+        }
+    }
+
+    func testClipboardOriginalImageCopyRespectsExternalChangeBeforeTaskStarts() async throws {
+        let page = DrawPageModel(store: DrawInMemoryStore())
+        let pb = NSPasteboard(name: .init("DrawOriginalClipboard-\(UUID())"))
+        defer { pb.releaseGlobally() }
+        page.pasteboard = pb
+        let image = DrawImage(original: Draw3Images.encoded(width: 20, height: 10), pixelWidth: 20, pixelHeight: 10)
+        page.images.copyAsImage([DrawObject(content: .image(image))])
+        pb.clearContents()
+        pb.setString("Later clipboard", forType: .string)
+        await page.images.lastTask?.value
+        XCTAssertEqual(pb.string(forType: .string), "Later clipboard")
+        XCTAssertNil(pb.data(forType: .png))
+    }
+
     func testDS9FailedModelSaveNeverPlaysImportSuccess() async throws {
         struct Failure: Error {}
         let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
