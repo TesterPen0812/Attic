@@ -4174,11 +4174,10 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating",
                       retaining edits: RetainedTaskEdits? = nil) -> Bool {
-        guard !taskEditNeedsReload else {
-            rollback(retaining: edits)
-            report("The task list needs a fresh read before editing.", owner: owner)
-            return false
-        }
+        // A failed refresh left `tasks` unconfirmed. The edit is already staged
+        // in this context (a reload would abandon it), so save it as before
+        // and publish through a full reload instead of an incremental commit.
+        let listNeedsReload = taskEditNeedsReload
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -4208,7 +4207,7 @@ final class TaskStore: ObservableObject {
             var presentationReadFailed = false
             var presentationReloaded = false
             var publishedWinners: [TaskItem]?
-            if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
+            if try !listNeedsReload && WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                 do {
                     publishedWinners = try IdleLatencyTrace.span("task_save_publish") {
                         try publishPlainCommit(changedIDs, removedRows: removedRows)
@@ -4350,7 +4349,10 @@ final class TaskStore: ObservableObject {
                     tasks[position] = row
                 }
             }
-            index.rebind(winners, revision: revision &+ 1)
+            // The cache stays at the current revision: `@Published` sinks run in
+            // willSet and read this index before `revision` advances; the bump
+            // in save() then moves the cache with it.
+            index.rebind(winners, revision: revision)
             rebindScopeSnapshots(winners, using: index)
             familyIndexCache = index
             return winners
