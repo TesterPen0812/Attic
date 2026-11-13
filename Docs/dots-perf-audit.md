@@ -529,6 +529,9 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Confidence: high for repeated calls and journal loops; impact requires roots plus nontrivial remaining journal content and Mac measurements.
 - Mac measurement: count candidate roots, inventory calls, directory entries, bytes read/hashed and generation changes, plus time-to-settled migration with 1/100/1,000 roots and 0/10/100 recovery entries and representative payload sizes. Guard test: unchanged journal is inventoried O(1) times per sweep, relevant verified quarantines still reconcile, and an intervening new/damaged/changed operation forces revalidation and cannot release an unsafe hold.
 
+### Additional first-click check: borrowed application activation
+`Attic/Window/PanelActivation.swift:63–100` records the prior frontmost app on an eligible press and, if Attic is not active on release, makes the panel key and main and requests process activation. This is conditional and important for the existing first-click/focus contract; the code does not establish that it causes the residual delay, so it is not a separate defect. Add signposts for press/release, `prepare`, `activate`, activation notifications and the first CA transaction, and compare otherwise-identical inactive versus already-active clicks with AX clients present. Do not remove the activation/focus handoff without demonstrating equivalent keyboard, Space and previous-app behavior.
+
 ## Provisional top 15 and coverage checkpoint
 
 This is a prioritized test plan, not a measured ranking. The owner-provided H-01/host numbers are the only timings here. Effects cannot be added, and no percentages are defensible before Mac traces. The separately assigned shared-host and PF-1–PF-50 findings are not renumbered or re-filed.
