@@ -78,6 +78,81 @@ final class ComposerTests: XCTestCase {
 
     private func liveTasks() -> [TaskItem] { tasks.tasks.filter { $0.deletedAt == nil } }
 
+    func testBG7ConsecutiveCalendarEventsKeepTheSelectedDay() async throws {
+        let selected = day(3)
+        model.open(on: .calendar(selected: selected))
+        await model.loadCalendars()
+        for title in ["First event", "Second event"] {
+            type(title)
+            let made = await model.create()
+            XCTAssertTrue(made)
+            XCTAssertTrue(model.isOpen)
+        }
+        XCTAssertEqual(events.events.count, 2)
+        for event in events.events.values {
+            XCTAssertEqual(DueDay(date: event.draft.start, calendar: clock), selected)
+        }
+    }
+
+    func testBG7ConsecutiveCalendarTasksKeepTheSelectedDayThroughSubmit() async throws {
+        let selected = day(3)
+        model.open(on: .calendar(selected: selected), as: .task)
+        for title in ["First task", "Second task"] {
+            type(title)
+            model.submit()
+            for _ in 0..<200 where model.isCreating { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(model.isCreating)
+            XCTAssertTrue(model.isOpen)
+        }
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertTrue(liveTasks().allSatisfy { $0.dueDay == selected })
+        XCTAssertEqual(library.undo(in: .calendar), .applied)
+        XCTAssertEqual(liveTasks().count, 1)
+    }
+
+    func testBG8ClearDateRemovesDateAndTimeAndUndoRestoresBoth() async throws {
+        model.open(on: .tasks(.now))
+        for text in ["Call tomorrow 4pm", "Call 4pm"] {
+            type(text)
+            let before = page.addBar
+            let expected = before.parts(parser: page.parser)
+            let steps = page.addBarState.history.undoStack.count
+            page.clearComposer(.date, editor: model.editor)
+            XCTAssertNil(model.values.day)
+            XCTAssertNil(model.values.time)
+            XCTAssertEqual(page.addBarState.history.undoStack.count, steps + 1)
+            let cleared = page.addBar
+            let undo = try XCTUnwrap(page.addBarState.history.undo(current: cleared, selection: nil))
+            page.addBar = undo.text
+            XCTAssertEqual(page.addBar.parts(parser: page.parser), expected)
+            let redo = try XCTUnwrap(page.addBarState.history.redo(current: page.addBar, selection: nil))
+            page.addBar = redo.text
+            let made = await model.create()
+            XCTAssertTrue(made)
+        }
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertTrue(liveTasks().allSatisfy { $0.dueDay == nil && $0.dueTimeMinutes == nil })
+    }
+
+    func testBG9EventDraftUsesGregorianCivilDayForEverySystemCalendar() throws {
+        for zone in ["Europe/London", "America/Los_Angeles"] {
+            var gregorian = Calendar(identifier: .gregorian)
+            gregorian.timeZone = TimeZone(identifier: zone)!
+            let civilDay = DueDay(year: 2026, month: 11, day: 13)!
+            for time: Int? in [nil, 16 * 60 + 30] {
+                let expected = try XCTUnwrap(ComposerModel.eventDraft(title: "Meeting", day: civilDay, time: time,
+                    length: 60, calendarID: "home", calendar: gregorian))
+                for identifier in [Calendar.Identifier.buddhist, .japanese, .gregorian] {
+                    var calendar = Calendar(identifier: identifier)
+                    calendar.timeZone = gregorian.timeZone
+                    let actual = try XCTUnwrap(ComposerModel.eventDraft(title: "Meeting", day: civilDay, time: time,
+                        length: 60, calendarID: "home", calendar: calendar))
+                    XCTAssertEqual(actual, expected, "\(identifier), \(zone), \(String(describing: time))")
+                }
+            }
+        }
+    }
+
     func testQueuedEventSubmissionCannotCreateAReplacementSession() async {
         model.open(on: .calendar(selected: today))
         await model.loadCalendars()

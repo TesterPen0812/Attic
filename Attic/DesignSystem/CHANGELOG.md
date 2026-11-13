@@ -1,3 +1,9 @@
+## 2026-11-13 · Date-picker hover (BG-57)
+
+Hovering a neighbouring-month date keeps the six-week grid still until the
+click. Keyboard, typed-date and month/year navigation still turn the month;
+the existing day shapes, highlights and motion are unchanged.
+
 ## 2026-11-13 · Menus conform to the accepted glass, motion and opening rules
 
 Menus and pickers use the same system-menu Liquid Glass face, independent of

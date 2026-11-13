@@ -975,7 +975,7 @@ struct PanelPageVisibility: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .environment(\.atticPanelPageIsCurrent, isCurrent)
+            .transformEnvironment(\.atticPanelPageIsCurrent) { $0 = $0 && isCurrent }
             .environment(\.panelPageMotion, motion)
             .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
             .offset(x: isCurrent ? 0 : restingOffset)

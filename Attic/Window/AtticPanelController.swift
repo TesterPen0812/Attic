@@ -373,6 +373,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var onOutsidePress: ((CGPoint, NSWindow?) -> Void)?
     private var isDisplayingResizeCursor = false
     private var visibilityTransition = PanelVisibilityTransitionState()
+    private var calendarHideGeneration: UInt64 = 0
     private var isSavingCalendarForHide = false
     private var calendarHideCompletions: [(PanelHideCompletion) -> Void] = []
     private(set) var currentScreen: NSScreen?
@@ -665,6 +666,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// nothing) when the screen has no usable area for it.
     @discardableResult
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) -> Bool {
+        supersedeCalendarHide()
         cancelPageRelease()
         // Build the pages now, before the first frame is shown, so the panel
         // never slides in empty; the reveal signpost includes it.
@@ -799,6 +801,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// A reveal supersedes the entire hide intent, including an asynchronous
+    /// Calendar preflight. The write may finish; its UI continuation may not.
+    private func supersedeCalendarHide() {
+        calendarHideGeneration &+= 1
+        isSavingCalendarForHide = false
+        let completions = calendarHideCompletions
+        calendarHideCompletions.removeAll()
+        completions.forEach { $0(.superseded) }
+    }
+
     @discardableResult
     func requestHide(
         completion: @escaping (PanelHideCompletion) -> Void
@@ -834,6 +846,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         let openCalendarRows = CalendarDraftTerminationRegistry.shared.openRows(for: .docked)
         if !openCalendarRows.isEmpty {
+            calendarHideGeneration &+= 1
+            let generation = calendarHideGeneration
             isSavingCalendarForHide = true
             calendarHideCompletions.append(completion)
             Task { @MainActor [weak self] in
@@ -841,11 +855,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 var saved = true
                 for rows in openCalendarRows {
                     let settled = await rows.waitForInFlightWorkBeforeQuit()
+                    guard self.calendarHideGeneration == generation else { return }
                     if !settled {
                         saved = false
                         break
                     }
-                    if !(await rows.close()) {
+                    let closed = await rows.close()
+                    guard self.calendarHideGeneration == generation else { return }
+                    if !closed {
                         saved = false
                         break
                     }

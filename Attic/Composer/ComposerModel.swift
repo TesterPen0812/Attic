@@ -528,7 +528,7 @@ final class ComposerModel: ObservableObject {
         // The next task starts with the picked tags too (13 Nov).
         if case .tasks = page { tasks.startDraftFromFilter() }
         if openingPage { isOpen = false }
-        else { focusRequest &+= 1 }
+        else { fillCalendarDay(); focusRequest &+= 1 }
     }
 
     private func createImmediately(openingPage: Bool) -> Bool {
@@ -553,6 +553,7 @@ final class ComposerModel: ObservableObject {
         if openingPage {
             isOpen = false
         } else {
+            fillCalendarDay()
             focusRequest &+= 1
         }
         return true
@@ -623,6 +624,7 @@ final class ComposerModel: ObservableObject {
     /// (end exclusive, the next local midnight).
     nonisolated static func eventDraft(title: String, day: DueDay, time: Int?, length: Int,
                                        calendarID: String, calendar: Calendar, notes: String = "") -> CalendarEventDraft? {
+        let calendar = DueDay.storageCalendar(matching: calendar)
         let zone = calendar.timeZone.identifier
         // The writing line becomes the event's notes; an empty line writes none.
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -250,11 +250,11 @@ struct TaskAddBarText: Equatable {
     }
 
     enum PieceKind {
-        case date, priority, tag
+        case date, time, priority, tag
 
         func matches(_ value: ParsedTaskToken.Value) -> Bool {
             switch (self, value) {
-            case (.date, .dueDay), (.priority, .priority), (.tag, .tag): true
+            case (.date, .dueDay), (.time, .time), (.priority, .priority), (.tag, .tag): true
             default: false
             }
         }
