@@ -387,6 +387,9 @@ final class TaskStore: ObservableObject {
     var tagInventoryDidRefresh: () -> Void = {}
 
     @Published private(set) var revision: UInt64 = 0
+    /// Task-row state changes only on durable task publications; task-writing
+    /// search can publish `revision` without invalidating the unfiltered list.
+    private(set) var taskDataRevision: UInt64 = 0
     /// IDs touched by the most recently published revision. Nil means a
     /// full reload or an uncertain change; subscribers must then refresh.
     private(set) var revisionChangedTaskIDs: Set<UUID>?
@@ -459,6 +462,7 @@ final class TaskStore: ObservableObject {
         func canRebind(_ rows: [TaskItem]) -> Bool {
             rows.allSatisfy { byID[$0.id] != nil && parentIDs[$0.id] == $0.parentID }
         }
+        func isRoot(_ id: UUID) -> Bool { rootPositions[id] != nil }
         func rebind(_ rows: [TaskItem], revision: UInt64) {
             for row in rows {
                 let id = row.id
@@ -639,6 +643,9 @@ final class TaskStore: ObservableObject {
         if let familyIndexCache, familyIndexCache.revision == revision {
             return familyIndexCache
         }
+        #if DEBUG
+        familyIndexRebuilds += 1
+        #endif
         var byID: [UUID: TaskItem] = [:]
         var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
         var records: [(UUID, TaskItem)] = []
@@ -803,6 +810,7 @@ final class TaskStore: ObservableObject {
         guard ids.count == drafts.count, Set(ids).count == ids.count else { return nil }
         let parentIDs = Set(drafts.map(\.parentID))
         let owner = parentIDs.count == 1 ? familyOwner(forParentID: parentIDs.first ?? nil) : nil
+        guard prepareTaskEdit(owner: owner) else { return nil }
         do {
             let created = try stageCreation(drafts, ids: ids, timestamp: now())
             guard save(owner: owner) else { return nil }
@@ -1983,6 +1991,7 @@ final class TaskStore: ObservableObject {
     /// restoring them from Recently Deleted puts them back in the log.
     @discardableResult
     func delete(taskIDs: [UUID], includingDoneLog: Bool = false) -> Bool {
+        guard prepareTaskEdit(owner: taskIDs.first) else { return false }
         let release: () -> Void
         do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: Set(taskIDs), noteID: nil, container: container) }
         catch { report(error.localizedDescription, owner: taskIDs.first); return false }
@@ -2727,10 +2736,15 @@ final class TaskStore: ObservableObject {
     private var itemTaskPartIDsByRoot: [UUID: Set<UUID>] = [:]
     private var itemTaskTerms: [UUID: NSString] = [:]
     private var itemWritingTerms: [UUID: NSString] = [:]
+    private var itemWritingPartsByNote: [UUID: (owner: UUID, text: String)] = [:]
+    private var itemWritingNoteIDsByOwner: [UUID: Set<UUID>] = [:]
     private var itemWritingObservation: AnyCancellable?
     #if DEBUG
     private(set) var itemSearchIndexPartVisits = 0
     private(set) var doneSearchMembershipVisits = 0
+    private(set) var itemWritingBodyJoins = 0
+
+    func resetItemWritingBodyJoins() { itemWritingBodyJoins = 0 }
 
     func resetSearchIndexVisitCounters() {
         itemSearchIndexPartVisits = 0
@@ -2739,25 +2753,84 @@ final class TaskStore: ObservableObject {
     #endif
 
     func observeItemWriting(_ notes: NoteStore) {
-        refreshItemWriting(notes)
+        refreshItemWriting(notes, changedNoteIDs: nil)
         itemWritingObservation = notes.$revision.dropFirst().sink { [weak self, weak notes] _ in
             guard let self, let notes else { return }
-            self.refreshItemWriting(notes)
+            self.refreshItemWriting(notes, changedNoteIDs: notes.revisionChangedNoteIDs)
         }
     }
 
-    private func refreshItemWriting(_ notes: NoteStore) {
-        var terms: [UUID: [String]] = [:]
-        for note in notes.notes.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
-            guard let owner = note.taskID else { continue }
-            if !note.body.isEmpty { terms[owner, default: []].append(note.body) }
-            for file in notes.attachmentsByNoteID[note.id] ?? [] where file.deletedAt == nil {
-                terms[owner, default: []].append(file.originalFilename)
-            }
+    private func writingText(for note: NoteItem, in notes: NoteStore) -> String {
+        #if DEBUG
+        itemWritingBodyJoins += 1
+        #endif
+        var fragments: [String] = []
+        if !note.body.isEmpty { fragments.append(note.body) }
+        for file in notes.attachmentsByNoteID[note.id] ?? [] where file.deletedAt == nil {
+            fragments.append(file.originalFilename)
         }
-        let next = terms.mapValues { $0.joined(separator: "\n") as NSString }
+        return fragments.joined(separator: "\n")
+    }
+
+    private func refreshItemWriting(_ notes: NoteStore, changedNoteIDs: Set<UUID>?) {
+        if changedNoteIDs == nil {
+            itemWritingPartsByNote.removeAll(keepingCapacity: true)
+            itemWritingNoteIDsByOwner.removeAll(keepingCapacity: true)
+            for note in notes.notes {
+                guard let owner = note.taskID else { continue }
+                itemWritingPartsByNote[note.id] = (owner, writingText(for: note, in: notes))
+                itemWritingNoteIDsByOwner[owner, default: []].insert(note.id)
+            }
+        } else if let changedNoteIDs {
+            guard !changedNoteIDs.isEmpty else { return }
+            var affectedOwners: Set<UUID> = []
+            for noteID in changedNoteIDs {
+                if let old = itemWritingPartsByNote.removeValue(forKey: noteID) {
+                    affectedOwners.insert(old.owner)
+                    itemWritingNoteIDsByOwner[old.owner]?.remove(noteID)
+                    if itemWritingNoteIDsByOwner[old.owner]?.isEmpty == true {
+                        itemWritingNoteIDsByOwner[old.owner] = nil
+                    }
+                }
+                if let note = notes.note(withID: noteID), let owner = note.taskID {
+                    itemWritingPartsByNote[noteID] = (owner, writingText(for: note, in: notes))
+                    itemWritingNoteIDsByOwner[owner, default: []].insert(noteID)
+                    affectedOwners.insert(owner)
+                }
+            }
+            var changed = false
+            for owner in affectedOwners {
+                let next = writingTerms(for: owner)
+                if itemWritingTerms[owner] != next {
+                    itemWritingTerms[owner] = next
+                    changed = true
+                }
+            }
+            guard changed else { return }
+            publishWritingSearchChange()
+            return
+        }
+        // Unknown/imported revisions rebuild every owner from the canonical
+        // visible note; local commits touch only their old and new owners.
+        var next: [UUID: NSString] = [:]
+        for owner in itemWritingNoteIDsByOwner.keys {
+            next[owner] = writingTerms(for: owner)
+        }
         guard next != itemWritingTerms else { return }
         itemWritingTerms = next
+        publishWritingSearchChange()
+    }
+
+    private func writingTerms(for owner: UUID) -> NSString? {
+        guard let noteIDs = itemWritingNoteIDsByOwner[owner], !noteIDs.isEmpty else { return nil }
+        let pieces = noteIDs.sorted { $0.uuidString < $1.uuidString }
+            .compactMap { itemWritingPartsByNote[$0]?.text }
+            .filter { !$0.isEmpty }
+        guard !pieces.isEmpty else { return nil }
+        return pieces.joined(separator: "\n") as NSString
+    }
+
+    private func publishWritingSearchChange() {
         doneSearchMatches = nil
         // This is a presentation invalidation; it writes no model rows.
         revisionChangedTaskIDs = []
@@ -2823,6 +2896,15 @@ final class TaskStore: ObservableObject {
     private var doneSearchEntries: [DoneSearchEntry] = []
     private var doneSearchEntryIDs = Set<UUID>()
     private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
+    /// Count requests for an empty query must not displace the active
+    /// searched page. Bound this to one separate tag-only projection.
+    private var doneTagMatches: (tags: TagPicks, locale: String, ids: [UUID])?
+    #if DEBUG
+    private(set) var doneSearchFullScanVisits = 0
+    var doneSearchLocaleOverrideForTesting: String?
+
+    func resetDoneSearchFullScanVisits() { doneSearchFullScanVisits = 0 }
+    #endif
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         indexItemTasks(winners, replacing: ids)
@@ -2853,19 +2935,35 @@ final class TaskStore: ObservableObject {
             return $0.id.uuidString < $1.id.uuidString
         }
         doneSearchMatches = nil
+        doneTagMatches = nil
     }
 
     private func doneSearchIDs(matching query: String, tags: TagPicks = .none) -> [UUID] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
+        let locale = doneSearchLocaleOverrideForTesting ?? Locale.current.identifier
+        #else
         let locale = Locale.current.identifier
-        if let cached = doneSearchMatches, cached.query == query, cached.tags == tags, cached.locale == locale { return cached.ids }
+        #endif
+        if query.isEmpty {
+            if let cached = doneTagMatches, cached.tags == tags, cached.locale == locale { return cached.ids }
+        } else if let cached = doneSearchMatches, cached.query == query, cached.tags == tags, cached.locale == locale {
+            return cached.ids
+        }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
         let ids = doneSearchEntries.compactMap { entry -> UUID? in
+            #if DEBUG
+            doneSearchFullScanVisits += 1
+            #endif
             if !tags.matches(entry.tags) { return nil }
             return query.isEmpty || entry.title.localizedStandardContains(query) || additionalItemMatch(entry.id, query: query) ? entry.id : nil
         }
-        doneSearchMatches = (query, tags, locale, ids)
+        if query.isEmpty {
+            doneTagMatches = (tags, locale, ids)
+        } else {
+            doneSearchMatches = (query, tags, locale, ids)
+        }
         return ids
     }
 
@@ -3067,12 +3165,50 @@ final class TaskStore: ObservableObject {
 
     /// A task by id wherever it lives in the lists: shown, or in the Done
     /// log (never one in Recently Deleted). Resolved over all replicas.
+    #if DEBUG
+    private(set) var doneIndividualLookupFetches = 0
+    private(set) var doneBatchLookupFetches = 0
+
+    func resetDoneLookupCounts() {
+        doneIndividualLookupFetches = 0
+        doneBatchLookupFetches = 0
+    }
+    #endif
+
     func listedTask(withID id: UUID) -> TaskItem? {
         if let shown = task(withID: id) { return shown }
+        #if DEBUG
+        doneIndividualLookupFetches += 1
+        #endif
         guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })),
               let winner = Self.canonicalReplicas(from: rows).first,
               winner.deletedAt == nil, winner.doneLoggedAt != nil else { return nil }
         return winner
+    }
+
+    /// Resolve a selection from the live index and one archive read. The
+    /// canonical winner of every physical UUID replica determines whether
+    /// the logical task still exists. Nil means the read failed, so callers
+    /// should retain their selection until a successful reconciliation.
+    func listedTasks(withIDs ids: Set<UUID>) -> [UUID: TaskItem]? {
+        var found: [UUID: TaskItem] = [:]
+        let index = familyIndex
+        for id in ids {
+            if let row = index.byID[id] { found[id] = row }
+        }
+        let archived = Array(ids.subtracting(found.keys))
+        guard !archived.isEmpty else { return found }
+        #if DEBUG
+        doneBatchLookupFetches += 1
+        #endif
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate {
+            archived.contains($0.id)
+        })) else { return nil }
+        for winner in Self.canonicalReplicas(from: rows)
+        where winner.deletedAt == nil && winner.doneLoggedAt != nil {
+            found[winner.id] = winner
+        }
+        return found
     }
 
     /// The editable fields of a task wherever it is listed (see
@@ -3773,15 +3909,20 @@ final class TaskStore: ObservableObject {
     }
 
     private var doneTodayCache: (revision: UInt64, tasks: [TaskItem])?
+    #if DEBUG
+    private(set) var snapshotRootKeyBuilds = 0
+
+    func resetSnapshotRootKeyBuilds() { snapshotRootKeyBuilds = 0 }
+    #endif
 
     /// Done needs only its unlogged finished roots. Building every Now/Later
     /// section and sort key for this slice dominated the first cold query.
     /// Preserve exactly the snapshot's root validation and section ordering.
     func doneTodayTasks() -> [TaskItem] {
-        if let doneTodayCache, doneTodayCache.revision == revision { return doneTodayCache.tasks }
+        if let doneTodayCache, doneTodayCache.revision == taskDataRevision { return doneTodayCache.tasks }
         let done = tasks.filter { $0.statusRaw == TaskStatus.done.rawValue && parent(of: $0) == nil }
             .map(SectionSortKey.init).sorted(by: SectionSortKey.comesBefore).map(\.task)
-        doneTodayCache = (revision, done)
+        doneTodayCache = (taskDataRevision, done)
         return done
     }
 
@@ -3789,7 +3930,7 @@ final class TaskStore: ObservableObject {
     /// than tasks change, so repeated calls between edits are O(1). Every
     /// mutation path goes through save()/reloadTasks(), which bump `revision`.
     func snapshot(for scope: TaskScope) -> TaskScopeSnapshot {
-        if let cached = snapshotCache[scope], cached.revision == revision {
+        if let cached = snapshotCache[scope], cached.revision == taskDataRevision {
             return cached.snapshot
         }
 
@@ -3797,6 +3938,9 @@ final class TaskStore: ObservableObject {
         // keys; each section then sorts its own slice.
         var keysByStatus: [String: [SectionSortKey]] = [:]
         for task in familyIndex.roots {
+            #if DEBUG
+            snapshotRootKeyBuilds += 1
+            #endif
             let key = SectionSortKey(task)
             keysByStatus[key.statusRaw, default: []].append(key)
         }
@@ -3812,8 +3956,53 @@ final class TaskStore: ObservableObject {
                 count + (activeStatuses.contains(section.status) ? section.tasks.count : 0)
             }
         )
-        snapshotCache[scope] = (revision, snapshot)
+        snapshotCache[scope] = (taskDataRevision, snapshot)
         return snapshot
+    }
+
+    /// Rebinding a confirmed, unchanged family membership only changes the
+    /// touched root's section slot. Keep warmed scopes and their original
+    /// durable ordering without sorting every unrelated root on each edit.
+    private func rebindScopeSnapshots(_ winners: [TaskItem], using index: FamilyIndex) {
+        let roots = winners.filter { index.isRoot($0.id) }
+        let changed = Set(roots.map(\.id))
+        for scope in TaskScope.allCases {
+            guard let cached = snapshotCache[scope], cached.revision == taskDataRevision else { continue }
+            guard !changed.isEmpty else {
+                snapshotCache[scope] = (taskDataRevision &+ 1, cached.snapshot)
+                continue
+            }
+            var byStatus = Dictionary(uniqueKeysWithValues: cached.snapshot.sections.map { ($0.status, $0.tasks) })
+            for status in scope.statuses {
+                byStatus[status]?.removeAll { changed.contains($0.id) }
+            }
+            for root in roots where scope.statuses.contains(root.listedStatus) {
+                let key = SectionSortKey(root)
+                var group = byStatus[root.listedStatus] ?? []
+                var lower = 0, upper = group.count
+                while lower < upper {
+                    let middle = (lower + upper) / 2
+                    if SectionSortKey.comesBefore(key, SectionSortKey(group[middle])) {
+                        upper = middle
+                    } else {
+                        lower = middle + 1
+                    }
+                }
+                group.insert(root, at: lower)
+                byStatus[root.listedStatus] = group
+            }
+            let sections = scope.statuses.compactMap { status -> TaskSectionSnapshot? in
+                guard let rows = byStatus[status], !rows.isEmpty else { return nil }
+                return TaskSectionSnapshot(status: status, tasks: rows)
+            }
+            let active = Set(scope.countedStatuses)
+            let snapshot = TaskScopeSnapshot(
+                sections: sections,
+                visibleCount: sections.reduce(0) { $0 + $1.tasks.count },
+                activeCount: sections.reduce(0) { $0 + (active.contains($1.status) ? $1.tasks.count : 0) }
+            )
+            snapshotCache[scope] = (taskDataRevision &+ 1, snapshot)
+        }
     }
 
     /// Drop onto another row: same section reorders, a different section
@@ -3975,6 +4164,7 @@ final class TaskStore: ObservableObject {
             try reloadTasks()
             errorNotice = nil
         } catch {
+            taskEditNeedsReload = true
             report(error.localizedDescription, owner: nil)
         }
     }
@@ -3984,6 +4174,10 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating",
                       retaining edits: RetainedTaskEdits? = nil) -> Bool {
+        // A failed refresh left `tasks` unconfirmed. The edit is already staged
+        // in this context (a reload would abandon it), so save it as before
+        // and publish through a full reload instead of an incremental commit.
+        let listNeedsReload = taskEditNeedsReload
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -4013,7 +4207,7 @@ final class TaskStore: ObservableObject {
             var presentationReadFailed = false
             var presentationReloaded = false
             var publishedWinners: [TaskItem]?
-            if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
+            if try !listNeedsReload && WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                 do {
                     publishedWinners = try IdleLatencyTrace.span("task_save_publish") {
                         try publishPlainCommit(changedIDs, removedRows: removedRows)
@@ -4029,7 +4223,14 @@ final class TaskStore: ObservableObject {
                 }
             } else {
                 do { try reloadTasks(); presentationReloaded = true; errorNotice = nil }
-                catch { report("\(presentationFailure): \(error.localizedDescription)", owner: owner) }
+                catch {
+                    // The journaled writer committed in a different context.
+                    // A failed fresh read cannot turn its staging context into
+                    // an authoritative, narrowly changed presentation.
+                    familyIndexCache = nil
+                    presentationReadFailed = true
+                    report("\(presentationFailure): \(error.localizedDescription)", owner: owner)
+                }
             }
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
@@ -4044,7 +4245,7 @@ final class TaskStore: ObservableObject {
             var indexReadFailed = false
             // A full reload already indexed every canonical replica. Incremental
             // publication has the same confirmed winners available for search.
-            if !changedIDs.isEmpty && !presentationReloaded {
+            if !changedIDs.isEmpty && !presentationReloaded && !presentationReadFailed {
                 let ids = Array(changedIDs)
                 do {
                     // The plain writer already confirmed every physical
@@ -4074,11 +4275,19 @@ final class TaskStore: ObservableObject {
                     indexReadFailed = true
                 }
             }
-            revisionChangedTaskIDs = indexReadFailed || presentationReadFailed || presentationReloaded
-                ? nil : changedIDs
-            revision &+= 1
-            familyIndexCache?.revision = revision
-            if indexReadFailed || presentationReadFailed { refresh() }
+            if indexReadFailed || presentationReadFailed {
+                // The fallback reload itself publishes the complete recovered
+                // state. Do not notify subscribers of an unconfirmed change.
+                taskEditNeedsReload = true
+                refresh()
+            } else if !presentationReloaded {
+                // reloadTasks already published one coherent revision when it
+                // was required. Plain commits publish here, exactly once.
+                revisionChangedTaskIDs = changedIDs
+                taskDataRevision &+= 1
+                revision &+= 1
+                familyIndexCache?.revision = revision
+            }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
@@ -4104,30 +4313,81 @@ final class TaskStore: ObservableObject {
     #if DEBUG
     /// Test seam for a failed presentation refresh after a durable save.
     var listRefreshFailures = 0
+    private(set) var fullTaskReloadCount = 0
+
+    func resetFullTaskReloadCount() { fullTaskReloadCount = 0 }
+
+    /// Full family-index rebuilds (the O(n) branch of `familyIndex`).
+    private(set) var familyIndexRebuilds = 0
+
+    func resetFamilyIndexRebuilds() { familyIndexRebuilds = 0 }
     #endif
 
     /// Plain saves can materialize a different instance of a physical row.
     /// Publish the complete confirmed logical family to BOTH list and index,
     /// choosing the presentation winner again (never deduplicating mutations).
-    /// Stable families replace only changed slots; membership changes refresh.
+    /// Stable families replace changed slots. Membership changes update the
+    /// visible list from confirmed winners, without reading the Done archive.
     private func publishPlainCommit(_ changedIDs: Set<UUID>, removedRows: Bool) throws -> [TaskItem]? {
+        #if DEBUG
+        if listRefreshFailures > 0 {
+            listRefreshFailures -= 1
+            throw NSError(domain: "TaskStoreTestRefresh", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Injected presentation read failure"])
+        }
+        #endif
         let ids = Array(changedIDs)
         let confirmed = try WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context)
             ?? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
         let winners = Self.canonicalReplicas(from: confirmed)
         let index = familyIndex
-        guard !removedRows, Set(winners.map(\.id)) == changedIDs,
-              winners.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(winners) else {
-            try reloadTasks()
-            return nil
+        if !removedRows, Set(winners.map(\.id)) == changedIDs,
+           winners.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }),
+           index.canRebind(winners) {
+            for row in winners {
+                if let position = index.positions[row.id], tasks[position] !== row {
+                    tasks[position] = row
+                }
+            }
+            // The cache stays at the current revision: `@Published` sinks run in
+            // willSet and read this index before `revision` advances; the bump
+            // in save() then moves the cache with it.
+            index.rebind(winners, revision: revision)
+            rebindScopeSnapshots(winners, using: index)
+            familyIndexCache = index
+            return winners
         }
-        for row in winners {
-            if let position = index.positions[row.id], tasks[position] !== row {
-                tasks[position] = row
+
+        // Every changed logical ID was resolved over its complete physical
+        // family. Keep untouched slots in their original order, replace
+        // survivors in place, drop deleted/logged winners and append newly
+        // live IDs. Sorting still follows their durable manual order keys.
+        let visibleWinners = Dictionary(uniqueKeysWithValues: winners
+            .filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
+            .map { ($0.id, $0) })
+        var remaining = Set(visibleWinners.keys)
+        var next: [TaskItem] = []
+        next.reserveCapacity(tasks.count + remaining.count)
+        var membershipChanged = false
+        for row in tasks {
+            guard changedIDs.contains(row.id) else { next.append(row); continue }
+            if let winner = visibleWinners[row.id] {
+                next.append(winner)
+                remaining.remove(row.id)
+            } else {
+                membershipChanged = true
             }
         }
-        index.rebind(winners, revision: revision &+ 1)
-        familyIndexCache = index
+        for row in winners where remaining.remove(row.id) != nil {
+            next.append(row)
+            membershipChanged = true
+        }
+        if membershipChanged || !next.elementsEqual(tasks, by: { $0 === $1 }) {
+            tasks = next
+        }
+        // A reparent can change root validity even when every instance and
+        // visible slot is unchanged; invalidate the family classification.
+        familyIndexCache = nil
         return winners
     }
 
@@ -4139,6 +4399,9 @@ final class TaskStore: ObservableObject {
 
     private func reloadTasksMeasured(using initialContext: ModelContext?) throws {
         IdleLatencyTrace.count("task_reload_count", 1)
+        #if DEBUG
+        fullTaskReloadCount += 1
+        #endif
         defer { tagInventoryDidRefresh() }
         #if DEBUG
         if listRefreshFailures > 0 {
@@ -4162,6 +4425,7 @@ final class TaskStore: ObservableObject {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
         revisionChangedTaskIDs = nil
+        taskDataRevision &+= 1
         revision &+= 1
         familyIndexCache = nil
     }
