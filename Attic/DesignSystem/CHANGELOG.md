@@ -1,3 +1,19 @@
+## 2026-11-13 · Corners: the measured fix
+
+The sheet drew the continuous corner as a CSS superellipse that clamps to
+half a shape's height, so its rows were rounder boxes than their labels
+said. Measured against the drawing (`corner-match-measure.swift`), the app
+now builds the drawn corners, at any row height: task rows 9.5 pt
+continuous (`AtticRadius.taskRow`; were 15.5, a pill), menu and picker row
+highlights 8 pt (were 12), today's day card events 14 pt (were 17.5). The
+task highlight, joined selection glass, keyboard ring, right-click glass
+chip, the lifted, carried and dragged-out task cards and the Next event
+hover follow the task row. Note rows keep 16 (`AtticRadius.noteRow`), as do
+the proposal notice and a dragged note block; cards stay 24 and 18 with
+their 6.5 and 6 pt padding. The task circle stays where it was, 8 pt clear
+of the row's sides. The unused `AtticRadius.menu`, `menuPadding` and
+`menuRow` are gone.
+
 ## 2026-11-13 · Menus conform to the accepted glass, motion and opening rules
 
 Menus and pickers use the same system-menu Liquid Glass face, independent of
@@ -49,7 +65,7 @@ Apple's continuous curve. `AtticRadius.row` is 16 (was 12), capped at half a
 row's height by `AtticRadius.row(height:)`, so a one-line task row is 15.5 and
 its circle sits centred in the rounded end. Task highlights, the joined
 selection glass, the keyboard ring and the lifted, carried and dragged-out task
-cards follow it. Notes rows are 16 with 10 pt thumbnails 6 pt in (concentric).
+cards follow it. Notes rows are 16 with 7 pt thumbnails 6 pt in.
 Today's Calendar card stays 24 and is continuous; its events are 17.5
 (24 − 6.5), and their fill and ring are continuous. Glass menu highlights stay
 12 and cap at half the row. The proposal notice and a dragged note block also
