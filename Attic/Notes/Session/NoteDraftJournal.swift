@@ -783,16 +783,29 @@ final class NoteDraftJournal: NoteDraftJournaling {
         return snapshot
     }
 
-    private func publish(_ entries: [NoteDraftRecoveryEntry], for snapshot: NoteLiveReferenceSnapshot) {
+    private func publish(_ entries: [NoteDraftRecoveryEntry], for snapshot: NoteLiveReferenceSnapshot) throws {
         guard snapshot.version >= cachedVersion else { return }
         // Result leases cover the IO-return-to-adoption interval. Refresh all
         // live facades before replacing this facade's cached recovery lease.
-        do { try path.refreshLiveReferences() }
-        catch { return }
+        try path.refreshLiveReferences()
         path.publishCache(snapshot, entries: entries)
         cachedVersion = snapshot.version
         cached = entries
         inventoryChanged?(entries)
+    }
+    /// The disk mutation has already committed. Publication failure must
+    /// preserve its result, invalidate stale offers and keep collection held
+    /// until a later complete inventory can publish the exact owners.
+    private func publishCommittedInventory(for snapshot: NoteLiveReferenceSnapshot) async {
+        do {
+            let entries = try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot)
+            try publish(entries, for: snapshot)
+        } catch {
+            guard snapshot.version >= cachedVersion else { return }
+            cachedVersion = snapshot.version
+            cached = nil
+            inventoryChanged?([.damaged("Recovery inventory is unavailable.")])
+        }
     }
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
     var requiresAsyncIO: Bool { true }
@@ -846,44 +859,38 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()
         let claim = try await io.write(entry, staged: staged, replacing: replacing, live: snapshot)
-        // The checkpoint has committed. Inventory publication is secondary:
-        // failing it must not strand the writer with a stale recovery claim.
-        if let entries = try? await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot) {
-            publish(entries, for: snapshot)
-        }
+        await publishCommittedInventory(for: snapshot)
         return claim
     }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()
         let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true, live: snapshot)
-        if let entries = try? await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot) {
-            publish(entries, for: snapshot)
-        }
+        await publishCommittedInventory(for: snapshot)
         return updated
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         let snapshot = try liveSnapshot()
         try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     /// The coordinator already proved its complete saved result and payloads.
     /// A replacement checkpoint is independent work, never retired by it.
     func retireOperationCheckpoint(noteID: UUID, claim: NoteRecoveryClaim, saved: NoteRecoverySavedState) async throws {
         let snapshot = try liveSnapshot()
         try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot, preservingReplacement: true)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         let snapshot = try liveSnapshot()
         try await io.discardOwned(noteID: noteID, claim: claim, live: snapshot)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await io.listDamaged() }
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails { try await io.damagedDetails(noteID: noteID) }
     func archiveDamagedDurably(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) async throws -> URL {
         let snapshot = try liveSnapshot()
         let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving, live: snapshot)
-        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+        try publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
         return archive
     }
 }

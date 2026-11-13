@@ -3913,6 +3913,35 @@ extension NotesPageControllerTests {
                            byteCount: staged.byteCount, digest: staged.digest)], savedAt: .now)
     }
 
+    func testR3FailedPostcommitInventoryInvalidatesCacheAndHoldsCollectionUntilRefresh() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R3Inventory")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)
+        let journal = NoteDraftJournal(directory: root, fileManagerFactory: { fault })
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
+        _ = try await journal.readRecoveryEntries() // prove the old empty cache must be invalidated
+        let data = Data("held checkpoint payload".utf8)
+        let staged = StagedNoteAttachment(id: UUID(), filename: "held.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        fault.failNextInventory()
+        let claim = try await journal.writeDurably(ds8Entry(noteID, "Checkpoint", staged: staged), staged: [staged])
+        XCTAssertEqual(fault.injectedFailures, 1)
+        XCTAssertThrowsError(try journal.recoveryEntries(), "a failed complete inventory cannot leave a usable empty cache")
+        let unsafeCollection = coordinator.ownership.tryAcquire([noteID, staged.id], kind: .collection)
+        XCTAssertNil(unsafeCollection, "unknown committed ownership must hold collection")
+        unsafeCollection?.release()
+        _ = try await journal.cancelPendingDurably(ds8Entry(noteID, "Refreshed", staged: staged), staged: [staged], replacing: claim)
+        XCTAssertTrue(coordinator.recoveryDependsOnNote(noteID))
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(staged.id))
+        let unrelatedCollection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+        XCTAssertNotNil(unrelatedCollection, "a complete successful refresh releases the unknown-inventory hold")
+        unrelatedCollection?.release()
+        let protectedCollection = coordinator.ownership.tryAcquire([noteID, staged.id], kind: .collection)
+        XCTAssertNil(protectedCollection)
+        protectedCollection?.release()
+    }
+
     func testDS8PostcommitInventoryFailureStillReturnsClaimAndAllowsLaterCheckpoint() async throws {
         let root = ownedTemporaryDirectory(prefix: "DS8Journal")
         let noteID = UUID(), fault = DS8InventoryFault(root: root, noteID: noteID)

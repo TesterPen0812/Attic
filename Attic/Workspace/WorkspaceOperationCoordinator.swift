@@ -335,7 +335,11 @@ final class WorkspaceOperationCoordinator {
     private func observeCheckpointInventory() {
         journal.inventoryChanged = { [weak self] entries in
             guard let self else { return }
-            do { try self.registerCheckpointInventory(entries) }
+            do {
+                try self.registerCheckpointInventory(entries)
+                self.damagedCollectionHold?.release()
+                self.damagedCollectionHold = nil
+            }
             catch {
                 // Keep the last known owners and hold unbounded collection.
                 if self.damagedCollectionHold == nil {
