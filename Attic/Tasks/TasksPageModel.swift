@@ -256,6 +256,20 @@ final class TasksTitleDraftState: ObservableObject {
 /// was typed, selected and expanded.
 @MainActor
 final class TasksPageModel: ObservableObject {
+    private static let live = NSHashTable<TasksPageModel>.weakObjects()
+
+    /// Quit must drain the visible acknowledgement before approving exit,
+    /// including models retained by a pulled-out page. Other stores are unrelated.
+    static func prepareForTermination(in store: TaskStore) -> Bool {
+        var ready = true
+        for model in live.allObjects where model.store.container === store.container {
+            let failures = model.acknowledgementFailures
+            model.settlePendingCompletionAcknowledgements()
+            if model.acknowledgementFailures != failures { ready = false }
+        }
+        return ready
+    }
+
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
     var services: TasksPageServices
@@ -378,6 +392,8 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedCreated: [TaskItem] = []
     @Published private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
+    /// Includes failures from commands that reenter settlement to preserve Undo order.
+    private var acknowledgementFailures: UInt64 = 0
     private var acknowledgedTaskToken: UUID?
 
     struct HeldPlace: Equatable {
@@ -591,6 +607,7 @@ final class TasksPageModel: ObservableObject {
         self.services = services
         self.toasts = toasts ?? PanelToastCenter()
         self.memory = memory
+        Self.live.add(self)
         Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
             NotificationCenter.default.publisher(for: $0)
         }).sink { [weak self] notification in
@@ -1836,7 +1853,9 @@ final class TasksPageModel: ObservableObject {
         guard let command = acknowledgedTaskCommand else { return false }
         acknowledgedTaskCommand = nil
         acknowledgedTaskToken = nil
-        return command()
+        let applied = command()
+        if !applied { acknowledgementFailures &+= 1 }
+        return applied
     }
 
     func setStatusAcknowledged(_ status: TaskStatus, for ids: [UUID],
@@ -2070,6 +2089,7 @@ final class TasksPageModel: ObservableObject {
             let next = completingAfterAcknowledgement.removeFirst()
             let outcome = finishCompletion(next.id)
             savedAny = savedAny || outcome.isApplied
+            if !outcome.isApplied { acknowledgementFailures &+= 1 }
             next.settled(outcome)
             if next.id == id { break }
         }
