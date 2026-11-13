@@ -70,6 +70,11 @@ Both Now/Later (`TasksPage.swift:1665–1693`) and Done (`TasksDonePage.swift:90
 - Confidence: high for source-level full candidate and eager `colourCommands`, medium for actual runtime evaluation and cost.
 - Mac measurement: count `AtticTagColourMenu.body`, `colourCommands`, tag label size measurements, native anchor creations and allocations per realized row while scrolling and resizing with 1/5/50 tags per task, AX active. Guard test: compare fitted output at width boundaries; count that only displayed tag controls and menu commands are materialized, while right-click and accessibility behavior remain identical.
 
+### DP-20 (P2, per-scroll overhead): vertical scroll samples restyle every built task list even when the style is unchanged
+- Chain: `Attic/Tasks/TasksPage.swift:488–500, 5471–5496, 5513–5529` → `Attic/Tasks/TasksScrollKeeper.swift:95–103`. Once the gesture is classified vertical, each changed sample produces `.show`; a mouse-wheel sample also produces `.show`. `setScrollersHidden(false)` re-creates a dictionary of live scroll views and visits each built list on each sample. The individual AppKit properties have equality guards, so already-correct style does **not** imply repeated property writes or relayout. Hidden or wrong-window events are gated.
+- Scale: O(B) checks per event for B built task-tab scroll views, not O(task count), and likely much smaller than row geometry or layout. Smallest fix: skip the traversal when desired state is already applied; keep the existing independent styling when a newly built scroller attaches or settings/preview override changes. Confidence: high in checks, low in perceptible contribution.
+- Mac measurement: counter per incoming sample, `.show`, live-list enumeration and actual changed AppKit properties, plus Time Profiler during long trackpad and mouse-wheel scroll. Guard test: 1,000 same-axis samples perform at most one state transition/traversal after initial styling, while a newly attached list, hide/show transitions and override changes still get correct style.
+
 ### O-2 preliminary ranking and open questions
 1. Known H-01 focus-responder population and shared-host AX layout: already assigned, no new finding; impact on scroll needs an A/B trace.
 2. DP-6 row realization/native anchor/AX setup; DP-5 geometry callbacks per realized moving row; DP-12 where tasks have many tags. Order is unmeasured and may vary with scrolling velocity and retained-cell count.
@@ -184,7 +189,7 @@ Other app areas remain to be read; PF-1–PF-50 and the assigned one-host issue 
 - Mac measurement: count `draw_accessibility_refresh` spans, objects whose bounds and `update` run, sort size, notifications and input-to-frame during sustained text typing with AX on/off, 10/1,000/10,000 objects. Guard test: after initial enumeration, K same-bounds text edits update only changed accessible elements and trigger bounded notifications, with full ordering/focus and VoiceOver text preserved; moving an object still updates navigation order.
 
 ## Summary and coverage at this checkpoint
-- DP findings: 19 static suspects; none is measured on the owner's Mac.
+- DP findings: 20 static suspects; none is measured on the owner's Mac.
 - O-2 and O-3 remain under review; whole-app top 15 is not complete. No folder has been read fully file by file.
 - Mac work: instrument resize input → frame set → size publication → host/layout → AX and Core Animation, separating island work from shell work.
 - Checkpoint after O-1 shell/island/table/Draw, O-2 list/row, O-3 initial focus/context analysis, and Notes folded headings, MCP approval polling agent tool-input streaming helper framing, Calendar month projections, shared tag-bar layout, Notes row anchors and conditional idle Genie capture, and workspace deletion staging, and Draw accessibility after text edits. Remaining page interactions, launch, idle and lifetime areas still need review. Continue rather than treat this checkpoint as a final audit.
