@@ -2400,6 +2400,45 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(us.inMonth.prefix(5).filter { !$0 }.count, 4)
     }
 
+    func testBG57SeededPickerIntentPreservesPointerTargets() {
+        for seed: UInt64 in [57, 1307, 1311, 20261113] {
+            var random = seed
+            var state = AtticDateCardState(start: date(2026, 10, 9))
+            for step in 0..<320 {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                let action = Int((random >> 32) % 8)
+                if action < 5 {
+                    let grid = state.month(calendar)
+                    let index = Int((random >> 16) % 42)
+                    let target = grid.cells[index]
+                    state.hoverDay(target, inside: true, calendar: calendar)
+                    XCTAssertEqual(state.month(calendar).cells[index], target, "seed \(seed), step \(step)")
+                    XCTAssertEqual(state.apply(.pick, calendar: calendar, suggestions: 0, typing: false, hasRemove: true), .pick(target))
+                    state.hoverDay(target, inside: false, calendar: calendar)
+                } else {
+                    let key: AtticDateCardKey = action == 5 ? .right : action == 6 ? .month(1) : .month(-1)
+                    _ = state.apply(key, calendar: calendar, suggestions: 0, typing: false, hasRemove: true)
+                    XCTAssertTrue(calendar.isDate(state.month(calendar).start, equalTo: state.cursor, toGranularity: .month))
+                }
+            }
+        }
+    }
+
+    func testBG57HoveringNeighbourMonthKeepsTheCellUntilItsClick() {
+        for index in [0, 35] {
+            var state = AtticDateCardState(start: date(2026, 10, 9))
+            let shown = state.month(calendar)
+            let target = shown.cells[index]
+            state.hoverDay(target, inside: true, calendar: calendar)
+            XCTAssertEqual(state.month(calendar).start, shown.start)
+            XCTAssertEqual(state.month(calendar).cells[index], target, "the date beneath the pointer stays put")
+            XCTAssertEqual(state.apply(.pick, calendar: calendar, suggestions: 0, typing: false, hasRemove: false), .pick(target))
+            _ = state.apply(.right, calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+            XCTAssertTrue(calendar.isDate(state.month(calendar).start, equalTo: state.cursor, toGranularity: .month),
+                "deliberate keyboard movement still turns the month")
+        }
+    }
+
     func testArrowsLightTheCursorFirstThenMoveItAndTheMonthFollows() {
         var state = AtticDateCardState(start: today)
         XCTAssertNil(state.lit, "nothing is lit as the card opens")

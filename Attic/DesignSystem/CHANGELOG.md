@@ -1,3 +1,9 @@
+## 2026-11-13 · Date-picker hover (BG-57)
+
+Hovering a neighbouring-month date keeps the six-week grid still until the
+click. Keyboard, typed-date and month/year navigation still turn the month;
+the existing day shapes, highlights and motion are unchanged.
+
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 
 The note thumbnail keeps the drawing's proportion: 7 pt continuous corners

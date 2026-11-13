@@ -346,7 +346,7 @@ enum AtticDateCardKey: Equatable {
 /// The date card's one highlight and the day it is on (owner, 2026-10-05):
 /// the arrows move it through the grid, the pointer moves the same one,
 /// Tab reaches Today (and Remove date), Return picks what is lit. The month
-/// shown is always the cursor's, so what Return picks is on screen. Pure:
+/// follows deliberate navigation; pointer hover keeps its grid still. Pure:
 /// tested directly.
 struct AtticDateCardState: Equatable {
     enum Spot: Equatable {
@@ -363,12 +363,14 @@ struct AtticDateCardState: Equatable {
 
     /// The active day: the grid's highlight when `lit` is `.day`.
     private(set) var cursor: Date
+    /// Pointer hover may light a neighbouring-month cell without moving it.
+    private var displayedMonth: Date
     /// Nothing is lit as the card opens.
     private(set) var lit: Spot?
 
-    init(start: Date) { cursor = start }
+    init(start: Date) { cursor = start; displayedMonth = start }
 
-    func month(_ calendar: Calendar) -> AtticDateMonth { AtticDateMonth(containing: cursor, calendar: calendar) }
+    func month(_ calendar: Calendar) -> AtticDateMonth { AtticDateMonth(containing: displayedMonth, calendar: calendar) }
 
     /// Answers a navigation key (typing is the card's own); nil when the
     /// key is not the card's.
@@ -381,9 +383,11 @@ struct AtticDateCardState: Equatable {
         case .down:
             if case let .suggestion(index)? = lit { lit = index + 1 < suggestions ? .suggestion(index + 1) : .day } else { arrow(7, calendar) }
         case let .month(step):
-            cursor = calendar.date(byAdding: .month, value: step, to: cursor) ?? cursor
+            cursor = calendar.date(byAdding: .month, value: step, to: displayedMonth) ?? cursor
+            displayedMonth = cursor
         case let .year(step):
-            cursor = calendar.date(byAdding: .year, value: step, to: cursor) ?? cursor
+            cursor = calendar.date(byAdding: .year, value: step, to: displayedMonth) ?? cursor
+            displayedMonth = cursor
         case .clear:
             return hasRemove ? .remove : Outcome.nothing
         case let .tab(back):
@@ -416,6 +420,7 @@ struct AtticDateCardState: Equatable {
         } else {
             lit = .day
         }
+        displayedMonth = cursor
     }
 
     /// The pointer entered or left a day: the highlight follows it, as a
@@ -439,6 +444,7 @@ struct AtticDateCardState: Equatable {
     mutating func typed(suggestions: [AtticDateSuggestion]) {
         if let first = suggestions.first {
             cursor = first.date
+            displayedMonth = cursor
             lit = .suggestion(0)
         } else if case .suggestion? = lit {
             lit = nil
