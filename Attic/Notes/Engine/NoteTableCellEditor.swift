@@ -488,6 +488,10 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     // MARK: Right-click
 
+    override func rightMouseDown(with event: NSEvent) {
+        NoteGlassContextMenu.open(menu(for: event), in: self, event: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
         guard let table, let engine = table.engine, let cell = table.activeCell else { return menu }
