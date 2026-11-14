@@ -463,6 +463,62 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    func testPulledOutCalendarDraftDoesNotAppearInAnUnrelatedPanelController() throws {
+        try withRig { first in
+            first.state.selectSection(.calendar)
+            spin(until: { !CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).isEmpty })
+            let rows = try XCTUnwrap(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).last)
+            let start = Date(timeIntervalSince1970: 1_793_361_600)
+            let event = CalendarEvent(id: "isolated-draft", title: "First window", start: start,
+                end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+                calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+            Task { await rows.toggle(event) }
+            spin(until: { rows.rowID == event.id && !rows.busy })
+            try pull(.calendar, in: first, to: CGPoint(x: first.workArea.midX - 220, y: first.workArea.midY))
+            let floating = try XCTUnwrap(first.pullOut.panel(for: .calendar))
+            XCTAssertTrue(floating.calendarEventRowsForDock === rows)
+            let beforeSecond = Set(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked)
+                .map(ObjectIdentifier.init))
+
+            try withRig { second in
+                second.state.selectSection(.calendar)
+                spin(until: {
+                    CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).contains {
+                        !beforeSecond.contains(ObjectIdentifier($0))
+                    }
+                })
+                let otherRows = try XCTUnwrap(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked)
+                    .first { !beforeSecond.contains(ObjectIdentifier($0)) })
+                XCTAssertFalse(otherRows === floating.calendarEventRowsForDock,
+                               "separate panel controllers must not share Calendar's event editor")
+                XCTAssertNil(otherRows.rowID)
+                XCTAssertTrue(CalendarDraftTerminationRegistry.shared.openRows(for: .floating).contains { $0 === rows })
+                XCTAssertFalse(CalendarDraftTerminationRegistry.shared.openRows(for: .docked).contains { $0 === rows })
+            }
+        }
+    }
+
+    /// P2 review reproducer. Remove after recording the unfixed RED: an
+    /// in-flight Tasks dock must yield to a newer drag of the same window.
+    func testReviewNewTasksDragCancelsEarlierDockingFlight() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_DEFERRED_P2_RED"] == "1",
+                          "Deferred P2 red test (review-shell-r1): runs only with ATTIC_DEFERRED_P2_RED=1")
+        try withRig { rig in
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            XCTAssertTrue(rig.pullOut.dockIn(.tasks))
+            let moved = floating.visibleFrame.offsetBy(dx: -90, dy: -50)
+            floating.hostingViewForTesting.onWindowDragBegan?()
+            let changed = try XCTUnwrap(floating.hostingViewForTesting.onWindowDragChanged)
+            floating.setFrame(changed(moved, CGPoint(x: moved.midX, y: moved.midY)))
+            floating.hostingViewForTesting.onWindowDragEnded?(moved,
+                CGPoint(x: moved.midX, y: moved.midY), .zero, .zero)
+            spin(0.65)
+            XCTAssertTrue(rig.pullOut.panel(for: .tasks) === floating,
+                          "A stale docking completion must not close a re-dragged Tasks panel")
+        }
+    }
+
     func testFix18CalendarDockWaitingForWriterDoesNotOverrideLaterDrag() throws {
         try withRig { rig in
             try pull(.calendar, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))

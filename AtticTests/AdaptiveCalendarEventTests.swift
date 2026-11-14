@@ -221,6 +221,29 @@ final class AdaptiveCalendarEventTests: XCTestCase {
         XCTAssertNil(detached.rows.rowID)
     }
 
+    func testQuitAfterCalendarMovesToFloatingWindowKeepsTheCorrectOwnerAndSaves() async throws {
+        let f = try Fixture(); defer { f.finish() }
+        let registry = CalendarDraftTerminationRegistry()
+        registry.register(f.rows, owner: .docked)
+        await f.rows.toggle(f.event)
+        f.rows.title = "Edited in floating Calendar"
+
+        registry.register(f.rows, owner: .floating)
+        XCTAssertFalse(registry.openRows(for: .docked).contains { $0 === f.rows })
+        XCTAssertTrue(registry.openRows(for: .floating).contains { $0 === f.rows })
+        f.backend.commitError = .saveFailed("Cannot save")
+        let refused = await registry.prepareForTerminationResult()
+        XCTAssertEqual(refused, .refused(.floating),
+                       "Quit must attribute a failed floating draft to the window that owns it")
+        XCTAssertNotNil(f.rows.rowID, "a failed quit must keep the event editor open")
+
+        f.backend.commitError = nil
+        let ready = await registry.prepareForTerminationResult()
+        XCTAssertEqual(ready, .ready)
+        XCTAssertEqual(f.backend.events.values.first?.draft.title, "Edited in floating Calendar")
+        XCTAssertNil(f.rows.rowID)
+    }
+
     func testV6QuitRefusalNamesTheActualFailedCalendarOwner() async throws {
         let docked = try Fixture(); defer { docked.finish() }
         let floating = try Fixture(); defer { floating.finish() }
