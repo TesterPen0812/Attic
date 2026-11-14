@@ -260,8 +260,9 @@ final class ScrollEdgeHangTests: XCTestCase {
         struct Outcome: Equatable {
             var recordCalls: Int
             var offset: CGFloat?
+            var postsFrames: Bool
         }
-        func run(armed: Bool) throws -> (Outcome, notes: Int) {
+        func run(armed: Bool, postsFrames: Bool) throws -> (Outcome, notes: Int) {
             TasksScrollKeeper.KeeperView.recordsDiagnostics = true
             defer { TasksScrollKeeper.KeeperView.recordsDiagnostics = false }
             let probe = armed ? AtticHangProbe(outputURL: FileManager.default.temporaryDirectory
@@ -279,9 +280,10 @@ final class ScrollEdgeHangTests: XCTestCase {
             let keeper = TasksScrollKeeper.KeeperView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
             keeper.model = model
             keeper.tab = .now
-            document.addSubview(keeper)
             scroll.documentView = document
             window.contentView = scroll
+            document.postsFrameChangedNotifications = postsFrames
+            document.addSubview(keeper)
             defer { window.contentView = nil; window.close() }
             scroll.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.2))
@@ -291,16 +293,25 @@ final class ScrollEdgeHangTests: XCTestCase {
             clip.scroll(to: CGPoint(x: 0, y: 300))
             clip.postsBoundsChangedNotifications = true
             TasksScrollKeeper.KeeperView.recordCalls = 0
+            let beforeNotes = probe?.callCount(kind: "scroll.documentFrame", key: "now") ?? 0
             document.setFrameSize(CGSize(width: 300, height: 2_400))
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-            return (Outcome(recordCalls: TasksScrollKeeper.KeeperView.recordCalls, offset: model.scrollOffsets[.now]),
-                    probe?.callCount(kind: "scroll.documentFrame", key: "now") ?? 0)
+            return (Outcome(recordCalls: TasksScrollKeeper.KeeperView.recordCalls, offset: model.scrollOffsets[.now],
+                            postsFrames: document.postsFrameChangedNotifications),
+                    (probe?.callCount(kind: "scroll.documentFrame", key: "now") ?? 0) - beforeNotes)
         }
-        let off = try run(armed: false)
-        let on = try run(armed: true)
-        XCTAssertEqual(on.0, off.0, "a document frame change writes the same model state and runs the same production paths probed or not")
-        XCTAssertEqual(off.notes, 0)
-        XCTAssertGreaterThan(on.notes, 0, "the armed observer notes the geometry")
+        for postsFrames in [false, true] {
+            let off = try run(armed: false, postsFrames: postsFrames)
+            let on = try run(armed: true, postsFrames: postsFrames)
+            XCTAssertEqual(on.0, off.0, "a document frame change writes the same model state and runs the same production paths probed or not")
+            XCTAssertEqual(on.0.postsFrames, postsFrames, "arming never enables frame notifications")
+            XCTAssertEqual(off.notes, 0)
+            if postsFrames {
+                XCTAssertGreaterThan(on.notes, 0, "an existing frame notification notes the new geometry")
+            } else {
+                XCTAssertEqual(on.notes, 0, "no extra notification is requested")
+            }
+        }
         #endif
     }
 
