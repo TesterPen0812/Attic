@@ -68,6 +68,109 @@ final class ComposerTests: XCTestCase {
         windows.removeAll()
     }
 
+
+    // R5: fresh page/card instances model relaunch; only the isolated defaults survive.
+    private func r5Relaunch(_ store: ComposerDraftStore) -> (TasksPageModel, ComposerModel) {
+        let fresh = TasksPageModel(library: library)
+        return (fresh, ComposerModel(tasks: fresh, services: ComposerServices(drafts: store)))
+    }
+
+    func testR5BothOwnedDraftsSurviveQuitWithNoteShown() throws {
+        let suite = "ComposerR5.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ComposerDraftStore(defaults: defaults)
+        let (first, card) = r5Relaunch(store)
+        card.open(on: .tasks(.now))
+        first.addBar = TaskAddBarText(text: "Invoice for Bob")
+        card.writing = "Task details"
+        first.addBarState.stagingFiles = 1
+        card.open(on: .notes)
+        first.addBar = TaskAddBarText(text: "Half a note")
+        card.writing = "Note details"
+        card.saveKeptDraft()
+        let (second, again) = r5Relaunch(store)
+        XCTAssertEqual(again.kind, .note)
+        XCTAssertEqual(second.addBar.text, "Half a note")
+        XCTAssertEqual(again.writing, "Note details")
+        again.open(on: .tasks(.now))
+        again.choose(.task)
+        XCTAssertEqual(second.addBar.text, "Invoice for Bob")
+        XCTAssertEqual(again.writing, "Task details")
+        again.choose(.note)
+        XCTAssertEqual(second.addBar.text, "Half a note")
+        XCTAssertEqual(again.writing, "Note details")
+    }
+
+    func testR5FileOnlyTaskCannotEraseTheAsideNoteOnQuit() throws {
+        let suite = "ComposerR5.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ComposerDraftStore(defaults: defaults)
+        let (first, card) = r5Relaunch(store)
+        card.open(on: .tasks(.now))
+        first.addBarState.stagingFiles = 1
+        card.open(on: .notes)
+        first.addBar = TaskAddBarText(text: "Half a note")
+        card.writing = "Note details"
+        card.close() // An earlier backup exists before Task is shown.
+        card.open(on: .tasks(.now))
+        card.choose(.task)
+        XCTAssertEqual(first.addBar.text, "")
+        card.saveKeptDraft()
+        let (second, again) = r5Relaunch(store)
+        XCTAssertEqual(again.kind, .task, "restore which owner was shown, including an empty Task")
+        again.open(on: .tasks(.now))
+        again.choose(.note)
+        XCTAssertEqual(second.addBar.text, "Half a note")
+        XCTAssertEqual(again.writing, "Note details")
+    }
+
+    func testR5SubmittingTaskKeepsTheAsideNoteAcrossRelaunch() async throws {
+        let suite = "ComposerR5.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ComposerDraftStore(defaults: defaults)
+        let (first, card) = r5Relaunch(store)
+        card.open(on: .tasks(.now))
+        first.addBar = TaskAddBarText(text: "Invoice for Bob")
+        first.addBarState.stagingFiles = 1
+        card.open(on: .notes)
+        first.addBar = TaskAddBarText(text: "Half a note")
+        card.writing = "Keep this writing"
+        card.close()
+        card.open(on: .tasks(.now))
+        card.choose(.task)
+        first.addBarState.stagingFiles = 0 // Completed staging; file persistence is a separate job.
+        card.submit()
+        for _ in 0..<100 where card.isCreating { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(card.isCreating)
+        XCTAssertEqual(liveTasks().map(\.title), ["Invoice for Bob"])
+        // The acknowledgement must itself preserve the Note, without another close/quit save.
+        let (second, again) = r5Relaunch(store)
+        again.open(on: .tasks(.now))
+        again.choose(.note)
+        XCTAssertEqual(second.addBar.text, "Half a note")
+        XCTAssertEqual(again.writing, "Keep this writing")
+    }
+
+    func testR5LegacySingleDraftMigratesWithoutChangingItsWordsOrKind() throws {
+        let suite = "ComposerR5.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(Data(#"{"title":"Old note #home","writing":"kept\nexactly","kind":"note"}"#.utf8), forKey: "composerKeptDraft")
+        let store = ComposerDraftStore(defaults: defaults)
+        let (first, card) = r5Relaunch(store)
+        XCTAssertEqual(first.addBar.text, "Old note #home")
+        XCTAssertEqual(card.writing, "kept\nexactly")
+        XCTAssertEqual(card.kind, .note)
+        card.saveKeptDraft()
+        let (second, again) = r5Relaunch(store)
+        XCTAssertEqual(second.addBar, first.addBar)
+        XCTAssertEqual(again.writing, card.writing)
+        XCTAssertEqual(again.kind, .note)
+    }
+
     private func type(_ text: String) {
         // Typing keeps the draft's picks (the Calendar's day), as the field does.
         var draft = TaskAddBarText(text: text)

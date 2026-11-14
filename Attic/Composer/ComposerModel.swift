@@ -89,6 +89,13 @@ struct ComposerDraftStore {
         var kind: String
     }
 
+    /// The shown owner and the other owner's words travel together. An empty
+    /// shown draft still records which kind the person left open.
+    struct KeptDrafts: Codable, Equatable {
+        var shown: Draft
+        var aside: Draft?
+    }
+
     /// Failed submissions wait separately from the current card's kept draft,
     /// so a later task or note cannot overwrite an event that never saved.
     struct FailedEvent: Codable, Equatable {
@@ -103,8 +110,27 @@ struct ComposerDraftStore {
     var key = "composerKeptDraft"
 
     func load() -> Draft? {
+        guard let kept = loadKeptDrafts() else { return nil }
+        return kept.shown.title.isEmpty && kept.shown.writing.isEmpty ? kept.aside : kept.shown
+    }
+
+    func loadKeptDrafts() -> KeptDrafts? {
         guard let data = defaults.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(Draft.self, from: data)
+        if let kept = try? JSONDecoder().decode(KeptDrafts.self, from: data) { return kept }
+        // The former single-entry format remains readable without changing
+        // its words or kind. The next save writes the owned format.
+        return (try? JSONDecoder().decode(Draft.self, from: data)).map { KeptDrafts(shown: $0) }
+    }
+
+    func saveKeptDrafts(_ kept: KeptDrafts) {
+        guard !kept.shown.title.isEmpty || !kept.shown.writing.isEmpty || kept.aside != nil else {
+            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
+            return
+        }
+        if let data = defaults.data(forKey: key),
+           let previous = try? JSONDecoder().decode(KeptDrafts.self, from: data), previous == kept { return }
+        guard let data = try? JSONEncoder().encode(kept) else { return }
+        defaults.set(data, forKey: key)
     }
 
     func save(_ draft: Draft?) {
@@ -178,24 +204,24 @@ final class ComposerModel: ObservableObject {
 
     /// A draft saved before a quit comes back into an empty card.
     private func restoreKeptDraft() {
-        guard let saved = services.drafts?.load(), tasks.addBar.text.isEmpty, writing.isEmpty else { return }
+        guard let kept = services.drafts?.loadKeptDrafts(), tasks.addBar.text.isEmpty, writing.isEmpty else { return }
+        let saved = kept.shown
         tasks.addBar = TaskAddBarText(text: saved.title)
         writing = saved.writing
         if let kind = ComposerKind(rawValue: saved.kind) { self.kind = kind }
+        if let aside = kept.aside, let owner = ComposerKind(rawValue: aside.kind) {
+            asideDraft = AsideDraft(owner: owner, text: TaskAddBarText(text: aside.title), writing: aside.writing,
+                pinned: false, history: TaskDraftHistory(), caret: nil, selection: nil, seededTags: nil)
+        }
     }
 
     /// Saves what the card holds now (or forgets it once used up). Called
     /// when the card closes, after a creation and as the app quits.
     func saveKeptDraft() {
         guard let drafts = services.drafts else { return }
-        if hasDraft {
-            drafts.save(ComposerDraftStore.Draft(title: tasks.addBar.text, writing: writing, kind: kind.rawValue))
-        } else if let aside = asideDraft, aside.owner == .task, !aside.isEmpty {
-            // The Task draft set aside is the one the next launch should keep.
-            drafts.save(ComposerDraftStore.Draft(title: aside.text.text, writing: aside.writing, kind: ComposerKind.task.rawValue))
-        } else {
-            drafts.save(nil)
-        }
+        drafts.saveKeptDrafts(ComposerDraftStore.KeptDrafts(
+            shown: .init(title: tasks.addBar.text, writing: writing, kind: kind.rawValue),
+            aside: asideDraft.map { .init(title: $0.text.text, writing: $0.writing, kind: $0.owner.rawValue) }))
     }
 
     var title: TasksAddBarState { tasks.addBarState }
