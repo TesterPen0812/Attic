@@ -47,6 +47,7 @@ private struct TasksGroupKeyboardFocus: ViewModifier {
                         DispatchQueue.main.async { if selectedByTab { focused = true } }
                     } else if selectedByTab {
                         selectedByTab = false
+                        focused = false
                         requests?.note(id, focused: false)
                     }
                 }

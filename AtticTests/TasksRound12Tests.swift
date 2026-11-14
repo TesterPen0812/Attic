@@ -183,7 +183,8 @@ final class TasksRound12Tests: XCTestCase {
         hosted.spin(0.2)
         hosted.press("\t", keyCode: 48)
         XCTAssertNil(model.keyboardFocus)
-        // A key's route checks that the page's window is key, and a shared
+        // ⌘F with a heading Tab chose: the search must take the keyboard from
+        // it. A key's route checks that the page's window is key, and a shared
         // test machine can take that away between two keys: ask again.
         for _ in 0..<4 where !hosted.searchHasKeyboard {
             for _ in 0..<20 where !hosted.window.isKeyWindow {
@@ -194,9 +195,7 @@ final class TasksRound12Tests: XCTestCase {
             sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
             for _ in 0..<40 where !hosted.searchHasKeyboard { try await Task.sleep(for: .milliseconds(20)) }
         }
-        // Not every run of a busy shared machine lets the field take the
-        // keyboard; the test is about what ↓ does once it has it.
-        try XCTSkipUnless(hosted.searchHasKeyboard, "⌘F did not give Find the keyboard in this run")
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F gave Find the keyboard, though a heading Tab chose had it")
         model.setSearchQuery("plumber", for: .now)
         hosted.spin(0.3)
         XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["Call the plumber"], "the query matches one row")

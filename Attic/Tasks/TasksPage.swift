@@ -1110,6 +1110,8 @@ struct TasksPage: View {
         // Every way into the search is an explicit choice of page: a swipe
         // in progress ends here (round 10, Astra's round 9 check).
         swipe.cancel()
+        // The search takes the keyboard from a heading Tab chose.
+        endTabTarget()
         addBarFocused = false
         // No row stays lit behind the search (round 5, the owner's item 16).
         focusedRow = nil
