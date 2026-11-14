@@ -1,3 +1,9 @@
+## 2026-11-14 · Shared keyboard ownership (BG-67 R-4)
+
+Focus requests can identify the physical control that acquired a stop. A late
+release from an older shared "+" leaves its replacement's ownership intact.
+Existing callers keep their current behavior and Tab order; no visual tokens change.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another

@@ -38,6 +38,7 @@ final class PanelSharedChromeTests: XCTestCase {
         AtticDraw.enabledOverride = nil
         PanelKeyStopSeam.holdsHandoffs = false
         PanelKeyStopSeam.held = []
+        PanelKeyStopSeam.plusFocusReports = [:]
     }
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
@@ -984,6 +985,7 @@ extension PanelSharedChromeTests {
             let (chrome, requests, model, window) = armedTasksBar()
             defer { close(window) }
             requests.note(PanelPlusFocusID(), focused: true)
+            PanelKeyStopSeam.plusFocusReports[.tasks]?(true)
             XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "\(change): Tasks' Tab order has the plus")
             switch change {
             case "handover": chrome.plusHandedOver = true
@@ -1181,7 +1183,8 @@ extension PanelSharedChromeTests {
                 shell.tabTo(plus.identifier)
                 XCTAssertTrue(shell.sharedChrome.plusHasKeyboard)
             } else {
-                shell.sharedChrome.notePlusKeyboard(true)
+                let report = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[PanelPage(page)])
+                report(true)
             }
             let size = shell.state.panelSize
             shell.hideAndReveal()
@@ -1458,5 +1461,32 @@ extension PanelSharedChromeTests {
         XCTAssertFalse(shell.state.keyboardFocus.isKeyboardDriving)
         shell.tab()
         XCTAssertTrue(shell.state.keyboardFocus.isKeyboardDriving, "real Tab must traverse application monitors before the native key loop")
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3AnUnfocusedPlusDisappearingNeverClearsTheNewPlusOwnership() throws {
+        for oldHadFocus in [false, true] {
+            let chrome = PanelSharedChrome()
+            let requests = AtticFocusRequests()
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                          actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+            let old = mountBar(chrome, SharedBarModel(page: .tasks))
+            let oldReport = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[.tasks])
+            if oldHadFocus { oldReport(true) }
+            let new = mountBar(chrome, SharedBarModel(page: .tasks))
+            defer { close(new) }
+            let newReport = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[.tasks])
+            newReport(true)
+            XCTAssertTrue(chrome.plusHasKeyboard)
+            XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()))
+            // A late loss callback, or disappearance without ever having focus,
+            // must not release the other physical control's acquired ownership.
+            if oldHadFocus { oldReport(false) }
+            close(old)
+            XCTAssertTrue(chrome.plusHasKeyboard, "the old instance cannot release the new owner")
+            XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()))
+        }
     }
 }

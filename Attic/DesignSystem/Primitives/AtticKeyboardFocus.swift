@@ -106,11 +106,18 @@ final class AtticFocusRequests {
     let requests = PassthroughSubject<AnyHashable, Never>()
     /// The target that has the keyboard, as its view last reported.
     private(set) var current: AnyHashable?
+    private var currentOwner: UUID?
 
     func focus(_ target: AnyHashable) { requests.send(target) }
 
-    func note(_ target: AnyHashable, focused: Bool) {
-        if focused { current = target } else if current == target { current = nil }
+    func note(_ target: AnyHashable, focused: Bool, owner: UUID? = nil) {
+        if focused {
+            current = target
+            currentOwner = owner
+        } else if current == target, owner == nil || currentOwner == owner {
+            current = nil
+            currentOwner = nil
+        }
     }
 }
 

@@ -37,7 +37,13 @@ final class PanelSharedChrome: ObservableObject {
     /// never takes the key from "+" (round 2 review N-6).
     private(set) var plusHasKeyboard = false
 
-    func notePlusKeyboard(_ has: Bool) { if plusHasKeyboard != has { plusHasKeyboard = has } }
+    private var plusKeyboardOwner: UUID?
+
+    func notePlusKeyboard(_ has: Bool, owner: UUID? = nil) {
+        if !has, let owner, plusKeyboardOwner != owner { return }
+        plusKeyboardOwner = has ? owner : nil
+        if plusHasKeyboard != has { plusHasKeyboard = has }
+    }
 
     /// What the controls do, per page. Not observable: only a click reads them.
     private var barActions: [PanelPage: PanelBottomBarActions] = [:]
@@ -193,6 +199,9 @@ enum PanelKeyStopSeam {
     /// How many handoffs actually gave the control the keyboard.
     static var plusAssignments = 0
     static var tagKeyAssignments = 0
+    static var plusFocusReports: [PanelPage: (Bool) -> Void] = [:]
+    static var plusActivationKeys: Set<KeyEquivalent> = []
+    static var summaryFocusRings: [String: Bool] = [:]
 }
 #endif
 
@@ -249,18 +258,22 @@ private struct PanelPlusFocus: ViewModifier {
     /// page switch changed the requests, or after the subtree went.
     @State private var lender: AtticFocusRequests?
     @State private var handoff = PanelKeyHandoffToken()
+    @State private var keyboardOwner = UUID()
 
     /// One structure on every page: a branch here would rebuild the "+" on
     /// each page switch.
     func body(content: Content) -> some View {
         let focusable = reachable && (!page.managesOwnTabOrder || armed)
+        let activationKeys: Set<KeyEquivalent> = [.space, .return]
         #if DEBUG
         let _ = PanelKeyStopSeam.plus[page] = focusable
+        let _ = PanelKeyStopSeam.plusActivationKeys = activationKeys
+        let _ = PanelKeyStopSeam.plusFocusReports[page] = noteFocus
         #endif
         content
             .focusable(focusable, interactions: .activate)
             .focused($focused)
-            .onKeyPress(keys: [.space, .return]) { _ in
+            .onKeyPress(keys: activationKeys) { _ in
                 guard focused, reachable else { return .ignored }
                 action()
                 return .handled
@@ -279,20 +292,10 @@ private struct PanelPlusFocus: ViewModifier {
                     focused = true
                 }
             }
-            .onChange(of: focused) { _, now in
-                if now {
-                    lender = requests
-                    requests?.note(PanelPlusFocusID(), focused: true)
-                    chrome?.notePlusKeyboard(true)
-                } else {
-                    lender?.note(PanelPlusFocusID(), focused: false)
-                    chrome?.notePlusKeyboard(false)
-                    armed = false
-                }
-            }
+            .onChange(of: focused) { _, now in noteFocus(now) }
             .onChange(of: requests.map(ObjectIdentifier.init), initial: true) { _, _ in
                 // Another page's requests: the old Tab order is told at once.
-                if let lender, lender !== requests { lender.note(PanelPlusFocusID(), focused: false) }
+                if let lender, lender !== requests { lender.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner) }
                 lender = requests
             }
             // The one "+" keeps its identity on every page, so its focus
@@ -306,12 +309,24 @@ private struct PanelPlusFocus: ViewModifier {
             .onDisappear { release() }
     }
 
+    private func noteFocus(_ now: Bool) {
+        if now {
+            lender = requests
+            requests?.note(PanelPlusFocusID(), focused: true, owner: keyboardOwner)
+            chrome?.notePlusKeyboard(true, owner: keyboardOwner)
+        } else {
+            lender?.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner)
+            chrome?.notePlusKeyboard(false, owner: keyboardOwner)
+            armed = false
+        }
+    }
+
     private func release() {
         handoff.cancel()
         armed = false
         if focused { focused = false }
-        lender?.note(PanelPlusFocusID(), focused: false)
-        chrome?.notePlusKeyboard(false)
+        lender?.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner)
+        chrome?.notePlusKeyboard(false, owner: keyboardOwner)
     }
 }
 
