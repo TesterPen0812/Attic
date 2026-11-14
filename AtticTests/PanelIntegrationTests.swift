@@ -538,7 +538,11 @@ final class PanelIntegrationTests: XCTestCase {
         let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Scroller target")])?.first)
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
         panel.uiState.openTaskNote(task.id, from: .tasks, backTitle: "Back to Now")
-        spin(until: { panel.noteDraft.pages.taskNotePresenter?.lease != nil })
+        // TaskNoteRouteHost creates the presenter in its MainActor .task.
+        // This async test must yield while the route mounts.
+        for _ in 0..<300 where panel.noteDraft.pages.taskNotePresenter?.host.scrollView == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         let scroll = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter?.host.scrollView)
         XCTAssertTrue(scroll.hasVerticalScroller)
         panel.uiState.pageTransit.sliding = true
@@ -722,7 +726,9 @@ final class PanelIntegrationTests: XCTestCase {
         let (panel, _, _) = try await followupNotes()
         let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Task note")])?.first)
         panel.uiState.openTaskNote(task.id, from: .notes, backTitle: "Back to Notes")
-        spin(until: { panel.noteDraft.pages.taskNotePresenter?.host.textView.window != nil })
+        for _ in 0..<300 where panel.noteDraft.pages.taskNotePresenter?.host.textView.window == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
@@ -883,16 +889,23 @@ final class PanelIntegrationTests: XCTestCase {
                                      "Full motion moves the panel with the swipe")
             }
             window.onTrackpadDismissRequest?()
-            // The error is published before requestHide's completion runs.
-            spin(until: {
-                rows.failure != nil && !rig.uiState.interactionLockReasons.contains(.panelSwipe)
-            })
+            // The hide preflight runs in a MainActor Task. Yield this async
+            // test while it saves; spinning a nested RunLoop blocks that task.
+            for _ in 0..<300 where rows.failure == nil {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(writer.editCalls, 1, "the swipe must attempt the edited Calendar save")
             XCTAssertNotNil(rows.failure, "the failed writer leaves its error visible")
             XCTAssertEqual(rows.title, "Uncommitted edit", "the draft survives the rejected hide")
             XCTAssertTrue(rig.controller.isPanelVisible)
+            for _ in 0..<300 where rig.uiState.interactionLockReasons.contains(.panelSwipe) {
+                try await Task.sleep(for: .milliseconds(10))
+            }
             XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.panelSwipe),
                            "the rejected hide must release the swipe lock so the editor is usable")
-            spin(until: { surface.motionIsAtRest && rig.controller.acceptsInputForProbe })
+            for _ in 0..<300 where !(surface.motionIsAtRest && rig.controller.acceptsInputForProbe) {
+                try await Task.sleep(for: .milliseconds(10))
+            }
             XCTAssertTrue(surface.motionIsAtRest, "the panel must finish its spring-back or reduced fade")
             XCTAssertEqual(surface.motionOpacity(presented: false), 1, accuracy: 0.01)
             XCTAssertEqual(rig.controller.displayedProgressForProbe, 0, accuracy: 0.02)
