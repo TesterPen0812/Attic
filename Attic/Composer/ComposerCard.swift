@@ -117,7 +117,7 @@ struct ComposerCard: View {
     /// The card is kept built while closed (A11): the title asks for the
     /// keyboard only as the card opens (`focusRequest`), never on mount.
     @State private var titleFocused = false
-    @FocusState private var writingFocused: Bool
+    @State private var writingFocused = false
     @FocusState private var keyboardStop: KeyboardStop?
     /// The title field's wrapped height (one line: `titleHeight`).
     @State private var titleFieldHeight = ComposerMetrics.titleHeight
@@ -285,9 +285,8 @@ struct ComposerCard: View {
             titleFocused = false
             writingFocused = true
         } else {
-            // The native responder handoff resigns the SwiftUI writing field.
-            // Clearing its FocusState here also schedules a SwiftUI defocus
-            // that can clear Title's newly installed first responder.
+            // The native handoff resigns Writing. Clearing writingFocused
+            // here would also queue its defocus after Title takes over.
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
                 window.makeFirstResponder(field)
@@ -544,20 +543,10 @@ struct ComposerCard: View {
     /// The writing, for every kind: a task's or note's writing, an event's
     /// notes.
     private func writingLine(_ kind: ComposerKind) -> some View {
-        TextField(String(localized: "Notes"), text: $model.writing, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(AtticTextStyle.composerWriting.font)
-            .foregroundStyle(AtticSurfaceInk.toneInk(.nextEventTime, tokens: design.tokens).color)
-            .lineLimit(1...ComposerMetrics.writingMaxLines)
+        ComposerWritingLine(text: $model.writing, focused: $writingFocused,
+                            ink: NSColor(AtticSurfaceInk.toneInk(.nextEventTime, tokens: design.tokens).color),
+                            submit: { model.submit(openingPage: $0) }, escape: { if open == nil { model.close() } else { open = nil } }, tab: advanceKeyboard)
             .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
-            .focused($writingFocused)
-            // The card's native Tab monitor moves forward through the actions
-            // or backwards to Title before AppKit visits the panel underneath.
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.shift) && !press.modifiers.contains(.command) { return .ignored }
-                model.submit(openingPage: press.modifiers.contains(.command))
-                return .handled
-            }
             .accessibilityLabel(String(localized: "Notes"))
             .accessibilityIdentifier("composer-writing")
     }
@@ -934,47 +923,200 @@ extension TaskPriority {
 /// view offers it to the input method first (a candidate pick), and a key the
 /// input method leaves alone becomes `insertTab:` / `insertBacktab:`. Those two
 /// commands must neither insert a tab nor move the keyboard out of a field that
-/// holds a composition, so the view's command boundary answers them with
-/// nothing while the key is dispatched (`holdTabCommands`).
+/// holds a composition. The owning text field answers them with nothing
+/// when its Tab key began with marked text, before its normal control
+/// delegate handles other commands. The window's
+/// shared field editor is never touched, and there is no time window: the
+/// boundary is armed by the key and used up by its command.
 @MainActor
 enum ComposerInputMethod {
     /// How many Tab commands the boundary has answered with nothing.
     private(set) static var swallowedTabCommands = 0
 
-    /// Installs the boundary on `view` until the key now being dispatched is
-    /// done (the next turn of the main queue).
-    static func holdTabCommands(on view: NSTextView) {
-        guard !(view.delegate is TabCommandGuard) else { return }
-        let guarded = TabCommandGuard(original: view.delegate)
-        view.delegate = guarded
-        DispatchQueue.main.async { [weak view] in
-            if let view, view.delegate === guarded { view.delegate = guarded.original }
-        }
+    /// A Tab key is about to be dispatched to the field editor `view`: with
+    /// `marked` text the field's boundary answers the Tab command it leads to;
+    /// otherwise that Tab is the composer's again.
+    static func holdTabCommands(on view: NSTextView, marked: Bool = true) {
+        guard let field = view.delegate as? ComposerWritingField else { return }
+        field.composingTab = marked
     }
 
     fileprivate static func swallowed() { swallowedTabCommands += 1 }
 }
 
-/// Stands in for a text view's delegate while a Tab is dispatched during
-/// composition: Tab and ⇧Tab commands end here, everything else goes on to the
-/// real delegate.
-private final class TabCommandGuard: NSObject, NSTextViewDelegate {
-    let original: NSTextViewDelegate?
-    init(original: NSTextViewDelegate?) { self.original = original }
+/// The writing field owns its command delegate from creation. Its Tab
+/// fallback stays at that control boundary, without replacing the window's
+/// field-editor delegate.
+private struct ComposerWritingLine: NSViewRepresentable {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var text: String
+    @Binding var focused: Bool
+    let ink: NSColor
+    let submit: (Bool) -> Void
+    let escape: () -> Void
+    let tab: (Bool) -> Bool
 
-    override func responds(to selector: Selector!) -> Bool {
-        super.responds(to: selector) || original?.responds(to: selector) == true
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> ComposerWritingField {
+        let field = ComposerWritingField()
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.maximumNumberOfLines = ComposerMetrics.writingMaxLines
+        field.cell?.wraps = true
+        field.cell?.isScrollable = false
+        field.cell?.usesSingleLineMode = false
+        field.lineBreakMode = .byWordWrapping
+        field.delegate = context.coordinator
+        field.setAccessibilityLabel(String(localized: "Notes"))
+        field.setAccessibilityIdentifier("composer-writing")
+        return field
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? { original }
+    func updateNSView(_ field: ComposerWritingField, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.isApplyingModel = true
+        defer { context.coordinator.isApplyingModel = false }
+        if field.isEnabled != enabled { field.isEnabled = enabled }
+        if field.isEditable != enabled { field.isEditable = enabled }
+        let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        if field.appearance != appearance { field.appearance = appearance }
+        let font = AtticTextStyle.composerWriting.nsFont
+        if field.font != font { field.font = font }
+        if field.textColor != ink { field.textColor = ink }
+        let placeholder = NSAttributedString(string: String(localized: "Notes"),
+            attributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor])
+        if field.placeholderAttributedString != placeholder { field.placeholderAttributedString = placeholder }
+        let editor = field.currentEditor() as? NSTextView
+        let replaced = context.coordinator.modelText != text
+        context.coordinator.modelText = text
+        // Native composition can run ahead of its binding. Only a new model
+        // value replaces marked text; an unrelated redraw leaves it alone.
+        if (editor?.string ?? field.stringValue) != text,
+           editor?.hasMarkedText() != true || replaced {
+            if let editor, editor.hasMarkedText() {
+                editor.inputContext?.discardMarkedText()
+                editor.unmarkText()
+            }
+            field.composingTab = false
+            field.returnModifiers = []
+            field.tabModifiers = []
+            field.stringValue = text
+            if let editor, editor.string != text {
+                editor.string = text
+                editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            }
+            field.invalidateIntrinsicContentSize()
+        }
+        let wanted = $focused
+        let allowed = enabled
+        DispatchQueue.main.async { [weak field] in
+            guard let field, let window = field.window else { return }
+            let editing = (window.firstResponder as? NSTextView)?.delegate as? NSTextField === field
+            if wanted.wrappedValue, allowed, !editing, !field.isHiddenOrHasHiddenAncestor {
+                window.makeFirstResponder(field)
+            } else if !wanted.wrappedValue, editing {
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
 
-    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.insertTab(_:))
-            || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
-            MainActor.assumeIsolated { ComposerInputMethod.swallowed() }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ComposerWritingField, context: Context) -> CGSize? {
+        let width = max(1, proposal.width ?? ComposerMetrics.width)
+        let font = AtticTextStyle.composerWriting.nsFont
+        // NSTextFieldCell uses the same native line metrics as the original
+        // field; a copy measures provisional input without changing its editor.
+        let measuring = nsView.cell?.copy() as? NSTextFieldCell
+        measuring?.stringValue = text
+        let height = measuring?.cellSize(forBounds: CGRect(x: 0, y: 0, width: width,
+            height: .greatestFiniteMagnitude)).height ?? ComposerMetrics.writingMinHeight
+        let line = NSLayoutManager().defaultLineHeight(for: font)
+        return CGSize(width: width, height: max(ComposerMetrics.writingMinHeight,
+            min(ceil(height), ceil(line * CGFloat(ComposerMetrics.writingMaxLines)))))
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: ComposerWritingLine
+        var isApplyingModel = false
+        var modelText: String?
+        init(_ parent: ComposerWritingLine) { self.parent = parent }
+
+        func focusBegan() {
+            guard !isApplyingModel else { return }
+            if !parent.focused { parent.focused = true }
+        }
+        func controlTextDidBeginEditing(_ notification: Notification) { focusBegan() }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard !isApplyingModel else { return }
+            parent.focused = false
+        }
+        func controlTextDidChange(_ notification: Notification) {
+            guard !isApplyingModel, modelText == parent.text,
+                  let field = notification.object as? NSTextField else { return }
+            let value = field.currentEditor()?.string ?? field.stringValue
+            modelText = value
+            if parent.text != value { parent.text = value }
+            field.invalidateIntrinsicContentSize()
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertTab(_:)) || selector == #selector(NSResponder.insertBacktab(_:)) {
+                let modifiers = (control as? ComposerWritingField)?.tabModifiers ?? []
+                guard modifiers.intersection([.command, .option, .control]).isEmpty else { return false }
+                return parent.tab(selector == #selector(NSResponder.insertBacktab(_:)))
+            }
+            if selector == #selector(NSResponder.cancelOperation(_:)) { parent.escape(); return true }
+            if selector == #selector(NSResponder.insertNewline(_:))
+                || selector == #selector(NSResponder.insertLineBreak(_:))
+                || selector == #selector(NSTextView.insertNewlineIgnoringFieldEditor(_:)) {
+                let modifiers = (control as? ComposerWritingField)?.returnModifiers ?? []
+                if modifiers.contains(.shift), !modifiers.contains(.command) {
+                    textView.insertNewlineIgnoringFieldEditor(nil)
+                } else { parent.submit(modifiers.contains(.command)) }
+                return true
+            }
+            return false
+        }
+    }
+}
+
+private final class ComposerWritingField: NSTextField, NSTextViewDelegate {
+    var composingTab = false
+    var returnModifiers: NSEvent.ModifierFlags = []
+    var tabModifiers: NSEvent.ModifierFlags = []
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { (delegate as? ComposerWritingLine.Coordinator)?.focusBegan() }
+        return accepted
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.contains(.command), let editor = currentEditor(),
+           window?.firstResponder === editor,
+           let coordinator = delegate as? ComposerWritingLine.Coordinator {
+            coordinator.parent.submit(true)
             return true
         }
-        return original?.textView?(textView, doCommandBy: commandSelector) ?? false
+        return super.performKeyEquivalent(with: event)
+    }
+
+    // Answer before NSTextField's default command handling commits marked
+    // text. The field remains the editor's delegate throughout the key.
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if composingTab, selector == #selector(NSResponder.insertTab(_:))
+            || selector == #selector(NSResponder.insertBacktab(_:)) {
+            composingTab = false
+            ComposerInputMethod.swallowed()
+            return true
+        }
+        return delegate?.control?(self, textView: textView, doCommandBy: selector) ?? false
     }
 }
 
@@ -1000,17 +1142,25 @@ private struct ComposerTabTrap: NSViewRepresentable {
                 guard active != oldValue else { return }
                 if active {
                     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                        guard let self, event.keyCode == 48, event.window === self.window,
+                        guard let self, event.window === self.window else { return event }
+                        if let editor = event.window?.firstResponder as? NSTextView,
+                           let field = editor.delegate as? ComposerWritingField {
+                            if event.keyCode == 48 { field.tabModifiers = event.modifierFlags }
+                            if event.keyCode == 36 || event.keyCode == 76 { field.returnModifiers = event.modifierFlags }
+                        }
+                        guard event.keyCode == 48,
                               event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
-                        if let text = event.window?.firstResponder as? NSTextView, text.hasMarkedText() {
+                        if let text = event.window?.firstResponder as? NSTextView {
+                            let marked = text.hasMarkedText()
                             // The input method sees Tab and ⇧Tab first, by the
                             // normal route. Whatever it leaves becomes a Tab
                             // command, which AppKit would answer by resigning
                             // the field even with text marked: it is answered
-                            // with nothing, so composition stays in its native
-                            // input editor until it commits.
-                            ComposerInputMethod.holdTabCommands(on: text)
-                            return event
+                            // with nothing (by the field's own delegate), so
+                            // composition stays in its native input editor
+                            // until it commits.
+                            if text.isFieldEditor { ComposerInputMethod.holdTabCommands(on: text, marked: marked) }
+                            if marked { return event }
                         }
                         return self.onTab(event.modifierFlags.contains(.shift)) ? nil : event
                     }

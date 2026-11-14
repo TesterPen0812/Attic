@@ -1001,7 +1001,7 @@ final class ComposerTests: XCTestCase {
 
     private func mountForKeys(on composerPage: ComposerPage,
                               onKeyboardTargetChange: ((ComposerCard.KeyboardTarget) -> Void)? = nil,
-                              captureSurface: Bool = false) throws -> (NSWindow, NSView, NSTextView) {
+                              captureSurface: Bool = false, mode: AtticDesignContext.Mode? = nil) throws -> (NSWindow, NSView, NSTextView) {
         try requireKeyWindowTests()
         model.open(on: composerPage)
         let hosting: NSView
@@ -1009,10 +1009,13 @@ final class ComposerTests: XCTestCase {
             // The production panel supplies its material behind this card.
             // Draw the real card contents over a stable panel surface here:
             // sandboxed offscreen AppKit cannot snapshot system glass.
-            let design = AtticDesignContext(mode: .light, reduceTransparency: true)
+            let design = AtticDesignContext(mode: mode ?? .light, reduceTransparency: true)
             hosting = NSHostingView(rootView: ComposerCard(model: model, drawsChrome: false,
                 onKeyboardTargetChange: onKeyboardTargetChange)
                 .atticDesign(design).background(design.tokens.panel.base.color))
+        } else if let mode {
+            hosting = NSHostingView(rootView: ComposerCard(model: model,
+                onKeyboardTargetChange: onKeyboardTargetChange).atticDesign(AtticDesignContext(mode: mode)))
         } else {
             hosting = NSHostingView(rootView: ComposerCard(model: model,
                 onKeyboardTargetChange: onKeyboardTargetChange))
@@ -1275,6 +1278,246 @@ final class ComposerTests: XCTestCase {
             XCTAssertEqual(targets.count, before, "BG-70: a marked-text Tab must not ask the composer to navigate")
             XCTAssertTrue(window.firstResponder === writing, "composition owns keyboard focus")
             writing.unmarkText()
+        }
+    }
+
+    /// Opus R-14: the Tab boundary does not swap the delegate of the window's
+    /// shared field editor, not even for the length of the key. Every field in
+    /// the window uses that one text view; while it is swapped, a reply from the
+    /// input method (a commit, a later `insertTab:`) goes to the stand-in.
+    func testTheTabBoundaryNeverSwapsTheSharedFieldEditorsDelegate() throws {
+        var targets: [ComposerCard.KeyboardTarget] = []
+        let (window, _, field) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { targets.append($0) })
+        field.insertTab(nil)
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertFalse(writing === field)
+        let editorDelegate = writing.delegate
+        XCTAssertNotNil(editorDelegate)
+        for backwards in [false, true] {
+            window.makeFirstResponder(writing)
+            writing.setMarkedText("漢", selectedRange: NSRange(location: 1, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(writing.hasMarkedText())
+            let swallowed = ComposerInputMethod.swallowedTabCommands
+            let before = targets.count
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: backwards ? .shift : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: backwards ? "\u{19}" : "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: 48))
+            // The key itself, through the monitor and the text view, with the main
+            // queue not drained: the editor still has its own delegate.
+            NSApp.sendEvent(event)
+            XCTAssertTrue(writing.delegate === editorDelegate,
+                          "the field editor's delegate is its own right after the key (\(String(describing: writing.delegate)))")
+            spin(0.1)
+            XCTAssertTrue(writing.delegate === editorDelegate, "and after the turn")
+            XCTAssertEqual(ComposerInputMethod.swallowedTabCommands, swallowed + 1, "the Tab command was still answered with nothing")
+            XCTAssertEqual(targets.count, before, "the composer's keyboard does not move")
+            XCTAssertTrue(window.firstResponder === writing)
+            writing.unmarkText()
+        }
+    }
+
+    /// R-14: a delayed input-method reply commits through the real control,
+    /// then sends its unhandled Tab command after a main-queue turn. The
+    /// control still owns its editor and publishes every committed character.
+    func testADelayedTabCommandKeepsTheCommitAndOnlyGuardsItsOwnField() throws {
+        let (window, host, titleField) = try mountForKeys(on: .tasks(.now))
+        titleField.insertTab(nil)
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        let control = try XCTUnwrap(writing.delegate as? NSTextField)
+        for backwards in [false, true] {
+            XCTAssertTrue(window.makeFirstResponder(control))
+            writing.setMarkedText("漢", selectedRange: NSRange(location: 1, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+            ComposerInputMethod.holdTabCommands(on: writing)
+            XCTAssertTrue(control.currentEditor() === writing)
+            writing.insertText("語", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let committed = writing.string
+            XCTAssertEqual(model.writing, committed, "the composition commits to the model immediately")
+            spin(0.1)
+            let swallowed = ComposerInputMethod.swallowedTabCommands
+            writing.doCommand(by: backwards ? #selector(NSResponder.insertBacktab(_:)) : #selector(NSResponder.insertTab(_:)))
+            XCTAssertEqual(ComposerInputMethod.swallowedTabCommands, swallowed + 1, "a later Tab command still ends here")
+            XCTAssertEqual(model.writing, committed)
+            XCTAssertTrue(control.currentEditor() === writing)
+            XCTAssertTrue(window.firstResponder === writing)
+        }
+        // A second control uses the very same window field editor. Its
+        // commands must go to its own delegate, never the composer's guard.
+        let other = NSTextField(string: "other")
+        other.frame = CGRect(x: 0, y: 0, width: 100, height: 20)
+        host.addSubview(other)
+        ComposerInputMethod.holdTabCommands(on: writing)
+        XCTAssertTrue(window.makeFirstResponder(other))
+        let otherEditor = try XCTUnwrap(other.currentEditor() as? NSTextView)
+        XCTAssertTrue(otherEditor === writing)
+        XCTAssertTrue(otherEditor.delegate as? NSTextField === other)
+        let swallowed = ComposerInputMethod.swallowedTabCommands
+        otherEditor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(other.stringValue.contains("!"))
+        otherEditor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(ComposerInputMethod.swallowedTabCommands, swallowed, "another field's Tab is not intercepted")
+    }
+
+    private func writingControl(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, field.accessibilityIdentifier() == "composer-writing" { return field }
+        return view.subviews.lazy.compactMap { self.writingControl(in: $0) }.first
+    }
+
+    /// A 2× capture of the actual field, used for ink checks and visual proof.
+    private func writingBitmap(in view: NSView) throws -> NSBitmapImageRep {
+        let bounds = view.alignmentRect(forFrame: view.bounds)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(ceil(bounds.width * 2)), pixelsHigh: Int(ceil(bounds.height * 2)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = bounds.size
+        bitmap.bitmapData?.initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        view.cacheDisplay(in: bounds, to: bitmap)
+        return bitmap
+    }
+
+    /// Compare translucent ink against the same light or dark surface.
+    private func writingInk(in view: NSView, background: CGFloat = 1) throws -> [CGFloat] {
+        let bitmap = try writingBitmap(in: view)
+        var ink = [CGFloat](repeating: background, count: 3)
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                for (index, value) in [color.redComponent, color.greenComponent, color.blueComponent].enumerated() {
+                    let component = background * (1 - color.alphaComponent) + value * color.alphaComponent
+                    ink[index] = background == 1 ? min(ink[index], component) : max(ink[index], component)
+                }
+            }
+        }
+        return ink
+    }
+
+    /// The field-specific IME boundary preserves the writing line's existing
+    /// native commands, including Shift-Return and the two submit routes.
+    func testWritingKeepsNewlineSubmitAndEscapeCommands() throws {
+        var target: ComposerCard.KeyboardTarget = .outside
+        let (window, host, titleField) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { target = $0 })
+        func writingKey(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                    isARepeat: false, keyCode: code)!
+                NSApp.sendEvent(event)
+            }
+            spin(0.1)
+        }
+        typeKeys(titleField, "Task with writing")
+        let control = try XCTUnwrap(writingControl(in: host))
+        XCTAssertTrue(window.makeFirstResponder(control), "native focus can enter writing before any text is typed")
+        spin()
+        XCTAssertEqual(target, .writing)
+        var writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertFalse(writing === titleField)
+        writing.insertText("first", replacementRange: writing.selectedRange())
+        writingKey("\r", code: 36, modifiers: .shift)
+        writing.insertText("second", replacementRange: writing.selectedRange())
+        XCTAssertEqual(model.writing, "first\nsecond")
+        XCTAssertTrue(liveTasks().isEmpty, "Shift-Return writes a newline without submitting")
+        writingKey("\r", code: 36)
+        spin(0.3)
+        XCTAssertEqual(liveTasks().count, 1)
+        XCTAssertEqual(model.writing, "")
+        XCTAssertTrue(window.firstResponder === titleField, "Return readies the empty title")
+        typeKeys(titleField, "Kept draft")
+        titleField.insertTab(nil)
+        spin()
+        writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        writing.insertText("kept writing", replacementRange: writing.selectedRange())
+        writingKey("\u{1b}", code: 53)
+        XCTAssertFalse(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Kept draft")
+        XCTAssertEqual(model.writing, "kept writing")
+        model.open(on: .tasks(.now))
+        spin()
+        titleField.insertTab(nil)
+        spin()
+        XCTAssertEqual(target, .writing)
+        XCTAssertTrue((window.firstResponder as? NSTextView)?.delegate as? NSTextField === control)
+        XCTAssertTrue(model.canCreate)
+        writingKey("\r", code: 36, modifiers: .command)
+        spin(0.3)
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertEqual(opened.count, 1, "Command-Return opens the created task")
+        XCTAssertFalse(model.isOpen)
+    }
+
+    func testReplacingWritingDuringCompositionKeepsTheNewDraft() throws {
+        let (window, _, titleField) = try mountForKeys(on: .tasks(.now))
+        titleField.insertTab(nil)
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertFalse(writing === titleField)
+        writing.setMarkedText("old composition", selectedRange: NSRange(location: 15, length: 0),
+                              replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(writing.hasMarkedText())
+        model.writing = "replacement draft"
+        spin()
+        XCTAssertEqual(model.writing, "replacement draft", "the old editing callback cannot replace the new draft")
+        XCTAssertEqual(writing.string, "replacement draft")
+        XCTAssertFalse(writing.hasMarkedText(), "the replaced draft no longer has an active composition")
+    }
+
+    /// Keep the native bridge's placeholder ink and line sizing equal to the
+    /// original SwiftUI field, including wrapping and the five-line cap.
+    func testWritingLineKeepsTheExistingInkAndLineHeights() throws {
+        for mode in AtticDesignContext.Mode.allCases {
+            let (window, host, _) = try mountForKeys(on: .tasks(.now), mode: mode)
+            defer { window.contentView = nil; window.close() }
+            let field = try XCTUnwrap(writingControl(in: host))
+            let cases = [""] + (1...6).map { Array(repeating: "a line", count: $0).joined(separator: "\n") }
+                + [Array(repeating: "a sentence long enough to wrap", count: 8).joined(separator: " ")]
+            let wrapping = [10, 15, 18, 20].map { String(repeating: "ab ", count: $0) }
+            for text in cases + wrapping {
+                model.writing = text
+                spin(0.1)
+                host.layoutSubtreeIfNeeded()
+                let width = field.alignmentRect(forFrame: field.frame).width
+                let reference = NSHostingView(rootView:
+                    TextField(String(localized: "Notes"), text: .constant(text), axis: .vertical)
+                        .textFieldStyle(.plain).font(AtticTextStyle.composerWriting.font)
+                        .foregroundStyle(AtticSurfaceInk.toneInk(.nextEventTime, tokens: AtticDesignContext(mode: mode).tokens).color)
+                        .lineLimit(1...ComposerMetrics.writingMaxLines)
+                        .frame(minHeight: ComposerMetrics.writingMinHeight, alignment: .topLeading)
+                        .frame(width: width).fixedSize(horizontal: false, vertical: true)
+                        .atticDesign(AtticDesignContext(mode: mode)))
+                reference.setFrameSize(reference.fittingSize)
+                reference.layoutSubtreeIfNeeded()
+                if text.isEmpty || text == "a line" {
+                    let surface: CGFloat = mode == .light ? 1 : 0
+                    let actual = try writingInk(in: field, background: surface)
+                    let expected = try writingInk(in: reference, background: surface)
+                    print("R14_INK mode=\(mode) rendered empty=\(text.isEmpty) actual=\(actual) legacy=\(expected)")
+                    for index in 0..<3 {
+                        XCTAssertEqual(actual[index], expected[index], accuracy: 1.0 / 255,
+                                       "the writing line keeps the original field's ink (empty \(text.isEmpty))")
+                    }
+                }
+                if mode == .light, text.components(separatedBy: "\n").count == 5,
+                   ProcessInfo.processInfo.environment["ATTIC_R13_RENDER"] != nil {
+                    let directory = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+                        .appendingPathComponent("R13Renders", isDirectory: true)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    for (name, view) in [("writing-native.png", field as NSView), ("writing-legacy.png", reference as NSView)] {
+                        let bitmap = try writingBitmap(in: view)
+                        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                            .write(to: directory.appendingPathComponent(name))
+                    }
+                }
+                print("R14_HEIGHT actual=\(field.frame.height) legacy=\(reference.fittingSize.height) cell=\(field.cell?.cellSize(forBounds: CGRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height ?? -1)")
+                XCTAssertEqual(field.frame.height, reference.fittingSize.height, accuracy: 1,
+                               "same writing height for \(text.components(separatedBy: "\n").count) lines / \(text.count) characters")
+            }
         }
     }
 
