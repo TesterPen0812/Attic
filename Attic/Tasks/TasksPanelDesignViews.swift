@@ -723,8 +723,8 @@ struct TasksFoldLayout: Layout {
 
 #if DEBUG
 /// Opt-in counter for a live lazy list. The lock also covers SwiftUI's
-/// off-main Layout calls. Disabled unless a hosted hang regression enables it,
-/// and then a layout pass costs one atomic read: it never reaches the lock.
+/// off-main Layout calls. Unless a hosted hang regression enables it, a layout
+/// pass costs one atomic read and never reaches the lock.
 final class TasksFoldLayoutProbe: @unchecked Sendable {
     static let shared = TasksFoldLayoutProbe()
     private let enabledFlag = Atomic<Bool>(false)

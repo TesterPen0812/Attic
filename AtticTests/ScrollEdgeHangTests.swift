@@ -210,6 +210,7 @@ final class ScrollEdgeHangTests: XCTestCase {
         TasksFoldLayoutProbe.shared.start()
         TasksFoldLayoutProbe.shared.stop()
         AtticTaskRow.stopHoverDiagnostics()
+        TasksScrollKeeper.KeeperView.recordCalls = 0
         defer { AtticTaskRow.stopHoverDiagnostics() }
         let mounted = try mountLongList(extraRows: 300)
         defer { mounted.window.close() }
@@ -225,6 +226,7 @@ final class ScrollEdgeHangTests: XCTestCase {
             list.reflectScrolledClipView(list.contentView)
             mounted.settle(0.3)
         }
+        XCTAssertEqual(TasksScrollKeeper.KeeperView.recordCalls, 0, "the production scroll path counts nothing unless a test opts in")
         XCTAssertEqual(TasksFoldLayoutProbe.shared.lockEntries, 0, "no layout call reaches the probe's lock while it is off")
         XCTAssertTrue(AtticTaskRow.hoverEvents.isEmpty, "no per-row hover counts are kept while diagnostics are off")
         XCTAssertTrue(AtticTaskRow.hoverHistory.isEmpty, "no per-row hover history is kept while diagnostics are off")
@@ -260,6 +262,8 @@ final class ScrollEdgeHangTests: XCTestCase {
             var offset: CGFloat?
         }
         func run(armed: Bool) throws -> (Outcome, notes: Int) {
+            TasksScrollKeeper.KeeperView.recordsDiagnostics = true
+            defer { TasksScrollKeeper.KeeperView.recordsDiagnostics = false }
             let probe = armed ? AtticHangProbe(outputURL: FileManager.default.temporaryDirectory
                 .appendingPathComponent("attic-hang-observer-\(UUID().uuidString).txt")) : nil
             AtticHangProbe.testInstance = probe

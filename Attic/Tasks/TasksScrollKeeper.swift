@@ -174,6 +174,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         #if DEBUG
         private var documentObserver: NSObjectProtocol?
         /// Test seam: how often the production `record()` ran.
+        static var recordsDiagnostics = false
         static var recordCalls = 0
         #endif
         /// Until the remembered place is back, the list's own first layout
@@ -319,7 +320,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
         private func record() {
             #if DEBUG
-            Self.recordCalls += 1
+            if Self.recordsDiagnostics { Self.recordCalls += 1 }
             if let clip = observedClip {
                 AtticHangProbe.note("scroll.geometry", key: String(describing: tab),
                                     value: "clip=\(clip.bounds) document=\(String(describing: enclosingScrollView?.documentView?.frame))",
