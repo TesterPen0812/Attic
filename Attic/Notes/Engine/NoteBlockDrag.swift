@@ -89,9 +89,16 @@ extension NoteEditorTextView {
         let origin = textContainerOrigin
         let firstFragment = layoutManager.textLayoutFragment(for:
             CGPoint(x: 0, y: max(0, visible.minY - origin.y)))
-        let start = firstFragment?.rangeInElement.location
+        var start = firstFragment?.rangeInElement.location
             ?? layoutManager.textViewportLayoutController.viewportRange?.location
             ?? engine.contentStorage.documentRange.location
+        // The band includes a viewport above us too. Measure back to that
+        // edge before walking forward, so upward autoscroll never reuses a
+        // band whose earlier slots were only estimated.
+        layoutManager.enumerateTextLayoutFragments(from: start, options: [.reverse, .ensuresLayout]) { fragment in
+            start = fragment.rangeInElement.location
+            return fragment.layoutFragmentFrame.minY + origin.y > band.lowerBound
+        }
         let offset = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: start)
         let first = min(max(titleEnd, offset), max(titleEnd, length - 1))
         var location = first < length ? max(titleEnd, engine.blockRange(at: first).location) : length

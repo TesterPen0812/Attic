@@ -149,6 +149,30 @@ final class NoteBlockDragTests: XCTestCase {
         XCTAssertEqual(session.choice?.after, true, "no flip on the boundary after a re-measure")
     }
 
+    func testPF15UpwardAutoscrollKeepsTheViewportInsideMeasuredSlots() throws {
+        let blocks = [NoteBlock.text("Title")] + (0..<100).map { NoteBlock.text("Block \($0)") }
+        let (engine, text) = editor(blocks, height: 280)
+        let clip = try XCTUnwrap(text.enclosingScrollView?.contentView)
+        let target = engine.blockRange(at: location(of: "Block 40\n", in: engine))
+        let targetRect = try XCTUnwrap(text.rect(ofBlock: target))
+        clip.scroll(to: NSPoint(x: 0, y: targetRect.minY))
+        text.enclosingScrollView?.reflectScrolledClipView(clip)
+        let source = engine.blockRange(at: location(of: "Block 42\n", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let pointer = text.convert(CGPoint(x: sourceRect.minX, y: clip.bounds.midY), to: nil)
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source, sourceRect: sourceRect, pressPoint: pointer))
+        defer { session.finish() }
+        let start = clip.bounds.minY
+        for step in 1...30 {
+            clip.scroll(to: NSPoint(x: 0, y: start - CGFloat(step) * 6))
+            text.enclosingScrollView?.reflectScrolledClipView(clip)
+            session.pointerMoved(to: pointer)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(session.slots.blocks.first).rect.minY, text.visibleRect.minY,
+                                     "the advertised band must contain measured slots above the viewport")
+        }
+        XCTAssertEqual(session.slotBuildCount, 1, "upward frames inside the measured band need no rebuild")
+    }
+
     func testTheSlotIsTheBlockHalfUnderThePointerWithHysteresis() {
         func block(_ y: CGFloat, _ index: Int) -> NoteBlockDropSlots.Block {
             let slot = { (location: Int) in
