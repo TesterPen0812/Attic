@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -404,7 +406,15 @@ final class Draw3StoreTests: XCTestCase {
     }
 
     /// What the list does when rows come on screen.
-    private func shown(_ store: DrawStore, _ ids: [UUID]) { store.touchThumbnails(ids) }
+    private func shown(_ model: DrawPageModel, _ matches: [DrawCanvas], _ ids: [UUID]) {
+        // Search can already carry bytes, so its rows skip searchThumbnail.
+        // Use the real shown callback, which must still touch those bytes.
+        model.thumbnailsShown(ids.compactMap { id in matches.first { $0.id == id } })
+    }
+
+    private func listActions() -> DrawLibraryActions {
+        DrawLibraryActions(open: { _ in }, newCanvas: { _ in }, reveal: { _, _ in }, close: {})
+    }
 
     private func damage(_ id: UUID, in container: ModelContainer) throws {
         let other = ModelContext(container)
@@ -434,8 +444,12 @@ final class Draw3StoreTests: XCTestCase {
         let container = try container()
         try seedBoards(container, count: 120)
         let (store, probe) = probeStore(container)
-        let ids = try store.presentationLibrary().map(\.id)
+        let menu = DrawLibraryMenuModel(store: store, actions: listActions())
+        let ids = menu.rows.compactMap { $0.canvas?.id }
         XCTAssertGreaterThan(try store.search("Board 1").count, 20)
+        probe.metrics.reset()
+        XCTAssertEqual(menu.rows.compactMap { $0.canvas?.id }, ids)
+        XCTAssertEqual(probe.metrics.metadataRowsRead, 0, "reopening the menu hits rowsCache")
         probe.reads = []
         for index in ids.indices { try rowThumbnail(store, ids, index) }
         XCTAssertFalse(probe.reads.isEmpty)
@@ -452,12 +466,73 @@ final class Draw3StoreTests: XCTestCase {
         let container = try container()
         try seedBoards(container, count: 120)
         let (store, probe) = probeStore(container)
-        let results = try store.search("Board 1").map(\.canvas.id)
+        let search = DrawSearchModel(store: store, actions: listActions())
+        search.query = "Board 1"
+        let results = search.results.map(\.id)
         XCTAssertGreaterThan(results.count, 24)
+        XCTAssertNil(search.highlightedID)
         probe.reads = []
-        for index in results.indices.reversed() { try rowThumbnail(store, results, index) }
+        for index in results.indices.reversed() {
+            search.moveHighlight(by: -1)
+            XCTAssertEqual(search.highlightedID, results[index], "Up starts at the last result, then walks up")
+            try rowThumbnail(store, results, index)
+        }
         let pages = (results.count + DrawStore.thumbnailWindow - 1) / DrawStore.thumbnailWindow
         XCTAssertLessThanOrEqual(probe.reads.count, pages, "walking up \(results.count) results read in \(probe.reads.count) batches")
+    }
+
+    /// Exercise the actual lazy search rows and their scrollTo path in an
+    /// unordered window: Up with no highlight, then another page upward.
+    func testR14HostedSearchWalksUpInDisplayedOrder() throws {
+        let container = try container()
+        try seedBoards(container, count: 120)
+        let (store, probe) = probeStore(container)
+        var shown = Set<UUID>()
+        var neighbours: [(UUID, [UUID])] = []
+        let actions = DrawLibraryActions(open: { _ in }, newCanvas: { _ in }, reveal: { _, _ in }, close: {},
+            thumbnailsShown: { shown.formUnion($0.map(\.id)); store.touchThumbnails($0.map(\.id)) },
+            searchThumbnail: { id, near in
+                neighbours.append((id, near))
+                return try? store.searchThumbnail(id, near: near)
+            })
+        let search = DrawSearchModel(store: store, actions: actions)
+        search.query = "Board 1"
+        let ids = search.results.map(\.id)
+        XCTAssertGreaterThan(ids.count, 24)
+        let host = NSHostingView(rootView: DrawSearchResults(model: search)
+            .frame(width: 224, height: 320).atticDesign(AtticDesignContext()))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func settle(until condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                if condition() { return true }
+            } while Date() < deadline
+            return condition()
+        }
+        XCTAssertTrue(settle { shown.contains(ids[0]) }, "the first search row is realized")
+        probe.reads = []
+        XCTAssertNil(search.highlightedID)
+        for index in stride(from: ids.count - 1, through: 24, by: -1) {
+            shown.remove(ids[index])
+            search.moveHighlight(by: -1)
+            XCTAssertEqual(search.highlightedID, ids[index])
+            // A task already realized for a neighbouring row need not run
+            // again: visibility is also proved by its thumbnail lookup.
+            XCTAssertTrue(settle { shown.contains(ids[index]) || neighbours.contains { $0.0 == ids[index] } },
+                          "the highlighted result is realized while walking up")
+        }
+        let pages = (ids.count + DrawStore.thumbnailWindow - 1) / DrawStore.thumbnailWindow
+        XCTAssertFalse(probe.reads.isEmpty, "Up realized cold rows beyond the first page")
+        XCTAssertLessThanOrEqual(probe.reads.count, pages, "upward realization reads at most one batch per page")
+        for (id, near) in neighbours {
+            let index = try XCTUnwrap(ids.firstIndex(of: id))
+            XCTAssertEqual(near, page(of: ids, containing: index), "the view supplies its displayed page")
+        }
     }
 
     /// R-14 C: rows that are on screen are used, so scrolling a broad search
@@ -466,14 +541,16 @@ final class Draw3StoreTests: XCTestCase {
         let container = try container()
         try seedBoards(container, count: 150)
         let (store, probe) = probeStore(container)
-        var found = try store.search("Board").map(\.canvas.id)
+        let model = DrawPageModel(store: store)
+        let matches = try store.search("Board").map(\.canvas)
+        var found = matches.map(\.id)
         XCTAssertEqual(found.count, 150)
-        shown(store, page(of: found, containing: 0))
+        shown(model, matches, page(of: found, containing: 0))
         for pageIndex in 1...8 {
             for index in (pageIndex * 12)..<((pageIndex + 1) * 12) { try rowThumbnail(store, found, index) }
-            shown(store, page(of: found, containing: pageIndex * 12))
+            shown(model, matches, page(of: found, containing: pageIndex * 12))
         }
-        shown(store, page(of: found, containing: 0)) // scrolled back to the top
+        shown(model, matches, page(of: found, containing: 0)) // scrolled back to the top
         for pageIndex in 9...11 {
             for index in (pageIndex * 12)..<((pageIndex + 1) * 12) { try rowThumbnail(store, found, index) }
         }
