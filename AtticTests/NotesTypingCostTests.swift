@@ -445,6 +445,29 @@ final class NotesTypingCostTests: XCTestCase {
         XCTAssertEqual(engine.find.matches.count, 1, "the latest query must publish its one matching range")
         XCTAssertEqual(engine.find.matches[0].noteRange.length, 12)
     }
+    /// Dot R-7: a short note with one huge table cell meets neither the outer
+    /// text nor the cell-count threshold, yet every query key scanned that cell
+    /// on the main thread. The cell's text size now counts toward the worker.
+    func testPF16ALongSingleTableCellSearchesOffMainAndAgreesWithTheInlineScan() async throws {
+        for length in [1_000, 400_000] {
+            let cell = String(repeating: "a", count: length) + " needleHere " + String(repeating: "b", count: 100)
+            let table = NoteTable(texts: [[cell, "other needle"], ["x", "y"]])
+            let (engine, _) = editor([.text("Title"), .text("short"), .table(table)])
+            defer { engine.find.close(); engine.detachView() }
+            engine.find.show()
+            let before = engine.find.searchedUTF16Count
+            engine.find.query = "needle"
+            let inline = engine.find.searchedUTF16Count - before
+            print("PF16 single_cell_utf16=\(length) inline_scanned_utf16=\(inline)")
+            if length > 100_000 {
+                XCTAssertLessThan(inline, 50_000, "a huge cell must not be scanned inside the query callback")
+            }
+            await engine.find.waitForSearch()
+            XCTAssertEqual(engine.find.matches.count, 2, "the worker and the inline scan agree (length \(length))")
+            XCTAssertEqual(engine.find.matches.compactMap(\.cellRange?.location).sorted(), [6, length + 1])
+        }
+    }
+
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
         let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
             .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])

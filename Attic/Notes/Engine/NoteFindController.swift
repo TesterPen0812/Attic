@@ -180,21 +180,28 @@ final class NoteFindController: ObservableObject {
         return snapshot
     }
 
+    /// A note goes to the worker when its text, its table grids or the text
+    /// inside its table cells is large enough to stall the query callback. The
+    /// cell text counts UTF-8 bytes (O(1) per cell), which never undercounts.
     private func needsBackgroundSearch(in engine: NoteEditorEngine) -> Bool {
         if engine.textStorage.length >= Self.backgroundSearchThreshold { return true }
-        if let immutableSnapshot {
-            return immutableSnapshot.tables.reduce(0) { $0 + $1.content.rowCount * $1.content.columnCount }
-                >= Self.backgroundTableCellsThreshold
+        var cells = 0, bytes = 0
+        func add(_ table: NoteTable) -> Bool {
+            cells += table.rowCount * table.columnCount
+            for row in table.rows { for cell in row.cells { bytes += cell.text.utf8.count } }
+            return cells >= Self.backgroundTableCellsThreshold || bytes >= Self.backgroundSearchThreshold
         }
-        var count = 0
+        if let immutableSnapshot {
+            return immutableSnapshot.tables.contains { add($0.content) }
+        }
         let range = NSRange(location: 0, length: engine.textStorage.length)
         guard range.length > 0 else { return false }
+        var large = false
         engine.textStorage.enumerateAttribute(.attachment, in: range) { value, _, stop in
             guard let table = value as? NoteTableAttachment else { return }
-            count += table.table.rowCount * table.table.columnCount
-            if count >= Self.backgroundTableCellsThreshold { stop.pointee = true }
+            if add(table.table) { large = true; stop.pointee = true }
         }
-        return count >= Self.backgroundTableCellsThreshold
+        return large
     }
 
     private func scheduleBackgroundSearch(in engine: NoteEditorEngine, selectFirst: Bool) {
