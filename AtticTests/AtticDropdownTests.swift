@@ -876,7 +876,9 @@ final class AtticDropdownTests: XCTestCase {
 
             origin.pointerEntered("row-30")
             host.rootView = ViewportRows(highlighted: 30, viaParameter: viaParameter, box: box)
-            origin.pointerLeft("row-30")
+            // This list keeps the pointer-made highlight after exit until
+            // SwiftUI reports it; tag/task flicks clear theirs on exit.
+            origin.pointerLeft("row-30", retainsHighlight: true)
             host.layoutSubtreeIfNeeded()
             spin(0.5)
             XCTAssertEqual(scrollOffset(in: host) ?? -1, start, accuracy: 0.5,

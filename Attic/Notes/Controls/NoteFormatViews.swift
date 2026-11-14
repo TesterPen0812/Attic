@@ -1381,7 +1381,7 @@ extension NoteSlashListView {
                              onHover: { inside in
                                  // The list always keeps one highlight (Return takes it).
                                  if inside, model.highlighted != index { model.highlighted = index }
-                             }, position: index + 1, itemCount: model.items.count) {
+                             }, hoverRetainsHighlightOnExit: true, position: index + 1, itemCount: model.items.count) {
                 model.onPick?(item.kind)
             }
             .accessibilityIdentifier("notes-slash-\(item.kind.rawValue)")
@@ -1444,7 +1444,7 @@ struct NoteLinkCardView: View {
         AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
             ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, note in
                 AtticDropdownRow(title: note.title, systemName: "note.text", isHighlighted: model.linkSuggestionIndex == index,
-                    onHover: { if $0 { model.linkSuggestionIndex = index } }, position: index + 1, itemCount: model.linkSuggestions.count) {
+                    onHover: { if $0 { model.linkSuggestionIndex = index } }, hoverRetainsHighlightOnExit: true, position: index + 1, itemCount: model.linkSuggestions.count) {
                     model.chooseNote(index)
                 }
                 .accessibilityIdentifier("notes-link-suggestion-\(note.id)")

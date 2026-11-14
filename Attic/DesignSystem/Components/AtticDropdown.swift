@@ -581,6 +581,9 @@ struct AtticDropdownRow: View {
     /// The name in its own font (the style list: each style in its style).
     var titleFont: Font?
     var onHover: ((Bool) -> Void)?
+    /// Some lists retain the pointer's highlight after a leave (for Return);
+    /// others clear it as soon as the pointer exits.
+    var hoverRetainsHighlightOnExit = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -590,7 +593,7 @@ struct AtticDropdownRow: View {
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
          detail: String? = nil, detailInk: AtticInk = .helper, detailColour: AtticRGBA? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
-         titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
+         titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, hoverRetainsHighlightOnExit: Bool = false, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
         self.position = position
         self.itemCount = itemCount
@@ -609,6 +612,7 @@ struct AtticDropdownRow: View {
         self.titleInk = titleInk
         self.titleFont = titleFont
         self.onHover = onHover
+        self.hoverRetainsHighlightOnExit = hoverRetainsHighlightOnExit
         self.action = action
     }
 
@@ -700,7 +704,7 @@ struct AtticDropdownRow: View {
                 if !hovered { hovered = true }
                 onHover?(true)
             case .ended:
-                highlightOrigin?.pointerLeft(scrollID ?? title)
+                highlightOrigin?.pointerLeft(scrollID ?? title, retainsHighlight: hoverRetainsHighlightOnExit)
                 if hovered { hovered = false }
                 onHover?(false)
             }
@@ -2450,10 +2454,10 @@ final class AtticHighlightOrigin {
     /// Whether the list has reported the pointer row's highlight yet: a
     /// pointer that leaves first (a flick across the edge) still made it.
     private var reported = false
-    /// A leave with no highlight report keeps its origin through the current
-    /// update, then expires on the next main-queue turn. A flick that changes
-    /// nil → row → nil never reports a row, so its next keyboard visit must
-    /// not inherit that pointer origin. New entries invalidate queued leaves.
+    /// When the hover callback clears the highlight on exit, its origin can
+    /// be dropped immediately. A list that retains a pointer-made highlight
+    /// after exit needs one update to report that origin before it expires.
+    /// New entries invalidate queued leaves; no elapsed-time rule is used.
     private var leaveGeneration = 0
 
     func pointerEntered(_ id: String) {
@@ -2464,9 +2468,9 @@ final class AtticHighlightOrigin {
         leaveGeneration &+= 1
     }
 
-    func pointerLeft(_ id: String) {
+    func pointerLeft(_ id: String, retainsHighlight: Bool = false) {
         guard pointerRow == id else { return }
-        if reported {
+        if reported || !retainsHighlight {
             pointerRow = nil
             return
         }

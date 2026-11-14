@@ -1684,6 +1684,7 @@ struct AtticSuggestionList: View {
                 AtticDropdownRow(title: item.title, systemName: item.systemName, detail: item.detail,
                                isHighlighted: index == highlighted,
                                onHover: onHover.map { report in { inside in if inside { report(index) } } },
+                               hoverRetainsHighlightOnExit: true,
                                position: index + 1, itemCount: items.count) { onChoose(index) }
             }
         }

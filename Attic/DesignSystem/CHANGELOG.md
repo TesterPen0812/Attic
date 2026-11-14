@@ -15,9 +15,10 @@ The viewport knows the source from the change itself, through a shared
   scroll its row into view even when the pointer rests on it.
 - A pointer that leaves the row before the list reports its highlight still
   made it, so a quick flick across the cut-off edge does not scroll. A flick
-  that moved no highlight at all is forgotten on the next main-queue turn,
-  after that update has had a chance to report it. A keyboard move immediately
-  after the flick can therefore scroll to the row, without a timed grace period.
+  whose hover clears the highlight on exit forgets its pointer origin at once,
+  allowing an immediate keyboard move to scroll. Lists that retain the pointer's
+  highlight on exit keep that origin through the reporting update and then
+  expire it on the next main-queue turn; neither path uses a timed grace period.
 - A click on ‹ or › in a date card cut short to fit the panel turns the month
   without scrolling the card; the arrow stays under the pointer. A key, or an
   accessibility press on the arrow, still scrolls to the day it lights. The
