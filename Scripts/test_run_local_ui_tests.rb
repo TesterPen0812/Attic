@@ -34,6 +34,16 @@ class RunLocalUITestsTest < Minitest::Test
     refute_includes File.read(SCRIPT), "arch=arm64"
   end
 
+  def test_ad_hoc_default_clears_the_project_team_and_an_explicit_override_is_preserved
+    stdout, stderr, status = dry_run
+    assert status.success?, stderr
+    assert_match(/(?:^|\s)DEVELOPMENT_TEAM=(?:\s|$)/, stdout)
+
+    stdout, stderr, status = dry_run("--development-team", "ZGZWS73268")
+    assert status.success?, stderr
+    assert_includes stdout, "DEVELOPMENT_TEAM=ZGZWS73268"
+  end
+
   def test_explicit_identities_and_selection_are_target_specific
     stdout, stderr, status = dry_run(
       "--app-bundle-id", "com.taha.Attic.ui.host",

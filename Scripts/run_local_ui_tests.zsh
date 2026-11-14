@@ -254,10 +254,8 @@ common_arguments=(
     CODE_SIGNING_REQUIRED=YES
     CODE_SIGN_STYLE=Manual
     "CODE_SIGN_IDENTITY=$signing_identity"
+    "DEVELOPMENT_TEAM=$development_team"
 )
-if [[ -n "$development_team" ]]; then
-    common_arguments+=("DEVELOPMENT_TEAM=$development_team")
-fi
 selection_arguments=()
 for selection in "${only_testing[@]}"; do
     selection_arguments+=("-only-testing:$selection")
