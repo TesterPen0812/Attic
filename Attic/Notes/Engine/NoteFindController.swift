@@ -119,6 +119,8 @@ final class NoteFindController: ObservableObject {
         var responder: ObjectIdentifier?
         var table: ObjectIdentifier?
         var cell: NoteTable.Position?
+        var cellSelection: NSRange?
+        var composition: NSRange?
     }
     private var searchOrigin: Interaction?
     /// Only notes large enough to stall the query callback use the worker.
@@ -215,10 +217,13 @@ final class NoteFindController: ObservableObject {
     }
 
     private func interaction(in engine: NoteEditorEngine) -> Interaction {
-        Interaction(selection: engine.textView?.selectedRange(),
+        let table = engine.activeTableView
+        let editor = table?.activeCell == nil ? nil : table?.editor
+        return Interaction(selection: engine.textView?.selectedRange(),
                     responder: engine.textView?.window?.firstResponder.map { ObjectIdentifier($0) },
-                    table: engine.activeTableView.map { ObjectIdentifier($0) },
-                    cell: engine.activeTableView?.activeCell)
+                    table: table.map { ObjectIdentifier($0) },
+                    cell: table?.activeCell, cellSelection: editor?.selectedRange(),
+                    composition: editor?.hasMarkedText() == true ? editor?.markedRange() : nil)
     }
 
     private func scheduleBackgroundSearch(in engine: NoteEditorEngine, origin: Interaction?,
@@ -278,7 +283,8 @@ final class NoteFindController: ObservableObject {
             // The first match is revealed only while the person is still where
             // the query was typed: not after a click into the body, a focused
             // table cell or an edit made while the scan ran.
-            if selectFirst, origin == self.interaction(in: engine) { self.reveal(activateCell: false) }
+            let interaction = self.interaction(in: engine)
+            if selectFirst, origin == interaction, interaction.composition == nil { self.reveal(activateCell: false) }
             self.searchOrigin = nil
             self.searchTask = nil
         }
@@ -570,16 +576,20 @@ final class NoteFindController: ObservableObject {
         let string = engine.textStorage.string as NSString
         let affected = string.paragraphRange(for: NSIntersectionRange(edited, NSRange(location: 0, length: string.length)))
         dirtyHighlights = dirtyHighlights.map { NSUnionRange(rebased($0), affected) } ?? affected
-        if pendingMatches != nil || pendingFullSearch || query.contains(where: \.isNewline) {
+        let alreadyPending = pendingMatches != nil
+        let shown = pendingMatches ?? matches
+        let old = alreadyPending ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        let oldAffected = NSRange(location: affected.location, length: max(0, affected.length - delta))
+        func rebasedMatch(_ match: Match) -> Match? {
+            if NSIntersectionRange(match.noteRange, oldAffected).length > 0 { return nil }
+            return Match(noteRange: rebased(match.noteRange), tableID: match.tableID, cell: match.cell, cellRange: match.cellRange)
+        }
+        pendingMatches = shown.compactMap(rebasedMatch)
+        pendingOldMatch = old.flatMap(rebasedMatch)
+        if alreadyPending || pendingFullSearch || query.contains(where: \.isNewline) {
             pendingFullSearch = true
             pendingSearchRange = nil
             return
-        }
-        pendingOldMatch = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
-        let oldAffected = NSRange(location: affected.location, length: max(0, affected.length - delta))
-        pendingMatches = matches.compactMap { match in
-            if NSIntersectionRange(match.noteRange, oldAffected).length > 0 { return nil }
-            return Match(noteRange: rebased(match.noteRange), tableID: match.tableID, cell: match.cell, cellRange: match.cellRange)
         }
         pendingSearchRange = affected
     }

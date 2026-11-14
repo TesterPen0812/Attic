@@ -516,6 +516,45 @@ final class NotesTypingCostTests: XCTestCase {
                        "the interrupted scan must not select its first match over the person's selection")
     }
 
+    func testPF16LateFindPreservesARealCellResponderAndComposition() async throws {
+        let (engine, view) = longFindEditor()
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let scroll = try XCTUnwrap(view.enclosingScrollView)
+        root.addSubview(scroll)
+        root.addSubview(attachment.tableView)
+        let window = NSWindow(contentRect: root.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        defer { engine.find.close(); window.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        attachment.tableView.activate(.init(row: 0, column: 0))
+        let cell = attachment.tableView.editor
+        cell.setMarkedText("composing", selectedRange: NSRange(location: 3, length: 0),
+                           replacementRange: cell.selectedRange())
+        let selection = cell.selectedRange(), marked = cell.markedRange(), text = cell.string
+        XCTAssertTrue(cell.hasMarkedText())
+        XCTAssertTrue(window.firstResponder === cell)
+        await engine.find.waitForSearch()
+        XCTAssertTrue(window.firstResponder === cell, "late Find cannot reclaim the responder")
+        XCTAssertEqual(attachment.tableView.activeCell, .init(row: 0, column: 0))
+        XCTAssertEqual(cell.selectedRange(), selection)
+        XCTAssertEqual(cell.markedRange(), marked)
+        XCTAssertEqual(cell.string, text)
+        XCTAssertTrue(cell.hasMarkedText(), "Find cannot commit or discard the composition")
+        cell.unmarkText()
+
+        // Staying in the same table/cell and responder can still move the
+        // selection. This must invalidate reveal ownership too.
+        engine.find.query = "needl"
+        cell.setSelectedRange(NSRange(location: 1, length: 0))
+        await engine.find.waitForSearch()
+        XCTAssertTrue(window.firstResponder === cell)
+        XCTAssertEqual(attachment.tableView.activeCell, .init(row: 0, column: 0))
+        XCTAssertEqual(cell.selectedRange(), NSRange(location: 1, length: 0))
+    }
+
     /// Dot R-4: an edit made while the select-first scan runs cancels it and
     /// schedules a replacement; the replacement keeps the intent, so the result
     /// has a current match (without taking the caret from the body).
@@ -552,6 +591,25 @@ final class NotesTypingCostTests: XCTestCase {
         await engine.find.waitForSearch()
         XCTAssertEqual(engine.find.matches.count, 3)
         XCTAssertEqual(view.selectedRange(), moved, "the late publication leaves the person's navigation alone")
+    }
+
+    func testPF16AnEditKeepsUnchangedPreviousMatchesNavigableDuringTheReplacementScan() async {
+        let (engine, view) = longFindEditor()
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        await engine.find.waitForSearch()
+        engine.find.query = "needl"
+        let typedAt = (view.string as NSString).range(of: "middle").location + 2
+        view.setSelectedRange(NSRange(location: typedAt, length: 0))
+        view.insertText("x", replacementRange: view.selectedRange())
+        XCTAssertEqual(engine.find.matches.count, 3, "unmodified paragraphs and cells stay navigable during the replacement scan")
+        engine.find.next()
+        let moved = view.selectedRange()
+        XCTAssertNotEqual(moved.location, typedAt + 1)
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 3)
+        XCTAssertEqual(view.selectedRange(), moved)
     }
 
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
