@@ -1599,6 +1599,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertNil(task, "a warm note needs no asynchronous open")
         XCTAssertNotNil(shown, "the presenter is installed before begin returns")
         XCTAssertFalse(opening.isOpening)
+        await task?.value  // A red implementation must finish before fixture teardown too.
     }
 
     /// Panel half of R-4: a preparation that goes stale retries once and then
