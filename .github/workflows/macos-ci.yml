@@ -167,6 +167,20 @@ jobs:
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
+          # The shared "+" and "#" keyboard tests that only run with Full Keyboard Access on
+          # (BG-67 and its review rounds). Each must have run, not skipped.
+          shared_chrome=(
+            testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
+            testAPageSwitchNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
+            testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
+          )
+          only=(); for t in "${shared_chrome[@]}"; do only+=(-only-testing:"AtticTests/PanelSharedChromeTests/$t"); done
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-shared-chrome.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO "${only[@]}" || status=1
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-shared-chrome.xcresult" --format json > "$RUNNER_TEMP/fka-shared-chrome-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-shared-chrome-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==int(sys.argv[2]) and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-shared-chrome-summary.json" "${#shared_chrome[@]}" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()

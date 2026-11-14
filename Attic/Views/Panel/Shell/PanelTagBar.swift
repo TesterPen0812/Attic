@@ -642,7 +642,12 @@ private struct PanelTagKeyFocus: ViewModifier {
     private func arm() {
         guard reachable || managed else { return }
         armed = true
-        DispatchQueue.main.async { focused = true }
+        panelKeyHandoff {
+            #if DEBUG
+            PanelKeyStopSeam.tagKeyAssignments += 1
+            #endif
+            focused = true
+        }
     }
 }
 

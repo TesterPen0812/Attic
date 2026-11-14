@@ -32,6 +32,12 @@ final class PanelSharedChrome: ObservableObject {
     /// starts collapsed each time the panel opens and on each page
     /// (Accepted 2026-11-13, 1A).
     let tagBar = PanelTagBarState()
+    /// The shared "+" has the keyboard (Tab, Space, Return). Not published:
+    /// nothing draws from it. The Notes library reads it so its own Return
+    /// never takes the key from "+" (round 2 review N-6).
+    private(set) var plusHasKeyboard = false
+
+    func notePlusKeyboard(_ has: Bool) { if plusHasKeyboard != has { plusHasKeyboard = has } }
 
     /// What the controls do, per page. Not observable: only a click reads them.
     private var barActions: [PanelPage: PanelBottomBarActions] = [:]
@@ -180,8 +186,29 @@ struct PanelPlusFocusID: Hashable {}
 enum PanelKeyStopSeam {
     static var plus: [PanelPage: Bool] = [:]
     static var tagKey: [String: Bool] = [:]
+    /// A test holds the queued focus handoffs and drains them when it
+    /// chooses (`panelKeyHandoff`).
+    static var holdsHandoffs = false
+    static var held: [() -> Void] = []
+    /// How many handoffs actually gave the control the keyboard.
+    static var plusAssignments = 0
+    static var tagKeyAssignments = 0
 }
 #endif
+
+/// A focus handoff one run-loop turn after the request (the control is
+/// being updated as the request arrives). The closure checks again that it
+/// is still wanted when it runs.
+@MainActor
+func panelKeyHandoff(_ run: @escaping @MainActor () -> Void) {
+    #if DEBUG
+    if PanelKeyStopSeam.holdsHandoffs {
+        PanelKeyStopSeam.held.append(run)
+        return
+    }
+    #endif
+    DispatchQueue.main.async(execute: run)
+}
 
 private struct PanelPlusFocus: ViewModifier {
     let page: PanelPage
@@ -221,7 +248,12 @@ private struct PanelPlusFocus: ViewModifier {
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
                 guard reachable, asked == AnyHashable(PanelPlusFocusID()) else { return }
                 armed = true
-                DispatchQueue.main.async { focused = true }
+                panelKeyHandoff {
+                    #if DEBUG
+                    PanelKeyStopSeam.plusAssignments += 1
+                    #endif
+                    focused = true
+                }
             }
             .onChange(of: focused) { _, now in
                 if now {

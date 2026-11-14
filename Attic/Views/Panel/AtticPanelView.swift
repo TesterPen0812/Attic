@@ -107,7 +107,7 @@ struct AtticPanelView: View {
     /// The top row's search and footprint, shared by the pages and the pin.
     @State private var topRowState = PanelTopRowState()
     /// The bars every page shares, drawn once above the pages.
-    @State private var sharedChrome = PanelSharedChrome()
+    @State private var sharedChrome: PanelSharedChrome
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
@@ -124,7 +124,8 @@ struct AtticPanelView: View {
         toasts: PanelToastCenter? = nil,
         tasksPageState: TasksPageState? = nil,
         calendarPageState: CalendarPageState? = nil,
-        composerState: PanelComposerState? = nil
+        composerState: PanelComposerState? = nil,
+        sharedChrome: PanelSharedChrome? = nil
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -140,6 +141,8 @@ struct AtticPanelView: View {
         _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
         _calendarPageState = StateObject(wrappedValue: calendarPageState ?? CalendarPageState())
         _composerState = StateObject(wrappedValue: composerState ?? PanelComposerState())
+        // A test hands one in to reach the shared bars' state (round 2).
+        _sharedChrome = State(initialValue: sharedChrome ?? PanelSharedChrome())
     }
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }

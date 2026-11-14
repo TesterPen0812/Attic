@@ -9,6 +9,25 @@ import XCTest
 /// above the pages, and the page switch's open moves the bar with it.
 @MainActor
 final class PanelSharedChromeTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        resetStaticState()
+    }
+
+    override func tearDown() {
+        resetStaticState()
+        super.tearDown()
+    }
+
+    /// The statics the "+" card and the key-stop seams leave behind, so no
+    /// test passes or fails on what an earlier one left (round 2 review N-1).
+    private func resetStaticState() {
+        ComposerOverlay.isPresented = false
+        AtticDraw.enabledOverride = nil
+        PanelKeyStopSeam.holdsHandoffs = false
+        PanelKeyStopSeam.held = []
+    }
+
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
     private func elements(_ root: AnyObject) -> [AnyObject] {
@@ -420,10 +439,12 @@ private final class RealShell {
     let state: PanelUIState
     let notes: NoteStore
     let draft: NoteDraftController
+    /// The shell's shared bars, handed in so a test reaches the keyboard
+    /// state the real controls report.
+    let sharedChrome = PanelSharedChrome()
     private let suite: String
 
     init(attachments: AttachmentFileStore) throws {
-        AtticDraw.enabledOverride = true
         suite = "PanelSharedChromeKeys.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -432,6 +453,8 @@ private final class RealShell {
         notes = NoteStore(container: container, attachmentFileStore: attachments)
         _ = try notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Launch plan")]), tags: ["launch"]).get()
         draft = NoteDraftController(noteStore: notes)
+        // After every step that can throw, so a failed init leaves nothing on.
+        AtticDraw.enabledOverride = true
         state = PanelUIState()
         let size = CGSize(width: 340, height: 560)
         state.updatePanelSize(size)
@@ -442,7 +465,8 @@ private final class RealShell {
         host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
-                                     noteDraft: draft, chromeInteractionState: chrome, uiState: state, settings: settings),
+                                     noteDraft: draft, chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     sharedChrome: sharedChrome),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
         panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -6_000, y: -6_000), size: size),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -492,6 +516,32 @@ private final class RealShell {
             panel.sendEvent(event)
         }
         spin(0.15)
+    }
+
+    /// A key through `NSApp.sendEvent`, so the app's local monitors (the
+    /// library's keys, the tag bar's) see it as they do a real key, then it
+    /// goes on to the window.
+    func appKey(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                         isARepeat: false, keyCode: keyCode)!
+            NSApp.sendEvent(event)
+        }
+        spin(0.2)
+    }
+
+    /// A click at `point` (window coordinates, origin bottom left) through
+    /// `NSApp.sendEvent`.
+    func appClick(at point: CGPoint) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            NSApp.sendEvent(event)
+        }
+        spin(0.3)
     }
 
     func elements(_ root: AnyObject, depth: Int = 0) -> [AnyObject] {
@@ -820,13 +870,20 @@ extension PanelSharedChromeTests {
             XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier), "\(page): the plus is one stop, not two")
             shell.tab(shift: true)
             XCTAssertTrue(shell.focusedIdentifiers().contains(plus.identifier), "\(page): Shift-Tab comes back to the plus")
+            // The real shell gives pages the "+" card (`\.panelComposer`): on
+            // Calendar and Notes the plus opens it instead of making the
+            // thing itself.
+            ComposerOverlay.isPresented = false
             shell.press(" ", keyCode: 49)
             switch page {
             case .calendar: XCTAssertTrue(ComposerOverlay.isPresented, "calendar: Space on the plus opens the new-event card")
-            case .notes: XCTAssertEqual(shell.notes.notes.count, notesBefore + 1, "notes: Space on the plus makes a note")
+            case .notes:
+                XCTAssertTrue(ComposerOverlay.isPresented, "notes: Space on the plus opens the new-note card")
+                XCTAssertEqual(shell.notes.notes.count, notesBefore, "notes: the card makes the note, not the key")
             case .canvas: XCTAssertNotEqual(DrawPageModel.shared.canvasID, canvasBefore, "draw: Space on the plus makes a canvas")
             case .tasks: break
             }
         }
     }
 }
+
