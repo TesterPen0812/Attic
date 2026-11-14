@@ -687,9 +687,13 @@ final class AgentChatTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         var seen = Set<ObjectIdentifier>()
         XCTAssertTrue(hasHistory(host, seen: &seen), "A blank thread must still expose saved Chats")
-        if let capturePath = ProcessInfo.processInfo.environment["ATTIC_BG44_CAPTURE_DIR"] {
-            let directory = URL(fileURLWithPath: capturePath, isDirectory: true)
+        if ProcessInfo.processInfo.environment["ATTIC_BG44_CAPTURE_DIR"] != nil {
+            // The unit host is sandboxed; its own temporary directory is
+            // writable, while the external Air job build folder is not.
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-bg44-shots-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            print("BG44_CAPTURE_DIR=\(directory.path)")
             func capture(_ name: String) throws {
                 host.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(NSBitmapImageRep(

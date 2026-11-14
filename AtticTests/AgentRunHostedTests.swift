@@ -967,6 +967,8 @@ final class AgentRunHostedTests: XCTestCase {
 
         chat.newChat()
         chat.draft = "Do not run this"
+        let attachment = AgentTarget(page: .tasks, itemID: UUID(), title: "Keep this context")
+        chat.attach(attachment)
         chat.send()
         XCTAssertEqual(chat.phase, .waiting)
         chat.stop()
@@ -976,6 +978,7 @@ final class AgentRunHostedTests: XCTestCase {
         XCTAssertEqual(helpers.count, 1, "Stop must prevent starting the waiting helper")
         XCTAssertEqual(chat.phase, .idle, "The cancelled new message must leave Stop state")
         XCTAssertEqual(chat.draft, "Do not run this", "The stopped message is recoverable")
+        XCTAssertEqual(chat.attachments, [.item(attachment)], "Stopping preserves the queued attachment")
         XCTAssertTrue(runner.chats().contains { $0.title == "Original change" },
                       "The old run still records its committed receipt")
     }
