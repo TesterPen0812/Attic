@@ -676,15 +676,14 @@ final class CalendarPageHostedTests: XCTestCase {
                 backend.commitError = .saveFailed("Simulated unavailable calendar")
                 board.pick(day(2026, 10, 31), generation: chat.watchingGeneration)
                 page.settle(0.6)
-                // Preserve the actual hosted Calendar view at 2× on both
-                // the baseline red and repaired green runs for visual review.
+                // Keep the real 2× Calendar view only when this test fails.
                 let capture = try page.capture(scale: 2)
                 XCTAssertEqual(capture.pixelsWide, 640)
                 XCTAssertEqual(capture.pixelsHigh, 1800)
                 let screenshot = XCTAttachment(data: try XCTUnwrap(capture.representation(using: .png, properties: [:])),
                                                uniformTypeIdentifier: "public.png")
                 screenshot.name = "watched-day-after-failed-save"
-                screenshot.lifetime = .keepAlways
+                screenshot.lifetime = .deleteOnSuccess
                 add(screenshot)
                 XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 30),
                                "a failed save keeps the day and the unsaved editor")
