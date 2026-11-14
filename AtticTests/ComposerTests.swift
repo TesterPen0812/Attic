@@ -126,6 +126,105 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(Set(liveTasks().map(\.title)), ["Task A with a pending file", "Task B"])
     }
 
+    func testTaskSaveFailureAfterNextDraftStartsKeepsBothDraftsAndTheirFiles() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ComposerFailedTasks")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let firstURL = root.appendingPathComponent("original.pdf")
+        let nextURL = root.appendingPathComponent("next.pdf")
+        try Data("original attachment".utf8).write(to: firstURL)
+        try Data("next attachment".utf8).write(to: nextURL)
+        page.services.acknowledgementDelay = .seconds(3600)
+
+        model.open(on: .tasks(.now))
+        type("Original task #first")
+        model.writing = "Original writing"
+        page.addComposerFiles(urls: [firstURL])
+        model.submit()
+        XCTAssertEqual(page.addBar.text, "")
+
+        type("Next task #second")
+        model.writing = "Next writing"
+        page.addComposerFiles(urls: [nextURL])
+        let focusBeforeLateFailure = model.focusRequest
+        saveFailure.on = true
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(liveTasks().isEmpty, "the failed task+writing transaction must roll back")
+        XCTAssertEqual(model.focusRequest, focusBeforeLateFailure,
+            "a late failure must not steal the keyboard from the next draft")
+        XCTAssertEqual(page.addBar.text, "Next task #second")
+        XCTAssertEqual(model.writing, "Next writing")
+        XCTAssertEqual(page.addBarState.fileNames, ["next.pdf"], "failed task files must not migrate into the next draft")
+
+        saveFailure.on = false
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(page.addBar.text, "Original task #first", "failed task should be recoverable after the next one saves")
+        XCTAssertEqual(model.writing, "Original writing")
+        XCTAssertEqual(page.addBarState.fileNames, ["original.pdf"])
+
+        page.setViewOptions(TasksViewOptions(status: .inProgress), for: .now)
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        try await waitForComposer {
+            self.liveTasks().count == 2 && self.liveTasks().allSatisfy { $0.attachments.count == 1 }
+        }
+        XCTAssertEqual(liveTasks().first { $0.title == "Original task" }?.status, .todo,
+            "retrying the failed task must preserve its originally submitted status")
+        XCTAssertEqual(liveTasks().first { $0.title == "Original task" }?.attachments.map(\.filename), ["original.pdf"])
+        XCTAssertEqual(liveTasks().first { $0.title == "Next task" }?.attachments.map(\.filename), ["next.pdf"])
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 2, "failed save must not add an Undo step")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertEqual(liveTasks().count, 1)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Original task", "Next task"])
+        let fixed = now
+        let reopened = TaskStore(container: container, now: { fixed }, taskImageFiles: tasks.taskImageFiles)
+        XCTAssertEqual(reopened.tasks.first { $0.title == "Original task" }?.attachments.map(\.filename), ["original.pdf"])
+        XCTAssertEqual(reopened.tasks.first { $0.title == "Next task" }?.attachments.map(\.filename), ["next.pdf"])
+    }
+
+    func testFailedTaskAndNextDraftBothSurviveComposerRelaunch() throws {
+        let suite = "ComposerFailedTasks.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        page.services.acknowledgementDelay = .seconds(3600)
+
+        model.open(on: .tasks(.now))
+        type("Task to retry")
+        page.addBar.picked.tags = ["chosen"]
+        model.writing = "Keep my writing"
+        model.submit()
+        type("Later draft")
+        model.writing = "Also keep this"
+        saveFailure.on = true
+        page.settlePendingCompletionAcknowledgements()
+        model.saveKeptDraft()
+
+        let fixed = now
+        let restartedPage = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
+        restartedPage.services.acknowledgementDelay = .seconds(3600)
+        let restarted = ComposerModel(tasks: restartedPage, services: ComposerServices(drafts: drafts))
+        restarted.open(on: .tasks(.now))
+        XCTAssertEqual(restartedPage.addBar.text, "Later draft")
+        XCTAssertEqual(restarted.writing, "Also keep this")
+
+        saveFailure.on = false
+        restarted.submit()
+        restartedPage.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(restartedPage.addBar.text, "Task to retry")
+        XCTAssertEqual(restarted.writing, "Keep my writing")
+        XCTAssertEqual(restartedPage.addBar.picked.tags, ["chosen"])
+        restarted.submit()
+        restartedPage.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Later draft", "Task to retry"])
+        XCTAssertNil(defaults.data(forKey: drafts.key + ".failedTasks"), "saved retries must clear the durable failure queue")
+    }
+
     private var container: ModelContainer!
     private var tasks: TaskStore!
     private var notes: NoteStore!
