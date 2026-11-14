@@ -80,25 +80,33 @@ final class NoteFindController: ObservableObject {
     func attach() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated {
-                guard let self, let view = self.engine?.textView, let window = view.window,
-                      event.window === window, window.isKeyWindow else { return event }
-                let responder = window.firstResponder
-                let inNote = responder === view || self.engine?.activeTableView?.isFocused == true
-                let inFind = self.isFindField(responder)
-                // The native field can take focus before its onAppear
-                // callback. Replay pending keys before its next real key.
-                if inFind, self.awaitingField { self.topRowFieldAppeared() }
-                if inFind, !self.awaitingField { self.typeAheadDeadline = nil }
-                if inNote, self.typeAhead(event) { return nil }
-                if inFind, self.replacesQuery, Self.isTyping(event), let editor = responder as? NSTextView {
-                    // The last query, still selected, gives way to the key.
-                    editor.selectAll(nil)
-                    self.replacesQuery = false
-                }
-                return (inNote || inFind) && self.handleKey(event) ? nil : event
+                guard let self else { return event }
+                return self.routeKeyDown(event)
             }
         }
         layoutBar()
+    }
+
+    /// What the local key monitor does with a key-down: nil when Find took
+    /// it (the typed-ahead query, an editing command meant for the field
+    /// that is still mounting, a Find shortcut), else the event itself.
+    func routeKeyDown(_ event: NSEvent) -> NSEvent? {
+        guard let view = engine?.textView, let window = view.window,
+              event.window === window, window.isKeyWindow else { return event }
+        let responder = window.firstResponder
+        let inNote = responder === view || engine?.activeTableView?.isFocused == true
+        let inFind = isFindField(responder)
+        // The native field can take focus before its onAppear
+        // callback. Replay pending keys before its next real key.
+        if inFind, awaitingField { topRowFieldAppeared() }
+        if inFind, !awaitingField { typeAheadDeadline = nil }
+        if inNote, typeAhead(event) { return nil }
+        if inFind, replacesQuery, Self.isTyping(event), let editor = responder as? NSTextView {
+            // The last query, still selected, gives way to the key.
+            editor.selectAll(nil)
+            replacesQuery = false
+        }
+        return (inNote || inFind) && handleKey(event) ? nil : event
     }
 
     /// The field editor of Find's own field: the card's, or the top row's.
@@ -130,15 +138,47 @@ final class NoteFindController: ObservableObject {
         }
     }
 
+    /// The editing commands a search field takes (⌘V ⌘A ⌘Z ⇧⌘Z ⌘X ⌘C): while
+    /// the field mounts they belong to it, never to the note.
+    private static func editingCommand(_ event: NSEvent) -> Selector? {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if flags == .command {
+            switch key {
+            case "v": return #selector(NSText.paste(_:))
+            case "a": return #selector(NSText.selectAll(_:))
+            case "x": return #selector(NSText.cut(_:))
+            case "c": return #selector(NSText.copy(_:))
+            case "z": return #selector(UndoManager.undo)
+            default: return nil
+            }
+        }
+        if flags == [.command, .shift], key == "z" { return #selector(UndoManager.redo) }
+        if flags == [.command, .option, .shift], key == "v" { return #selector(NSText.paste(_:)) }
+        return nil
+    }
+
     /// Capture keys before the field appears. Early plain-text feedback is
-    /// provisional; the field editor remains the authority for composition.
+    /// provisional; the field editor remains the authority for composition
+    /// and for editing commands.
     @discardableResult
     func typeAhead(_ event: NSEvent) -> Bool {
-        guard shownInTopRow, isShown, fieldFocused, awaitingField, let deadline = typeAheadDeadline,
-              ProcessInfo.processInfo.systemUptime < deadline else { return false }
+        guard shownInTopRow, isShown, fieldFocused, awaitingField else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if Self.editingCommand(event) != nil {
+            // ⌘V and the like would reach the note's own selection: queue
+            // them for the field and replay them there, in order.
+            if pendingInputEvents.isEmpty {
+                pendingInputBaseQuery = query
+                pendingInputReplacesQuery = replacesQuery
+            }
+            pendingInputEvents.append(event)
+            pendingInputComposition = true
+            replacesQuery = false
+            return true
+        }
         guard !modifiers.contains(.command), !modifiers.contains(.control) else { return false }
-        let isDelete = event.keyCode == 51 && !modifiers.contains(.option)
+        let isDelete = event.keyCode == 51 || event.keyCode == 117
         let isPlainTyping = Self.isTyping(event)
         // Dead keys and early IME key-downs may have no `characters`. They
         // must still be delivered to NSTextInputClient, even before a glyph
@@ -151,7 +191,7 @@ final class NoteFindController: ObservableObject {
             pendingInputReplacesQuery = replacesQuery
         }
         pendingInputEvents.append(event)
-        pendingInputComposition = pendingInputComposition || isComposingKey || modifiers.contains(.option)
+        pendingInputComposition = pendingInputComposition || isComposingKey || modifiers.contains(.option) || event.keyCode == 117
         if !pendingInputComposition {
             if isDelete {
                 if replacesQuery { query = "" } else if !query.isEmpty { query.removeLast() }
@@ -179,7 +219,14 @@ final class NoteFindController: ObservableObject {
         pendingInputBaseQuery = nil
         pendingInputReplacesQuery = false
         pendingInputComposition = false
-        for event in events { editor.interpretKeyEvents([event]) }
+        for event in events {
+            guard let command = Self.editingCommand(event) else { editor.interpretKeyEvents([event]); continue }
+            switch command {
+            case #selector(UndoManager.undo): editor.undoManager?.undo()
+            case #selector(UndoManager.redo): editor.undoManager?.redo()
+            default: _ = editor.tryToPerform(command, with: nil)
+            }
+        }
         if !editor.hasMarkedText(), query != editor.string { query = editor.string }
     }
 

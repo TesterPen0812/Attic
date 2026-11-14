@@ -285,6 +285,117 @@ final class AdaptiveFindTests: XCTestCase {
         }
     }
 
+    private func key(_ code: UInt16, _ characters: String, flags: NSEvent.ModifierFlags = [], in panel: NSPanel) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: panel.windowNumber,
+                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                         isARepeat: false, keyCode: code)!
+    }
+
+    /// Round 2, Dot R-2: ⌘F then ⌘V before Find's field has mounted pasted
+    /// over the note's selection. The field takes the paste; the note, its
+    /// saved document and its Undo stack are left as they were.
+    func testPasteWhileFindsFieldMountsGoesToTheFieldNeverTheNote() throws {
+        try requireKeyWindowTests()
+        try withNote { host, panel, draft, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            let original = engine.textStorage.string
+            let saved = engine.document()
+            let undoBefore = engine.history.undoOps.map(ObjectIdentifier.init)
+            let redoBefore = engine.history.redoOps.map(ObjectIdentifier.init)
+            let session = try XCTUnwrap(draft.pages.active)
+            view.setSelectedRange((original as NSString).range(of: "quotes"))
+            let board = NSPasteboard.general
+            let kept = board.string(forType: .string)
+            defer { board.clearContents(); if let kept { board.setString(kept, forType: .string) } }
+            board.clearContents()
+            board.setString("warm", forType: .string)
+            let formerMenu = NSApp.mainMenu
+            let menu = NSMenu()
+            let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+            edit.submenu = NSMenu(title: "Edit")
+            let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+            paste.target = view // the selected note is the pending handoff's responder
+            edit.submenu?.addItem(paste)
+            menu.addItem(edit)
+            NSApp.mainMenu = menu
+            defer { NSApp.mainMenu = formerMenu }
+            // Enter the exact local-monitor callback, then let AppKit deliver
+            // any unclaimed event through the native menu and editor.
+            @MainActor func send(_ event: NSEvent) {
+                if let forwarded = engine.find.routeKeyDown(event), !menu.performKeyEquivalent(with: forwarded) {
+                    NSApp.sendEvent(forwarded)
+                }
+            }
+            send(key(3, "f", flags: .command, in: panel))
+            XCTAssertTrue(engine.find.isShown, "⌘F opens Find through the note's key monitor")
+            // Hold the main-thread mount handoff beyond the old one-second
+            // type-ahead deadline: pending Find still owns editing commands.
+            Thread.sleep(forTimeInterval: 1.05)
+            send(key(9, "v", flags: .command, in: panel))
+            XCTAssertEqual(engine.textStorage.string, original, "the note's selection is not replaced")
+            spin(0.8)
+            let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier }, "the top row's field")
+            XCTAssertEqual(engine.textStorage.string, original)
+            XCTAssertEqual(engine.document(), saved, "the saved document is unchanged")
+            XCTAssertTrue(draft.pages.save(session))
+            XCTAssertEqual(draft.pages.store.loadDocument(noteID: session.noteID)?.content.document, saved,
+                           "saving during the handoff preserves the document")
+            XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undoBefore, "the Undo stack is unchanged")
+            XCTAssertEqual(engine.history.redoOps.map(ObjectIdentifier.init), redoBefore, "the Redo stack is unchanged")
+            XCTAssertEqual(engine.find.query, "warm", "the clipboard text is the query")
+            XCTAssertEqual(field.stringValue, "warm")
+            engine.find.close(returnFocus: false)
+        }
+    }
+
+    func testEditingCommandsWhileFindMountsAreClaimedForTheField() throws {
+        try requireKeyWindowTests()
+        try withNote { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertFalse(engine.history.undoOps.isEmpty, "the note has an Undo step to protect")
+            let board = NSPasteboard.general
+            let kept = board.string(forType: .string)
+            defer { board.clearContents(); if let kept { board.setString(kept, forType: .string) } }
+            board.clearContents()
+            board.setString("field input", forType: .string)
+            let original = engine.document()
+            let undo = engine.history.undoOps.map(ObjectIdentifier.init)
+            let historyLog = engine.history.log
+            let priorChange = engine.onTextChange
+            var changes = 0
+            engine.onTextChange = { changes += 1; priorChange?() }
+            defer { engine.onTextChange = priorChange }
+            engine.find.show()
+            for (code, characters, flags) in [
+                (UInt16(0), "a", NSEvent.ModifierFlags.command), (7, "x", .command),
+                (8, "c", .command), (6, "z", .command), (6, "z", [.command, .shift]),
+                (51, "\u{7f}", []), (117, "\u{f728}", []), (51, "\u{7f}", .option),
+                (9, "v", [.command, .option, .shift])
+            ] {
+                XCTAssertNil(engine.find.routeKeyDown(key(code, characters, flags: flags, in: panel)),
+                             "editing key \(code) is claimed while the field mounts")
+            }
+            XCTAssertNotNil(engine.find.routeKeyDown(key(1, "s", flags: .command, in: panel)),
+                            "global commands retain their routing")
+            XCTAssertNotNil(engine.find.routeKeyDown(key(8, "c", flags: [.command, .option, .shift], in: panel)),
+                            "Copy as Markdown remains a global note command")
+            XCTAssertEqual(engine.document(), original)
+            spin(0.8)
+            XCTAssertEqual(engine.document(), original, "replaying editing commands never changes the note")
+            XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
+            XCTAssertEqual(engine.history.log, historyLog)
+            XCTAssertEqual(changes, 0, "Find's Undo/Redo must not traverse the note, even if both would cancel out")
+            engine.find.close(returnFocus: false)
+        }
+    }
+
     func testKeysTypedBeforeTheFieldArrivesGoToTheQuery() throws {
         try withNote { host, panel, _, engine, _ in
             let text = engine.textStorage.string
