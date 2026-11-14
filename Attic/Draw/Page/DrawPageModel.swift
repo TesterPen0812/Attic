@@ -1409,6 +1409,14 @@ final class DrawPageModel: ObservableObject {
                 syncExternalChanges()
                 return
             }
+            // The canvas lifecycle is part of this revision. Navigate while
+            // the current store revision is still unseen, through the same
+            // path used for external deletion (including the last canvas).
+            if delta.canvas.deletedAt != nil {
+                externalSyncDeferred = true
+                syncExternalChanges()
+                return
+            }
             canvasName = delta.canvas.name
             if delta.removedIDs.isEmpty, delta.upserted.count == 1,
                let changed = delta.upserted.first,

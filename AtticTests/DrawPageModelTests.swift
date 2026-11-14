@@ -32,6 +32,22 @@ final class DrawPageModelTests: XCTestCase {
 
     private var stored: [DrawObject] { (try? store.open(model.canvasID!).objects) ?? [] }
 
+    func testBG29ToolbarUndoOfRestoreLeavesTheDeletedCanvas() throws {
+        stroke()
+        let target = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target).isSaved)
+        model.syncExternalChanges()
+        XCTAssertNotEqual(model.canvasID, target)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target).isSaved)
+        model.open(target)
+        XCTAssertEqual(model.canvasID, target)
+        model.undo()
+        XCTAssertNotNil(try store.open(target).canvas.deletedAt)
+        XCTAssertNotEqual(model.canvasID, target, "Deleted canvas must no longer remain interactive")
+        model.syncExternalChanges()
+        XCTAssertNotEqual(model.canvasID, target, "Queued store observation must not revive it")
+    }
+
     private func drag(_ points: [CGPoint], shift: Bool = false) {
         model.pointerDown(at: points[0], shift: shift)
         for point in points.dropFirst() { model.pointerDragged(to: point, shift: shift) }
