@@ -59,6 +59,96 @@ final class AtticDropdownTests: XCTestCase {
         return window
     }
 
+    /// Opening a picker opts its anchor hierarchy into synchronous AppKit
+    /// geometry notifications. A closed picker must not leave those flags on
+    /// every task row its owner has visited over a long session.
+    func testPerfClosedPickersReleaseGeometryNotificationsAcross120Anchors() throws {
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let root = try XCTUnwrap(window.contentView)
+        root.postsFrameChangedNotifications = false
+        root.postsBoundsChangedNotifications = false
+        XCTAssertFalse(root.postsFrameChangedNotifications)
+        XCTAssertFalse(root.postsBoundsChangedNotifications)
+
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.opaqueMotion = true
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.content = AnyView(Text("Picker").frame(width: 100, height: 28))
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+
+        var anchors: [NSView] = []
+        for index in 0..<120 {
+            let anchor = NSView(frame: NSRect(x: 12, y: CGFloat(20 + index % 10 * 35), width: 24, height: 24))
+            root.addSubview(anchor)
+            // Preserve a known initial policy: NSView's defaults can vary
+            // with its place in the hierarchy and other geometry observers.
+            anchor.postsFrameChangedNotifications = false
+            anchor.postsBoundsChangedNotifications = false
+            presenter.present(from: anchor)
+            XCTAssertTrue(presenter.isOpen, "round \(index): picker opens")
+            XCTAssertTrue(anchor.postsFrameChangedNotifications, "while open, placement follows the anchor")
+            presenter.close(restoreFocus: false, immediately: true)
+            anchors.append(anchor)
+        }
+
+        let retainedFrameObservers = anchors.filter(\.postsFrameChangedNotifications).count
+        let retainedBoundsObservers = anchors.filter(\.postsBoundsChangedNotifications).count
+        print("PERF_PICKER_CLOSED_GEOMETRY flags=\(retainedFrameObservers)/\(retainedBoundsObservers) per 120 anchors")
+        XCTAssertEqual(retainedFrameObservers, 0, "closed pickers must release their geometry notification policy")
+        XCTAssertEqual(retainedBoundsObservers, 0)
+        XCTAssertFalse(root.postsFrameChangedNotifications)
+        XCTAssertFalse(root.postsBoundsChangedNotifications)
+
+        var emitted = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+                                                               object: nil, queue: nil) { note in
+            if let view = note.object as? NSView, anchors.contains(where: { $0 === view }) { emitted += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        for (index, anchor) in anchors.enumerated() {
+            anchor.setFrameOrigin(NSPoint(x: CGFloat(14 + index % 3), y: anchor.frame.minY))
+        }
+        print("PERF_PICKER_CLOSED_GEOMETRY frameNotifications=\(emitted) per 120 frame changes")
+        XCTAssertEqual(emitted, 0, "no geometry broadcasts remain from dismissed pickers")
+    }
+
+    func testPerfConcurrentPickersKeepSharedGeometryNotificationsUntilLastClose() throws {
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let root = try XCTUnwrap(window.contentView)
+        let first = NSView(frame: NSRect(x: 20, y: 170, width: 28, height: 28))
+        let second = NSView(frame: NSRect(x: 80, y: 240, width: 28, height: 28))
+        root.addSubview(first)
+        root.addSubview(second)
+        root.postsFrameChangedNotifications = false
+        root.postsBoundsChangedNotifications = true // another existing owner
+
+        func picker() -> AtticDropdownPresenter {
+            let presenter = AtticDropdownPresenter()
+            presenter.takesKeyboard = false
+            presenter.opaqueMotion = true
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = AnyView(Text("Picker").frame(width: 100, height: 28))
+            return presenter
+        }
+        let a = picker(), b = picker()
+        defer {
+            a.close(restoreFocus: false, immediately: true)
+            b.close(restoreFocus: false, immediately: true)
+        }
+        a.present(from: first)
+        b.present(from: second)
+        XCTAssertTrue(a.isOpen && b.isOpen)
+        a.close(restoreFocus: false, immediately: true)
+        XCTAssertTrue(root.postsFrameChangedNotifications, "the second picker still needs geometry updates")
+        XCTAssertTrue(root.postsBoundsChangedNotifications)
+        b.close(restoreFocus: false, immediately: true)
+        XCTAssertFalse(root.postsFrameChangedNotifications, "last picker restores the original frame policy")
+        XCTAssertTrue(root.postsBoundsChangedNotifications, "preserve the pre-existing bounds notification owner")
+    }
+
     /// What a card's content sees of its presentation's focus request as it
     /// appears.
     struct FocusRequestProbe: View {

@@ -1918,6 +1918,45 @@ struct AtticDropdownStage: View {
     }
 }
 
+/// Temporary geometry-notification ownership for open dropdowns.
+@MainActor
+private enum AtticDropdownGeometryNotifications {
+    private final class Lease: NSObject {
+        let originalFrame: Bool
+        let originalBounds: Bool
+        var users = 1
+
+        init(view: NSView) {
+            originalFrame = view.postsFrameChangedNotifications
+            originalBounds = view.postsBoundsChangedNotifications
+            super.init()
+        }
+    }
+
+    // A shared ancestor can serve several open cards. Weak keys avoid holding
+    // discarded SwiftUI anchors alive, and the last card restores the policy
+    // that was in place before any of them opened.
+    private static let leases = NSMapTable<NSView, Lease>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+
+    static func acquire(_ view: NSView) {
+        if let lease = leases.object(forKey: view) {
+            lease.users += 1
+        } else {
+            leases.setObject(Lease(view: view), forKey: view)
+        }
+        view.postsFrameChangedNotifications = true
+        view.postsBoundsChangedNotifications = true
+    }
+
+    static func release(_ view: NSView) {
+        guard let lease = leases.object(forKey: view) else { return }
+        guard lease.users == 1 else { lease.users -= 1; return }
+        view.postsFrameChangedNotifications = lease.originalFrame
+        view.postsBoundsChangedNotifications = lease.originalBounds
+        leases.removeObject(forKey: view)
+    }
+}
+
 /// Shows one dropdown card in the panel's overlay layer (above the page,
 /// moving with the panel, hit-tested first), placed by the width rule from
 /// its anchor. The page behind is never re-rendered: the card has its own
@@ -1968,6 +2007,8 @@ final class AtticDropdownPresenter {
     private var monitors: [Any] = []
     private var resignObserver: NSObjectProtocol?
     private var geometryObservers: [NSObjectProtocol] = []
+    private struct WeakGeometryView { weak var view: NSView? }
+    private var leasedGeometryViews: [WeakGeometryView] = []
     private var placementScheduled = false
     /// The last full placement, with the anchor and bounds it was made
     /// for: a card cut short follows its anchor from it
@@ -2257,8 +2298,8 @@ final class AtticDropdownPresenter {
         })
         var ancestor = anchor
         while let view = ancestor {
-            view.postsFrameChangedNotifications = true
-            view.postsBoundsChangedNotifications = true
+            AtticDropdownGeometryNotifications.acquire(view)
+            leasedGeometryViews.append(WeakGeometryView(view: view))
             for name in [NSView.frameDidChangeNotification, NSView.boundsDidChangeNotification] {
                 geometryObservers.append(center.addObserver(forName: name, object: view, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.schedulePlacementUpdate() }
@@ -2334,6 +2375,10 @@ final class AtticDropdownPresenter {
         resignObserver = nil
         geometryObservers.forEach { NotificationCenter.default.removeObserver($0) }
         geometryObservers = []
+        for reference in leasedGeometryViews {
+            if let view = reference.view { AtticDropdownGeometryNotifications.release(view) }
+        }
+        leasedGeometryViews = []
     }
 }
 

@@ -1,3 +1,11 @@
+## 2026-11-14 · Closed pickers release geometry notifications
+
+The dropdown presenter now leases frame and bounds change notifications only
+while a picker is open. Closing the last picker restores each anchor and
+ancestor's previous AppKit notification settings, including when two pickers
+shared the same ancestor. This prevents accumulated notifications from visited
+picker rows without changing material, motion, placement or focus.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
