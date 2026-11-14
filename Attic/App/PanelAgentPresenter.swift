@@ -45,7 +45,11 @@ final class PanelAgentPresenter: AgentPanelPresenting {
         // detached page) with a text field or editor focused: the Draw
         // library's rename, search and tag fields set no lock, and a
         // floating panel has a key state of its own.
-        if let window = keyWindow(), window is AtticPanel, window.firstResponder is NSText { return true }
+        // Only an editable text view takes typing: a closed or read-only note
+        // view that keeps first responder must not block `show` (a field's
+        // editor is an editable text view).
+        if let window = keyWindow(), window is AtticPanel,
+           (window.firstResponder as? NSTextView)?.isEditable == true { return true }
         guard uiState.isPanelKey else { return false }
         let typing: Set<PanelInteractionLockReason> = [
             .quickEntryFocus, .taskComposer, .agentComposer, .taskEditing, .notesEditorFocus, .notesDirty

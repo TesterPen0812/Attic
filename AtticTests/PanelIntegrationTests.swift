@@ -907,6 +907,50 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(small.loads, large.loads, "the work does not grow with the number of canvases")
     }
 
+    /// BG-60 round 2 (Dot R-7, Opus R-12): only an editable text view counts as
+    /// typing. A read-only text view left as first responder in a key Attic
+    /// panel must not block `show`; a field editor, which is editable, does.
+    func testBG60ANonEditableFirstResponderDoesNotCountAsTyping() throws {
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        panel.uiState.setPanelKey(false)
+        let floating = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 240, height: 120),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+        floating.isReleasedWhenClosed = false
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 120))
+        let readOnly = NSTextView(frame: CGRect(x: 10, y: 60, width: 200, height: 40))
+        readOnly.isEditable = false
+        readOnly.isSelectable = true
+        let editable = NSTextView(frame: CGRect(x: 10, y: 10, width: 200, height: 40))
+        editable.isEditable = true
+        let field = NSTextField(frame: CGRect(x: 10, y: 100, width: 200, height: 16))
+        [readOnly, editable, field].forEach(content.addSubview)
+        floating.contentView = content
+        floating.orderFrontRegardless()
+        defer {
+            floating.makeFirstResponder(nil)
+            floating.orderOut(nil)
+            floating.close()
+        }
+        panel.presenter.keyWindow = { floating }
+
+        XCTAssertTrue(floating.makeFirstResponder(readOnly))
+        XCTAssertTrue(floating.firstResponder === readOnly)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel, "a read-only text view cannot take typing")
+        guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
+            return XCTFail("a non-editable first responder must not block show")
+        }
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        XCTAssertTrue(floating.makeFirstResponder(editable))
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "an editable text view is typing")
+        XCTAssertEqual(panel.presenter.presentForAgent(.page(.tasks)), .userIsTyping)
+        XCTAssertTrue(floating.makeFirstResponder(field))
+        XCTAssertTrue((floating.firstResponder as? NSTextView)?.isFieldEditor == true)
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "a field's editor is editable")
+    }
+
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {
