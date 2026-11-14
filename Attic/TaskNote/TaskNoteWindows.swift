@@ -23,7 +23,12 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     /// Stable host IDs, independent of the current task/note alias.
     private var entries: [UUID: Entry] = [:]
     private var closing: Set<UUID> = []
-    private var preparingOpen: Set<UUID> = []
+    /// A window being prepared (decode, then lease): the task is already
+    /// "opening in a window", so nothing else may open it in the panel.
+    private var preparingOpen: [UUID: Task<Void, Never>] = [:]
+
+    var windowCount: Int { entries.count }
+    var preparingTaskIDs: Set<UUID> { Set(preparingOpen.keys) }
 
     var openTaskIDs: Set<UUID> { Set(entries.values.compactMap { $0.presenter.isOrdinary ? nil : $0.presenter.taskID }) }
     func window(for taskID: UUID) -> NSWindow? { entry(taskID)?.value.window }
@@ -126,19 +131,33 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
         return true
     }
 
+    /// Opens the task in its own window. The open is asynchronous (the cold
+    /// document decodes off the main actor); the returned task finishes once
+    /// the window is on screen or the open has given up, so callers and tests
+    /// can wait for it.
+    @discardableResult
     func open(taskID: UUID, tasks: TaskStore, controller: NotesPageController, noteStore: NoteStore,
-              design: AtticDesignContext, uiState: PanelUIState) {
-        if bringForward(taskID) { return }
-        guard preparingOpen.insert(taskID).inserted else { return }
-        Task { @MainActor [weak self] in
-            defer { self?.preparingOpen.remove(taskID) }
-            do {
-                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
-                guard !Task.isCancelled else { return }
-                self?.openPrepared(taskID: taskID, tasks: tasks, controller: controller,
-                                   design: design, uiState: uiState, prepared: prepared)
-            } catch { }
+              design: AtticDesignContext, uiState: PanelUIState) -> Task<Void, Never> {
+        if bringForward(taskID) { return Task {} }
+        if let running = preparingOpen[taskID] { return running }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.preparingOpen[taskID] = nil }
+            await self.prepareAndOpen(taskID: taskID, tasks: tasks, controller: controller,
+                                      design: design, uiState: uiState)
         }
+        preparingOpen[taskID] = task
+        return task
+    }
+
+    private func prepareAndOpen(taskID: UUID, tasks: TaskStore, controller: NotesPageController,
+                                design: AtticDesignContext, uiState: PanelUIState) async {
+        do {
+            let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+            guard !Task.isCancelled else { return }
+            openPrepared(taskID: taskID, tasks: tasks, controller: controller,
+                         design: design, uiState: uiState, prepared: prepared)
+        } catch { }
     }
 
     private func openPrepared(taskID: UUID, tasks: TaskStore, controller: NotesPageController,

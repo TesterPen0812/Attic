@@ -2381,8 +2381,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
         let ui = PanelUIState(), beforeActive = notes.active
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
-            design: .default, uiState: ui)
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+            design: .default, uiState: ui).value
         let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let lease = presenter.lease, history = presenter.page.history
@@ -2420,10 +2420,25 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(resolved === presenter.page)
     }
 
+    // Review R-1: the window open is awaitable, and an awaited open that is
+    // handed off leaves nothing behind in the shared registry.
+    func testWindowOpenIsAwaitableAndHandoffLeavesNoStrayWindow() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        _ = try open(id)
+        XCTAssertEqual(TaskNoteWindows.shared.windowCount, 0)
+        let opening = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                  design: .default, uiState: PanelUIState())
+        await opening.value
+        XCTAssertNotNil(TaskNoteWindows.shared.window(for: id), "an awaited open has its window")
+        XCTAssertTrue(TaskNoteWindows.shared.preparingTaskIDs.isEmpty)
+        TaskNoteWindows.shared.finishHandoff(id)
+        XCTAssertEqual(TaskNoteWindows.shared.windowCount, 0, "no window leaks into TaskNoteWindows.shared")
+    }
+
     func testC2RetainedRetirementKeepsQueuedAndNewerWriting() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState()).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         coordinator.afterPreparation = { presenter.host.textView.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0)) }
         let outcome = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
@@ -2442,7 +2457,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
         notes.makeTaskFromNote = { _ in }
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState()).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let outcome = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
         XCTAssertEqual(outcome, .removed(noteID: session.noteID))
@@ -2465,7 +2480,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
     func testC2OrdinaryMoveToPanelLeavesTheLibraryAndKeepsHistory() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let history = presenter.page.history
         let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
@@ -2484,7 +2499,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
     func testC2RefusedOrdinaryMoveToPanelKeepsTheSourceWindowAndBusyDestination() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
         XCTAssertEqual(removed, .removed(noteID: session.noteID))
@@ -2505,7 +2520,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
     func testC2LateTaskFieldDraftIsNeverHiddenOrDiscardedByConversion() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState()).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         coordinator.save = { context in
             let converting = context.changedModelsArray.contains { ($0 as? NoteItem)?.id == session.noteID && ($0 as? NoteItem)?.taskID == nil }
@@ -2562,7 +2577,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
     func testC2LateFieldKeepsWritingReservedUntilCancellationThenReplaysOnNewProjection() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState()).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let lease = presenter.lease, history = presenter.page.history
         coordinator.save = { context in
@@ -2613,7 +2628,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
         try context.save(); tasks.refresh(); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
-        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        await TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui).value
         defer { TaskNoteWindows.shared.finishHandoff(id) }
         let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
         let history = presenter.page.history
