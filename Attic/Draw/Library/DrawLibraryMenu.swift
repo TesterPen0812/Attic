@@ -146,9 +146,9 @@ struct DrawLibraryRows: View {
     var thumbnailsShown: (([DrawCanvas]) -> Void)?
     var thumbnailsHidden: (([UUID]) -> Void)?
     var searchThumbnail: ((_ id: UUID, _ near: [UUID]) -> DrawCanvas?)?
-    /// A row without a thumbnail body in its metadata reads its own from the
-    /// store (cached there, per canvas) while it is built, so its first frame
-    /// already shows the stored image. `thumbnailRevision` only makes the
+    /// Every row reads its thumbnail from the store's per-canvas cache while
+    /// it is built, including rows carrying search bytes. Its first frame
+    /// shows the current stored image or empty card. `thumbnailRevision` makes the
     /// list rebuild when the store changes; rows do not re-run their task.
     var thumbnailRevision: UInt64 = 0
     @Environment(\.colorScheme) private var colorScheme
@@ -182,13 +182,12 @@ struct DrawLibraryRows: View {
                   thumbnailRevision: model.store.revision)
     }
 
-    /// The stored thumbnail of a row that has none in its metadata. The
-    /// store reads the row with the others of its page, in the list's own
-    /// on-screen order, so rows reached from either direction share a batch.
+    /// Search bytes may outlive their cache entry or be cleared. Consult the
+    /// store even for those rows, so showing them admits their page again
+    /// and a current empty thumbnail replaces older merged bytes.
     private func hydrated(_ canvas: DrawCanvas?, ids: [UUID], positions: [UUID: Int]) -> DrawCanvas? {
-        guard let canvas, canvas.thumbnail == nil, let at = positions[canvas.id],
-              let found = searchThumbnail?(canvas.id, DrawStore.thumbnailPage(of: ids, containing: at)),
-              found.thumbnail != nil else { return nil }
+        guard let canvas, let at = positions[canvas.id],
+              let found = searchThumbnail?(canvas.id, DrawStore.thumbnailPage(of: ids, containing: at)) else { return nil }
         return found
     }
 
@@ -305,7 +304,7 @@ struct DrawLibraryRowView: View {
         let m = AtticDropdownMetrics.self
         switch row.kind {
         case let .canvas(canvas):
-            DrawCanvasThumbnail(canvas: canvas.thumbnail == nil ? (thumbnailOverride ?? canvas) : canvas)
+            DrawCanvasThumbnail(canvas: thumbnailOverride ?? canvas)
         case .newCanvas:
             Image(systemName: "plus")
                 .font(.system(size: m.iconSize))

@@ -541,6 +541,41 @@ final class Draw3StoreTests: XCTestCase {
         }
     }
 
+    /// Merged search bytes outlive the LRU entry. Scrolling back must admit
+    /// those displayed rows again, so a later edit rereads only its own bytes.
+    func testR14SearchRowsWithMergedBytesReenterTheLRUAfterEviction() throws {
+        let container = try container()
+        try seedBoards(container, count: 150)
+        let (store, probe) = probeStore(container)
+        let matches = try store.search("Board").map(\.canvas)
+        XCTAssertEqual(matches.prefix(12).filter { $0.thumbnail != nil }.count, 12,
+                       "the rows carry the search's merged bytes")
+        let ids = matches.map(\.id)
+        for index in 12..<ids.count { try rowThumbnail(store, ids, index) }
+        XCTAssertEqual(store.searchThumbnailCacheCount, 128)
+        var shown = Set<UUID>()
+        let rows = matches.prefix(12).map { DrawLibraryMenuModel.Row(kind: .canvas($0), title: $0.name) }
+        let host = NSHostingView(rootView: DrawLibraryRows(rows: rows, litID: nil, maxHeight: 320,
+            hover: { _, _ in }, choose: { _ in },
+            thumbnailsShown: { shown.formUnion($0.map(\.id)); store.touchThumbnails($0.map(\.id)) },
+            searchThumbnail: { try? store.searchThumbnail($0, near: $1) })
+            .frame(width: 224, height: 320).atticDesign(AtticDesignContext()))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { window.contentView = nil }
+        let deadline = Date().addingTimeInterval(5)
+        while !Set(ids.prefix(12)).isSubset(of: shown), Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(Set(ids.prefix(12)).isSubset(of: shown), "the merged search rows are shown again")
+        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[5]).isSaved)
+        probe.reads = []
+        XCTAssertEqual(try store.search("Board").prefix(12).filter { $0.canvas.thumbnail != nil }.count, 12)
+        XCTAssertEqual(probe.reads.flatMap { $0 }, [ids[5]], "only the edited row is reread after scroll-back")
+    }
+
     /// R-14 C: rows that are on screen are used, so scrolling a broad search
     /// back to the top does not evict the top results first.
     func testR14TheRowsOnScreenAreTheLastToBeEvicted() throws {

@@ -468,26 +468,29 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
     /// not keep showing from an older hydration.
     func testR2AClearedThumbnailLeavesNoStaleImageOnItsRow() {
         let stored = Self.redThumbnail
-        let canvas = DrawCanvas(name: "Cleared", thumbnailDark: true)
-        let rows = [DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)]
-        var cleared = false
-        let lookup: (UUID, [UUID]) -> DrawCanvas? = { _, _ in
-            var found = canvas
-            if !cleared { found.thumbnail = stored }
-            return found
+        for carriesMergedBytes in [false, true] {
+            let canvas = DrawCanvas(name: "Cleared", thumbnail: carriesMergedBytes ? stored : nil, thumbnailDark: true)
+            let rows = [DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)]
+            var cleared = false
+            let lookup: (UUID, [UUID]) -> DrawCanvas? = { _, _ in
+                var found = canvas
+                found.thumbnail = cleared ? nil : stored
+                return found
+            }
+            let host = NSHostingView(rootView: hostedRows(rows, revision: 0, searchThumbnail: lookup))
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                                  styleMask: [.borderless], backing: .buffered, defer: true)
+            window.contentView = host
+            host.layout()
+            XCTAssertTrue(wait { self.redPixels(in: host).red > 20 }, "the stored thumbnail shows")
+            cleared = true
+            host.rootView = hostedRows(rows, revision: 1, searchThumbnail: lookup)
+            host.layout()
+            spin(0.4)
+            XCTAssertEqual(redPixels(in: host).red, 0,
+                           "a cleared canvas shows the empty card, including merged search bytes: \(carriesMergedBytes)")
+            window.contentView = nil
         }
-        let host = NSHostingView(rootView: hostedRows(rows, revision: 0, searchThumbnail: lookup))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
-                              styleMask: [.borderless], backing: .buffered, defer: true)
-        window.contentView = host
-        host.layout()
-        XCTAssertTrue(wait { self.redPixels(in: host).red > 20 }, "the stored thumbnail shows")
-        cleared = true
-        host.rootView = hostedRows(rows, revision: 1, searchThumbnail: lookup)
-        host.layout()
-        spin(0.4)
-        XCTAssertEqual(redPixels(in: host).red, 0, "a cleared canvas shows the empty card, not its old drawing")
-        window.contentView = nil
     }
 }
 
