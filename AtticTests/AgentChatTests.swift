@@ -722,6 +722,45 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(hasHistory(host, seen: &seen), "History stays reachable after closing and reopening a blank chat")
     }
 
+    func testBG51BackdropEscapeBelongsToTheActiveInputMethod() throws {
+        var routedEscapes = 0
+        let size = CGSize(width: 300, height: 360)
+        let editor = NSTextView(frame: CGRect(x: 15, y: 15, width: 250, height: 44))
+        let backdrop = NSHostingView(rootView: AgentChatBackdrop(
+            shown: true, reveal: 1, origin: CGPoint(x: 150, y: 180),
+            tint: .clear, fades: true, solid: true, onEscape: { routedEscapes += 1 }
+        ).frame(width: size.width, height: size.height))
+        let content = NSView(frame: CGRect(origin: .zero, size: size))
+        content.addSubview(backdrop)
+        content.addSubview(editor)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -7000, y: -7000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = content
+        defer { window.close() }
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+
+        func escape() throws {
+            let key = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}",
+                isARepeat: false, keyCode: 53
+            ))
+            NSApp.sendEvent(key)
+        }
+        editor.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText(), "The input method owns the first Escape")
+        try escape()
+        XCTAssertEqual(routedEscapes, 0, "Cancelling a marked composition must leave chat open")
+        editor.unmarkText()
+        try escape()
+        XCTAssertEqual(routedEscapes, 1, "The next ordinary Escape should dismiss chat")
+    }
+
     func testHistoryDaysReadTodayAWeekdayOrTheDate() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
