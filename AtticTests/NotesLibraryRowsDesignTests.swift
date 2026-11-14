@@ -28,6 +28,115 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
     private func library() -> NotesLibraryModel { NotesLibraryModel(search: { _ in [] }, store: store) }
 
+    func testPF14LibraryRemountReusesTaskWritingClassification() throws {
+        let context = ModelContext(store.container)
+        var owners: [TaskItem] = []
+        for i in 0..<24 {
+            let task = TaskItem(title: "Task note \(i)")
+            context.insert(task)
+            owners.append(task)
+        }
+        try context.save()
+        for (i, task) in owners.enumerated() {
+            let blocks: [NoteBlock] = i.isMultiple(of: 5)
+                ? [.text(task.title)]
+                : [.text(task.title), .text(String(repeating: "text", count: 1_000))]
+            _ = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: blocks),
+                                             taskOwner: task.id).get()
+        }
+        let controller = controller()
+        let first = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        let firstIDs = Set(first.groups(store: store, drafts: [], prepareSummaries: false).flatMap(\.rows).map(\.id))
+        print("PF14 first_mount=\(first.writingDecodeCount) task_writing_decodes")
+        XCTAssertEqual(first.writingDecodeCount, 24)
+        XCTAssertEqual(firstIDs.count, 19, "title-only task notes are excluded")
+        let remounted = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        let remountIDs = Set(remounted.groups(store: store, drafts: [], prepareSummaries: false).flatMap(\.rows).map(\.id))
+        print("PF14 remount=\(remounted.writingDecodeCount) task_writing_decodes")
+        XCTAssertEqual(remounted.writingDecodeCount, 0,
+                       "reopening All notes must not decode unchanged task documents again")
+        XCTAssertEqual(firstIDs, remountIDs)
+
+        let changed = try XCTUnwrap(store.notes.first { $0.taskID == owners[0].id })
+        let revision = changed.revisionID
+        let document = NoteDocument(blocks: [.text(changed.title), .text("New writing after the first mount")])
+        guard case .success = store.saveDocument(noteID: changed.id, document: document,
+                                                 baseRevisionID: revision) else {
+            XCTFail("the revised writing must be saved before measuring invalidation")
+            return
+        }
+        let updatedIDs = Set(remounted.groups(store: store, drafts: [], prepareSummaries: false)
+            .flatMap(\.rows).map(\.id))
+        XCTAssertEqual(remounted.writingDecodeCount, 1,
+                       "a changed document must invalidate only its own classification")
+        XCTAssertTrue(updatedIDs.contains(changed.id), "the newly written task note becomes visible")
+        XCTAssertEqual(updatedIDs.count, firstIDs.count + 1)
+
+        // An imported fresh-context row can carry different content under
+        // the same revision token. The digest must invalidate the shared
+        // classification even when that token is unchanged.
+        let revised = try XCTUnwrap(store.note(withID: changed.id))
+        let sameRevision = revised.revisionID
+        revised.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text(revised.title)]))
+        XCTAssertEqual(revised.revisionID, sameRevision)
+        let imported = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        let importedIDs = Set(imported.groups(store: store, drafts: [], prepareSummaries: false)
+            .flatMap(\.rows).map(\.id))
+        XCTAssertEqual(imported.writingDecodeCount, 1,
+                       "new bytes under an unchanged revision must reclassify exactly one note")
+        XCTAssertFalse(importedIDs.contains(changed.id), "title-only writing must leave the library")
+    }
+
+    func testPF14ColdTagFilterDoesNotDecodeUnrelatedTaskNotes() throws {
+        let context = ModelContext(store.container)
+        var owners: [TaskItem] = []
+        for i in 0..<48 {
+            let task = TaskItem(title: "Task note \(i)")
+            task.tags = i.isMultiple(of: 24) ? ["focus"] : ["unrelated"]
+            context.insert(task)
+            owners.append(task)
+        }
+        try context.save()
+        var selectedIDs = Set<UUID>()
+        var otherIDs = Set<UUID>()
+        for (i, task) in owners.enumerated() {
+            if i.isMultiple(of: 24) {
+                let id = UUID()
+                selectedIDs.insert(id)
+                _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: [
+                    .text(task.title), .text("Writing")
+                ]), taskOwner: task.id).get()
+            } else {
+                let id = UUID()
+                otherIDs.insert(id)
+                _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: [
+                    .text(task.title), .text(String(repeating: "x", count: 4_000))
+                ]), taskOwner: task.id).get()
+            }
+        }
+        let model = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller())
+        model.toggleTag("focus")
+        let visible = Set(model.groups(store: store, drafts: [], prepareSummaries: false)
+            .flatMap(\.rows).map(\.id))
+        print("PF14 cold_filtered=\(model.writingDecodeCount) task_writing_decodes / 48 task notes")
+        XCTAssertEqual(model.writingDecodeCount, 2)
+        XCTAssertEqual(visible, selectedIDs)
+        // Fixed stress sequence (seed 0x14F1): 256 successive filter
+        // changes must keep exact membership without decoding unchanged
+        // content for a second time.
+        for step in 0..<256 {
+            let showOther = step.isMultiple(of: 2)
+            model.toggleTag(showOther ? "focus" : "unrelated")
+            model.toggleTag(showOther ? "unrelated" : "focus")
+            let rows = Set(model.groups(store: store, drafts: [], prepareSummaries: false)
+                .flatMap(\.rows).map(\.id))
+            XCTAssertEqual(rows, showOther ? otherIDs : selectedIDs, "filter flip \(step)")
+        }
+        print("PF14 filter_flips=256 total_writing_decodes=\(model.writingDecodeCount)")
+        XCTAssertEqual(model.writingDecodeCount, 48,
+                       "every task is classified once across 256 filter changes")
+    }
+
     func testSW04ArrowNavigationReusesOrderedIDsUntilRowsChange() throws {
         let first = try create("first")
         _ = try create("second")

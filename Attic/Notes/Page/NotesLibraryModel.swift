@@ -49,6 +49,10 @@ struct NoteSearchExcerpt: Equatable {
 @MainActor
 final class NotesLibrarySummaryCache {
     var bodies: [UUID: (revision: UUID?, content: Data?, plainText: String, body: NoteRowSummary.Body)] = [:]
+    /// Same-session library remounts reuse the exact writing classification
+    /// for a stored content revision without decoding it again on the main
+    /// actor. No ownership or presentation data is kept here.
+    var writing: [UUID: (revision: UUID?, fingerprint: String?, legacyContent: Data?, value: Bool)] = [:]
 }
 
 @MainActor
@@ -166,6 +170,7 @@ final class NotesLibraryModel: ObservableObject {
     /// How many note bodies the rows decoded (a profiling seam: a rebuild
     /// after one save decodes that note only).
     private(set) var bodyDecodeCount = 0
+    private(set) var writingDecodeCount = 0
     /// Every tag, most recently edited first, for the store revision it was read at.
     private var recentTagsCache: (revision: UInt64, taskMetadata: [UUID: TaskMetadata], tags: [String])?
 
@@ -393,8 +398,17 @@ final class NotesLibraryModel: ObservableObject {
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
         navigationGeneration &+= 1
 
+        let orderedNotes = store.orderedNotes()
+        let picks = tagPicks
+        // A tag or completed search can reject a row without examining its
+        // document. Apply those exact membership tests before the expensive
+        // task-note writing predicate, including on a cold library open.
+        let candidates = picks.isEmpty && !searching ? orderedNotes : orderedNotes.filter { note in
+            (picks.isEmpty || picks.matches(tags(of: note)))
+                && (!searching || matches?.contains(note.id) == true)
+        }
         var notes = IdleLatencyTrace.span("note_groups_rows") {
-            oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
+            oneRowPerItem(candidates, writingIDs: store.itemWritingIDs)
         }
         IdleLatencyTrace.count("note_groups_rows_count", notes.count)
         // The controller keeps decoded summaries across library remounts.
@@ -403,8 +417,8 @@ final class NotesLibraryModel: ObservableObject {
         if summaries.bodies.keys.contains(where: { !liveIDs.contains($0) }) {
             summaries.bodies = summaries.bodies.filter { liveIDs.contains($0.key) }
         }
-        if writingKnown.keys.contains(where: { !liveIDs.contains($0) }) {
-            writingKnown = writingKnown.filter { liveIDs.contains($0.key) }
+        if summaries.writing.keys.contains(where: { !liveIDs.contains($0) }) {
+            summaries.writing = summaries.writing.filter { liveIDs.contains($0.key) }
         }
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
@@ -419,7 +433,6 @@ final class NotesLibraryModel: ObservableObject {
             }
         }
         let allNotes = notes
-        let picks = tagPicks
         if !picks.isEmpty {
             notes = notes.filter { picks.matches(tags(of: $0)) }
             unsaved = unsaved.filter { picks.matches($0.engine.tags) }
@@ -450,7 +463,11 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
             }
-            thumbnails.keep(only: Set(allNotes.map(\.id)).union(draftRows.map(\.id)))
+            // Off-filter notes can still have cached thumbnails. Keep their
+            // existing images while pruning genuinely removed note IDs.
+            let liveThumbnailIDs = candidates.count == orderedNotes.count
+                ? Set(allNotes.map(\.id)) : Set(orderedNotes.map(\.id))
+            thumbnails.keep(only: liveThumbnailIDs.union(draftRows.map(\.id)))
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
                 Group(id: "today", title: String(localized: "Today"), rows: todayRows),
@@ -751,15 +768,18 @@ final class NotesLibraryModel: ObservableObject {
     /// document this build cannot read keeps its row (never hidden on an
     /// unknown).
     private func hasWriting(_ note: NoteItem) -> Bool {
-        // The revision changes with every save; only legacy rows without one
-        // compare their bytes.
-        if let kept = writingKnown[note.id], kept.revision == note.revisionID,
-           note.revisionID != nil || kept.content == note.content { return kept.value }
+        // A fresh-context import may replace bytes while preserving the
+        // revision token. Current rows carry a scalar digest; legacy rows
+        // without one must compare the actual bytes.
+        if let kept = summaries.writing[note.id], kept.revision == note.revisionID,
+           kept.fingerprint == note.contentFingerprint,
+           note.contentFingerprint != nil || kept.legacyContent == note.content { return kept.value }
+        writingDecodeCount += 1
         let value = note.content.flatMap { NoteContentCodec.decode($0).document }.map(TaskNoteConversion.documentHasWriting) ?? true
-        writingKnown[note.id] = (note.revisionID, note.revisionID == nil ? note.content : nil, value)
+        summaries.writing[note.id] = (note.revisionID, note.contentFingerprint,
+                                      note.contentFingerprint == nil ? note.content : nil, value)
         return value
     }
-    private var writingKnown: [UUID: (revision: UUID?, content: Data?, value: Bool)] = [:]
 
     private func body(of note: NoteItem) -> NoteRowSummary.Body {
         if let kept = summaries.bodies[note.id], kept.revision == note.revisionID, kept.content == note.content, kept.plainText == note.plainText { return kept.body }
