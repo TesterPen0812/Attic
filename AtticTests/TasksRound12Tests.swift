@@ -38,6 +38,68 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertFalse(model.folded(on: .done).contains(days[0].key),
             "BG-5: a Done header must be keyboard-accessible with no visible rows")
     }
+    // MARK: - pro-bugs-tasks-r1 fix 1: the Tab target ends when the keyboard moves on
+
+    /// Opus R-1 = Dot R-2: Tab to a header, then ↓ to a row. Return belongs to
+    /// the row (a title edit), not to the header Tab left behind.
+    func testReturnAfterTabbingToAHeaderAndPressingDownEditsTheRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let first = try XCTUnwrap(model.sections(for: .now).groups.first)
+        XCTAssertTrue(first.showsHeader, "the first Tab stop must be a date heading")
+        hosted.press("\t", keyCode: 48)
+        XCTAssertNil(model.keyboardFocus, "Tab went to the heading, not a row")
+        hosted.press("\u{F701}", keyCode: 125)
+        let focused = try XCTUnwrap(model.keyboardFocus, "↓ gave a row the keyboard")
+        hosted.press("\r", keyCode: 36)
+        XCTAssertFalse(model.folded(on: .now).contains(first.key), "Return must not fold the heading ↓ left")
+        XCTAssertEqual(model.editingTitleID, focused.id, "Return edits the focused row")
+    }
+
+    /// The same for Space: it is the row's key (the quick look), never a fold of
+    /// the heading ↓ left.
+    func testSpaceAfterTabbingToAHeaderAndPressingDownLeavesTheHeadingAlone() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let first = try XCTUnwrap(model.sections(for: .now).groups.first)
+        XCTAssertTrue(first.showsHeader)
+        hosted.press("\t", keyCode: 48)
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertNotNil(model.keyboardFocus)
+        hosted.press(" ", keyCode: 49)
+        XCTAssertFalse(model.folded(on: .now).contains(first.key), "Space must not fold the heading ↓ left")
+    }
+
+    /// And Tab goes on from the focused row, not back from the old heading.
+    func testTabAfterTabbingToAHeaderAndPressingDownGoesOnFromTheFocusedRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let sections = model.sections(for: .now)
+        let first = try XCTUnwrap(sections.groups.first)
+        XCTAssertTrue(first.showsHeader)
+        let rows = sections.groupRows[first.key] ?? []
+        hosted.press("\t", keyCode: 48)
+        hosted.press("\u{F701}", keyCode: 125)
+        let focused = try XCTUnwrap(model.keyboardFocus)
+        XCTAssertEqual(focused.id, rows.first?.id, "↓ from the first heading focuses the first row")
+        hosted.press("\t", keyCode: 48)
+        XCTAssertNotEqual(model.keyboardFocus?.id, focused.id, "Tab goes on from the focused row")
+        if rows.count > 1 {
+            XCTAssertEqual(model.keyboardFocus?.id, rows[1].id, "the next row of the group")
+        } else if sections.groups.count > 1, sections.groups[1].showsHeader {
+            // The next stop is the next group's heading: Space folds that one.
+            XCTAssertNil(model.keyboardFocus)
+            hosted.press(" ", keyCode: 49)
+            XCTAssertTrue(model.folded(on: .now).contains(sections.groups[1].key), "the next heading has the keyboard")
+        }
+    }
+
     private final class ProbePanel: NSPanel {
         override var canBecomeKey: Bool { true }
     }

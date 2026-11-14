@@ -169,6 +169,15 @@ struct TasksPage: View {
         focusedRow = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
     }
 
+    /// The keyboard leaves a stop Tab chose (a heading) by another route: the
+    /// arrow keys, a file dropped on the add bar. Tab's target ends with it, so
+    /// Return, Space and the next Tab belong to where the keyboard is now, and
+    /// the heading lets go of its ring. (A press ends it too: `mousePressed`.)
+    private func endTabTarget() {
+        if focusRequests.current?.base is TasksGroupFocusID { focusRequests.focus(TasksGroupFocusRelease()) }
+        tabTarget.cancel()
+    }
+
     /// The tabs sit 14 below the header, which moves inward with larger
     /// corners, so the gap under the header stays the same.
     /// The owner's panel design (2026-10-27): no tabs line; the list starts
@@ -259,6 +268,7 @@ struct TasksPage: View {
                 setTargeted: { on in if composerDropTargeted != on { composerDropTargeted = on } },
                 perform: { providers in
                     model.addComposerFiles(providers)
+                    endTabTarget()
                     if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
                 }
             )
@@ -3114,6 +3124,7 @@ struct TasksPage: View {
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
+            endTabTarget()
             guard let current, let index = visible.firstIndex(of: current) else {
                 let first = step > 0 ? visible.first : visible.last
                 setFocus(first)
