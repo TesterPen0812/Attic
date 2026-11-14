@@ -190,6 +190,9 @@ final class ScrollEdgeUITests: XCTestCase {
     /// exist. A launch-time HANG dump is kept as evidence but never counts as
     /// the target hang; only the recovery's verdict fails a pass.
     private func attachEvidence(of pass: HangPass) {
+        // An abandoned XCUI call can jump straight to teardown while the
+        // recovery is still sampling. Join it before inspecting its files.
+        _ = pass.recovery?.finish()
         let fileManager = FileManager.default
         let latest = pass.probe
         let first = latest.map { URL(fileURLWithPath: $0.path + ".first") }
@@ -214,7 +217,7 @@ final class ScrollEdgeUITests: XCTestCase {
             case .sample: attach(pass.sample, "sample")
             case .recoveryLog: attach(pass.recoveryLog, "recovery-log")
             case .screenshotUnavailableNote:
-                let note = XCTAttachment(string: "No window of the launched app was on screen for \(pass.prefix); no picture was taken.")
+                let note = XCTAttachment(string: "Window capture was unavailable for \(pass.prefix); see the recovery log for the window lookup and capture result.")
                 note.name = "\(pass.prefix)-frozen-window-unavailable"
                 note.lifetime = .keepAlways
                 add(note)
@@ -707,8 +710,8 @@ enum HangEvidencePlan {
         var items: [Item] = []
         if recovered || probeText?.hasPrefix("HANG:") == true {
             if probeText != nil { items.append(.probeLatest) }
-            if probeFirstExists { items.append(.probeFirst) }
         }
+        if probeFirstExists { items.append(.probeFirst) }
         guard recovered else { return items }
         items.append(screenshotExists ? .screenshot : .screenshotUnavailableNote)
         if sampleExists { items.append(.sample) }
@@ -887,6 +890,9 @@ final class HangRecoverySupportTests: XCTestCase {
         XCTAssertEqual(HangEvidencePlan.items(recovered: true, probeText: "ARMED\n", probeFirstExists: false,
                                               screenshotExists: false, sampleExists: false),
                        [.probeLatest, .screenshotUnavailableNote])
+        XCTAssertEqual(HangEvidencePlan.items(recovered: false, probeText: "HEALTHY: main loop waited\n",
+                                              probeFirstExists: true, screenshotExists: false, sampleExists: false),
+                       [.probeFirst], "keep the launch-time HANG after a healthy heartbeat replaces it")
         // A launch-time dump of a pass that recovered by itself is kept as evidence, and nothing else.
         XCTAssertEqual(HangEvidencePlan.items(recovered: false, probeText: "HANG: x\n", probeFirstExists: true,
                                               screenshotExists: true, sampleExists: true),
