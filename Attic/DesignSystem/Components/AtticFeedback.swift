@@ -90,10 +90,10 @@ private struct AtticToastButton: View {
             // drives (`atticOwnFocusRing`), so a window becoming key again
             // never hands the typing to it.
             button
-                .modifier(AtticKeyboardReach(action: action))
+                .modifier(AtticKeyboardReach(action: action,
+                    outline: .rounded(radius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius,
+                                      height: AtticControlSize.smallHeight)))
                 .focusEffectDisabled()
-                .atticOwnFocusRing(.rounded(radius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius,
-                                            height: AtticControlSize.smallHeight))
         } else {
             // Do not register a FocusState for transient Undo chrome:
             // SwiftUI's native key proxy would take the editor's responder.
@@ -599,9 +599,8 @@ struct AtticStatusPill: View {
                 .buttonStyle(AtticUndimmedButtonStyle())
                 // Tab reaches it with Full Keyboard Access off too; its
                 // ring registers a focus state only while the keyboard drives.
-                .modifier(AtticKeyboardReach(action: onOpen))
+                .modifier(AtticKeyboardReach(action: onOpen, outline: .rounded(radius: radius, height: m.pillHeight)))
                 .focusEffectDisabled()
-                .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
                 .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
                 .accessibilityHint(String(localized: "Shows details"))
                 .accessibilityIdentifier("notes-status-primary")
@@ -788,22 +787,52 @@ extension View {
 
 
 
-/// A button Tab reaches with Full Keyboard Access off, the default. Measured
-/// on macOS 26: `focusable(true, interactions: .activate)` (the notice
-/// action's policy) joins the key loop only under Full Keyboard Access; the
-/// automatic interactions join it always, but then Space and Return no
-/// longer press the button, so they are handled here.
+/// Mouse activation and Tab have different macOS policies: activation focus
+/// keeps a click with the writer; a separate keyboard-only target lets Tab
+/// reach the same action with Full Keyboard Access off.
 struct AtticKeyboardReach: ViewModifier {
     let action: () -> Void
+    let outline: AtticOwnFocusRing.Outline
     @Environment(\.isEnabled) private var isEnabled
 
+    @ViewBuilder
     func body(content: Content) -> some View {
+        if NSApp.isFullKeyboardAccessEnabled {
+            button(content).atticOwnFocusRing(outline)
+        } else {
+            button(content)
+                .background {
+                    AtticKeyboardActivationTarget(outline: outline)
+                        .focusable(isEnabled)
+                        .focusEffectDisabled()
+                        .onKeyPress(keys: [.space, .return], phases: .down, action: activate)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+        }
+    }
+
+    private func button(_ content: Content) -> some View {
         content
-            .focusable(isEnabled)
-            .onKeyPress(keys: [.space, .return], phases: .down) { key in
-                guard isEnabled, key.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-                action()
-                return .handled
-            }
+            .focusable(isEnabled, interactions: .activate)
+            .onKeyPress(keys: [.space, .return], phases: .down, action: activate)
+    }
+
+    private func activate(_ key: KeyPress) -> KeyPress.Result {
+        guard isEnabled, key.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+        action()
+        return .handled
+    }
+}
+
+private struct AtticKeyboardActivationTarget: View {
+    let outline: AtticOwnFocusRing.Outline
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+
+    var body: some View {
+        Color.clear.overlay {
+            if isFocused && keyboardFocusVisible { AtticOwnFocusRing.ring(outline) }
+        }
     }
 }

@@ -1437,9 +1437,9 @@ struct AtticSmallButton: View {
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
-        .modifier(AtticOptionalActivateFocus(enabled: reachableWithoutFullKeyboardAccess && acceptsKeyboardFocus, action: action))
+        .modifier(AtticOptionalActivateFocus(enabled: reachableWithoutFullKeyboardAccess && acceptsKeyboardFocus,
+            action: action, outline: .rounded(radius: radius, height: height), acceptsKeyboardFocus: acceptsKeyboardFocus))
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: radius, height: height), acceptsKeyboardFocus: acceptsKeyboardFocus)
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -1454,10 +1454,13 @@ struct AtticSmallButton: View {
 private struct AtticOptionalActivateFocus: ViewModifier {
     let enabled: Bool
     let action: () -> Void
+    let outline: AtticOwnFocusRing.Outline
+    let acceptsKeyboardFocus: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if enabled { content.modifier(AtticKeyboardReach(action: action)) } else { content }
+        if enabled { content.modifier(AtticKeyboardReach(action: action, outline: outline)) }
+        else { content.atticOwnFocusRing(outline, acceptsKeyboardFocus: acceptsKeyboardFocus) }
     }
 }
 

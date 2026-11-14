@@ -1010,7 +1010,7 @@ struct AtticOwnFocusRing: ViewModifier {
     }
 
     @ViewBuilder
-    fileprivate static func ring(_ outline: Outline) -> some View {
+    static func ring(_ outline: Outline) -> some View {
         switch outline {
         case let .circle(diameter):
             AtticFocusRing(cornerRadius: diameter / 2).frame(width: diameter, height: diameter)

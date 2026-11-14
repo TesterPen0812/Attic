@@ -896,6 +896,57 @@ private struct TransientFocusHost: View {
 }
 
 extension AtticDesignSystemHostedTests {
+    func testR3ClickingStatusActionsLeavesTheNoteAsFirstResponder() throws {
+        try requireKeyWindowTests()
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let probe = TransientFocusProbe()
+        let (window, hosting) = host(TransientFocusHost(probe: probe).environment(\.atticKeyboardFocusVisible, true), size: CGSize(width: 350, height: 170), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        for (shown, identifier) in [(1, "notes-status-action"), (1, "notes-status-primary"), (3, "notes-status-cancel")] {
+            probe.shown = shown; spin(0.2)
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            let button = try XCTUnwrap(elements(hosting).first { $0.accessibilityIdentifier?() == identifier })
+            let screen = try XCTUnwrap(button.accessibilityFrame?())
+            let point = window.convertPoint(fromScreen: NSPoint(x: screen.midX, y: screen.midY))
+            let events = try [NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+            }
+            events.forEach { NSApp.postEvent($0, atStart: false) }
+            var delivered = 0
+            while delivered < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next); delivered += 1
+            }
+            spin(0.1)
+            if ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" {
+                let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 700, pixelsHigh: 340,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                rep.size = hosting.bounds.size
+                hosting.cacheDisplay(in: hosting.bounds, to: rep)
+                let path = FileManager.default.temporaryDirectory.appendingPathComponent("R3-\(identifier)-\(UUID().uuidString).png")
+                try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: path)
+                print("R3_SNAPSHOT=\(path.path)")
+            }
+            XCTAssertTrue(window.firstResponder === editor, "clicking \(identifier) preserves the writing caret")
+            let length = probe.writing.count
+            key(window, "q", code: 12)
+            XCTAssertEqual(probe.writing.count, length + 1, "typing after a status action reaches the note")
+        }
+        XCTAssertEqual(probe.statusRetries, 1, "real mouse events activate Retry once")
+        XCTAssertEqual(probe.statusOpens, 1)
+        XCTAssertEqual(probe.statusCancels, 1)
+        probe.shown = 0; spin(0.1)
+        XCTAssertTrue(window.firstResponder === editor, "dismissing the status leaves the caret intact")
+    }
+
     func testBG66StatusDetailsRetryAndCancelAreKeyboardReachableWithoutStealingTyping() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else {
@@ -915,7 +966,7 @@ extension AtticDesignSystemHostedTests {
     private func runBG66TabFlow() throws {
         print("BG66_FULL_KEYBOARD_ACCESS=\(NSApp.isFullKeyboardAccessEnabled)")
         let probe = TransientFocusProbe()
-        let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
+        let (window, hosting) = host(TransientFocusHost(probe: probe).environment(\.atticKeyboardFocusVisible, true), size: CGSize(width: 350, height: 170), key: true)
         let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
         XCTAssertTrue(window.makeFirstResponder(editor))
         func capture(_ state: String) throws {
