@@ -280,6 +280,23 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('run_tests unit 4', focused)
         self.assertIn('fka-task-focus-summary.json', focused)
 
+    def test_focused_fka_runs_every_shared_chrome_native_keyboard_regression(self):
+        import re
+        root = Path(__file__).resolve().parent.parent
+        source = (root / 'AtticTests/PanelSharedChromeTests.swift').read_text()
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        focused = workflow.split('  fka:', 1)[1].split('\n  round-trips:', 1)[0]
+        selected = focused.split('          shared_chrome=(', 1)[1].split('          )', 1)[0].split()
+        tests = re.split(r'\n    func (test\w+)\(', source)
+        methods = set(tests[1::2])
+        required = {name for name, body in zip(tests[1::2], tests[2::2])
+                    if 'NSApp.isFullKeyboardAccessEnabled' in body}
+        self.assertTrue(required, 'the native keyboard tests must be discovered')
+        self.assertFalse(required - set(selected), f'FKA regressions missing from the focused lane: {required - set(selected)}')
+        self.assertFalse(set(selected) - methods, 'the focused lane must select real test methods')
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertIn('s["skippedTests"]==0', focused)
+
     def test_optimized_cost_callers_keep_their_fixtures_in_the_main_bundle(self):
         import json
         import re

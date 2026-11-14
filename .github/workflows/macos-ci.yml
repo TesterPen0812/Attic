@@ -173,11 +173,15 @@ jobs:
             testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
             testAPageSwitchNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
             testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
+            testARevealOfTheRetainedPanelReleasesTheSharedPlusOnTheRealShell
             testTheCardTakingTheRowNeverLeavesTasksTabOrderOnThePlusWithFullKeyboardAccess
             testTheTagKeyNeverLeavesTasksTabOrderOnItAfterThePageSwitchWithFullKeyboardAccess
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
             testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess
             testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess
+            testAQueuedPlusHandoffNeverOutlivesTheReleaseThatCameBetween
+            testAQueuedTagKeyHandoffNeverOutlivesTheReleaseThatCameBetween
+            testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
           )
           only=(); for t in "${shared_chrome[@]}"; do only+=(-only-testing:"AtticTests/PanelSharedChromeTests/$t"); done
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
