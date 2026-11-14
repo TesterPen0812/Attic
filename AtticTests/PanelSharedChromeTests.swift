@@ -1051,3 +1051,29 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 R-2 (a reveal reaches the shared controls)
+
+extension PanelSharedChromeTests {
+    /// Dot R-2: the shell's selective observer never subscribed to
+    /// `revealCount`, so on the production shell a retained panel that hid
+    /// and came back without another observed change never told the "+"
+    /// (nor closed the tag bar). Hidden and revealed with the page and size
+    /// unchanged, the keyboard must be released. (The Air keeps Full
+    /// Keyboard Access off, so the "+" holds the keyboard the way its focus
+    /// callback reports it.)
+    func testARevealOfTheRetainedPanelReleasesTheSharedPlusOnTheRealShell() throws {
+        try requireKeyWindowTests()
+        for page in [PanelSection.calendar, .notes] {
+            let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+            defer { shell.close() }
+            shell.go(to: page)
+            shell.sharedChrome.notePlusKeyboard(true)
+            shell.state.panelDidHide()
+            shell.spin(0.3)
+            shell.state.panelDidReveal()
+            shell.spin(0.6)
+            XCTAssertFalse(shell.sharedChrome.plusHasKeyboard, "\(page): a reveal never leaves the keyboard on the plus")
+        }
+    }
+}
+

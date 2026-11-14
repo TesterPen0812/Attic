@@ -65,7 +65,11 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
             changed(uiState.$isPanelPinned),
             changed(uiState.$primaryInputFocusRequest),
             changed(uiState.$openTaskNoteID),
-            changed(uiState.$isComposerPresented)
+            changed(uiState.$isComposerPresented),
+            // A reveal: the shell closes the tag bar and the shared "+" lets
+            // the keyboard go (`PanelSharedBottomBar.revealCount`); neither
+            // happened while nothing else the shell observes changed.
+            changed(uiState.$revealCount)
         ])
         .sink { [weak self] in self?.objectWillChange.send() }
         .store(in: &subscriptions)
