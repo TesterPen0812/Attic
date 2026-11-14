@@ -308,6 +308,22 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(reader.searchThumbnailCacheCount, 128)
     }
 
+    /// Dot R-1: a canvas saved after the last library query is found by
+    /// `searchThumbnail` on its own, not answered with nil from a stale list.
+    func testR1ACanvasSavedAfterTheLibraryQueryStillGetsItsThumbnail() throws {
+        let container = try container()
+        try seedBoards(container, count: 3)
+        let reader = DrawPersistentStore(container: container)
+        _ = try reader.presentationLibrary()
+        let fresh = reader.create(name: "Made later")
+        XCTAssertTrue(reader.perform(.put([stroke()]), on: fresh.id).isSaved)
+        let bytes = Data(repeating: 9, count: 80)
+        XCTAssertTrue(reader.perform(.thumbnail(bytes, dark: false), on: fresh.id).isSaved)
+        let found = try XCTUnwrap(try reader.searchThumbnail(fresh.id), "a canvas made after the last list query")
+        XCTAssertEqual(found.thumbnail, bytes)
+        XCTAssertEqual(found.name, "Made later")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)

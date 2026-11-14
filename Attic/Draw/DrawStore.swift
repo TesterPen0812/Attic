@@ -225,10 +225,14 @@ class DrawStore: DrawStoreProtocol {
     func searchThumbnail(_ id: UUID) throws -> DrawCanvas? {
         if recoveredCanvasIDs.contains(id) { return states[id]?.canvas }
         // The summary only names the canvas, so a stale snapshot is enough
-        // and a write on another canvas costs no metadata read.
-        let snapshot = try searchSnapshot ?? currentSearchSnapshot()
-        guard let position = snapshot.positions[id] else { return nil }
-        let metadata = snapshot.canvases[position]
+        // and a write on another canvas costs no metadata read. An id it
+        // doesn't know (a canvas saved since) refreshes it.
+        var snapshot = try searchSnapshot ?? currentSearchSnapshot()
+        if snapshot.positions[id] == nil {
+            snapshot = try currentSearchSnapshot()
+            guard snapshot.positions[id] != nil else { return nil }
+        }
+        let metadata = snapshot.canvases[snapshot.positions[id]!]
         if let entry = cachedThumbnail(id) { return merged(metadata, entry) }
         // A miss reads the uncached rows from this one to the end of its
         // window (a page of `thumbnailWindow` rows in the order the caller
