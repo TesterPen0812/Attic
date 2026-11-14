@@ -43,6 +43,27 @@ final class TasksRound13Tests: XCTestCase {
                        "Space still completes the native-focused row")
     }
 
+    // MARK: - owner-scroll-r3 review fixes (R-2, R-3, R-4, R-6)
+
+    /// R-3: Return on a focused row inside a multi-selection collapses the
+    /// selection to that row before the editor opens (the row's old
+    /// `editTitle` did), so the next Space or Delete does not act on both.
+    func testR3ReturnOnAFocusedRowInAMultiSelectionCollapsesToThatRow() throws {
+        try requireKeyWindowTests()
+        for tab in [TasksTab.now, .done] {
+            let hosted = try Hosted(height: 520)
+            defer { hosted.close() }
+            if tab != .now { hosted.go(to: tab) }
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+            XCTAssertEqual(hosted.model.selection.count, 2, "\(tab): two rows selected")
+            let focused = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+            hosted.press("\r", keyCode: 36)
+            XCTAssertEqual(hosted.model.editingTitleID, focused, "\(tab): Return edits the focused row")
+            XCTAssertEqual(hosted.model.selection, [focused], "\(tab): and collapses the selection to it")
+        }
+    }
+
     func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")

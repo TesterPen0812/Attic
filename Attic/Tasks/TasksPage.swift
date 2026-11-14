@@ -3034,8 +3034,11 @@ struct TasksPage: View {
             }
             return .handled
         case .return where modifiers.isEmpty:
-            // Done's rows too (round 10).
+            // Done's rows too (round 10). The row's own Edit Title collapsed
+            // a multi-selection to the row first (`actions(for:in:)`); so
+            // does Return, or the next Space or Delete would act on all.
             guard let current else { return .ignored }
+            model.selectOnly(current)
             model.beginEditingTitle(current)
             return .handled
         case .rightArrow where modifiers.isEmpty:
