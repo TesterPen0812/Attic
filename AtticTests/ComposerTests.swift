@@ -1225,6 +1225,46 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(liveTasks().isEmpty, "keyboard traversal does not submit the draft")
     }
 
+    func testBG10ShiftTabFromTitleExitsBackwardsWithoutEnteringWriting() throws {
+        var target: ComposerCard.KeyboardTarget = .outside
+        let (_, _, field) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { target = $0 })
+        field.insertBacktab(nil)
+        spin()
+        XCTAssertNotEqual(target, .writing, "BG-10: Shift-Tab from Title must exit backwards")
+    }
+
+    func testBG70MarkedTextKeepsBothDirectionsOfTabInTheInputMethod() throws {
+        var targets: [ComposerCard.KeyboardTarget] = []
+        let (window, _, field) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { targets.append($0) })
+        field.insertTab(nil)
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertFalse(writing === field, "the IME test must focus the Writing field")
+        for backwards in [false, true] {
+            window.makeFirstResponder(writing)
+            writing.setMarkedText("漢", selectedRange: NSRange(location: 1, length: 0),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(writing.hasMarkedText(), "test must enter native IME composition")
+            let before = targets.count
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: backwards ? .shift : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: backwards ? "\u{19}" : "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: 48))
+            NSApp.postEvent(event, atStart: false)
+            var dispatched = 0
+            while dispatched < 64,
+                  let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                dispatched += 1
+            }
+            spin(0.1)
+            XCTAssertEqual(targets.count, before, "BG-70: a marked-text Tab must not ask the composer to navigate")
+            XCTAssertTrue(window.firstResponder === writing, "composition owns keyboard focus")
+            writing.unmarkText()
+        }
+    }
+
     func testCommandReturnInTheTitleCreatesAndOpens() throws {
         let (window, _, field) = try mountForKeys(on: .tasks(.now))
         typeKeys(field, "Open me")

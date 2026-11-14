@@ -456,7 +456,8 @@ struct ComposerCard: View {
             selectionMoved: { title.selection = $0 },
             undoFallback: { model.undoPage() },
             redoFallback: { model.redoPage() },
-            tab: { _ in
+            tab: { backward in
+                guard !backward else { return false }
                 moveKeyboard(toWriting: true)
                 return true
             }
@@ -904,6 +905,12 @@ private struct ComposerTabTrap: NSViewRepresentable {
                     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                         guard let self, event.keyCode == 48, event.window === self.window,
                               event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
+                        if (event.window?.firstResponder as? NSTextView)?.hasMarkedText() == true {
+                            // AppKit's default Tab action resigns the field
+                            // even when text is marked. Keep composition in
+                            // its native input editor until it commits.
+                            return nil
+                        }
                         return self.onTab(event.modifierFlags.contains(.shift)) ? nil : event
                     }
                 } else if let monitor {
