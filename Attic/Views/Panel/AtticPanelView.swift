@@ -207,10 +207,6 @@ struct AtticPanelView: View {
                             ? nil : uiState.retainedPageSizeDuringLiveResize
                         let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
                             ?? pageLayout
-                        #if ATTIC_LOCAL_ONLY
-                        let _ = PanelInvalidationProbe.pageRestingOffset?(page,
-                            pageMotion.restingOffset(side: page.side(from: currentPage), width: panelSize.width))
-                        #endif
                         PanelResizeStablePageHost(
                             page: page,
                             isCurrent: page == currentPage,
@@ -246,6 +242,7 @@ struct AtticPanelView: View {
                             }
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelPageVisibility(
+                                page: page,
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
@@ -1038,6 +1035,9 @@ extension EnvironmentValues {
 }
 
 struct PanelPageVisibility: ViewModifier {
+    /// The shell's page, so a local-only probe can report what this modifier
+    /// was actually given. Nil for a view that is not one of the four pages.
+    var page: PanelPage?
     let isCurrent: Bool
     /// Where the page rests while hidden (0 when it is current).
     let restingOffset: CGFloat
@@ -1055,7 +1055,10 @@ struct PanelPageVisibility: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content
+        #if ATTIC_LOCAL_ONLY
+        if let page { PanelInvalidationProbe.pageRestingOffset?(page, restingOffset) }
+        #endif
+        return content
             .transformEnvironment(\.atticPanelPageIsCurrent) { $0 = $0 && isCurrent }
             .environment(\.panelPageMotion, motion)
             .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }

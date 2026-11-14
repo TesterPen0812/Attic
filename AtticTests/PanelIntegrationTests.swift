@@ -438,6 +438,8 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
                        "The departing Tasks page must use the live width while sliding")
         XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        XCTAssertEqual(abs(try XCTUnwrap(offsets[.tasks])), liveWidth, accuracy: 1,
+                       "The departing Tasks page must rest a live width away")
         host.mouseUp(with: try event(.leftMouseUp, x: point.x + sign * 24, time: 1.2))
         XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive)
         spin(0.3)
