@@ -11,7 +11,7 @@ final class CalendarDraftTerminationRegistry {
 
     private final class Entry {
         weak var rows: CalendarEventRowState?
-        let owner: Owner
+        var owner: Owner
         init(_ rows: CalendarEventRowState, owner: Owner) { self.rows = rows; self.owner = owner }
     }
 
@@ -19,7 +19,10 @@ final class CalendarDraftTerminationRegistry {
 
     func register(_ rows: CalendarEventRowState, owner: Owner) {
         entries.removeAll { $0.rows == nil }
-        guard !entries.contains(where: { $0.rows === rows }) else { return }
+        if let existing = entries.first(where: { $0.rows === rows }) {
+            existing.owner = owner
+            return
+        }
         entries.append(Entry(rows, owner: owner))
     }
 
@@ -32,6 +35,15 @@ final class CalendarDraftTerminationRegistry {
             return rows
         }
     }
+
+    #if DEBUG
+    /// The hosted pull-out test needs the docked model before an event is
+    /// opened. Production callers only care about rows with an open draft.
+    func rowsForTesting(owner: Owner) -> [CalendarEventRowState] {
+        entries.removeAll { $0.rows == nil }
+        return entries.compactMap { $0.owner == owner ? $0.rows : nil }
+    }
+    #endif
 
     func prepareForTerminationDurably() async -> Bool {
         await prepareForTerminationResult() == .ready

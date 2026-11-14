@@ -850,6 +850,41 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    func testCalendarSwipeFailedSaveReleasesInteractionAndRestoresThePanel() async throws {
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
+        spin(0.5)
+        let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+        let rows = CalendarEventRowState(makeWriter: { writer })
+        await rows.toggle(writer.event)
+        XCTAssertTrue(rows.canEdit)
+        rows.title = "Uncommitted edit"
+        writer.error = .eventChanged
+        CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+
+        // A real pull starts by collapsing the live panel and locking input.
+        let window = rig.controller.panelForTesting
+        window.onTrackpadDismissProgress?(120)
+        XCTAssertTrue(rig.uiState.interactionLockReasons.contains(.panelSwipe), "the swipe owns input while moving")
+        window.onTrackpadDismissRequest?()
+        // The error is published before requestHide's completion runs. Wait
+        // for both so the assertion exercises the finished hide transaction.
+        spin(until: {
+            rows.failure != nil && !rig.uiState.interactionLockReasons.contains(.panelSwipe)
+        })
+        XCTAssertNotNil(rows.failure, "the failed writer leaves its error visible")
+        XCTAssertEqual(rows.title, "Uncommitted edit", "the draft survives the rejected hide")
+        XCTAssertTrue(rig.controller.isPanelVisible)
+        XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.panelSwipe),
+                       "the rejected hide must release the swipe lock so the editor is usable")
+        spin(0.5)
+        XCTAssertTrue(rig.controller.acceptsInputForProbe,
+                      "the failed save must restore the full, interactive panel")
+
+        writer.error = nil
+        _ = await rows.close()
+    }
+
     func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false

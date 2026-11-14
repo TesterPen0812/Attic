@@ -449,6 +449,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         self.toasts = toasts
         // The Tasks page remembers its page and views (L7).
         let tasksPageState = TasksPageState(memory: tasksMemory)
+        let calendarPageState = CalendarPageState()
         // The chat's page chip carries the open note, the one selected task
         // or the canvas on show.
         uiState.agentChat.currentItem = { [weak uiState, weak tasksPageState, weak store, weak noteStore,
@@ -492,6 +493,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 settings: settings,
                 toasts: toasts,
                 tasksPageState: tasksPageState,
+                calendarPageState: calendarPageState,
                 composerState: composerState
             ),
             panelCornerRadius: settings.panelCornerSize,
@@ -502,7 +504,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         islandWindows = PanelIslandWindows(model: uiState.island, uiState: uiState, settings: settings)
         pullOut = PanelPullOutController(docked: uiState, dependencies: PanelPageDependencies(
             store: store, noteStore: noteStore, canvasSession: canvasSession, noteDraft: noteDraft,
-            settings: settings, tasksMemory: tasksMemory))
+            settings: settings, tasksMemory: tasksMemory, calendarPageState: calendarPageState))
 
         super.init()
         islandWindows.onIdleTraceContext = { [weak self] in self?.idleLatencyContext() }
@@ -1426,8 +1428,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     @discardableResult
     private func requestInteractiveHide() -> PanelHideRequestResult {
         requestHide { [weak self] completion in
-            guard completion == .hidden else { return }
-            self?.onInteractiveHideCompleted?()
+            switch completion {
+            case .hidden:
+                self?.onInteractiveHideCompleted?()
+            case .superseded:
+                // An asynchronous Calendar save can refuse a swipe after its
+                // pull has already disabled the live panel's input. A newer
+                // reveal clears this state itself; only restore a swipe that
+                // still owns the presentation.
+                guard let self, self.isInteractiveDismissal else { return }
+                self.hideFadesWhenReduced = false
+                self.cancelInteractiveDismissal()
+            }
         }
     }
 

@@ -12,6 +12,7 @@ struct PanelPageDependencies {
     let noteDraft: NoteDraftController
     let settings: AppSettings
     let tasksMemory: TasksPageMemory?
+    var calendarPageState: CalendarPageState? = nil
 }
 
 // MARK: - A floating panel
@@ -26,7 +27,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     let page: PanelPage
     let panel: AtticPanel
     let uiState = PanelUIState()
-    let calendarPageState = CalendarPageState()
+    let calendarPageState: CalendarPageState
     let toasts = PanelToastCenter()
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
@@ -48,6 +49,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
 
     init(page: PanelPage, frame: CGRect, pinned: Bool, dependencies deps: PanelPageDependencies) {
         self.page = page
+        calendarPageState = page == .calendar ? (deps.calendarPageState ?? CalendarPageState()) : CalendarPageState()
         store = deps.store
         noteDraft = deps.noteDraft
         settings = deps.settings
@@ -563,6 +565,9 @@ final class PanelPullOutController {
             panels[page] = nil
             floating.close()
             state.dockIn(page)
+            if page == .calendar, let rows = deps.calendarPageState?.activeEventRows {
+                CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+            }
             docked.setPagesElsewhere(state.outPages)
             switchDocked(to: page)
             makeDockedKey()
@@ -710,6 +715,11 @@ final class PanelPullOutController {
 
     private func makePanel(_ page: PanelPage, frame: CGRect, pinned: Bool) -> PanelFloatingPanel {
         let floating = PanelFloatingPanel(page: page, frame: frame, pinned: pinned, dependencies: deps)
+        // Covers both a new pull-out and restoration of a saved floating
+        // Calendar after the docked page has already mounted its model.
+        if page == .calendar, let rows = deps.calendarPageState?.activeEventRows {
+            CalendarDraftTerminationRegistry.shared.register(rows, owner: .floating)
+        }
         floating.uiState.onPageElsewhere = { [weak self] other in self?.bringForward(other) }
         floating.uiState.onOpenElsewhere = { [weak self] other, switchesDocked in
             self?.bringForward(other, switchesDocked: switchesDocked) ?? false

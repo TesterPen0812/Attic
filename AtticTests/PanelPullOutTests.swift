@@ -410,6 +410,59 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    func testPullingOutCalendarKeepsTheOpenEventEditorAndTransfersItsOwner() throws {
+        try withRig { rig in
+            rig.state.selectSection(.calendar)
+            spin(until: { !CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).isEmpty })
+            let dockedRows = try XCTUnwrap(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).last)
+            let start = Date(timeIntervalSince1970: 1_793_361_600)
+            let event = CalendarEvent(id: "pullout-draft", title: "Before", start: start,
+                end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+                calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+            Task { await dockedRows.toggle(event) }
+            spin(until: { dockedRows.rowID != nil && !dockedRows.busy })
+            XCTAssertEqual(dockedRows.rowID, event.id)
+            // A retained draft's fields must follow the one Calendar page.
+            // The test host uses the stub writer; no real Calendar writes.
+            dockedRows.title = "Uncommitted"
+
+            try pull(.calendar, in: rig, to: CGPoint(x: rig.workArea.midX - 220, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .calendar))
+            XCTAssertTrue(floating.calendarEventRowsForDock === dockedRows,
+                          "Pulling out must carry the existing event editor, not create a new one")
+            XCTAssertEqual(floating.calendarEventRowsForDock?.rowID, event.id)
+            XCTAssertEqual(floating.calendarEventRowsForDock?.title, "Uncommitted")
+            XCTAssertFalse(CalendarDraftTerminationRegistry.shared.openRows(for: .docked).contains { $0 === dockedRows },
+                           "Hiding the docked panel must not close Calendar's floating draft")
+            XCTAssertTrue(CalendarDraftTerminationRegistry.shared.openRows(for: .floating).contains { $0 === dockedRows })
+
+            XCTAssertTrue(rig.pullOut.dockIn(.calendar))
+            spin(until: { rig.pullOut.panel(for: .calendar) == nil })
+            XCTAssertNil(rig.pullOut.panel(for: .calendar))
+            XCTAssertTrue(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).contains { $0 === dockedRows },
+                          "Snapping home must return the Calendar model to the docked window")
+        }
+    }
+
+    func testRestoringFloatingCalendarTransfersTheAlreadyMountedCalendarModel() throws {
+        try withRig { rig in
+            rig.state.selectSection(.calendar)
+            spin(until: { !CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).isEmpty })
+            let dockedRows = try XCTUnwrap(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .docked).last)
+            var saved = PanelPullOutState()
+            XCTAssertTrue(saved.pullOut(.calendar, at: CGRect(x: rig.workArea.midX - 300,
+                y: rig.workArea.midY - 200, width: 340, height: 560), pinned: true))
+            rig.settings.floatingPanelsData = saved.encoded()
+            rig.pullOut.restore()
+            spin(until: { rig.pullOut.panel(for: .calendar) != nil })
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .calendar))
+            XCTAssertTrue(floating.calendarEventRowsForDock === dockedRows,
+                          "Restoring a saved floating Calendar must reuse its mounted model")
+            XCTAssertTrue(CalendarDraftTerminationRegistry.shared.rowsForTesting(owner: .floating).contains { $0 === dockedRows },
+                          "Restoration must transfer Calendar's termination owner")
+        }
+    }
+
     func testFix18CalendarDockWaitingForWriterDoesNotOverrideLaterDrag() throws {
         try withRig { rig in
             try pull(.calendar, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
