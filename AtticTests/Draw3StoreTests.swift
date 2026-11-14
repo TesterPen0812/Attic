@@ -162,6 +162,43 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertNil(try reader.searchThumbnail(own)?.thumbnail, "a cleared thumbnail is seen at once")
     }
 
+    /// R-10: after an edit, the next menu open reads its rows' thumbnails in
+    /// a bounded number of batched reads, not one context and two fetches per
+    /// realized row.
+    func testR10MenuRowsAfterAnEditReadThumbnailsInBoundedBatches() throws {
+        let container = try container()
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        let bytes = Data(repeating: 37, count: 256)
+        for index in 0..<120 {
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnail: bytes)
+            let record = DrawCanvasRecord()
+            try record.apply(canvas)
+            seeded.insert(record)
+            let payload = DrawPayloadRecord()
+            payload.apply(bytes, id: canvas.id, canvasID: canvas.id, role: "thumbnail")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+
+        let reader = DrawPersistentStore(container: container)
+        func openMenu() throws -> Int {
+            reader.metrics.reset()
+            let window = try reader.presentationLibrary().prefix(12).map(\.id)
+            for id in window { XCTAssertEqual(try reader.searchThumbnail(id)?.thumbnail, bytes) }
+            return reader.metrics.thumbnailHydrations
+        }
+        XCTAssertLessThanOrEqual(try openMenu(), 2, "a cold first open reads the window in one batch")
+        let edited = try reader.presentationLibrary()[3].id
+        XCTAssertTrue(reader.perform(.put([stroke()]), on: edited).isSaved)
+        let afterEdit = try openMenu()
+        XCTAssertLessThanOrEqual(afterEdit, 2,
+                                 "the first menu open after an edit read the thumbnails in \(afterEdit) batches")
+        XCTAssertTrue(reader.undo(on: edited).isSaved)
+        let afterUndo = try openMenu()
+        XCTAssertLessThanOrEqual(afterUndo, 2, "Undo then reopening read \(afterUndo) batches")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)

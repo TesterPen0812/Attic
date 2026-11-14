@@ -13,12 +13,15 @@ final class DrawSaveMetrics {
     var payloadDecodesOnMain = 0
     #endif
     var thumbnailBytesRead = 0
+    /// Batched thumbnail reads: each is one new context and its fetches.
+    var thumbnailHydrations = 0
     var metadataRowsWritten = 0
     var objectRowsWritten = 0
     var payloadRowsWritten = 0
     var saveAttempts = 0
     func reset() {
         metadataRowsRead = 0; objectRowsRead = 0; payloadBytesRead = 0; payloadFetches = 0; thumbnailBytesRead = 0
+        thumbnailHydrations = 0
         #if DEBUG
         payloadDecodesOnMain = 0
         #endif
@@ -170,6 +173,7 @@ final class DrawSwiftDataRepository: DrawRepository {
 
     func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
         guard !canvases.isEmpty else { return [] }
+        metrics.thumbnailHydrations += 1
         let context = context()
         let ids = canvases.map(\.id)
         var winners: [UUID: DrawCanvasRecord] = [:]
