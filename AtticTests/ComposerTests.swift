@@ -1189,7 +1189,7 @@ final class ComposerTests: XCTestCase {
             switch expected {
             case .title: return window.firstResponder === field
             case .writing: return inWriting()
-            case .chip, .create:
+            case .clearFiles, .chip, .create:
                 // SwiftUI's KeyViewProxy is the native first responder. AX
                 // focus in an inactive XCTest host reports false for every
                 // control, including the active writing field.
@@ -1263,6 +1263,91 @@ final class ComposerTests: XCTestCase {
             XCTAssertTrue(window.firstResponder === writing, "composition owns keyboard focus")
             writing.unmarkText()
         }
+    }
+
+    func testBG11ImagePasteInSharedTaskTitleStagesAndAttachesTheFile() throws {
+        let (_, _, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Screenshot to review")
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.clearContents() }
+        XCTAssertTrue(pasteboard.setData(png, forType: .png))
+        let providers = AtticPastedFiles.providers(from: pasteboard)
+        XCTAssertEqual(providers.count, 1, "the native paste route recognizes the copied image")
+        let nativeTitle = try XCTUnwrap(field as? AtticTokenTextView)
+        XCTAssertTrue(nativeTitle.owner?.parent.actions.pasteFiles?(providers) == true,
+                      "BG-11: the shared title must wire its file-paste action")
+        for _ in 0..<50 where page.addBarState.fileNames.isEmpty { spin(0.02) }
+        XCTAssertEqual(page.addBarState.fileNames.count, 1, "BG-11: paste should stage the image in the shared task card")
+        model.submit(openingPage: false)
+        for _ in 0..<100 where liveTasks().first?.attachments.count != 1 { spin(0.03) }
+        XCTAssertEqual(liveTasks().first?.attachments.count, 1, "the created task owns the pasted image")
+    }
+
+    func testBG11SubmitKeepsTheDraftWhileFileStagingIsInFlight() throws {
+        model.open(on: .tasks(.now))
+        type("Wait for the photo")
+        page.addBarState.stagingFiles = 1
+        model.submit(openingPage: false)
+        spin(0.1)
+        XCTAssertTrue(liveTasks().isEmpty, "submitting before a promised image arrives cannot silently drop it")
+        XCTAssertEqual(page.addBar.text, "Wait for the photo")
+        page.addBarState.stagingFiles = 0
+        model.submit(openingPage: false)
+        for _ in 0..<60 where liveTasks().isEmpty { spin(0.02) }
+        XCTAssertEqual(liveTasks().first?.title, "Wait for the photo")
+    }
+
+    func testBG11SharedCardShowsAndCanRemoveStagedFiles() throws {
+        let (_, hosting, _) = try mountForKeys(on: .tasks(.now))
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        // Optional 2× offscreen evidence for the hunt's plain HTML review.
+        func capture(_ filename: String) throws {
+            guard ProcessInfo.processInfo.environment["ATTIC_BG11_RENDER_DIR"] != nil else { return }
+            // Keep the 2× offscreen captures in the test host's sandboxed
+            // Documents folder: XCTest removes its temporary directory at exit.
+            let directory = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+                .appendingPathComponent("BG11Renders", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            print("BG11_RENDER_DIR \(directory.path)")
+            hosting.layoutSubtreeIfNeeded()
+            let bounds = hosting.bounds
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmap.size = bounds.size
+            hosting.cacheDisplay(in: bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent(filename))
+        }
+
+        try capture("bg11-before.png")
+        page.addComposerFiles(urls: [URL(fileURLWithPath: "/tmp/queued-photo.png")])
+        spin(0.3)
+        XCTAssertEqual(page.addBarState.fileNames, ["queued-photo.png"])
+        try capture("bg11-after.png")
+
+        func descendants(_ node: AnyObject) -> [AnyObject] {
+            [node] + ((node.accessibilityChildren?() ?? nil) ?? []).flatMap { descendants($0 as AnyObject) }
+        }
+        let remove = try XCTUnwrap(descendants(hosting).first {
+            $0.accessibilityIdentifier?() == "composer-pending-files"
+        }, "a staged attachment must be reviewable in the shared card")
+        XCTAssertEqual(remove.accessibilityRole?()?.rawValue, "AXButton")
+        XCTAssertTrue((remove.accessibilityLabel?() ?? "").contains("queued-photo.png"),
+                      "VoiceOver must identify which staged file this control removes")
+        XCTAssertTrue(remove.accessibilityPerformPress?() ?? false,
+                      "the visible Remove files control must discard staged files")
+        spin(0.1)
+        XCTAssertTrue(page.addBarState.fileNames.isEmpty)
+        XCTAssertNil(descendants(hosting).first { $0.accessibilityIdentifier?() == "composer-pending-files" })
     }
 
     func testCommandReturnInTheTitleCreatesAndOpens() throws {

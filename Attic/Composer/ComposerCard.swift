@@ -128,17 +128,18 @@ struct ComposerCard: View {
     @State private var priorityPickGeneration = 0
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
-    private enum KeyboardStop: Hashable { case chip(Chip), create }
+    private enum KeyboardStop: Hashable { case clearFiles, chip(Chip), create }
 
     /// Read-only observation for hosted keyboard tests. It follows SwiftUI's
     /// resolved focus, which the inactive XCTest host does not expose through AX.
-    enum KeyboardTarget: Equatable { case title, writing, chip(Chip), create, outside }
+    enum KeyboardTarget: Equatable { case title, writing, clearFiles, chip(Chip), create, outside }
     let onKeyboardTargetChange: ((KeyboardTarget) -> Void)?
 
     private var keyboardTarget: KeyboardTarget {
         if titleFocused { return .title }
         if writingFocused { return .writing }
         switch keyboardStop {
+        case .clearFiles: return .clearFiles
         case .chip(let chip): return .chip(chip)
         case .create: return .create
         case nil: return .outside
@@ -149,7 +150,9 @@ struct ComposerCard: View {
 
     private var keyboardStops: [KeyboardStop] {
         switch model.kind {
-        case .task: [.chip(.date), .chip(.priority), .chip(.tags), .create]
+        case .task:
+            (model.tasks.composerFilesValue == nil ? [] : [.clearFiles])
+                + [.chip(.date), .chip(.priority), .chip(.tags), .create]
         case .note: [.chip(.pin), .chip(.tags), .create]
         case .event:
             [.chip(.date)] + (model.values.time == nil ? [] : [.chip(.length)]) + [.chip(.calendar), .create]
@@ -175,6 +178,11 @@ struct ComposerCard: View {
             if !titleTakesWritingSpace {
                 writingLine(kind)
                     .padding(.top, ComposerMetrics.writingTop)
+                    .padding(.leading, ComposerMetrics.writingLeading)
+            }
+            if kind == .task, let files = model.tasks.composerFilesValue {
+                stagedFilesLine(files)
+                    .padding(.top, ComposerMetrics.actionsTop)
                     .padding(.leading, ComposerMetrics.writingLeading)
             }
             actions(kind)
@@ -456,6 +464,10 @@ struct ComposerCard: View {
             selectionMoved: { title.selection = $0 },
             undoFallback: { model.undoPage() },
             redoFallback: { model.redoPage() },
+            pasteFiles: model.kind == .task ? { providers in
+                tasks.addComposerFiles(providers)
+                return true
+            } : nil,
             tab: { backward in
                 guard !backward else { return false }
                 moveKeyboard(toWriting: true)
@@ -491,6 +503,43 @@ struct ComposerCard: View {
     }
 
     // MARK: Writing
+
+    /// The shared card uses the same staged files as the Tasks add bar.
+    /// Show what will be attached and let the person remove the entire
+    /// batch, including a paste still being prepared.
+    private func stagedFilesLine(_ files: AtticStripValue) -> some View {
+        let ink = design.tokens.ink(.heading)
+        let remove = {
+            model.tasks.clearComposerFiles()
+            moveKeyboard(toWriting: false)
+        }
+        return Button(action: remove) {
+            ComposerChipFace(open: false) { hovered in
+                HStack(spacing: 4) {
+                    AtticIcon(systemName: "paperclip", size: ComposerMetrics.chipIcon, weight: .medium, ink: .glyph)
+                        .colour(ink)
+                    AtticText(verbatim: files.text, style: .composerChip, ink: .body, truncates: true)
+                        .colour(hovered ? ink : AtticSurfaceInk.toneInk(.meta, tokens: design.tokens))
+                    AtticIcon(systemName: "xmark", size: 8, weight: .medium, ink: .glyph)
+                        .colour(ink)
+                }
+                .padding(.horizontal, ComposerMetrics.chipPadding)
+                .frame(minHeight: ComposerMetrics.chipHeight, alignment: .leading)
+            }
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .focusable(true)
+        .focused($keyboardStop, equals: .clearFiles)
+        .atticFocusRing(keyboardStop == .clearFiles, cornerRadius: ComposerMetrics.chipHeight / 2)
+        .help(files.full ?? files.text)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Remove files, \(files.spoken)"))
+        .accessibilityValue(files.spoken)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default, remove)
+        .accessibilityIdentifier("composer-pending-files")
+    }
 
     /// The writing, for every kind: a task's or note's writing, an event's
     /// notes.

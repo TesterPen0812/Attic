@@ -479,7 +479,7 @@ final class ComposerModel: ObservableObject {
     /// transaction starts. Keep the exact draft until the write succeeds;
     /// a failure removes the row and restores its text to this card.
     private func submitTaskAcknowledged(openingPage: Bool) {
-        guard isOpen, canCreate else { return }
+        guard isOpen, canCreate, tasks.composerFilesReadyForSubmission() else { return }
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         let day = finished.parts(parser: tasks.parser).dueDay
@@ -570,6 +570,7 @@ final class ComposerModel: ObservableObject {
     }
 
     private func createTask(openingPage: Bool) -> Bool {
+        guard tasks.composerFilesReadyForSubmission() else { return false }
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         tasks.addBar = finished
