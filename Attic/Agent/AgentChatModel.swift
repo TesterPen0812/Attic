@@ -149,6 +149,9 @@ struct AgentChatWeekDay: Equatable, Identifiable {
     var day: Date
     /// One entry per bar: where it starts and how tall it is, 0...1 of the day.
     var bars: [ClosedRange<Double>]
+    /// The task due marks among `bars`, so a refresh can keep the ones the
+    /// strip was built with and replace only the Calendar bars.
+    var dueMarks: [ClosedRange<Double>] = []
     var id: Date { day }
 }
 
@@ -549,6 +552,9 @@ final class AgentChatModel: ObservableObject {
     var rowTitles: () -> [(id: UUID, title: String)] = { [] }
     /// What the week strip shows, for the week holding a day.
     var weekDays: (Date) -> [AgentChatWeekDay] = { AgentChatModel.emptyWeek(holding: $0) }
+    /// EventKit weeks arrive through its async worker; the immediate strip
+    /// can still show task marks and motion while calendar bars are loading.
+    var loadWeekDays: ((Date) async -> [AgentChatWeekDay])?
     /// Told when the pages with a dot change.
     var onDotsChanged: ((Set<AgentPage>) -> Void)?
     var pacing = AgentChatPacing()
@@ -579,6 +585,8 @@ final class AgentChatModel: ObservableObject {
     private var pendingSteps: [UUID] = []
     /// This run's week strip. Each run has its own, so an earlier one stays as it was.
     private(set) var runWeek: UUID?
+    private var weekReadTask: Task<Void, Never>?
+    private var weekReadGeneration: UInt64 = 0
     /// The page the agent itself is going to: arriving there keeps the chat open.
     private var agentGoingTo: AgentPage?
     /// The page the agent switched to while it is watched: the chip names it
@@ -874,6 +882,7 @@ final class AgentChatModel: ObservableObject {
         progress = nil
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         nextWordTime = nil
         replyEnds = nil
@@ -1197,6 +1206,7 @@ final class AgentChatModel: ObservableObject {
         presented = []
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         includesPage = true
         attachments = []
@@ -1229,6 +1239,7 @@ final class AgentChatModel: ObservableObject {
         unread = false
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         restore(runner.threadSnapshot().entries)
         presented = Set(entries.map(\.id))
@@ -1466,6 +1477,7 @@ final class AgentChatModel: ObservableObject {
                 presented = Set(entries.map(\.id))
                 pendingItems = []
                 pendingSteps = []
+                cancelWeekRead()
                 runWeek = nil
                 runChangeCount = 0
                 nextWordTime = nil
@@ -1551,9 +1563,15 @@ final class AgentChatModel: ObservableObject {
             weekID = showWeek(holding: day, target: day, dots: step.targets.count)
         } else if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             // Adaptive UI: an empty week would be seven blank boxes.
-            let days = runWeek == nil ? weekDays(now()) : nil
+            let day = now()
+            let days = runWeek == nil ? weekDays(day) : nil
             if days?.contains(where: { !$0.bars.isEmpty }) ?? true {
-                weekID = showWeek(holding: now(), target: nil, dots: 0, days: days)
+                weekID = showWeek(holding: day, target: nil, dots: 0, days: days)
+                if days != nil, let weekID { refreshWeekDays(holding: day, entryID: weekID) }
+            } else if loadWeekDays != nil {
+                // A read containing only EventKit events has no task marks to
+                // show yet. The async result decides whether a strip appears.
+                refreshWeekDays(holding: day, entryID: nil, after: step.id)
             }
         }
         guard isOpen else {
@@ -1651,13 +1669,18 @@ final class AgentChatModel: ObservableObject {
             let entry = AgentChatEntry(.week(AgentChatWeek(days: days ?? weekDays(day), target: target, dots: dots)))
             entries.append(entry)
             runWeek = entry.id
+            if days == nil { refreshWeekDays(holding: day, entryID: entry.id) }
             return entry.id
         }
         guard let target else { return runWeek }
         let calendar = Calendar.autoupdatingCurrent
+        var switchedWeek = false
         update(runWeek) {
             guard case var .week(week) = $0 else { return }
-            if !week.days.contains(where: { calendar.isDate($0.day, inSameDayAs: target) }) { week.days = weekDays(target) }
+            if !week.days.contains(where: { calendar.isDate($0.day, inSameDayAs: target) }) {
+                week.days = weekDays(target)
+                switchedWeek = true
+            }
             if let shown = week.target, calendar.isDate(shown, inSameDayAs: target) {
                 week.dots += dots
             } else {
@@ -1667,7 +1690,73 @@ final class AgentChatModel: ObservableObject {
             }
             $0 = .week(week)
         }
+        if switchedWeek { refreshWeekDays(holding: day, entryID: runWeek) }
         return runWeek
+    }
+
+    private func cancelWeekRead() {
+        weekReadGeneration &+= 1
+        weekReadTask?.cancel()
+        weekReadTask = nil
+    }
+
+    private func refreshWeekDays(holding day: Date, entryID: UUID?, after stepID: UUID? = nil) {
+        guard let loadWeekDays else { return }
+        cancelWeekRead()
+        let generation = weekReadGeneration
+        weekReadTask = Task { [weak self] in
+            let days = await loadWeekDays(day)
+            guard let self, !Task.isCancelled, self.weekReadGeneration == generation else { return }
+            self.weekReadTask = nil
+            if let entryID {
+                guard self.runWeek == entryID, let newFirst = days.first?.day else { return }
+                self.update(entryID) {
+                    guard case var .week(week) = $0,
+                          let oldFirst = week.days.first?.day,
+                          Calendar.autoupdatingCurrent.isDate(oldFirst, inSameDayAs: newFirst) else { return }
+                    week.days = Self.keepingDueMarks(of: week.days, in: days)
+                    $0 = .week(week)
+                }
+            } else if self.runWeek == nil, days.contains(where: { !$0.bars.isEmpty }),
+                      let stepIndex = self.entries.firstIndex(where: { $0.id == stepID }) {
+                // A short agent run may finish before EventKit replies. Its
+                // original read still owns this generation until a new run
+                // explicitly invalidates it. The strip goes under its step,
+                // and only a live run owns it.
+                let entry = AgentChatEntry(.week(AgentChatWeek(days: days, target: nil, dots: 0)))
+                self.entries.insert(entry, at: stepIndex + 1)
+                if self.isRunning { self.runWeek = entry.id }
+            }
+        }
+    }
+
+    /// Source-change callbacks refresh existing calendar bars through the
+    /// same invalidatable async path without replaying move animations.
+    func calendarWeekSourceChanged() {
+        // A finished run's strip stays as the agent saw it.
+        guard isRunning, let runWeek,
+              let entry = entries.first(where: { $0.id == runWeek }),
+              case let .week(week) = entry.content,
+              let day = week.days.first?.day else { return }
+        refreshWeekDays(holding: day, entryID: runWeek)
+    }
+
+    /// A refreshed week keeps the due marks the strip was built with (a move
+    /// draws the task going to its day) and takes only the new Calendar bars.
+    private static func keepingDueMarks(of old: [AgentChatWeekDay], in new: [AgentChatWeekDay]) -> [AgentChatWeekDay] {
+        let calendar = Calendar.autoupdatingCurrent
+        return new.map { day in
+            guard let kept = old.first(where: { calendar.isDate($0.day, inSameDayAs: day.day) }),
+                  !(kept.dueMarks.isEmpty && day.dueMarks.isEmpty) else { return day }
+            var bars = day.bars
+            for mark in day.dueMarks {
+                if let index = bars.firstIndex(of: mark) { bars.remove(at: index) }
+            }
+            var merged = day
+            merged.bars = (bars + kept.dueMarks).sorted { $0.lowerBound < $1.lowerBound }
+            merged.dueMarks = kept.dueMarks
+            return merged
+        }
     }
 
     private func updateWeek(_ change: (inout AgentChatWeek) -> Void) {
@@ -1707,7 +1796,7 @@ final class AgentChatModel: ObservableObject {
                 return top...(top + 0.24)
             }
             guard let next = calendar.date(byAdding: .day, value: 1, to: entry.day) else {
-                return AgentChatWeekDay(day: entry.day, bars: taskMarks)
+                return AgentChatWeekDay(day: entry.day, bars: taskMarks, dueMarks: taskMarks)
             }
             let interval = DateInterval(start: entry.day, end: next)
             let seconds = next.timeIntervalSince(entry.day)
@@ -1727,7 +1816,8 @@ final class AgentChatModel: ObservableObject {
                 } else { busy.append(span) }
             }
             return AgentChatWeekDay(day: entry.day,
-                                    bars: (busy + taskMarks).sorted { $0.lowerBound < $1.lowerBound })
+                                    bars: (busy + taskMarks).sorted { $0.lowerBound < $1.lowerBound },
+                                    dueMarks: taskMarks)
         }
     }
 

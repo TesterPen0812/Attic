@@ -3044,6 +3044,10 @@ final class TaskStore: ObservableObject {
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
     /// whose read fails is left out (reported); its row shows no checklist.
     private(set) var doneFamilyParentReadCount = 0
+    /// Counts actual archived-family fetches, including failed reads. MCP
+    /// lists must not issue two fetches per archived parent.
+    private(set) var doneFamilyReadCount = 0
+    private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
         doneFamilyParentReadCount += parentIDs.count
@@ -3135,6 +3139,46 @@ final class TaskStore: ObservableObject {
             .sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) }
     }
 
+    /// An MCP Done-log page reads all of its archived child families together.
+    /// Unlike the presentation-only batch reader, an incomplete family read
+    /// must throw: the MCP response must never claim a partial list is complete.
+    func readDoneLogSubtasks(ofParents parentIDs: [UUID]) throws -> [UUID: [TaskItem]] {
+        guard !parentIDs.isEmpty else { return [:] }
+        let wanted = Set(parentIDs)
+        let optionalIDs: [UUID?] = Array(wanted).map { $0 }
+        let children: [TaskItem]
+        do {
+            children = try readDoneFamily(FetchDescriptor<TaskItem>(predicate: #Predicate {
+                optionalIDs.contains($0.parentID)
+            }))
+        } catch is DoneLogReadFailure {
+            // The injected failure models an unreadable archived family;
+            // do not mask it by retrying as if the query syntax failed.
+            throw DoneLogReadFailure()
+        } catch {
+            // Some SwiftData runtimes reject optional-array membership.
+            // Retain the supported per-parent route on those runtimes.
+            children = try parentIDs.flatMap { parentID in
+                try readDoneFamily(FetchDescriptor<TaskItem>(predicate: #Predicate {
+                    $0.parentID == parentID
+                }))
+            }
+        }
+        let childIDs = Array(Set(children.map(\.id)))
+        guard !childIDs.isEmpty else { return [:] }
+        let replicas = try readDoneFamily(FetchDescriptor<TaskItem>(predicate: #Predicate {
+            childIDs.contains($0.id)
+        }))
+        var result: [UUID: [TaskItem]] = [:]
+        for child in Self.canonicalReplicas(from: replicas) {
+            guard let parentID = child.parentID, wanted.contains(parentID), child.deletedAt == nil else { continue }
+            result[parentID, default: []].append(child)
+        }
+        return result.mapValues { $0.sorted {
+            ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt)
+        } }
+    }
+
     /// A listed task's subtasks: a shown family's from the lists, a
     /// Done-log family's from the log. A Done-log family that cannot be
     /// read is reported and throws, so an export never goes out without
@@ -3152,6 +3196,7 @@ final class TaskStore: ObservableObject {
     /// Both reads of a Done-log family go through here, so tests can make
     /// either fail (`doneFamilyReadsToSkipBeforeFailing`).
     private func readDoneFamily(_ descriptor: FetchDescriptor<TaskItem>) throws -> [TaskItem] {
+        doneFamilyReadCount += 1
         if let skip = doneFamilyReadsToSkipBeforeFailing {
             if skip <= 0 {
                 doneFamilyReadsToSkipBeforeFailing = nil
@@ -3159,7 +3204,9 @@ final class TaskStore: ObservableObject {
             }
             doneFamilyReadsToSkipBeforeFailing = skip - 1
         }
-        return try context.fetch(descriptor)
+        let rows = try context.fetch(descriptor)
+        doneFamilyRowsReadCount += rows.count
+        return rows
     }
 
     /// Test seam: nil reads normally; N lets N family reads through, then

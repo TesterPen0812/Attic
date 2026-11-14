@@ -725,10 +725,16 @@ final class AgentTaskTools {
             guard !page.hasMore || page.next.rowOffset > cursor.rowOffset else {
                 throw AgentToolError.storeFailure("The Done log cursor did not advance.")
             }
+            let children: [UUID: [TaskItem]]
+            do {
+                children = try store.readDoneLogSubtasks(ofParents: page.tasks.map(\.id))
+            } catch {
+                throw AgentToolError.storeFailure(error.localizedDescription)
+            }
             for task in page.tasks {
                 shown.insert(task.id)
                 result.append(task)
-                result += try store.readDoneLogSubtasks(of: task.id)
+                result += children[task.id] ?? []
             }
             guard page.hasMore else { return result }
             cursor = page.next

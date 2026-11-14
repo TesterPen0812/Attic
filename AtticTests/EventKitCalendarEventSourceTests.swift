@@ -33,6 +33,26 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
     }
 }
 
+/// Holds the first store read on the worker queue until the test lets it go.
+private final class StoreReadGate: @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+    private var used = false  // only touched on the worker queue
+
+    func holdFirstRead() {
+        guard !used else { return }
+        used = true
+        entered.signal()
+        _ = released.wait(timeout: .now() + 5)
+    }
+
+    func waitForRead() async -> Bool {
+        await Task.detached { [entered] in entered.wait(timeout: .now() + 3) == .success }.value
+    }
+
+    func release() { released.signal() }
+}
+
 @MainActor
 private final class HeldCalendarReader: CalendarEventSource, AsyncCalendarEventReading {
     var accessState: CalendarAccessState = .granted
@@ -67,12 +87,14 @@ private final class HeldCalendarSearchSource: CalendarEventSource, AsyncCalendar
     var accessState: CalendarAccessState = .granted
     var onChange: (@MainActor () -> Void)?
     var streams: [AsyncStream<[CalendarEvent]>.Continuation] = []
+    private(set) var queries: [String] = []
     private(set) var terminated = 0
     func requestAccess() async -> CalendarAccessState { accessState }
     func events(in interval: DateInterval) -> [CalendarEvent] { [] }
     func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { XCTFail("streaming search used sync I/O"); return [] }
     func searchEvents(_ query: String, in interval: DateInterval, around date: Date) -> AsyncStream<[CalendarEvent]> {
-        AsyncStream { continuation in
+        queries.append(query)
+        return AsyncStream { continuation in
             streams.append(continuation)
             continuation.onTermination = { [weak self] _ in Task { @MainActor in self?.terminated += 1 } }
         }
@@ -116,6 +138,36 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         let refreshed = await source.loadEvents(in: interval)
         XCTAssertTrue(refreshed.isEmpty)
         XCTAssertEqual(backend.queries.count, fetches + 1)
+    }
+
+    func testR1AgentReadSurvivesAStoreChangeMidRead() async {
+        let backend = FakeCalendarEventStore()
+        backend.stored = [occurrence("dentist", "Dentist", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let center = NotificationCenter(), source = source(backend, center: center)
+        let gate = StoreReadGate()
+        backend.onFetch = { gate.holdFirstRead() }
+        let interval = day(2026, 10, 29)
+        let read = Task { await source.eventsWithoutBlocking(in: interval) }
+        let entered = await gate.waitForRead()
+        // The agent's own writer store (separate) reports a change mid-read.
+        center.post(name: .EKEventStoreChanged, object: nil)
+        gate.release()
+        let events = await read.value
+        XCTAssertTrue(entered)
+        XCTAssertEqual(events.map(\.title), ["Dentist"], "a change mid-read must not look like an empty calendar")
+    }
+
+    func testR5AgentReadsAreNotServedFromTheRangeCache() async {
+        let backend = FakeCalendarEventStore()
+        backend.stored = [occurrence("dentist", "Dentist", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let source = source(backend)
+        let interval = day(2026, 10, 29)
+        let first = await source.eventsWithoutBlocking(in: interval)
+        XCTAssertEqual(first.map(\.title), ["Dentist"])
+        // The agent's own write, before any change notification arrives.
+        backend.stored = [occurrence("dentist", "Dentist (moved)", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let second = await source.eventsWithoutBlocking(in: interval)
+        XCTAssertEqual(second.map(\.title), ["Dentist (moved)"])
     }
 
     func testReturningToACachedQueryAndReplacingASourceIgnoreLateReads() async throws {
@@ -535,6 +587,57 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertEqual(matches.sortedForAgenda().map(\.title), ["Audit old", "Audit cross", "Audit future"])
         XCTAssertEqual(Set(matches.map(\.id)).count, 3)
         XCTAssertTrue(backend.queries.allSatisfy { $0.duration <= 4 * 365 * 86400 })
+    }
+
+    func testPF37HiddenCalendarCancelsSearchAndDebounceThenResumesOnReveal() async throws {
+        let backend = HeldCalendarSearchSource()
+        defer { backend.finish() }
+        let model = CalendarPageModel(store: try makeTestStore(), source: backend,
+                                      now: { self.date(2026, 10, 29) })
+        model.setVisible(true)
+        model.setQuery("audit"); model.commitSearch()
+        let opened = await waitUntil { backend.streams.count == 1 }
+        XCTAssertTrue(opened)
+        model.setVisible(false)
+        let stopped = await waitUntil { backend.terminated == 1 }
+        model.setQuery("second"); model.commitSearch()
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(stopped, "hidden Calendar must stop its active source scan")
+        XCTAssertEqual(backend.streams.count, 1, "hidden edits must not start a new scan")
+        model.setVisible(true)
+        let restarted = await waitUntil { backend.streams.count == 2 }
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(backend.queries, ["audit", "second"])
+        backend.streams[1].finish()
+        await model.waitForEventReadsForTesting()
+        model.setVisible(false)
+        XCTAssertEqual(model.searchText, "second")
+        XCTAssertEqual(model.snapshot.query, "second")
+        let completedScans = backend.streams.count
+        let completedRebuilds = model.rebuildCount
+        for step in 0..<128 {
+            model.setVisible(true)
+            model.setVisible(false)
+            XCTAssertEqual(backend.streams.count, completedScans,
+                           "a completed search must not rescan on hide/reveal cycle \(step)")
+            XCTAssertEqual(model.rebuildCount, completedRebuilds,
+                           "a cached search must not rebuild on hide/reveal cycle \(step)")
+        }
+        model.setVisible(true)
+        model.setQuery("debounced")
+        let debounceStarted = await waitUntil { backend.streams.count == 3 }
+        XCTAssertTrue(debounceStarted)
+        backend.streams[2].finish()
+        await model.waitForEventReadsForTesting()
+        model.setVisible(false)
+        let afterDebounce = model.rebuildCount
+        for step in 0..<128 {
+            model.setVisible(true)
+            model.setVisible(false)
+            XCTAssertEqual(model.rebuildCount, afterDebounce,
+                           "a completed debounce must not rebuild on hide/reveal cycle \(step)")
+            XCTAssertEqual(backend.streams.count, 3)
+        }
     }
 
     func testAuditA9CanceledPartialSearchRestartsWhenItsQueryReturns() async throws {
