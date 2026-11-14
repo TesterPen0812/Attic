@@ -1334,10 +1334,83 @@ final class ComposerTests: XCTestCase {
         XCTAssertGreaterThan(targets.count, after, "after the commit Tab moves the composer's keyboard")
     }
 
+    /// Opus R-8 (P1), the dead end: files staged on Tasks wait for a task, and
+    /// a Note made where Task cannot be reached (Notes) is made normally: the
+    /// files stay staged, shown again on the Tasks card's chip, and are never
+    /// attached to the note. The quick-note route (⇧⌘N: `as: .note`) is
+    /// never refused either.
+    func testStagedTaskFilesDoNotBlockANoteWhereTaskCannotBeReached() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r8-\(UUID().uuidString).txt")
+        try "staged".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        model.open(on: .tasks(.now))
+        type("Draft with a file")
+        page.addComposerFiles(urls: [file])
+        XCTAssertEqual(page.addBarState.fileNames.count, 1)
+        model.close()
+        for (route, requested) in [("Notes, +", nil), ("Notes, ⇧⌘N", ComposerKind.note), ("Tasks, ⇧⌘N", .note)] as [(String, ComposerKind?)] {
+            let onTasks = route.hasPrefix("Tasks")
+            model.open(on: onTasks ? .tasks(.now) : .notes, as: requested)
+            XCTAssertEqual(model.kind, .note, route)
+            type("A note via \(route)")
+            let made = await model.create()
+            XCTAssertTrue(made, "\(route): a note is made, not refused behind a chip nobody can reach")
+            XCTAssertEqual(page.addBarState.fileNames.count, 1, "\(route): the Task's files stay staged")
+            model.close()
+        }
+        XCTAssertEqual(notes.notes.filter { $0.deletedAt == nil }.count, 3)
+        XCTAssertTrue(liveTasks().allSatisfy { $0.attachments.isEmpty }, "the staged file went nowhere while notes were made")
+        XCTAssertTrue(page.toasts.current == nil, "nothing was refused")
+        // The Tasks card shows the chip again, and the task takes the file.
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(model.kind, .task)
+        XCTAssertNotNil(page.composerFilesValue)
+        type("Task for the file")
+        await XCTAssertTrueAsync(await model.create())
+        try await waitForAttachment(of: "Task for the file")
+        XCTAssertTrue(page.addBarState.fileNames.isEmpty)
+    }
+
+    /// Opus R-8, the variant: a file dropped on the add bar zone opens the
+    /// card on Task, though a Note draft is kept (it would hide the file
+    /// behind a kind that has no chip, and refuse Return).
+    func testAFileDroppedOnTheAddBarOpensTheCardOnTaskOverAKeptNoteDraft() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r8-drop-\(UUID().uuidString).txt")
+        try "dropped".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        model.open(on: .tasks(.now))
+        model.choose(.note)
+        type("A kept note draft")
+        model.close()
+        XCTAssertEqual(model.kind, .note)
+        XCTAssertTrue(model.hasDraft)
+        let route = PanelComposerRoute(open: { [model] page, kind in model?.open(on: page, as: kind) })
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: file))
+        XCTAssertTrue(page.dropFilesOnComposer([provider], card: route), "the card took it")
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(model.kind, .task, "the card shows Task, where the file is")
+        for _ in 0..<100 where page.addBarState.stagingFiles > 0 || page.addBarState.files.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(page.addBarState.fileNames.count, 1)
+        XCTAssertNotNil(page.composerFilesValue, "and its chip is drawn")
+        page.clearComposerFiles()
+    }
+
+    /// Waits for the import a created task started and checks it landed.
+    private func waitForAttachment(of title: String, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<250 {
+            if liveTasks().first(where: { $0.title == title })?.attachments.isEmpty == false { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("the file never landed on \(title)", file: file, line: line)
+    }
+
     /// Dot R-4: a file staged for a Task must not be consumed or inherited by
-    /// a Note made from the same shared draft. The note does not silently
-    /// leave the file behind for a later, unrelated task: it waits, the file
-    /// stays staged and removable, and the person is told.
+    /// a Note made from the same shared draft where the file can be seen. The
+    /// note does not silently leave the file behind for a later, unrelated
+    /// task: it waits, the file stays staged and removable, and the person is
+    /// told.
     func testStagedTaskFilesDoNotSurviveANoteSubmitIntoALaterTask() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("r4-\(UUID().uuidString).txt")
         try "staged".write(to: file, atomically: true, encoding: .utf8)
@@ -1357,6 +1430,9 @@ final class ComposerTests: XCTestCase {
         XCTAssertNotNil(page.composerFilesValue)
         await XCTAssertTrueAsync(await model.create())
         XCTAssertTrue(page.addBarState.fileNames.isEmpty, "the Task took its file")
+        // The import runs on its own task: wait for it before the file goes
+        // (the `defer`), and check that the attachment landed.
+        try await waitForAttachment(of: "Draft with a file")
     }
 
     func testBG11ImagePasteInSharedTaskTitleStagesAndAttachesTheFile() throws {

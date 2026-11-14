@@ -267,9 +267,9 @@ struct TasksPage: View {
                 contains: { point in composerDropZone(contains: point) },
                 setTargeted: { on in if composerDropTargeted != on { composerDropTargeted = on } },
                 perform: { providers in
-                    model.addComposerFiles(providers)
+                    let cardTookIt = model.dropFilesOnComposer(providers, card: panelComposer)
                     endTabTarget()
-                    if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
+                    if !cardTookIt { addBarFocused = true }
                 }
             )
         ))

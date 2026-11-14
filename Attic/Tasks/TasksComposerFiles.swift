@@ -48,6 +48,16 @@ extension TasksPageModel {
         }
     }
 
+    /// Files dropped on the add bar: staged, and the card opens on Task, the
+    /// kind that shows them, even over a kept Note draft. Returns whether the
+    /// panel's card took it (otherwise the old add bar takes the keyboard).
+    func dropFilesOnComposer(_ providers: [NSItemProvider], card: PanelComposerRoute?) -> Bool {
+        addComposerFiles(providers)
+        guard let card else { return false }
+        card.open(on: .tasks(tab), as: .task)
+        return true
+    }
+
     /// Files chosen with the strip's Attach button (the picker's originals,
     /// read only when the task is added, as a row's picker does).
     func addComposerFiles(urls: [URL]) {

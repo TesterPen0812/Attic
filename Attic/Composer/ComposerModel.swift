@@ -215,6 +215,7 @@ final class ComposerModel: ObservableObject {
     /// asks for Note. A kept event draft is a task outside Calendar.
     func open(on page: ComposerPage, as requested: ComposerKind? = nil) {
         draftGeneration += 1
+        openedForQuickNote = requested == .note
         let keptNote = kind == .note && hasDraft
         self.page = page
         if let requested, page.kinds.contains(requested) || requested == .note {
@@ -292,6 +293,7 @@ final class ComposerModel: ObservableObject {
     func choose(_ newKind: ComposerKind) {
         guard page.kinds.contains(newKind), newKind != kind else { return }
         kind = newKind
+        openedForQuickNote = false
         draftGeneration += 1
         if newKind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
@@ -396,7 +398,7 @@ final class ComposerModel: ObservableObject {
         // Closing has started (Escape, a click outside): nothing creates.
         guard isOpen else { return false }
         guard canCreate else { return false }
-        guard !tasks.refuseNonTaskCreationWhileFilesWait() else { return false }
+        guard !filesWaitForATask() else { return false }
         isCreating = true
         defer { isCreating = false }
         let generation = draftGeneration
@@ -542,9 +544,23 @@ final class ComposerModel: ObservableObject {
         else { fillCalendarDay(); focusRequest &+= 1 }
     }
 
+    /// ⇧⌘N asked for a note, not for the Task draft's files (see
+    /// `filesWaitForATask`). Ends when the person picks a kind themselves.
+    private var openedForQuickNote = false
+
+    /// Files staged for a Task stay with the Task draft: a Note or Event made
+    /// meanwhile is refused (with a toast) where the card can show them, which
+    /// is any page that offers Task. Where it cannot (Notes), or for the quick
+    /// note the person asked for, the note is made and the files stay staged,
+    /// shown again on the Task card's chip and never attached to the note.
+    private func filesWaitForATask() -> Bool {
+        guard page.kinds.contains(.task), !openedForQuickNote else { return false }
+        return tasks.refuseNonTaskCreationWhileFilesWait()
+    }
+
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
-        if kind != .task, tasks.refuseNonTaskCreationWhileFilesWait() { return false }
+        if kind != .task, filesWaitForATask() { return false }
         let made = kind == .task
             ? IdleLatencyTrace.span("task_add_submit") { createTask(openingPage: openingPage) }
             : createNote(openingPage: openingPage)
