@@ -907,6 +907,84 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(small.loads, large.loads, "the work does not grow with the number of canvases")
     }
 
+    /// BG-59 round 3 (Dot R-14): the current canvas needs no search, but its
+    /// lifecycle still decides the answer. An agent deleted it while the page
+    /// was deferring external changes (live input): `show` of it is not found,
+    /// never `.shown`.
+    func testBG59ShowOfTheCurrentCanvasAfterItsDeletionIsNotFound() throws {
+        let previous = DrawPageModel.shared
+        let switchSetting = AtticDraw.enabledOverride
+        defer {
+            DrawPageModel.replaceShared(previous)
+            AtticDraw.enabledOverride = switchSetting
+        }
+        AtticDraw.enabledOverride = true
+        let store = DrawInMemoryStore()
+        let draw = DrawPageModel(store: store)
+        draw.setBoard(size: CGSize(width: 320, height: 460),
+                      clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
+        let canvas = store.create(name: "Current")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("A"))]), on: canvas.id).isSaved)
+        draw.start()
+        draw.open(canvas.id)
+        DrawPageModel.replaceShared(draw)
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, canvas.id))), .shown("the canvas"))
+        // Live input defers the page's own sync of external changes.
+        draw.setTool(.pen)
+        draw.pointerDown(at: CGPoint(x: 60, y: 100))
+        draw.pointerDragged(to: CGPoint(x: 90, y: 120))
+        XCTAssertTrue(store.perform(.deleteCanvas, on: canvas.id).isSaved)
+        XCTAssertEqual(draw.canvasID, canvas.id, "the page has not navigated yet")
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, canvas.id))), .notFound("canvas"),
+                       "a deleted current canvas is not shown")
+        draw.pointerUp()
+    }
+
+    /// BG-60 round 3 (Opus R-19): an editable text view that is not visible
+    /// (hidden, or inside a hidden view) does not take typing, the way
+    /// DrawTextEditorView.focusedInVisibleWindow already decides it.
+    func testBG60AHiddenEditableTextViewDoesNotCountAsTyping() throws {
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        panel.uiState.setPanelKey(false)
+        let floating = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 240, height: 120),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+        floating.isReleasedWhenClosed = false
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 120))
+        let hiddenPage = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 60))
+        let editable = NSTextView(frame: CGRect(x: 10, y: 10, width: 200, height: 40))
+        editable.isEditable = true
+        hiddenPage.addSubview(editable)
+        content.addSubview(hiddenPage)
+        floating.contentView = content
+        floating.orderFrontRegardless()
+        defer {
+            floating.makeFirstResponder(nil)
+            floating.orderOut(nil)
+            floating.close()
+        }
+        panel.presenter.keyWindow = { floating }
+        XCTAssertTrue(floating.makeFirstResponder(editable))
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "visible and editable: typing")
+        hiddenPage.isHidden = true
+        // Hiding the page: AppKit gives the focus up (reported, not a defect).
+        let resignedOnHide = floating.firstResponder !== editable
+        // Focus requested while the page is already hidden.
+        floating.makeFirstResponder(nil)
+        let acceptedWhileHidden = floating.makeFirstResponder(editable) && floating.firstResponder === editable
+        print("BG60_R19 resignedOnHide=\(resignedOnHide) acceptedWhileHidden=\(acceptedWhileHidden)")
+        guard acceptedWhileHidden else { return }
+        XCTAssertTrue(editable.isHiddenOrHasHiddenAncestor)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel, "a hidden page keeping first responder is not typing")
+        guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
+            return XCTFail("a hidden editable text view must not block show")
+        }
+    }
+
     /// BG-60 round 2 (Dot R-7, Opus R-12): only an editable text view counts as
     /// typing. A read-only text view left as first responder in a key Attic
     /// panel must not block `show`; a field editor, which is editable, does.

@@ -45,11 +45,13 @@ final class PanelAgentPresenter: AgentPanelPresenting {
         // detached page) with a text field or editor focused: the Draw
         // library's rename, search and tag fields set no lock, and a
         // floating panel has a key state of its own.
-        // Only an editable text view takes typing: a closed or read-only note
-        // view that keeps first responder must not block `show` (a field's
-        // editor is an editable text view).
-        if let window = keyWindow(), window is AtticPanel,
-           (window.firstResponder as? NSTextView)?.isEditable == true { return true }
+        // Only an editable text view that can be seen takes typing: a closed
+        // or read-only note view, or a hidden page's editor, that keeps first
+        // responder must not block `show` (a field's editor is an editable
+        // text view inside its visible field).
+        if let window = keyWindow(), window is AtticPanel, window.isVisible,
+           let text = window.firstResponder as? NSTextView, text.isEditable,
+           !text.isHiddenOrHasHiddenAncestor { return true }
         guard uiState.isPanelKey else { return false }
         let typing: Set<PanelInteractionLockReason> = [
             .quickEntryFocus, .taskComposer, .agentComposer, .taskEditing, .notesEditorFocus, .notesDirty
@@ -89,14 +91,14 @@ final class PanelAgentPresenter: AgentPanelPresenting {
                 if AtticDraw.isEnabled {
                     let draw = DrawPageModel.shared
                     // One targeted read of the canvas wanted, never the library.
-                    if draw.canvasID != ref.id {
-                        do {
-                            guard try draw.store.open(ref.id).canvas.deletedAt == nil else { return .notFound("canvas") }
-                        } catch DrawStoreError.missingCanvas {
-                            return .notFound("canvas")
-                        } catch {
-                            return .failed("that canvas could not be read (\(error.localizedDescription)).")
-                        }
+                    // The current canvas is read too: an agent may have deleted
+                    // it while the page defers external changes.
+                    do {
+                        guard try draw.store.open(ref.id).canvas.deletedAt == nil else { return .notFound("canvas") }
+                    } catch DrawStoreError.missingCanvas {
+                        return .notFound("canvas")
+                    } catch {
+                        return .failed("that canvas could not be read (\(error.localizedDescription)).")
                     }
                     if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
                     if draw.canvasID != ref.id { draw.open(ref.id) }
