@@ -350,6 +350,14 @@ final class AtticDropdownTests: XCTestCase {
             .atticDesign(AtticDesignContext(reduceMotion: true))
         host.layoutSubtreeIfNeeded()
         spin(0.2)
+        // The scroll lands on a later layout pass, not after a fixed delay:
+        // wait on the last tag's appearance (the event), bounded only so a
+        // real regression still fails.
+        let deadline = Date().addingTimeInterval(10)
+        while !realized.contains("tag-1999"), Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            spin(0.02)
+        }
         XCTAssertTrue(realized.contains("tag-1999"), "keyboard highlight must reach the last logical tag")
         XCTAssertLessThan(realized.count, 70, "scroll-to-last cannot mount the full tag inventory")
     }
