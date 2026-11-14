@@ -14,10 +14,13 @@ The viewport knows the source from the change itself, through a shared
   `onHover` (the Notes tag suggestions) leave the keyboard's highlight to
   scroll its row into view even when the pointer rests on it.
 - A pointer that leaves the row before the list reports its highlight still
-  made it, so a quick flick across the cut-off edge does not scroll.
+  made it, so a quick flick across the cut-off edge does not scroll. A flick
+  that moved no highlight at all is forgotten after a moment, so the keyboard's
+  next visit to that row scrolls.
 - A click on ‹ or › in a date card cut short to fit the panel turns the month
-  without scrolling the card; the arrow stays under the pointer. A key that
-  turns the month still scrolls to the day it lights.
+  without scrolling the card; the arrow stays under the pointer. A key, or an
+  accessibility press on the arrow, still scrolls to the day it lights (only
+  a fresh left mouse-up at the button's action counts as a click).
 - A tag row's id, the id it publishes for the highlight and the id the
   pointer reports are one: the tag's name.
 
