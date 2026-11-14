@@ -2489,6 +2489,31 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(TaskNoteWindows.shared.preparingTaskIDs.isEmpty)
     }
 
+    // Review R-9: while a window is still preparing, the task is "opening in a
+    // window": the panel is turned away and no second open starts, so one host
+    // never sits in both places.
+    func testAPreparingWindowKeepsThePanelFromHostingTheSameTask() async throws {
+        let id = try seed(.heavy)
+        let gate = WindowDecodeGate(holdFirst: true)
+        useGatedNotes(gate)
+        let first = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        try await gate.waitUntilHeld()
+        XCTAssertEqual(TaskNoteWindows.shared.preparingTaskIDs, [id])
+        XCTAssertTrue(TaskNoteWindows.shared.bringForward(id), "the panel treats a preparing window as the open one")
+        let second = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                 design: .default, uiState: PanelUIState())
+        await gate.release()
+        await first.value; await second.value
+        let decodes = await gate.decodes
+        XCTAssertEqual(decodes, 1, "a second open joins the preparation instead of starting another")
+        XCTAssertNotNil(TaskNoteWindows.shared.window(for: id))
+        XCTAssertNil(notes.taskNotePresenter, "no panel host for a task that opened in a window")
+        XCTAssertTrue(TaskNoteWindows.shared.preparingTaskIDs.isEmpty)
+        XCTAssertEqual(TaskNoteWindows.shared.windowCount, 1)
+    }
+
     func testC2RetainedRetirementKeepsQueuedAndNewerWriting() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)

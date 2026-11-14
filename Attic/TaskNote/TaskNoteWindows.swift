@@ -26,6 +26,8 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     /// A window being prepared (decode, then lease): the task is already
     /// "opening in a window", so nothing else may open it in the panel.
     private var preparingOpen: [UUID: Task<Void, Never>] = [:]
+    /// A search result chosen while the window was still preparing.
+    private var pendingSearch: [UUID: String] = [:]
 
     var windowCount: Int { entries.count }
     var preparingTaskIDs: Set<UUID> { Set(preparingOpen.keys) }
@@ -118,7 +120,13 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
 
     @discardableResult
     func bringForward(_ taskID: UUID, searchQuery: String? = nil) -> Bool {
-        guard let entry = entry(taskID)?.value else { return false }
+        guard let entry = entry(taskID)?.value else {
+            // The window is on its way (R-9): the task is already opening
+            // there, so the panel must not build a second host for it.
+            guard preparingOpen[taskID] != nil else { return false }
+            if let searchQuery { pendingSearch[taskID] = searchQuery }
+            return true
+        }
         if let searchQuery { entry.presenter.revealSearchResult(searchQuery) }
         entry.window.makeKeyAndOrderFront(nil); NSApp.activate()
         return true
@@ -138,11 +146,10 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     @discardableResult
     func open(taskID: UUID, tasks: TaskStore, controller: NotesPageController, noteStore: NoteStore,
               design: AtticDesignContext, uiState: PanelUIState) -> Task<Void, Never> {
-        if bringForward(taskID) { return Task {} }
-        if let running = preparingOpen[taskID] { return running }
+        if bringForward(taskID) { return preparingOpen[taskID] ?? Task {} }
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.preparingOpen[taskID] = nil }
+            defer { self.preparingOpen[taskID] = nil; self.pendingSearch[taskID] = nil }
             await self.prepareAndOpen(taskID: taskID, tasks: tasks, controller: controller,
                                       design: design, uiState: uiState)
         }
@@ -174,7 +181,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     private func openPrepared(taskID: UUID, tasks: TaskStore, controller: NotesPageController,
                               design: AtticDesignContext, uiState: PanelUIState,
                               prepared: TaskNotePreparedOpen?) throws {
-        if bringForward(taskID) { return }
+        if entry(taskID) != nil { bringForward(taskID, searchQuery: pendingSearch[taskID]); return }
         guard let library = tasks.commandLibrary else { return }
         let presenter: TaskNotePresenter
         do {
@@ -200,6 +207,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
         installRoot(entry)
         window.setContentSize(size); window.center()
         window.makeKeyAndOrderFront(nil); NSApp.activate()
+        if let query = pendingSearch[taskID] { presenter.revealSearchResult(query) }
     }
 
     @discardableResult
