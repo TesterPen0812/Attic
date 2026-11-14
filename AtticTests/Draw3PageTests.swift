@@ -1352,6 +1352,47 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertFalse(store.hasUnsettledEdits)
     }
 
+    // MARK: Queued Undo reaching a deleted canvas (BG-29 review R-7)
+
+    /// The first queued Undo reverses a restore, so the canvas is deleted and
+    /// the board leaves it. The Undo queued behind it must not run on the
+    /// canvas now in Recently Deleted (it would silently restore it).
+    func testBG29QueuedUndoesStopOnceTheirCanvasIsDeleted() throws {
+        use(try persistentStore())
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        model.open(target.id)
+        model.undoAcknowledged()
+        model.undoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt, "The second Undo must not change a deleted canvas")
+        XCTAssertNotEqual(model.canvasID, target.id)
+        XCTAssertEqual(try store.library().map(\.id), [other.id])
+    }
+
+    /// A switch that begins the flush must finish its own navigation: the
+    /// deleted-canvas hop must not run inside it and leave a stray canvas.
+    func testBG29OpenFlushDoesNotNavigateAwayFromTheCanvasItIsOpening() throws {
+        use(try persistentStore())
+        let first = try XCTUnwrap(model.canvasID)
+        let target = store.create(name: "Last saved")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        let destination = store.create(name: "Fresh draft")
+        model.open(target.id)
+        model.undoAcknowledged()
+        model.open(destination.id)
+        XCTAssertEqual(model.canvasID, destination.id)
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt)
+        XCTAssertEqual(store.cachedCanvasIDs.subtracting([first, target.id, destination.id]), [],
+                       "No stray canvas may be created while a switch is in progress")
+    }
+
     // MARK: Quit
 
     func testQuitFinishesTheStrokeInProgress() async {

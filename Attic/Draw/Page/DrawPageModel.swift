@@ -227,6 +227,11 @@ final class DrawPageModel: ObservableObject {
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
     var externalSyncDeferred = false
+    /// While a canvas switch or an acknowledged flush is settling queued
+    /// input, a canvas that input just deleted must not navigate from inside
+    /// it: the switch finishes its own navigation, and a flush hops once at
+    /// its end.
+    private var deletedCanvasHopDeferrals = 0
     private var flashGeneration = 0
     /// Canvases whose thumbnail is behind their content.
     private var thumbnailDirty: Set<UUID> = []
@@ -591,8 +596,10 @@ final class DrawPageModel: ObservableObject {
             guard !library.isRenaming else { return }
         }
         finishLiveInput()
+        deletedCanvasHopDeferrals += 1
         endEditing()
         flushAcknowledgedDraw()
+        deletedCanvasHopDeferrals -= 1
         // The canvas being left gets its thumbnail now.
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
@@ -615,6 +622,7 @@ final class DrawPageModel: ObservableObject {
         isSelectionStyleOpen = false
         closeFilter()
         appliedRevision = store.revision
+        externalSyncDeferred = false
         initialFitPending = false
         if let kept = viewports[id] {
             setViewport(kept, byUser: false)
@@ -1340,15 +1348,22 @@ final class DrawPageModel: ObservableObject {
         guard !acknowledgedDraw.isEmpty else { return }
         let entries = acknowledgedDraw
         acknowledgedDraw = []
+        deletedCanvasHopDeferrals += 1
+        // Once an Undo/Redo has put a canvas in Recently Deleted, the actions
+        // still queued behind it are for a board nobody is looking at.
+        var deletedHere = Set<UUID>()
         for entry in entries {
+            if deletedHere.contains(entry.canvas) { continue }
             let result: DrawSaveResult
             switch entry.action {
             case .command(let command): result = store.perform(command, on: entry.canvas)
             case .undo: result = store.undo(on: entry.canvas)
             case .redo: result = store.redo(on: entry.canvas)
             }
+            if case .saved(let delta) = result, delta.canvas.deletedAt != nil { deletedHere.insert(entry.canvas) }
             if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
         }
+        deletedCanvasHopDeferrals -= 1
         if externalSyncDeferred { syncExternalChanges() }
     }
 
@@ -1526,6 +1541,10 @@ final class DrawPageModel: ObservableObject {
         }
         guard externalSyncDeferred || store.revision != appliedRevision else { return }
         guard let snapshot = try? store.open(canvasID) else { return }
+        if snapshot.canvas.deletedAt != nil, deletedCanvasHopDeferrals > 0 {
+            externalSyncDeferred = true
+            return
+        }
         externalSyncDeferred = false
         appliedRevision = store.revision
         if snapshot.canvas.deletedAt != nil {
