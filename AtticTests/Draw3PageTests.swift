@@ -395,9 +395,24 @@ final class Draw3PageTests: XCTestCase {
         model.start()
     }
 
-    private func persistentStore(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> DrawPersistentStore {
-        DrawPersistentStore(container: try ModelContainer(for: Schema(PersistenceController.appModelTypes),
-                                                          configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)),
+    private func persistentStore(fileBacked: Bool = false, save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> DrawPersistentStore {
+        let configuration: ModelConfiguration
+        if fileBacked {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawRound3-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            addTeardownBlock { @MainActor [weak self] in
+                if let page = self?.model {
+                    let ready = await page.prepareToQuit()
+                    XCTAssertTrue(ready, "settle background thumbnail work before removing the temporary store")
+                }
+                self?.model = nil
+                self?.store = nil
+                try FileManager.default.trashItem(at: root, resultingItemURL: nil)
+            }
+            configuration = ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none)
+        } else { configuration = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none) }
+        return DrawPersistentStore(container: try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+                                                          configurations: configuration),
                             save: save)
     }
 
@@ -1491,7 +1506,7 @@ final class Draw3PageTests: XCTestCase {
     /// restored canvas, as the person asked.
     func testBG29ARedoQueuedBehindAFailedUndoRunsAfterRetry() throws {
         var fail = false
-        let durable = try persistentStore(save: { context in
+        let durable = try persistentStore(fileBacked: true, save: { context in
             if fail { throw NSError(domain: "Injected", code: 1) }
             try context.save()
         })
@@ -1523,7 +1538,7 @@ final class Draw3PageTests: XCTestCase {
     /// after Retry the object is back, not left undone.
     func testBG29ARedoBehindAFailedUndoOfAnEditRestoresTheEdit() throws {
         var fail = false
-        let durable = try persistentStore(save: { context in
+        let durable = try persistentStore(fileBacked: true, save: { context in
             if fail { throw NSError(domain: "Injected", code: 1) }
             try context.save()
         })
@@ -1543,12 +1558,140 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNil(model.saveNotice)
     }
 
+    func testBG29NavigationDoesNotConsumeHistoryWaitingForRetry() throws {
+        var fail = false
+        let durable = try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        let target = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("keep"))])).isSaved)
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("other"))]), on: other.id).isSaved)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(model.saveNotice)
+        model.performAcknowledged(.put([DrawObject(content: .text("later"))]))
+        model.open(other.id)
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(Set(try DrawPersistentStore(container: durable.container).open(target).objects.map(\.text)), Set(["keep", "later"]),
+                       "new input and navigation cannot silently cancel an acknowledged Redo")
+        XCTAssertEqual(model.canvasID, other.id)
+    }
+
+    func testBG29ARedoBehindAFailedRecoveryCheckpointRunsAfterRetry() throws {
+        let durable = try persistentStore(fileBacked: true)
+        use(durable)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("keep"))])).isSaved)
+        let target = try XCTUnwrap(model.canvasID)
+        let root = try XCTUnwrap(durable.container.configurations.first).url.deletingLastPathComponent()
+        let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
+        if FileManager.default.fileExists(atPath: checkpoint.path) {
+            try FileManager.default.trashItem(at: checkpoint, resultingItemURL: nil)
+        }
+        // Atomic file replacement cannot replace a directory. This fails the
+        // real checkpoint before the repository is allowed its first write.
+        try FileManager.default.createDirectory(at: checkpoint, withIntermediateDirectories: false)
+        durable.metrics.reset()
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(model.saveNotice)
+        XCTAssertEqual(durable.metrics.saveAttempts, 0)
+        try FileManager.default.trashItem(at: checkpoint, resultingItemURL: nil)
+        model.retrySave()
+        XCTAssertNil(model.saveNotice)
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects.map(\.text), ["keep"])
+        XCTAssertTrue(store.canUndo(on: target))
+        XCTAssertFalse(store.canRedo(on: target))
+    }
+
+    func testBG29TypingCannotRunAheadOfHistoryWaitingForRetry() throws {
+        var fail = false
+        let durable = try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        let target = try XCTUnwrap(model.canvasID)
+        let original = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 80, height: 40), content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([original])).isSaved)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        model.beginText(at: CGPoint(x: 180, y: 200))
+        model.typed("later")
+        model.endEditing()
+        fail = false
+        model.retrySave()
+        let saved = try DrawPersistentStore(container: durable.container).open(target).objects
+        XCTAssertTrue(saved.contains(original), "the acknowledged Redo runs before subsequent typing")
+        let writing = saved.compactMap { object -> String? in
+            if case .text(let text) = object.content { return text }
+            return nil
+        }
+        XCTAssertEqual(writing, ["later"])
+        model.undo()
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original],
+                       "typing remains one Undo step after the queued Redo")
+    }
+
+    func testBG29LibraryRenameCannotConsumeHistoryWaitingForRetry() throws {
+        var fail = false
+        let durable = try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        let target = try XCTUnwrap(model.canvasID)
+        let original = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([original])).isSaved)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        model.library.perform(.rename)
+        model.library.nameDraft = "Later name"
+        model.library.commitRename()
+        XCTAssertTrue(model.library.isRenaming, "a refused save keeps the rename draft visible")
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original],
+                       "a library write must not clear the acknowledged Redo before it runs")
+        XCTAssertTrue(model.library.isRenaming, "the refused rename remains available to retry")
+        XCTAssertEqual(model.library.nameDraft, "Later name")
+        model.library.commitRename()
+        XCTAssertFalse(model.library.isRenaming)
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).canvas.name, "Later name")
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original])
+
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        model.library.perform(.rename)
+        model.library.nameDraft = "Discard me"
+        model.library.commitRename()
+        XCTAssertTrue(model.library.isRenaming)
+        model.library.cancelRename()
+        XCTAssertFalse(model.library.isRenaming, "Escape cancels a refused rename, without abandoning the pending history")
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).canvas.name, "Later name")
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original])
+    }
+
     /// BG-29 round 3 (Opus R-17): the deletion came from a Redo, not an
     /// Undo. The deletion toast's Undo restored the canvas, so its delete
     /// step is on the Redo stack; Redo then Undo in one flush delete and
     /// restore it again, instead of skipping the Undo as if it were deeper.
     func testBG29QueuedRedoThenUndoAfterAToastUndoKeepsTheCanvasLive() throws {
-        use(try persistentStore())
+        use(try persistentStore(fileBacked: true))
         let other = store.create(name: "Other")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
         let target = store.create(name: "Target")
@@ -1569,7 +1712,7 @@ final class Draw3PageTests: XCTestCase {
 
     /// The same Redo alone does delete it, and a second Redo is the deeper one.
     func testBG29QueuedRedoDeletesTheCanvasAndTheNextUndoIsNotSkippedBlindly() throws {
-        use(try persistentStore())
+        use(try persistentStore(fileBacked: true))
         let other = store.create(name: "Other")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
         let target = store.create(name: "Target")

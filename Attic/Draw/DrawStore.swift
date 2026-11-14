@@ -40,6 +40,9 @@ class DrawStore: DrawStoreProtocol {
     /// The steps live offers are bound to; a history holding one is never
     /// dropped for the budget.
     @ObservationIgnored private let pins = DrawStepPins()
+    /// A page has already acknowledged history behind a failed write. Fresh
+    /// native writes must not run ahead of that continuation and clear Redo.
+    @ObservationIgnored private let historyContinuations = DrawStepPins()
     var cachedCanvasIDs: Set<UUID> { Set(states.keys) }
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
@@ -547,6 +550,7 @@ class DrawStore: DrawStoreProtocol {
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
         if let recoveryIssue { return .held(recoveryIssue) }
         if case .thumbnail(let bytes, let dark) = command { return writeThumbnail(bytes, dark: dark, on: id) }
+        if historyContinuations.isPinned(id) { return historyMustResume() }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
             guard pending[id] != nil else { return execute(step, action: .edit) }
@@ -567,6 +571,7 @@ class DrawStore: DrawStoreProtocol {
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         guard !commands.isEmpty else { return .unchanged }
         guard recoveryIssue == nil else { return .held(recoveryIssue!) }
+        if historyContinuations.isPinned(id) { return historyMustResume() }
         if pending[id] != nil {
             var result: DrawSaveResult = .unchanged
             for command in commands { result = perform(command, on: id) }
@@ -755,6 +760,12 @@ class DrawStore: DrawStoreProtocol {
     /// Keeps a step an offer is bound to (the deletion toast's Undo, a grouped
     /// Restore's Undo) in the bounded history for as long as the offer lives.
     func pinHistoryStep(_ stepID: UUID) -> AnyObject? { pins.pin(stepID) }
+
+    func reserveHistoryContinuation(on id: UUID) -> DrawStepPins.Pin { historyContinuations.pin(id) }
+
+    private func historyMustResume() -> DrawSaveResult {
+        .held(String(localized: "Undo and Redo are waiting for this drawing to finish saving."))
+    }
 
     func undoStepID(on id: UUID) -> UUID? { histories[id]?.undo.last?.id }
     func redoStepID(on id: UUID) -> UUID? { histories[id]?.redo.last?.id }

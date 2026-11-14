@@ -104,6 +104,9 @@ final class DrawLibraryMenuModel: ObservableObject {
     @Published var nameDraft = ""
     private var renameCanvasID: UUID?
     private var nameBeforeRename: String?
+    /// A refused rename may be sitting behind somebody else's pending Undo.
+    /// Only a write this editor actually queued belongs to its Retry/Escape.
+    private var renameOwnsPendingWrite = false
 
     /// Where Delete posts its Undo toast (the panel's, from the view).
     weak var toasts: PanelToastCenter?
@@ -299,6 +302,7 @@ final class DrawLibraryMenuModel: ObservableObject {
             nameBeforeRename = canvas.name
             renameCanvasID = canvas.id
             renameFailed = false
+            renameOwnsPendingWrite = false
             isRenaming = true
             finish()
         case .tags:
@@ -413,15 +417,18 @@ final class DrawLibraryMenuModel: ObservableObject {
         // Retrying the same draft must settle its pending write, never queue
         // a second rename. If the text changed, discard the earlier failed
         // rename first so a later Escape cannot accidentally save that name.
-        if renameFailed, let pending = store.pendingEdits[id], pending.canvas.name != name {
+        if renameFailed, renameOwnsPendingWrite, let pending = store.pendingEdits[id], pending.canvas.name != name {
             guard store.abandonPendingRename(on: id, named: pending.canvas.name, restoring: original) else { return }
+            renameOwnsPendingWrite = false
         }
         let result: DrawSaveResult
-        if renameFailed, let pending = store.pendingEdits[id], pending.canvas.name == name {
+        if renameFailed, renameOwnsPendingWrite, let pending = store.pendingEdits[id], pending.canvas.name == name {
             if case .held = pending.outcome { result = store.reconcile(on: id) }
             else { result = store.retry(on: id) }
         } else {
+            let countBefore = store.pendingEdits[id]?.count ?? 0
             result = store.perform(.rename(name), on: id)
+            renameOwnsPendingWrite = (store.pendingEdits[id]?.count ?? 0) > countBefore
         }
         switch result {
         case .saved:
@@ -436,7 +443,7 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     func cancelRename() {
         guard isRenaming else { return }
-        if renameFailed, let id = renameCanvasID, let pending = store.pendingEdits[id] {
+        if renameFailed, renameOwnsPendingWrite, let id = renameCanvasID, let pending = store.pendingEdits[id] {
             guard let original = nameBeforeRename,
                   store.abandonPendingRename(on: id, named: pending.canvas.name, restoring: original) else { return }
         }
@@ -455,6 +462,7 @@ final class DrawLibraryMenuModel: ObservableObject {
     private func finishRename() {
         isRenaming = false
         renameFailed = false
+        renameOwnsPendingWrite = false
         renameCanvasID = nil
         nameBeforeRename = nil
         actions.canvasChanged()
