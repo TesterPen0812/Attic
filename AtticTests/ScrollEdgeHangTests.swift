@@ -147,6 +147,25 @@ final class ScrollEdgeHangTests: XCTestCase {
         XCTAssertTrue(dump(url)?.contains("healthy-waits=3") == true, "a real wait changes the count: \(dump(url) ?? "")")
     }
 
+    /// Dot R-6: recovery must learn about a healthy wait even if the next
+    /// busy burst has not yet lasted long enough to produce another HANG.
+    func testAHealthyWaitReplacesAStaleHangBeforeTheNextBusyBurst() {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HANG:") == true)
+        probe.runLoop(.beforeWaiting)
+        clock.advance(milliseconds: 5)
+        probe.runLoop(.afterWaiting)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HEALTHY:") == true,
+                      "a recovered loop must not leave a fresh HANG for recovery to accumulate")
+        XCTAssertTrue(dump(url)?.contains("healthy-waits=1") == true)
+        XCTAssertTrue(dump(URL(fileURLWithPath: url.path + ".first"))?.hasPrefix("HANG:") == true,
+                      "the original dump survives as evidence")
+    }
+
     /// Opus R-2 (the app's half). A signed app is sandboxed: the test names a
     /// leaf, which resolves into the app's own temporary folder.
     func testProbeFilesResolveIntoTheAppsOwnTemporaryFolder() {

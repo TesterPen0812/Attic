@@ -141,6 +141,7 @@ final class AtticHangProbe: @unchecked Sendable {
     /// change knows the run loop slept in between, so the stall was not continuous.
     private var healthyWaits: UInt64 = 0
     private var lastDump: UInt64?
+    private var lastDumpHealthyWaits: UInt64 = 0
     /// Only read on the watchdog's serial queue, never on the main run loop.
     private var savedFirstHang = false
     private var observer: CFRunLoopObserver?
@@ -253,9 +254,19 @@ final class AtticHangProbe: @unchecked Sendable {
     }
 
     func checkForHang() {
+        var recoveredWaits: UInt64?
         let snapshot: Snapshot? = lock.withLock {
             // Read inside the lock, after the run-loop state it is compared with.
             let now = clock()
+            // Retire a published HANG as soon as a real wait is observed.
+            // Otherwise a fresh, stale dump could bridge two separate bursts
+            // while the second is still below the three-second dump threshold.
+            if lastDump != nil,
+               healthyWaits != lastDumpHealthyWaits ||
+                (sleeping && Self.age(now, since: waitStarted) >= realWaitNanos) {
+                recoveredWaits = healthyWaits
+                lastDump = nil
+            }
             // A sleeping run loop is healthy, however old its last turn.
             guard !sleeping else { return nil }
             let noTurn = Self.age(now, since: lastCompletedTurn) > stallNanos
@@ -265,6 +276,7 @@ final class AtticHangProbe: @unchecked Sendable {
             guard noTurn || noRealWait else { return nil }
             if let lastDump, Self.age(now, since: lastDump) <= dumpIntervalNanos { return nil }
             lastDump = now
+            lastDumpHealthyWaits = healthyWaits
             let trigger = noTurn ? "unfinished-run-loop-turn" : "no-genuine-wait"
             let ordered = (0..<eventCount).compactMap { offset -> Event? in
                 let index = (nextEvent - eventCount + offset + events.count) % events.count
@@ -276,6 +288,9 @@ final class AtticHangProbe: @unchecked Sendable {
                             turns: turns, healthyWaits: healthyWaits, lastCompletedTurn: lastCompletedTurn,
                             lastRealWait: lastRealWait, events: ordered.suffix(4_000).map { $0 },
                             totals: totals, changes: changes, lastValues: lastValues)
+        }
+        if let recoveredWaits {
+            write("HEALTHY: main run loop waited, healthy-waits=\(recoveredWaits)\n")
         }
         guard let snapshot else { return }
         let leaders = snapshot.totals.keys.sorted { left, right in
