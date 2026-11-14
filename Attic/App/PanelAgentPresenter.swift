@@ -78,20 +78,20 @@ final class PanelAgentPresenter: AgentPanelPresenting {
                 noteDraft.pages.dismissLibrary()
                 return .shown("the note “\(note.title)”")
             case .canvas:
-                // The page context hands out the Draw canvas id, so a Draw id
-                // is shown in Draw; any other id still resolves in the legacy
-                // session.
+                // With Draw on, the page context hands out Draw canvas ids and
+                // the Canvas page shows the Draw board, so only a Draw canvas
+                // can be shown; a legacy id would report a success that changes
+                // nothing the person sees. Draw off keeps the legacy session.
                 if AtticDraw.isEnabled {
                     let draw = DrawPageModel.shared
                     let listed = ((try? draw.store.library(deleted: false)) ?? []).contains { $0.id == ref.id }
-                    if listed || draw.canvasID == ref.id {
-                        if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
-                        if draw.canvasID != ref.id { draw.open(ref.id) }
-                        guard draw.canvasID == ref.id else {
-                            return .failed("the Canvas page is open, but that canvas could not be opened.")
-                        }
-                        return .shown("the canvas")
+                    guard listed || draw.canvasID == ref.id else { return .notFound("canvas") }
+                    if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
+                    if draw.canvasID != ref.id { draw.open(ref.id) }
+                    guard draw.canvasID == ref.id else {
+                        return .failed("the Canvas page is open, but that canvas could not be opened.")
                     }
+                    return .shown("the canvas")
                 }
                 guard canvasSession.canvases.contains(where: { $0.id == ref.id }) else { return .notFound("canvas") }
                 // The board changes only once the Canvas page is showing.

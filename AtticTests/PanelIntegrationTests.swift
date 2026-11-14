@@ -836,10 +836,17 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(draw.canvasID, second.id, "the agent's show opens the Draw canvas")
         XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, second.id)
         XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, UUID()))), .notFound("canvas"))
-        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, legacy.id))), .shown("the canvas"),
-                       "the legacy fallback still resolves a legacy canvas id")
-        XCTAssertEqual(panel.canvasSession.selectedCanvasID, legacy.id)
+        // BG-59 round 2 (Opus R-10): the Canvas page shows the Draw board, so
+        // a legacy id would be a false success that changes nothing visible.
+        let legacySelection = panel.canvasSession.selectedCanvasID
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, legacy.id))), .notFound("canvas"),
+                       "with Draw on, only a Draw canvas can be shown")
+        XCTAssertEqual(panel.canvasSession.selectedCanvasID, legacySelection)
         XCTAssertEqual(draw.canvasID, second.id, "a legacy id leaves the Draw board where it was")
+        AtticDraw.enabledOverride = false
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, legacy.id))), .shown("the canvas"),
+                       "with Draw off the legacy session still resolves its own ids")
+        XCTAssertEqual(panel.canvasSession.selectedCanvasID, legacy.id)
     }
 
     /// A canvas text editor sets no interaction lock; `show` must still see
@@ -883,6 +890,9 @@ final class PanelIntegrationTests: XCTestCase {
         // Once the editor lets go, the same request shows the board.
         window.makeFirstResponder(nil)
         XCTAssertNil(CanvasSemanticTextEditor.focusedInVisibleWindow)
+        // These are legacy-session canvases: with Draw on only a Draw canvas
+        // can be shown (BG-59), so the legacy session answers with Draw off.
+        AtticDraw.enabledOverride = false
         XCTAssertEqual(try tools.call(name: "show", arguments: ["item": ["kind": "canvas", "id": second.id.uuidString]]),
                        "Shown: the canvas.")
         XCTAssertEqual(panel.canvasSession.selectedCanvasID, second.id)
@@ -892,6 +902,11 @@ final class PanelIntegrationTests: XCTestCase {
     /// reports that as a failure, and nothing moved: the page, the board
     /// (selected only after its page shows) and the draft are untouched.
     func testShowReportsARefusedNotesCloseAndChangesNothing() throws {
+        // The boards here are the legacy session's; with Draw on only a Draw
+        // canvas can be shown (BG-59), so this pins the legacy session.
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = false
+        defer { AtticDraw.enabledOverride = previousDraw }
         let panel = try makePanel()
         let first = try XCTUnwrap(panel.canvasSession.createCanvas(name: "First"))
         let second = try XCTUnwrap(panel.canvasSession.createCanvas(name: "Second"))
@@ -1390,3 +1405,4 @@ final class PanelIntegrationTests: XCTestCase {
                        "keyboard focus must leave a hidden native control")
     }
 }
+
