@@ -1000,10 +1000,23 @@ final class ComposerTests: XCTestCase {
     private func spin(_ seconds: TimeInterval = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
     private func mountForKeys(on composerPage: ComposerPage,
-                              onKeyboardTargetChange: ((ComposerCard.KeyboardTarget) -> Void)? = nil) throws -> (NSWindow, NSView, NSTextView) {
+                              onKeyboardTargetChange: ((ComposerCard.KeyboardTarget) -> Void)? = nil,
+                              captureSurface: Bool = false) throws -> (NSWindow, NSView, NSTextView) {
         try requireKeyWindowTests()
         model.open(on: composerPage)
-        let hosting = NSHostingView(rootView: ComposerCard(model: model, onKeyboardTargetChange: onKeyboardTargetChange))
+        let hosting: NSView
+        if captureSurface {
+            // The production panel supplies its material behind this card.
+            // Draw the real card contents over a stable panel surface here:
+            // sandboxed offscreen AppKit cannot snapshot system glass.
+            let design = AtticDesignContext(mode: .light, reduceTransparency: true)
+            hosting = NSHostingView(rootView: ComposerCard(model: model, drawsChrome: false,
+                onKeyboardTargetChange: onKeyboardTargetChange)
+                .atticDesign(design).background(design.tokens.panel.base.color))
+        } else {
+            hosting = NSHostingView(rootView: ComposerCard(model: model,
+                onKeyboardTargetChange: onKeyboardTargetChange))
+        }
         hosting.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
         let window = KeyWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1302,7 +1315,7 @@ final class ComposerTests: XCTestCase {
     }
 
     func testBG11SharedCardShowsAndCanRemoveStagedFiles() throws {
-        let (_, hosting, _) = try mountForKeys(on: .tasks(.now))
+        let (_, hosting, _) = try mountForKeys(on: .tasks(.now), captureSurface: true)
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
