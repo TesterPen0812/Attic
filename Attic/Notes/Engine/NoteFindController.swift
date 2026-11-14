@@ -237,7 +237,10 @@ final class NoteFindController: ObservableObject {
     func typeAhead(_ event: NSEvent) -> Bool {
         guard shownInTopRow, isShown, fieldFocused, awaitingField else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // The note's formatting shortcuts are local editing commands too;
+        // only actual app-wide shortcuts may bypass the pending field.
         let editing = Self.editingCommand(event) != nil || Self.isNativeEditingKey(event)
+            || NoteCommandCatalog.command(for: event) != nil
         let navigation = Self.navigationDirection(event)
         let isDelete = event.keyCode == 51 || event.keyCode == 117
         let isPlainTyping = Self.isTyping(event)

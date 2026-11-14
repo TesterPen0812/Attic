@@ -677,6 +677,26 @@ final class AdaptiveFindTests: XCTestCase {
         }
     }
 
+    func testR3NoteFormattingDuringFindHandoffNeverChangesTheNote() throws {
+        try requireKeyWindowTests()
+        try withNote { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.selectAll(nil)
+            let original = engine.document()
+            let undo = engine.history.undoOps.map(ObjectIdentifier.init)
+            for event in [key(3, "f", flags: .command, in: panel), key(11, "b", flags: .command, in: panel)] {
+                if let forwarded = engine.find.routeKeyDown(event) { panel.sendEvent(forwarded) }
+            }
+            XCTAssertEqual(engine.document(), original, "a local formatting shortcut is not a global command during Find handoff")
+            XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
+            spin(0.65)
+            XCTAssertEqual(engine.document(), original)
+            engine.find.close(returnFocus: false)
+        }
+    }
+
     // MARK: The Search button
 
     func testSearchFindsOnANoteAndSearchesOverAllNotesAndItsTooltipSaysWhich() throws {
