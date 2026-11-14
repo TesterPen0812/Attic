@@ -1072,6 +1072,9 @@ struct AtticTabsSearchField: View {
     var nativeInputIdentifier: String? = nil
     var nativeOnMove: ((Int) -> Void)? = nil
     var nativeOnSubmit: (() -> Void)? = nil
+    /// A caller can share this field's exact mounted-view claim instead of
+    /// rediscovering a fading-out field with the same identifier.
+    var nativeFocusClaim: AtticFieldClaim? = nil
     /// Top glass (2026-10-22): on the top line, which content scrolls
     /// under, the field floats on the raised material at the Medium height
     /// (as the add bar does) instead of the recessed fill. The find bar,
@@ -1090,7 +1093,8 @@ struct AtticTabsSearchField: View {
     @Environment(\.panelTopRowState) private var topRow
     @Environment(\.panelTopRowPage) private var topRowPage
     @FocusState private var focused: Bool
-    @State private var claim = AtticFieldClaim()
+    @State private var ownedClaim = AtticFieldClaim()
+    private var claim: AtticFieldClaim { nativeFocusClaim ?? ownedClaim }
     /// This field, as the top row knows it (its Escape ends the search on
     /// a click on the page's empty space).
     @State private var fieldID = UUID()
@@ -1116,9 +1120,7 @@ struct AtticTabsSearchField: View {
                         identifier: nativeInputIdentifier, isFocused: isFocused,
                         color: NSColor(tokens.color(.heading)), placeholderColor: NSColor(tokens.color(.helper)),
                         headerFont: header ? font : nil,
-                        onEscape: onEscape, onMove: nativeOnMove, onSubmit: nativeOnSubmit)
-                        .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
-                            wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
+                        onEscape: onEscape, onMove: nativeOnMove, onSubmit: nativeOnSubmit, focusClaim: claim)
                 } else if capture == nil {
                     TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                         .textFieldStyle(.plain)
@@ -2723,6 +2725,9 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         }
     }
 
+    /// Register the actual native view; discovery is only needed for SwiftUI fields.
+    var focusClaim: AtticFieldClaim? = nil
+
     final class Field: NSTextField {
         #if DEBUG
         /// Hosted tests distinguish a real representable update from a no-op refresh.
@@ -2730,6 +2735,17 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         #endif
         /// The field took the keyboard (a click back into it, ⌘F, Search).
         var onFocus: (() -> Void)?
+        weak var focusClaim: AtticFieldClaim?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let claim = focusClaim, claim.field === self else { return }
+            guard let window else { claim.cancelFocusRequest(); return }
+            DispatchQueue.main.async { [weak self, weak window, weak claim] in
+                guard let self, let window, let claim, self.window === window,
+                      claim.field === self, window.isKeyWindow || window.canBecomeKey else { return }
+                claim.takeKeyboard(request: claim.focusGeneration, in: window)
+            }
+        }
         var fixedHeight: CGFloat = AtticNativeSearchInput.bodyHeight
         override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: fixedHeight) }
         // The font and single-line height are fixed; typing changes neither.
@@ -2752,6 +2768,8 @@ struct AtticNativeSearchInput: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> Field {
         let field = Field()
+        focusClaim?.field = field
+        field.focusClaim = focusClaim
         field.cell = QueryCell(textCell: "")
         field.isBordered = false
         field.isBezeled = false
@@ -2773,9 +2791,14 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         field.representableUpdateCount &+= 1
         #endif
         context.coordinator.owner = self
+        if field.focusClaim !== focusClaim {
+            field.focusClaim = focusClaim
+            focusClaim?.field = field
+        }
         let coordinator = context.coordinator
-        field.onFocus = { [weak coordinator] in
-            guard let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true else { return }
+        field.onFocus = { [weak coordinator, weak field] in
+            guard let field, let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true,
+                  owner.focusClaim == nil || owner.focusClaim?.field === field else { return }
             owner.isFocused?.wrappedValue = true
         }
         apply(fontIn: context, to: field)
@@ -2796,14 +2819,17 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         var owner: AtticNativeSearchInput
         init(_ owner: AtticNativeSearchInput) { self.owner = owner }
         func controlTextDidChange(_ notification: Notification) {
+            guard owner.focusClaim == nil || owner.focusClaim?.field === notification.object as? NSTextField else { return }
             guard let field = notification.object as? NSTextField,
                   (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
             owner.text = field.stringValue
         }
         func controlTextDidBeginEditing(_ notification: Notification) {
+            guard owner.focusClaim == nil || owner.focusClaim?.field === notification.object as? NSTextField else { return }
             if owner.isFocused?.wrappedValue != true { owner.isFocused?.wrappedValue = true }
         }
         func controlTextDidEndEditing(_ notification: Notification) {
+            guard owner.focusClaim == nil || owner.focusClaim?.field === notification.object as? NSTextField else { return }
             if owner.isFocused?.wrappedValue == true { owner.isFocused?.wrappedValue = false }
         }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

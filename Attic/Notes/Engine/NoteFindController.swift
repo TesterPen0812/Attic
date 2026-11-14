@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import SwiftUI
 
 /// One Find session for the shared note engine, including table-cell text.
@@ -61,8 +62,12 @@ final class NoteFindController: ObservableObject {
     private var pendingInputBaseQuery: String?
     private var pendingInputReplacesQuery = false
     private var pendingInputComposition = false
-    /// The top row's field (the page draws it; found by this identifier).
+    /// The top row's field identity; the page registers its actual native view.
     static let fieldIdentifier = "note-find"
+    let topRowFieldClaim = AtticFieldClaim()
+    /// A quick reopen may reuse the top row during its closing animation.
+    /// Each session still needs a newly mounted native editor and replay.
+    private(set) var fieldSessionID: UInt = 0
     private var topInset: CGFloat = 0
     private var columnInset: CGFloat = 16
     /// Work counters for the headless performance gates.
@@ -106,7 +111,11 @@ final class NoteFindController: ObservableObject {
         // callback. Replay pending keys before its next real key.
         if inFind, awaitingField { topRowFieldAppeared() }
         if inFind, !awaitingField { typeAheadDeadline = nil }
-        if inNote, typeAhead(event) { return nil }
+        // The outgoing field can remain first responder during a reopen.
+        // Until the new field owns the session, it shares the same queue as
+        // the note and the window's temporary responder.
+        let inHandoff = awaitingField && fieldFocused && (inNote || inFind || responder === window || responder == nil)
+        if inHandoff, typeAhead(event) { return nil }
         if inFind, replacesQuery, Self.isTyping(event), let editor = responder as? NSTextView {
             // The last query, still selected, gives way to the key.
             editor.selectAll(nil)
@@ -125,14 +134,9 @@ final class NoteFindController: ObservableObject {
 
     /// The top row's field, once the page has drawn it.
     private func topRowField() -> NSTextField? {
-        guard let content = engine?.textView?.window?.contentView else { return nil }
-        func search(_ view: NSView) -> NSTextField? {
-            if let field = view as? NSTextField, field.isEditable,
-               field.accessibilityIdentifier() == Self.fieldIdentifier { return field }
-            for child in view.subviews { if let found = search(child) { return found } }
-            return nil
-        }
-        return search(content)
+        guard let field = topRowFieldClaim.field, field.isEditable,
+              field.window === engine?.textView?.window else { return nil }
+        return field
     }
 
     /// A plain typing key: characters, with no ⌘ or ⌃.
@@ -151,6 +155,39 @@ final class NoteFindController: ObservableObject {
         let identifier = inputSourceIdentifier() ?? engine?.textView?.inputContext?.selectedKeyboardInputSource
         guard let identifier else { return false }
         return !identifier.contains(".keylayout.")
+    }
+
+    /// Resolve Cocoa's current key bindings without performing the command.
+    /// Replay still interprets the real event in the field, including bindings
+    /// which expand to several selectors. This view never enters a window.
+    private final class KeyBindingProbe: NSTextView {
+        private static let standardCommands = NSProtocolFromString("NSStandardKeyBindingResponding")
+        var foundCommand = false
+        override func doCommand(by selector: Selector) {
+            guard let commands = Self.standardCommands,
+                  protocol_getMethodDescription(commands, selector, false, true).name != nil else { return }
+            foundCommand = true
+        }
+        override func insertText(_ insertString: Any, replacementRange: NSRange) { foundCommand = true }
+        override func insertText(_ insertString: Any) { foundCommand = true }
+    }
+    private static let keyBindings = KeyBindingProbe(usingTextLayoutManager: false)
+
+    private static func isNativeEditingKey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // Find's own shortcuts and navigation retain their controller routing.
+        if flags == .command, event.keyCode == 3 || event.keyCode == 5 { return false }
+        if flags == [.command, .shift], event.keyCode == 5 { return false }
+        if flags.isEmpty || flags == .shift {
+            if event.keyCode == 36 || event.keyCode == 53 { return false }
+            // Keep the ordinary type-ahead fast path and its one search/key.
+            if event.keyCode == 51 || event.keyCode == 117 || isTyping(event) { return false }
+        }
+        guard !isTyping(event),
+              flags.contains(.command) || flags.contains(.control) || !(event.characters?.isEmpty ?? true) else { return false }
+        keyBindings.foundCommand = false
+        keyBindings.interpretKeyEvents([event])
+        return keyBindings.foundCommand
     }
 
     /// The editing commands a search field takes (⌘V ⌘A ⌘Z ⇧⌘Z ⌘X ⌘C): while
@@ -180,7 +217,7 @@ final class NoteFindController: ObservableObject {
     func typeAhead(_ event: NSEvent) -> Bool {
         guard shownInTopRow, isShown, fieldFocused, awaitingField else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if Self.editingCommand(event) != nil {
+        if Self.editingCommand(event) != nil || Self.isNativeEditingKey(event) {
             // ⌘V and the like would reach the note's own selection: queue
             // them for the field and replay them there, in order.
             if pendingInputEvents.isEmpty {
@@ -311,6 +348,9 @@ final class NoteFindController: ObservableObject {
         if inTopRow || (isShown && shownInTopRow) {
             if !isShown {
                 shownInTopRow = true
+                fieldSessionID &+= 1
+                topRowFieldClaim.cancelFocusRequest()
+                topRowFieldClaim.field = nil
                 pendingInputEvents.removeAll()
                 pendingInputBaseQuery = nil
                 pendingInputReplacesQuery = false
@@ -362,6 +402,8 @@ final class NoteFindController: ObservableObject {
 
     func close(returnFocus: Bool = true) {
         guard isShown else { return }
+        topRowFieldClaim.cancelFocusRequest()
+        topRowFieldClaim.field = nil
         let selected = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
         isShown = false
         fieldFocused = false
@@ -720,7 +762,7 @@ struct NoteFindTopRowField: View {
     var body: some View {
         AtticTabsSearchField(placeholder: String(localized: "Find in note"), text: $find.query,
                              isFocused: $find.fieldFocused, nativeInputIdentifier: NoteFindController.fieldIdentifier,
-                             floating: true, onEscape: { find.close() }, header: true, accessory: AnyView(tail))
+                             nativeFocusClaim: find.topRowFieldClaim, floating: true, onEscape: { find.close() }, header: true, accessory: AnyView(tail))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("note-find-bar")
             .onAppear {
@@ -729,6 +771,7 @@ struct NoteFindTopRowField: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { find.topRowFieldAppeared() }
                 }
             }
+            .id(find.fieldSessionID)
     }
 
     private var tail: some View {

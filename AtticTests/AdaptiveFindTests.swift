@@ -286,9 +286,9 @@ final class AdaptiveFindTests: XCTestCase {
         }
     }
 
-    private func key(_ code: UInt16, _ characters: String, flags: NSEvent.ModifierFlags = [], in panel: NSPanel) -> NSEvent {
+    private func key(_ code: UInt16, _ characters: String, flags: NSEvent.ModifierFlags = [], ignoring: String? = nil, in panel: NSPanel) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: panel.windowNumber,
-                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                         context: nil, characters: characters, charactersIgnoringModifiers: ignoring ?? characters,
                          isARepeat: false, keyCode: code)!
     }
 
@@ -497,6 +497,60 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertTrue(engine.find.typeAhead(key(12, "q")))
             XCTAssertEqual(engine.find.query, "q", "the first key replaces the last query")
             engine.find.close(returnFocus: false)
+        }
+    }
+
+    func testR3NativeEditingSelectorsDuringFindHandoffNeverEditTheNote() throws {
+        try requireKeyWindowTests()
+        try withNote { host, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            let original = engine.document()
+            let undo = engine.history.undoOps.map(ObjectIdentifier.init)
+            final class NativeOracle: NSTextView {
+                var receivedCommand = false
+                override func doCommand(by selector: Selector) {
+                    receivedCommand = true
+                    super.doCommand(by: selector)
+                }
+            }
+            let chords: [(UInt16, String, NSEvent.ModifierFlags)] = [
+                (51, "\u{7f}", .command), (51, "\u{7f}", [.option, .command]),
+                (40, "\u{b}", .control), (4, "\u{8}", .control), (2, "\u{4}", .control),
+                (0, "\u{1}", .control), (14, "\u{5}", .control),
+                (123, "\u{f702}", [.option, .shift]), (124, "\u{f703}", .command)
+            ]
+            for (code, characters, flags) in chords {
+                XCTAssertTrue(panel.makeFirstResponder(view))
+                view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+                engine.find.query = "old query"
+                let open = key(3, "f", flags: .command, in: panel)
+                XCTAssertNil(engine.find.routeKeyDown(open))
+                let event = key(code, characters, flags: flags, ignoring: [40: "k", 4: "h", 2: "d", 0: "a", 14: "e"][Int(code)], in: panel)
+                let oracle = NativeOracle(usingTextLayoutManager: false)
+                oracle.isFieldEditor = true
+                oracle.string = "old query"
+                oracle.selectAll(nil)
+                oracle.interpretKeyEvents([event])
+                let forwarded = engine.find.routeKeyDown(event)
+                if oracle.receivedCommand {
+                    XCTAssertNil(forwarded, "native editing selector for code \(code), \(flags.rawValue) belongs to Find")
+                } else {
+                    XCTAssertNotNil(forwarded, "an unbound chord is not a native editing command on this Mac")
+                }
+                if let forwarded { panel.sendEvent(forwarded) }
+                XCTAssertEqual(engine.document(), original, "no handoff key changes note bytes")
+                spin(0.65)
+                let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? NSTextField }
+                    .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier })
+                let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+                XCTAssertEqual(editor.string, oracle.string, "native command acts on the eventual query")
+                XCTAssertEqual(editor.selectedRange(), oracle.selectedRange())
+                XCTAssertEqual(engine.document(), original)
+                XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
+                engine.find.close()
+                spin(0.1)
+            }
         }
     }
 
