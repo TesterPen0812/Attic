@@ -360,6 +360,10 @@ final class NotesPageController: ObservableObject {
     var attachmentMetadataCacheCounts: (availability: Int, resolved: Int, verifying: Int) {
         (verifiedAvailability.count, resolvedAttachmentRows.count, verifyingAvailability.count)
     }
+    /// Soak probe: an evicted draft must not leave an ever-growing LRU key list.
+    var cachedSessionCountsForTesting: (sessions: Int, recency: Int) {
+        (cache.count, recency.count)
+    }
     #endif
     private let cacheLimit = 8
     private var didStart = false
@@ -1620,6 +1624,7 @@ final class NotesPageController: ObservableObject {
         session.pauseTask?.cancel(); session.pauseTask = nil
         session.engine.detachView()
         cache[session.noteID] = nil
+        recency.removeAll { $0 == session.noteID }
     }
 
     /// Phase 3: a task note's task state for All notes, and opening a task's
@@ -2080,7 +2085,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func touch(_ noteID: UUID) {
-        recency.removeAll { $0 == noteID }
+        recency.removeAll { $0 == noteID || cache[$0] == nil }
         recency.append(noteID)
         // Evict the least recently used clean sessions only.
         while cache.count > cacheLimit, let evict = recency.first(where: { id in

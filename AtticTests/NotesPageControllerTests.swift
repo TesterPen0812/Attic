@@ -26,6 +26,24 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     #if !ATTIC_GENERATED_TESTS
+        #if DEBUG
+    func testClosingUnwrittenTaskPagesReleasesCachedLRUKeys() throws {
+        let controller = makeController()
+        let taskID = UUID()
+        for _ in 0..<100 {
+            let draft = try XCTUnwrap(controller.workspaceTaskDraft(taskID: taskID, title: "No writing"))
+            controller.resumeWorkspaceDurability(draft)
+            controller.releaseWorkspace(draft)
+            controller.discardUntouchedTaskDraft(draft)
+        }
+        let counts = controller.cachedSessionCountsForTesting
+        XCTAssertEqual(counts.sessions, 0, "closing an unwritten task page must discard its editor")
+        XCTAssertEqual(counts.recency, 0, "discarded note sessions must leave no stale LRU keys")
+    }
+        #endif
+    #endif
+
+    #if !ATTIC_GENERATED_TESTS
     func testBugs3FirstVisitShowsSavedNotesInsteadOfAnUnrequestedBlankDraft() async throws {
         let (id, _) = try store.createDocumentNote(id: UUID(),
             document: NoteDocument(blocks: [.text("Existing library note"), .text("Real writing")])).get()
