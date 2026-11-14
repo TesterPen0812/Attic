@@ -1,3 +1,18 @@
+## 2026-11-14 · Task rows: one key handler per list, not per row (PF-8)
+
+`AtticTaskRow` rows in a list no longer attach their own key handler. The row
+keeps its native focus target (Tab, Full Keyboard Access, VoiceOver focus,
+the focus ring), and its commands (Space, ⇧Space, Return, ⌘Return, ⇧⌘I, ⌘B,
+Delete, ⌘C, ⌘D) are answered by the list. A handler on every lazy row put
+every realized row in SwiftUI's focus tree. Tasks answers them once from
+`TasksPage`.
+
+Behaviour change for other lists: `AtticRowFocus` takes a new
+`answersRowKeys` (default false). A list with no page-level handler of its
+own must pass `true` to keep the old per-row keys: Calendar's agenda and Day
+view do. The `isActive` closure is read only by such rows. Look and motion do
+not change.
+
 ## 2026-11-13 · Context menu anchors during large task scrolls (DP-6)
 
 An ordinary row's context-click routing and VoiceOver Show Menu action now

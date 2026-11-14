@@ -2941,7 +2941,9 @@ struct TasksPage: View {
     /// extend, ⌘↑ ⌘↓ reorder, Return edits the title, → and ← open and close
     /// the quick look, Esc closes it or clears a selection, ⌘A selects all,
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
-    /// the row's own (`AtticTaskKeys`).
+    /// the focused row's commands (`AtticTaskKeys`), answered here once for
+    /// the whole list: a key handler on every lazy row would be another
+    /// responder in SwiftUI's focus tree for each row it builds (PF-8).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
         // The shared card owns the keyboard even if its editor temporarily
         // loses first responder. In particular, Done must not turn its
@@ -4557,8 +4559,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             metaPopover: active && metaPopover?.id == id && metaPopover?.tab == tab ? metaPopover : nil,
             // Whether it has the keyboard: the model's copy of the page's
             // focus (`TasksPageModel.keyboardFocus`), read as the cell draws.
-            focus: AtticRowFocus(binding: focus, id: focusID, isFocused: active && model.keyboardFocus == focusID,
-                                 isActive: { [model, tab] in model.tab == tab && model.isPageShown }),
+            focus: AtticRowFocus(binding: focus, id: focusID, isFocused: active && model.keyboardFocus == focusID),
             isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
             isActive: active
         )
