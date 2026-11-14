@@ -146,7 +146,7 @@ final class NotesSlice3bUITests: XCTestCase {
         let range = try XCTUnwrap(f.engine.objectPlacement(f.failed)?.1)
         let rect = try XCTUnwrap(f.engine.rect(for: range))
         let point = CGPoint(x: rect.midX, y: rect.midY)
-        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point, nativeParity: true)
         try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
         XCTAssertEqual(commands.map(\.title), ["The file is larger than 15 MB.", "Retry", "Remove"])
         XCTAssertTrue(commands[0].isHeader)

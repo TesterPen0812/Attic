@@ -13,10 +13,7 @@ final class AppSettingsTests: XCTestCase {
     /// Whatever this test revealed goes away with the test.
     @MainActor
     override func tearDown() async throws {
-        for window in NSApp.windows where window is AtticPanel || window is PanelIslandWindow {
-            window.orderOut(nil)
-        }
-        if NSApp.isActive { NSApp.deactivate() }
+        retireRevealedPanels()
         try await super.tearDown()
     }
 
