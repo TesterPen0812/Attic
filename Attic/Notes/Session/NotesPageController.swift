@@ -590,34 +590,58 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
+    /// What a task route needs before its page can mount: the resolved note
+    /// and, for a cold note, the bytes to decode.
+    private struct TaskNoteOpenPlan {
+        let noteID: UUID?
+        var decode: (bytes: Data, revision: UUID?)?
+    }
+
+    private func taskNoteOpenPlan(taskID: UUID) throws -> TaskNoteOpenPlan {
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        let (route, noteID) = try coordinator.sessions.resolve(.task(taskID))
+        guard route == .task(taskID) else { throw WorkspaceFoundationError.conflict }
+        var plan = TaskNoteOpenPlan(noteID: noteID, decode: nil)
+        if let noteID, cache[noteID] == nil, let note = store.note(withID: noteID),
+           note.usesDocumentFormat, let content = note.content {
+            plan.decode = (content, note.revisionID)
+        }
+        return plan
+    }
+
+    /// The preparation of a task route that needs no decode (a warm or an
+    /// empty note), resolved on the spot so its page mounts in the same
+    /// transaction as the route. nil when a document must decode first.
+    func warmTaskNoteOpen(taskID: UUID) throws -> TaskNotePreparedOpen? {
+        let plan = try taskNoteOpenPlan(taskID: taskID)
+        guard plan.decode == nil else { return nil }
+        return TaskNotePreparedOpen(taskID: taskID, noteID: plan.noteID, bytes: nil, load: nil)
+    }
+
     /// Resolve a cold task-owned document before constructing its presenter.
     /// Only bytes reach the decoder; SwiftData rows, the editor and leases
     /// remain on the main actor. A route change invalidates this preparation.
     func prepareTaskNoteOpen(taskID: UUID) async throws -> TaskNotePreparedOpen {
-        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
-        let (route, noteID) = try coordinator.sessions.resolve(.task(taskID))
-        guard route == .task(taskID) else { throw WorkspaceFoundationError.conflict }
+        let plan = try taskNoteOpenPlan(taskID: taskID)
         var bytes: Data?
         var load: NoteDocumentLoad?
-        if let noteID, cache[noteID] == nil, let note = store.note(withID: noteID),
-           note.usesDocumentFormat, let content = note.content {
-            bytes = content
-            let revision = note.revisionID
-            let decoded = await decodeOpenDocument(content)
+        if let noteID = plan.noteID, let decode = plan.decode {
+            bytes = decode.bytes
+            let decoded = await decodeOpenDocument(decode.bytes)
             coldDecodeCount += 1
             if decoded.onMainThread { coldDecodeOnMainCount += 1 }
             guard !Task.isCancelled, let current = store.note(withID: noteID),
-                  current.revisionID == revision, current.content == content else {
+                  current.revisionID == decode.revision, current.content == decode.bytes else {
                 throw WorkspaceFoundationError.conflict
             }
-            load = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: revision)
+            load = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: decode.revision)
         }
         // The registry re-resolves immediately before installation. A
         // second discovery here would duplicate its SwiftData reads.
         guard !Task.isCancelled else {
             throw WorkspaceFoundationError.conflict
         }
-        return TaskNotePreparedOpen(taskID: taskID, noteID: noteID, bytes: bytes, load: load)
+        return TaskNotePreparedOpen(taskID: taskID, noteID: plan.noteID, bytes: bytes, load: load)
     }
 
     func openDurably(noteID: UUID) async -> Bool {

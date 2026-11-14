@@ -1414,6 +1414,16 @@ final class TaskNoteOpening {
                failed: @escaping () -> Void,
                finished: @escaping () -> Void = {}) -> Task<Void, Never>? {
         guard task == nil else { return task }
+        do {
+            if let warm = try controller.warmTaskNoteOpen(taskID: taskID) {
+                if let presenter = try install(warm) { opened(presenter) }
+                finished()
+                return nil
+            }
+        } catch {
+            failed(); finished()
+            return nil
+        }
         let token = UUID()
         self.token = token
         let task = Task { @MainActor [weak self] in

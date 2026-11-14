@@ -1504,6 +1504,29 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(failed, 0)
     }
 
+    /// R-6: a note that needs no decode installs in the same transaction as
+    /// the route, so no frame commits with the blank opening page. This is also
+    /// the path Delete Note / Restore Note take when they reopen the page.
+    func testPF13AWarmTaskNoteOpensInTheSameTransaction() async throws {
+        let taskID = try seed(.heavy)
+        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        let first = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                          design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+        let closed3 = await first.close()
+        XCTAssertTrue(closed3)
+        let opening = TaskNoteOpening()
+        var shown: TaskNotePresenter?
+        let task = opening.begin(taskID: taskID, controller: notes, install: { [self] prepared in
+            let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                                  design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+            presenters.append(presenter)
+            return presenter
+        }, opened: { shown = $0 }, failed: { XCTFail("a warm note opens") })
+        XCTAssertNil(task, "a warm note needs no asynchronous open")
+        XCTAssertNotNil(shown, "the presenter is installed before begin returns")
+        XCTAssertFalse(opening.isOpening)
+    }
+
     /// Panel half of R-4: a preparation that goes stale retries once and then
     /// opens synchronously; the panel never shows the failed-open page where
     /// the synchronous open succeeded.
