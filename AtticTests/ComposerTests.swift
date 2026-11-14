@@ -237,6 +237,36 @@ final class ComposerTests: XCTestCase {
         }
     }
 
+
+    func testR5SwitchingOwnedDraftsRestoresTheNativeTitleSelection() throws {
+        let (window, _, title) = try mountForKeys(on: .tasks(.now))
+        typeKeys(title, "Invoice for Bob 🧾")
+        let expected = NSRange(location: 3, length: 5)
+        title.setSelectedRange(expected)
+        spin()
+        XCTAssertEqual(page.addBarState.selection, expected)
+        page.addBarState.stagingFiles = 1
+        model.open(on: .notes)
+        spin()
+        typeKeys(title, "Half a note")
+        title.setSelectedRange(NSRange(location: 2, length: 3))
+        spin()
+        model.open(on: .tasks(.now))
+        model.choose(.task)
+        spin()
+        XCTAssertTrue(window.firstResponder === title)
+        XCTAssertEqual(title.string, "Invoice for Bob 🧾")
+        XCTAssertEqual(page.addBarState.selection, expected)
+        XCTAssertEqual(title.selectedRange(), expected, "native selection must match the restored draft")
+        // A saved range from before an external shortening must be clamped.
+        page.addBarState.selection = NSRange(location: 1_000, length: 30)
+        model.choose(.note)
+        spin()
+        model.choose(.task)
+        spin()
+        XCTAssertEqual(title.selectedRange(), NSRange(location: (title.string as NSString).length, length: 0))
+    }
+
     private func type(_ text: String) {
         // Typing keeps the draft's picks (the Calendar's day), as the field does.
         var draft = TaskAddBarText(text: text)

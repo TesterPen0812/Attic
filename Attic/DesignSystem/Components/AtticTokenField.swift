@@ -92,8 +92,20 @@ enum AtticSuggestionKey: Equatable {
 @MainActor
 final class AtticTokenFieldEditor {
     weak var textView: NSTextView?
+    private var selectionToRestore: (text: String, range: NSRange)?
 
     init() {}
+
+    /// Apply once the matching model text reaches the native editor.
+    func restoreSelection(_ range: NSRange, for text: String) {
+        selectionToRestore = (text, range)
+    }
+
+    fileprivate func takeSelection(for text: String) -> NSRange? {
+        defer { selectionToRestore = nil }
+        guard let pending = selectionToRestore, pending.text == text else { return nil }
+        return pending.range
+    }
 
     /// Replaces the edits, last first, as one undoable step; the insertion
     /// point ends after the last one. False when the field is not live.
@@ -214,6 +226,14 @@ struct AtticTokenField: NSViewRepresentable {
             }
             view.textView.string = text
             view.textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            coordinator.isApplyingModel = false
+        }
+        if let selection = editor?.takeSelection(for: text) {
+            coordinator.isApplyingModel = true
+            let length = (text as NSString).length
+            let location = min(max(0, selection.location), length)
+            view.textView.setSelectedRange(NSRange(location: location,
+                length: min(max(0, selection.length), length - location)))
             coordinator.isApplyingModel = false
         }
         view.setChips(chips)

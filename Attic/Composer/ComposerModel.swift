@@ -627,6 +627,9 @@ final class ComposerModel: ObservableObject {
     }
 
     private func restore(_ draft: AsideDraft) {
+        if let selection = draft.selection ?? draft.caret.map({ NSRange(location: $0, length: 0) }) {
+            editor.restoreSelection(selection, for: draft.text.text)
+        }
         tasks.addBarState.clearDraft()
         tasks.addBar = draft.text
         title.history = draft.history

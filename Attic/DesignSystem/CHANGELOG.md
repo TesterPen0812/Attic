@@ -1,3 +1,9 @@
+## 2026-11-14 · Restored Composer selection (Dot R-12)
+
+The token editor can apply a selection once its matching draft text arrives.
+Restored ranges are clamped to UTF-16 bounds, so switching between owned
+Composer drafts resumes the native caret or selection where it was kept.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
