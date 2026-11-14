@@ -18,7 +18,8 @@ final class NoteBlockDragTests: XCTestCase {
         super.tearDown()
     }
 
-    private func editor(_ blocks: [NoteBlock], height: CGFloat = 400) -> (NoteEditorEngine, NoteEditorTextView) {
+    private func editor(_ blocks: [NoteBlock], height: CGFloat = 400,
+                        prelayout: Bool = true) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
         engines.append(engine)
         let (scroll, text) = engine.makeView()
@@ -29,7 +30,7 @@ final class NoteBlockDragTests: XCTestCase {
         window.contentView = scroll
         window.makeFirstResponder(text)
         windows.append(window)
-        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        if prelayout { engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange) }
         text.layoutSubtreeIfNeeded()
         return (engine, text)
     }
@@ -55,6 +56,45 @@ final class NoteBlockDragTests: XCTestCase {
     }
 
     // MARK: Slots
+
+    func testPF15InitialDragOnlyMeasuresVisibleBlocksRegardlessOfTailLength() {
+        for length in [100, 5_000] {
+            let blocks = [NoteBlock.text("Title"), .text("Source")]
+                + (0..<length).map { NoteBlock.text("Offscreen block \($0)") }
+            let (engine, text) = editor(blocks, height: 280, prelayout: false)
+            let source = engine.blockRange(at: location(of: "Source", in: engine))
+            let slots = text.blockDropSlots(moving: source)
+            print("PF15 offscreen_tail=\(length) initial_slots=\(slots.blocks.count)")
+            XCTAssertTrue(slots.blocks.contains { $0.range == source })
+            XCTAssertLessThan(slots.blocks.count, 100, "drag lift must avoid enumerating the unseen tail")
+        }
+    }
+
+    func testPF15ScrollDuringDragExtendsDropSlotsWithoutMeasuringTheTail() throws {
+        let blocks = [NoteBlock.text("Title"), .text("Source")]
+            + (0..<5_000).map { NoteBlock.text("Offscreen block \($0)") }
+        let (engine, text) = editor(blocks, height: 280, prelayout: false)
+        let source = engine.blockRange(at: location(of: "Source", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let press = text.convert(CGPoint(x: sourceRect.minX - 10, y: sourceRect.midY), to: nil)
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source,
+                                                         sourceRect: sourceRect, pressPoint: press))
+        let target = engine.blockRange(at: location(of: "Offscreen block 50", in: engine))
+        let targetRect = try XCTUnwrap(text.rect(ofBlock: target))
+        let clip = try XCTUnwrap(text.enclosingScrollView?.contentView)
+        clip.scroll(to: NSPoint(x: 0, y: targetRect.midY - 120))
+        text.enclosingScrollView?.reflectScrolledClipView(clip)
+        // Re-layout after scrolling: the first offscreen rectangle is a
+        // provisional TextKit estimate, not its final visible position.
+        session.pointerMoved(to: text.convert(CGPoint(x: sourceRect.minX, y: clip.bounds.midY), to: nil))
+        let visible = try XCTUnwrap(session.slots.blocks.first { $0.range == target })
+        session.pointerMoved(to: text.convert(CGPoint(x: sourceRect.minX, y: visible.rect.maxY - 1), to: nil))
+        print("PF15 scroll_target=50 refreshed_slots=\(session.slots.blocks.count)")
+        XCTAssertLessThan(session.slots.blocks.count, 100)
+        XCTAssertEqual(session.target?.location, NSMaxRange(target))
+        session.finish()
+        XCTAssertTrue(engine.history.undo() == false, "drag without a drop never changes the document")
+    }
 
     func testTheSlotIsTheBlockHalfUnderThePointerWithHysteresis() {
         func block(_ y: CGFloat, _ index: Int) -> NoteBlockDropSlots.Block {

@@ -496,8 +496,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// one, above the page's floating controls, while its place dims; the
     /// drop line glides from gap to gap, and the note scrolls each display
     /// frame near its top or bottom edge (`NoteBlockDragSession`). Slots
-    /// come from block frames measured once, so a pointer move lays
-    /// nothing out.
+    /// come from nearby block frames. Ordinary pointer moves lay nothing
+    /// out; autoscrolling refreshes the newly exposed drop positions.
     private func trackBlockHandle(with event: NSEvent) {
         guard let engine, let window, let location = handleBlockLocation else { return }
         let source = engine.blockRange(at: location)

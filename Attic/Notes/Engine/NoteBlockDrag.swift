@@ -4,9 +4,9 @@ import SwiftUI
 
 // MARK: - Where a dragged block lands (DG1)
 
-/// Every block's rectangle in the text view, measured once when a block
-/// drag starts, and the drop each half of a block means. A pointer move
-/// then picks its slot by a binary search: no layout per event.
+/// Nearby blocks' rectangles and the drop each half of a block means.
+/// Ordinary pointer moves use a binary search without layout; autoscrolling
+/// refreshes only the new viewport's slots.
 struct NoteBlockDropSlots {
     struct Slot: Equatable {
         let position: NoteBlockDropPosition
@@ -71,23 +71,40 @@ struct NoteBlockDropSlots {
 }
 
 extension NoteEditorTextView {
-    /// The note's blocks below the title, measured once (the whole note is
-    /// laid out first, so later moves and autoscroll find exact places).
+    /// Measure blocks in and just beyond the viewport. A drag can lift with
+    /// the unseen tail still unlaid-out; scrolling refreshes these slots.
     func blockDropSlots(moving source: NSRange) -> NoteBlockDropSlots {
         guard let engine, let layoutManager = textLayoutManager else { return NoteBlockDropSlots(blocks: []) }
-        layoutManager.ensureLayout(for: layoutManager.documentRange)
+        layoutManager.textViewportLayoutController.layoutViewport()
         let length = engine.textStorage.length
         let titleEnd = engine.titleParagraphRange.length
+        let visible = visibleRect
+        let upper = visible.maxY + max(visible.height, 200)
+        // Starting at the first laid-out fragment avoids walking thousands
+        // of earlier offscreen blocks when lifting from deep in a note.
+        let origin = textContainerOrigin
+        let firstFragment = layoutManager.textLayoutFragment(for:
+            CGPoint(x: 0, y: max(0, visible.minY - origin.y)))
+        let start = firstFragment?.rangeInElement.location
+            ?? layoutManager.textViewportLayoutController.viewportRange?.location
+            ?? engine.contentStorage.documentRange.location
+        let offset = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: start)
+        let first = min(max(titleEnd, offset), max(titleEnd, length - 1))
+        var location = first < length ? max(titleEnd, engine.blockRange(at: first).location) : length
         var ranges: [NSRange] = []
-        var location = titleEnd
+        var rects: [Int: CGRect] = [:]
         while location < length {
             let block = engine.blockRange(at: location)
             guard block.length > 0, block.location <= location, NSMaxRange(block) > location else { location += 1; continue }
-            ranges.append(block)
+            if let rect = rect(ofBlock: block) {
+                if rect.minY > upper { break }
+                if rect.maxY >= visible.minY - max(visible.height, 200) {
+                    ranges.append(block)
+                    rects[block.location] = rect
+                }
+            }
             location = NSMaxRange(block)
         }
-        var rects: [Int: CGRect] = [:]
-        for range in ranges { if let rect = rect(ofBlock: range) { rects[range.location] = rect } }
         let width = textContainer?.size.width ?? bounds.width
         func rectOfBlock(at location: Int) -> CGRect? {
             guard location >= titleEnd, location < length else { return nil }
@@ -281,7 +298,8 @@ final class NoteBlockDragStage: NSView {
 final class NoteBlockDragSession: NSObject {
     private weak var textView: NoteEditorTextView?
     let source: NSRange
-    let slots: NoteBlockDropSlots
+    private(set) var slots: NoteBlockDropSlots
+    private var slotsViewport: CGRect
     let stage: NoteBlockDragStage
     private let sourceRect: CGRect
     /// The pointer's offset from the card's origin, held for the whole drag.
@@ -311,6 +329,7 @@ final class NoteBlockDragSession: NSObject {
         self.sourceRect = sourceRect
         windowPoint = pressPoint
         animated = !engine.style.design.reduceMotion
+        slotsViewport = scrollView.contentView.bounds
         slots = textView.blockDropSlots(moving: source)
         let snapshot = NoteDragLiftView.snapshot(of: sourceRect, in: textView)
         let pageFrame = parent.convert(scrollView.bounds, from: scrollView)
@@ -384,13 +403,20 @@ final class NoteBlockDragSession: NSObject {
 
     private func chooseSlot() {
         guard let textView else { return }
+        var viewportChanged = false
+        if let viewport = textView.enclosingScrollView?.contentView.bounds, viewport != slotsViewport {
+            slotsViewport = viewport
+            slots = textView.blockDropSlots(moving: source)
+            choice = nil
+            viewportChanged = true
+        }
         let point = textView.convert(windowPoint, from: nil)
         let next = slots.choice(atY: point.y, current: choice)
-        guard next != choice else { return }
-        let before = slots.slot(for: choice)
+        guard viewportChanged || next != choice else { return }
+        let before = viewportChanged ? nil : slots.slot(for: choice)
         choice = next
         let slot = slots.slot(for: next)
-        guard slot != before else { return }
+        guard viewportChanged || slot != before else { return }
         showLine(slot?.line, in: textView)
     }
 
