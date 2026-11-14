@@ -1571,6 +1571,33 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(result.failed, 0)
     }
 
+    /// Dot R-8: a clean cached task note that another writer revised decodes
+    /// its new bytes off the main actor like a cold one, then validates the
+    /// revision and the lease when it installs.
+    func testPF13AStaleWarmTaskNoteDecodesOffMainAndOpensTheNewerBytes() async throws {
+        let taskID = try seed(.heavy)
+        let noteID = try XCTUnwrap(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
+        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        let first = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                          design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+        let closed4 = await first.close()
+        XCTAssertTrue(closed4)
+        XCTAssertNotNil(notes.workspaceSessionIfCached(noteID), "the closed note stays warm")
+        reviseExternally(noteID, "Newer writing from another writer")
+        let before = notes.store.documentDecodeCountByIDForTesting[noteID, default: 0]
+        let mainBefore = notes.coldDecodeOnMainCount, offBefore = notes.coldDecodeCount
+        let again = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        XCTAssertNotNil(again.load, "the stale warm session's bytes are prepared off the main actor")
+        XCTAssertEqual(notes.coldDecodeCount - offBefore, 1)
+        XCTAssertEqual(notes.coldDecodeOnMainCount, mainBefore)
+        let second = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                           design: .default, columnInset: columnInset, defaults: nil, prepared: again)
+        presenters.append(second)
+        XCTAssertEqual(notes.store.documentDecodeCountByIDForTesting[noteID, default: 0] - before, 0,
+                       "reopening a stale warm note decodes nothing on the main actor")
+        XCTAssertTrue(try XCTUnwrap(second.session).engine.textStorage.string.contains("Newer writing from another writer"))
+    }
+
     /// § 9: scrolling the composed view shows no regression against the
     /// plain note of the same length (40 pt steps, layout and display).
     func testScrollingTheComposedViewDoesNotRegressAgainstThePlainNote() throws {

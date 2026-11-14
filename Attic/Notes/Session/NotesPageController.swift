@@ -591,10 +591,11 @@ final class NotesPageController: ObservableObject {
     }
 
     /// What a task route needs before its page can mount: the resolved note
-    /// and, for a cold note, the bytes to decode.
+    /// and, when the document must be decoded (a cold note, or a clean cached
+    /// session that another writer has since revised), the bytes to decode.
     private struct TaskNoteOpenPlan {
         let noteID: UUID?
-        var decode: (bytes: Data, revision: UUID?)?
+        var decode: (bytes: Data, revision: UUID?, staleSession: NoteSession?)?
     }
 
     private func taskNoteOpenPlan(taskID: UUID) throws -> TaskNoteOpenPlan {
@@ -602,11 +603,40 @@ final class NotesPageController: ObservableObject {
         let (route, noteID) = try coordinator.sessions.resolve(.task(taskID))
         guard route == .task(taskID) else { throw WorkspaceFoundationError.conflict }
         var plan = TaskNoteOpenPlan(noteID: noteID, decode: nil)
-        if let noteID, cache[noteID] == nil, let note = store.note(withID: noteID),
-           note.usesDocumentFormat, let content = note.content {
-            plan.decode = (content, note.revisionID)
+        guard let noteID else { return plan }
+        if let existing = cache[noteID] {
+            // A clean cached session that was revised elsewhere is rebuilt at
+            // presentation; its bytes decode off the main actor like a cold
+            // note's (Dot R-8). Leased, dirty or workspace-bound sessions
+            // never rebuild here.
+            guard !existing.usesWorkspaceBinding else { return plan }
+            refreshStoreIfRevisedElsewhere(noteID, existing: existing)
+            if let note = store.note(withID: noteID), isStaleClean(existing, against: note),
+               note.usesDocumentFormat, let content = note.content {
+                plan.decode = (content, note.revisionID, existing)
+            }
+        } else if let note = store.note(withID: noteID), note.usesDocumentFormat, let content = note.content {
+            plan.decode = (content, note.revisionID, nil)
         }
         return plan
+    }
+
+    /// A clean, persisted, unleased session whose store revision moved.
+    private func isStaleClean(_ session: NoteSession, against note: NoteItem) -> Bool {
+        guard case .clean = session.state, session.isPersisted, session.workspacePage?.activeLease == nil else { return false }
+        return session.baseRevisionID != note.revisionID || session.baseContent != note.content
+    }
+
+    /// An actual external change replaces the stale store context before a
+    /// clean cached engine is judged or rebuilt.
+    private func refreshStoreIfRevisedElsewhere(_ noteID: UUID, existing: NoteSession) {
+        let context = ModelContext(store.container)
+        context.autosaveEnabled = false
+        guard let rows = try? store.liveReplicas(of: noteID, in: context) else { return }
+        let latest = NoteStore.canonicalReplicas(from: rows).first
+        if latest == nil || latest?.revisionID != existing.baseRevisionID || latest?.tags != existing.baseTags {
+            store.refresh()
+        }
     }
 
     /// The preparation of a task route that needs no decode (a warm or an
@@ -618,9 +648,10 @@ final class NotesPageController: ObservableObject {
         return TaskNotePreparedOpen(taskID: taskID, noteID: plan.noteID, bytes: nil, load: nil)
     }
 
-    /// Resolve a cold task-owned document before constructing its presenter.
-    /// Only bytes reach the decoder; SwiftData rows, the editor and leases
-    /// remain on the main actor. A route change invalidates this preparation.
+    /// Resolve a task-owned document that must decode before constructing its
+    /// presenter. Only bytes reach the decoder; SwiftData rows, the editor and
+    /// leases remain on the main actor. A route change invalidates this
+    /// preparation, as does a change to the note, the session or its lease.
     func prepareTaskNoteOpen(taskID: UUID) async throws -> TaskNotePreparedOpen {
         let plan = try taskNoteOpenPlan(taskID: taskID)
         var bytes: Data?
@@ -633,6 +664,12 @@ final class NotesPageController: ObservableObject {
             guard !Task.isCancelled, let current = store.note(withID: noteID),
                   current.revisionID == decode.revision, current.content == decode.bytes else {
                 throw WorkspaceFoundationError.conflict
+            }
+            if let stale = decode.staleSession {
+                // The same clean, unleased session must still be the cached one.
+                guard cache[noteID] === stale, isStaleClean(stale, against: current) else {
+                    throw WorkspaceFoundationError.conflict
+                }
             }
             load = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: decode.revision)
         }
@@ -1636,19 +1673,11 @@ final class NotesPageController: ObservableObject {
         if let existing, !existing.usesWorkspaceBinding {
             // Reopen checks this UUID's physical rows only. A warm hit must
             // not reload every unrelated note and attachment in the store.
-            let context = ModelContext(store.container)
-            context.autosaveEnabled = false
-            guard let rows = try? store.liveReplicas(of: noteID, in: context) else { return nil }
-            let latest = NoteStore.canonicalReplicas(from: rows).first
-            if latest == nil || latest?.revisionID != existing.baseRevisionID || latest?.tags != existing.baseTags {
-                // An actual external change replaces the stale store context
-                // before presentSession rebuilds the clean cached engine.
-                store.refresh()
-            }
+            refreshStoreIfRevisedElsewhere(noteID, existing: existing)
         }
         guard let note = store.note(withID: noteID) else { return nil }
         guard let session = (existing ?? session(for: note, preparedLoad: preparedLoad)).flatMap({
-            $0.usesWorkspaceBinding ? $0 : presentSession($0)
+            $0.usesWorkspaceBinding ? $0 : presentSession($0, preparedLoad: preparedLoad)
         }) else { return nil }
         if let existing, session !== existing {
             // A closed workspace still has its ordered history. An external
@@ -1928,7 +1957,11 @@ final class NotesPageController: ObservableObject {
 
     /// A clean cached session is rebuilt once, at presentation, if its store
     /// revision moved. A missing clean note is dropped.
-    private func presentSession(_ session: NoteSession, refreshingWorkspace: Bool = false) -> NoteSession? {
+    ///
+    /// `preparedLoad` is a decode already done off the main actor for this
+    /// very revision; it replaces the synchronous load of a rebuild.
+    private func presentSession(_ session: NoteSession, refreshingWorkspace: Bool = false,
+                                preparedLoad: NoteDocumentLoad? = nil) -> NoteSession? {
         if !refreshingWorkspace {
             guard session.workspacePage?.activeLease == nil else { return nil }
             // Bound notes refresh only through the workspace's history barrier.
@@ -1953,8 +1986,9 @@ final class NotesPageController: ObservableObject {
             }
             return session
         }
+        let prepared = preparedLoad.flatMap { $0.noteID == note.id && $0.revisionID == note.revisionID ? $0 : nil }
         if session.usesWorkspaceBinding {
-            guard let load = store.loadDocument(noteID: session.noteID) else { return nil }
+            guard let load = prepared ?? store.loadDocument(noteID: session.noteID) else { return nil }
             let reason: NoteReadOnlyReason? = if case let .readOnly(_, reason, _) = load.content { reason } else { nil }
             session.replaceEngine(makeEngine(noteID: session.noteID, document: load.content.document ?? .blank,
                 readOnly: reason != nil, tags: note.tags, bodyOnly: note.taskID != nil))
@@ -1968,7 +2002,7 @@ final class NotesPageController: ObservableObject {
         }
         cache[session.noteID] = nil
         session.engine.detachView()
-        let rebuilt = self.session(for: note)
+        let rebuilt = self.session(for: note, preparedLoad: prepared)
         if session.recoveryClaim != nil { retiredNoteIDs.remove(session.noteID) }
         rebuilt?.recoveryClaim = session.recoveryClaim
         return rebuilt
