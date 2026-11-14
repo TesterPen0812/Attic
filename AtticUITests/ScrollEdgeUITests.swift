@@ -567,9 +567,10 @@ private final class HoverScrollHangRecovery {
             steps.append("screencapture not run: no window of the app")
         }
         // The stack the freeze is in, before the process is killed.
-        steps.append("sample \(runHangTool("/usr/bin/sample", [String(pid), "3", "-file", sample.path], timeout: 10)); file \(FileManager.default.fileExists(atPath: sample.path) ? "written" : "missing")")
-        try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
-        if pid > 0 { _ = Darwin.kill(pid, SIGTERM) }
+        HangStackRecovery.sampleThenTerminate(pid: pid, output: sample, beforeTermination: { result in
+            steps.append("sample \(result); file \(FileManager.default.fileExists(atPath: sample.path) ? "written" : "missing")")
+            try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
+        })
         timer.cancel()
     }
 }
@@ -775,6 +776,21 @@ func runHangTool(_ executable: String, _ arguments: [String], timeout: TimeInter
     return "exited \(process.terminationStatus)" + (output.isEmpty ? "" : ": \(output)")
 }
 
+/// The stack must be attempted before terminating the launched app, even when
+/// no window is available. The callbacks let a test verify this order without
+/// sampling or terminating any real process.
+enum HangStackRecovery {
+    static func sampleThenTerminate(pid: Int32, output: URL,
+                                    run: (String, [String], TimeInterval) -> String = runHangTool,
+                                    beforeTermination: (String) -> Void,
+                                    terminate: (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
+        guard pid > 0 else { return }
+        let result = run("/usr/bin/sample", [String(pid), "3", "-file", output.path], 10)
+        beforeTermination(result)
+        terminate(pid)
+    }
+}
+
 /// The decisions behind ScrollEdgeUITests' hang recovery, with a fake clock,
 /// fake window lists and injected failures. No app is launched and nothing is
 /// scrolled, so these run in any UI lane in a fraction of a second.
@@ -783,6 +799,25 @@ final class HangRecoverySupportTests: XCTestCase {
 
     private func hang(waits: Int?, age: Double = 1) -> HangProbeReading {
         HangProbeReading(isHang: true, healthyWaits: waits, ageSeconds: age)
+    }
+
+    func testTheStackIsSampledAndEvidenceFinishedBeforeTermination() {
+        var actions: [String] = []
+        let output = URL(fileURLWithPath: "/tmp/fake-hang-stack.txt")
+        HangStackRecovery.sampleThenTerminate(pid: 42, output: output, run: { tool, arguments, timeout in
+            XCTAssertEqual(tool, "/usr/bin/sample")
+            XCTAssertEqual(arguments, ["42", "3", "-file", output.path])
+            XCTAssertEqual(timeout, 10)
+            actions.append("sample")
+            return "exited 0"
+        }, beforeTermination: { result in
+            XCTAssertEqual(result, "exited 0")
+            actions.append("evidence")
+        }, terminate: { pid in
+            XCTAssertEqual(pid, 42)
+            actions.append("terminate")
+        })
+        XCTAssertEqual(actions, ["sample", "evidence", "terminate"])
     }
 
     // MARK: Dot R-6: only a continuous stall is killed
