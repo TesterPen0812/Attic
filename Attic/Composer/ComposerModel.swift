@@ -190,6 +190,7 @@ final class ComposerModel: ObservableObject {
     private var failedEventDrafts: [ComposerDraftStore.FailedEvent] = []
     private var recoveringFailedEvent: ComposerDraftStore.FailedEvent?
     private var seededTags: [String]?
+    private var openingTags: [String]?
 
     static let lengths = [30, 60, 90, 120]
 
@@ -239,6 +240,10 @@ final class ComposerModel: ObservableObject {
     /// An empty draft starts with `tags` (a filtered page's picked tags),
     /// so what is made there stays in view.
     func startTags(_ tags: [String]) {
+        openingTags = tags
+    }
+
+    private func seedTags(_ tags: [String]) {
         guard !tags.isEmpty, tasks.addBar == TaskAddBarText(), writing.isEmpty else { return }
         tasks.addBar.picked.tags = tags
         seededTags = tags
@@ -259,6 +264,8 @@ final class ComposerModel: ObservableObject {
         if !page.kinds.contains(kind) { kind = kind == .event ? .task : page.ownKind }
         if !page.kinds.contains(kind) { kind = .note }
         settleDraftOwner()
+        if let tags = openingTags { seedTags(tags) }
+        openingTags = nil
         if kind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
         fillCalendarDay()

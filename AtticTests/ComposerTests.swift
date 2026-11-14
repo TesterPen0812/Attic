@@ -218,6 +218,25 @@ final class ComposerTests: XCTestCase {
         }
     }
 
+
+    func testR5LibraryTagsSeedTheNoteAfterItsTaskOwnerIsSetAside() throws {
+        for taskTitle in ["", "Invoice for Bob"] {
+            let fresh = TasksPageModel(library: library)
+            let card = ComposerModel(tasks: fresh)
+            card.open(on: .tasks(.now))
+            fresh.addBar = TaskAddBarText(text: taskTitle)
+            fresh.addBarState.stagingFiles = 1
+            card.startTags(["library"])
+            card.open(on: .notes)
+            XCTAssertEqual(fresh.addBar.picked.tags, ["library"], "the opened Note owns the library filter")
+            fresh.addBar.text = "Half a note"
+            card.open(on: .tasks(.now))
+            card.choose(.task)
+            XCTAssertEqual(fresh.addBar.text, taskTitle)
+            XCTAssertTrue(fresh.addBar.picked.tags.isEmpty, "Notes tags never leak onto the Task")
+        }
+    }
+
     private func type(_ text: String) {
         // Typing keeps the draft's picks (the Calendar's day), as the field does.
         var draft = TaskAddBarText(text: text)

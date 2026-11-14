@@ -3737,8 +3737,8 @@ struct TasksPage: View {
                                // A new task starts with the picked tags (and
                                // In Progress while that filter is on), so it
                                // doesn't vanish as you make it (13 Nov).
-                               model.startDraftFromFilter()
                                if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
+                               model.startDraftFromFilter()
                            }, selectionBar: selectionBarShown ? AnyView(selectionBar) : nil) {
                 addBar
             }
