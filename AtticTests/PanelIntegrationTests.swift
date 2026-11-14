@@ -851,38 +851,57 @@ final class PanelIntegrationTests: XCTestCase {
     }
 
     func testCalendarSwipeFailedSaveReleasesInteractionAndRestoresThePanel() async throws {
-        let rig = try makePanel()
-        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
-        spin(0.5)
-        let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
-        let rows = CalendarEventRowState(makeWriter: { writer })
-        await rows.toggle(writer.event)
-        XCTAssertTrue(rows.canEdit)
-        rows.title = "Uncommitted edit"
-        writer.error = .eventChanged
-        CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
+        let previousReduceMotion = AtticMotionPreference.systemReduceMotionOverride
+        let previousLevel = AtticMotionPreference.level
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previousReduceMotion
+            AtticMotionPreference.level = previousLevel
+        }
+        AtticMotionPreference.level = .lively
+        for reduced in [false, true] {
+            AtticMotionPreference.systemReduceMotionOverride = reduced
+            let rig = try makePanel()
+            XCTAssertEqual(rig.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
+            spin(0.5)
+            let writer = CalendarProHeldWriter(start: Date(timeIntervalSince1970: 1_793_361_600))
+            let rows = CalendarEventRowState(makeWriter: { writer })
+            await rows.toggle(writer.event)
+            XCTAssertTrue(rows.canEdit)
+            rows.title = "Uncommitted edit"
+            writer.error = .eventChanged
+            CalendarDraftTerminationRegistry.shared.register(rows, owner: .docked)
 
-        // A real pull starts by collapsing the live panel and locking input.
-        let window = rig.controller.panelForTesting
-        window.onTrackpadDismissProgress?(120)
-        XCTAssertTrue(rig.uiState.interactionLockReasons.contains(.panelSwipe), "the swipe owns input while moving")
-        window.onTrackpadDismissRequest?()
-        // The error is published before requestHide's completion runs. Wait
-        // for both so the assertion exercises the finished hide transaction.
-        spin(until: {
-            rows.failure != nil && !rig.uiState.interactionLockReasons.contains(.panelSwipe)
-        })
-        XCTAssertNotNil(rows.failure, "the failed writer leaves its error visible")
-        XCTAssertEqual(rows.title, "Uncommitted edit", "the draft survives the rejected hide")
-        XCTAssertTrue(rig.controller.isPanelVisible)
-        XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.panelSwipe),
-                       "the rejected hide must release the swipe lock so the editor is usable")
-        spin(0.5)
-        XCTAssertTrue(rig.controller.acceptsInputForProbe,
-                      "the failed save must restore the full, interactive panel")
+            // The live pull both changes presentation and locks input.
+            let window = rig.controller.panelForTesting
+            let surface = try XCTUnwrap(window.contentView as? AtticPanelContentContainer)
+            window.onTrackpadDismissProgress?(120)
+            XCTAssertTrue(rig.uiState.interactionLockReasons.contains(.panelSwipe), "the swipe owns input while moving")
+            if reduced {
+                XCTAssertLessThan(surface.motionOpacity(presented: false), 1, "Reduced motion dims the live pull")
+            } else {
+                XCTAssertGreaterThan(rig.controller.displayedProgressForProbe, 0,
+                                     "Full motion moves the panel with the swipe")
+            }
+            window.onTrackpadDismissRequest?()
+            // The error is published before requestHide's completion runs.
+            spin(until: {
+                rows.failure != nil && !rig.uiState.interactionLockReasons.contains(.panelSwipe)
+            })
+            XCTAssertNotNil(rows.failure, "the failed writer leaves its error visible")
+            XCTAssertEqual(rows.title, "Uncommitted edit", "the draft survives the rejected hide")
+            XCTAssertTrue(rig.controller.isPanelVisible)
+            XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.panelSwipe),
+                           "the rejected hide must release the swipe lock so the editor is usable")
+            spin(until: { surface.motionIsAtRest && rig.controller.acceptsInputForProbe })
+            XCTAssertTrue(surface.motionIsAtRest, "the panel must finish its spring-back or reduced fade")
+            XCTAssertEqual(surface.motionOpacity(presented: false), 1, accuracy: 0.01)
+            XCTAssertEqual(rig.controller.displayedProgressForProbe, 0, accuracy: 0.02)
+            XCTAssertTrue(rig.controller.acceptsInputForProbe,
+                          "the failed save must restore the full, interactive panel")
 
-        writer.error = nil
-        _ = await rows.close()
+            writer.error = nil
+            _ = await rows.close()
+        }
     }
 
     func testActivationDuringAndAfterAHideNeverSupersedesTheHide() throws {
