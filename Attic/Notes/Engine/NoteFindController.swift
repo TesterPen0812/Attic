@@ -53,6 +53,14 @@ final class NoteFindController: ObservableObject {
     private var replacesQuery = false
     /// The top row's field has not had the keyboard yet in this Find.
     private var awaitingField = false
+    /// Retain real key events through the field-mount interval so an input
+    /// method can compose across the handoff. `query` is updated eagerly for
+    /// ordinary keys to keep the accepted first-key response immediate, but
+    /// the native field editor replays these events from the original query.
+    private var pendingInputEvents: [NSEvent] = []
+    private var pendingInputBaseQuery: String?
+    private var pendingInputReplacesQuery = false
+    private var pendingInputComposition = false
     /// The top row's field (the page draws it; found by this identifier).
     static let fieldIdentifier = "note-find"
     private var topInset: CGFloat = 0
@@ -77,7 +85,10 @@ final class NoteFindController: ObservableObject {
                 let responder = window.firstResponder
                 let inNote = responder === view || self.engine?.activeTableView?.isFocused == true
                 let inFind = self.isFindField(responder)
-                if inFind { self.typeAheadDeadline = nil; self.awaitingField = false }
+                // The native field can take focus before its onAppear
+                // callback. Replay pending keys before its next real key.
+                if inFind, self.awaitingField { self.topRowFieldAppeared() }
+                if inFind, !self.awaitingField { self.typeAheadDeadline = nil }
                 if inNote, self.typeAhead(event) { return nil }
                 if inFind, self.replacesQuery, Self.isTyping(event), let editor = responder as? NSTextView {
                     // The last query, still selected, gives way to the key.
@@ -119,21 +130,57 @@ final class NoteFindController: ObservableObject {
         }
     }
 
-    /// A key typed after ⌘F while the top row's field is still on its way:
-    /// it edits the query (Delete too), never the note.
+    /// Capture keys before the field appears. Early plain-text feedback is
+    /// provisional; the field editor remains the authority for composition.
     @discardableResult
     func typeAhead(_ event: NSEvent) -> Bool {
         guard shownInTopRow, isShown, fieldFocused, awaitingField, let deadline = typeAheadDeadline,
               ProcessInfo.processInfo.systemUptime < deadline else { return false }
-        if event.keyCode == 51, event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            if replacesQuery { query = "" } else if !query.isEmpty { query.removeLast() }
-            replacesQuery = false
-            return true
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard !modifiers.contains(.command), !modifiers.contains(.control) else { return false }
+        let isDelete = event.keyCode == 51 && !modifiers.contains(.option)
+        let isPlainTyping = Self.isTyping(event)
+        // Dead keys and early IME key-downs may have no `characters`. They
+        // must still be delivered to NSTextInputClient, even before a glyph
+        // exists. Never consume navigation keys as text.
+        let isComposingKey = (event.characters?.isEmpty ?? true) && event.keyCode <= 50
+            && event.keyCode != 36 && event.keyCode != 48
+        guard isDelete || isPlainTyping || isComposingKey else { return false }
+        if pendingInputEvents.isEmpty {
+            pendingInputBaseQuery = query
+            pendingInputReplacesQuery = replacesQuery
         }
-        guard Self.isTyping(event), let characters = event.characters else { return false }
-        if replacesQuery { query = characters } else { query += characters }
+        pendingInputEvents.append(event)
+        pendingInputComposition = pendingInputComposition || isComposingKey || modifiers.contains(.option)
+        if !pendingInputComposition {
+            if isDelete {
+                if replacesQuery { query = "" } else if !query.isEmpty { query.removeLast() }
+            } else if let characters = event.characters {
+                if replacesQuery { query = characters } else { query += characters }
+            }
+        }
         replacesQuery = false
         return true
+    }
+
+    private func replayPendingInput(to editor: NSTextView, field: NSTextField) {
+        guard !pendingInputEvents.isEmpty else { return }
+        let original = pendingInputBaseQuery ?? query
+        // SwiftUI may already have drawn our provisional ASCII query. Reset
+        // the field editor to the original selection before native replay;
+        // otherwise those keystrokes would be inserted twice.
+        if field.stringValue != original { field.stringValue = original }
+        if editor.string != original { editor.string = original }
+        let length = (original as NSString).length
+        editor.setSelectedRange(pendingInputReplacesQuery
+            ? NSRange(location: 0, length: length) : NSRange(location: length, length: 0))
+        let events = pendingInputEvents
+        pendingInputEvents.removeAll()
+        pendingInputBaseQuery = nil
+        pendingInputReplacesQuery = false
+        pendingInputComposition = false
+        for event in events { editor.interpretKeyEvents([event]) }
+        if !editor.hasMarkedText(), query != editor.string { query = editor.string }
     }
 
     /// The top row's field has appeared: it takes the keyboard (unless the
@@ -148,11 +195,15 @@ final class NoteFindController: ObservableObject {
                     || window.firstResponder === window || window.firstResponder == nil,
                   window.makeFirstResponder(field) else { return }
         }
+        guard let editor = field.currentEditor() as? NSTextView else { return }
         typeAheadDeadline = nil
         awaitingField = false
-        guard let editor = field.currentEditor() else { return }
-        let length = (editor.string as NSString).length
-        editor.selectedRange = replacesQuery ? NSRange(location: 0, length: length) : NSRange(location: length, length: 0)
+        if pendingInputEvents.isEmpty {
+            let length = (editor.string as NSString).length
+            editor.selectedRange = replacesQuery ? NSRange(location: 0, length: length) : NSRange(location: length, length: 0)
+        } else {
+            replayPendingInput(to: editor, field: field)
+        }
         replacesQuery = false
     }
 
@@ -183,6 +234,10 @@ final class NoteFindController: ObservableObject {
         if inTopRow || (isShown && shownInTopRow) {
             if !isShown {
                 shownInTopRow = true
+                pendingInputEvents.removeAll()
+                pendingInputBaseQuery = nil
+                pendingInputReplacesQuery = false
+                pendingInputComposition = false
                 replacesQuery = !query.isEmpty
                 typeAheadDeadline = ProcessInfo.processInfo.systemUptime + 1
                 awaitingField = true
@@ -236,6 +291,10 @@ final class NoteFindController: ObservableObject {
         typeAheadDeadline = nil
         replacesQuery = false
         awaitingField = false
+        pendingInputEvents.removeAll()
+        pendingInputBaseQuery = nil
+        pendingInputReplacesQuery = false
+        pendingInputComposition = false
         matches = []
         index = nil
         if !shownInTopRow { engine?.scrollView?.contentInsets.top = topInset }
