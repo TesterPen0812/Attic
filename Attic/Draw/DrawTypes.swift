@@ -211,11 +211,16 @@ protocol DrawStoreProtocol: AnyObject {
     var hasUnsettledEdits: Bool { get }
     var recoveryIssue: String? { get }
     func library(deleted: Bool) throws -> [DrawCanvas]
-    /// The live library list is metadata only; each row reads its own
-    /// thumbnail body through `searchThumbnail` when it is built.
+    /// The live library list is metadata only; each row reads its thumbnail
+    /// through `searchThumbnail` when it is built.
     func presentationLibrary() throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
-    /// Hydrate one realized search result without opening its drawing.
+    /// The thumbnail of one realized row, without opening its drawing. The
+    /// store keeps a bounded number of them; a miss reads this row and the
+    /// uncached rows after it in the same window (a page of 12 in the order
+    /// of the last list asked for, the menu's or the search's) in one batch.
+    /// A canvas it has not listed yet refreshes the list first; nil means
+    /// there is no such canvas.
     func searchThumbnail(_ id: UUID) throws -> DrawCanvas?
     func create(name: String?) -> DrawCanvas
     func open(_ id: UUID) throws -> DrawSnapshot
