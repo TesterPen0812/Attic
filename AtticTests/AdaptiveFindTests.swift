@@ -331,9 +331,8 @@ final class AdaptiveFindTests: XCTestCase {
             }
             send(key(3, "f", flags: .command, in: panel))
             XCTAssertTrue(engine.find.isShown, "⌘F opens Find through the note's key monitor")
-            // Hold the main-thread mount handoff beyond the old one-second
-            // type-ahead deadline: pending Find still owns editing commands.
-            Thread.sleep(forTimeInterval: 1.05)
+            // No run-loop turn: the field has not mounted yet. The separate
+            // failed-mount regression covers expiry and discarding queued input.
             send(key(9, "v", flags: .command, in: panel))
             XCTAssertEqual(engine.textStorage.string, original, "the note's selection is not replaced")
             spin(0.8)
@@ -551,6 +550,17 @@ final class AdaptiveFindTests: XCTestCase {
                 engine.find.close()
                 spin(0.1)
             }
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            XCTAssertNil(engine.find.routeKeyDown(key(3, "f", flags: .command, in: panel)))
+            // Keep both the field's mount and its expiry timer off the run loop.
+            Thread.sleep(forTimeInterval: 1.05)
+            let late = engine.find.routeKeyDown(key(51, "\u{7f}", flags: .command, in: panel))
+            XCTAssertNil(late, "an editing key that discovers expiry still cannot reach the note")
+            if let late { panel.sendEvent(late) }
+            XCTAssertFalse(engine.find.isShown)
+            XCTAssertEqual(engine.document(), original)
+            XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
         }
     }
 
@@ -618,6 +628,52 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertTrue((panel.firstResponder as? NSTextView)?.isFieldEditor == true)
             XCTAssertEqual(engine.document(), original)
             engine.find.close(returnFocus: false)
+        }
+    }
+
+    func testR3MissingFindFieldExpiresWithoutReplayingIntoTheNote() throws {
+        try requireKeyWindowTests()
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        let (scroll, view) = engine.makeView()
+        final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+        let panel = KeyPanel(contentRect: CGRect(x: -4000, y: -4000, width: 320, height: 400),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false; panel.contentView = scroll; panel.makeKeyAndOrderFront(nil)
+        defer { engine.detachView(); panel.contentView = nil; panel.close() }
+        engine.find.inTopRow = true
+        engine.find.inputSourceIdentifier = { "com.apple.keylayout.ABC" }
+        XCTAssertTrue(panel.makeFirstResponder(view))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertNil(engine.find.routeKeyDown(key(3, "f", flags: .command, in: panel)))
+        XCTAssertNil(engine.find.routeKeyDown(key(0, "a", in: panel)))
+        spin(1.1)
+        let event = key(11, "b", in: panel)
+        if let forwarded = engine.find.routeKeyDown(event) { panel.sendEvent(forwarded) }
+        XCTAssertEqual(engine.document().blocks.last?.text, "Bodyb", "typing resumes after the bounded handoff")
+        // A field appearing late never replays the held 'a' into the note.
+        engine.find.topRowFieldAppeared()
+        XCTAssertEqual(engine.document().blocks.last?.text, "Bodyb")
+        XCTAssertFalse(engine.find.isShown, "failed mounting ends Find instead of invisibly retaining input")
+    }
+
+    func testR3PendingFindInputHasABoundedQueue() throws {
+        try requireKeyWindowTests()
+        try withNote { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(panel.makeFirstResponder(engine.textView))
+            let original = engine.document()
+            engine.find.inputHandoffUptime = { 0 } // This guard must not pass because of the time bound.
+            engine.find.show()
+            // No run-loop turn: the field cannot mount. Exceed the input cap.
+            for index in 0..<1024 {
+                if index % 32 == 0 {
+                    XCTAssertNotNil(engine.find.routeKeyDown(key(1, "s", flags: .command, in: panel)),
+                                    "a full queue must still let genuine global shortcuts through")
+                }
+                _ = engine.find.routeKeyDown(key(0, "a", flags: .command, in: panel))
+            }
+            XCTAssertFalse(engine.find.isShown, "a failed mount cannot retain an unbounded queue")
+            XCTAssertEqual(engine.document(), original, "overflow discards pending edits")
         }
     }
 

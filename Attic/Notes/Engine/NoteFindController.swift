@@ -81,6 +81,8 @@ final class NoteFindController: ObservableObject {
     /// The keyboard input source in use (an identifier such as
     /// `com.apple.keylayout.ABC`); a test seam over the text input context.
     var inputSourceIdentifier: () -> String? = { nil }
+    /// Monotonic time; a test can freeze it to check the queue bound independently.
+    var inputHandoffUptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
     /// The room the card takes above the note: none in the top row.
     var clearance: CGFloat { isShown && !shownInTopRow ? Self.height : 0 }
@@ -235,32 +237,27 @@ final class NoteFindController: ObservableObject {
     func typeAhead(_ event: NSEvent) -> Bool {
         guard shownInTopRow, isShown, fieldFocused, awaitingField else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if Self.editingCommand(event) != nil || Self.navigationDirection(event) != nil || Self.isNativeEditingKey(event) {
-            // ⌘V and the like would reach the note's own selection: queue
-            // them for the field and replay them there, in order.
-            if pendingInputEvents.isEmpty {
-                pendingInputBaseQuery = query
-                pendingInputReplacesQuery = replacesQuery
-            }
-            pendingInputEvents.append(event)
+        let editing = Self.editingCommand(event) != nil || Self.isNativeEditingKey(event)
+        let navigation = Self.navigationDirection(event)
+        let isDelete = event.keyCode == 51 || event.keyCode == 117
+        let isPlainTyping = Self.isTyping(event)
+        let isComposingKey = (event.characters?.isEmpty ?? true) && event.keyCode <= 50
+            && event.keyCode != 36 && event.keyCode != 48
+        let textKey = modifiers.isDisjoint(with: [.command, .control]) && (isDelete || isPlainTyping || isComposingKey)
+        if expirePendingInput() {
+            // A blocked run loop may deliver this key before the expiry timer.
+            // It was pressed during the handoff: discard field input, while
+            // genuine global shortcuts (including ⌘G) retain their routing.
+            return editing || textKey || (navigation != nil && !modifiers.contains(.command))
+        }
+        if editing || navigation != nil {
+            guard enqueuePendingInput(event) else { return true }
             pendingInputComposition = true
             replacesQuery = false
             return true
         }
-        guard !modifiers.contains(.command), !modifiers.contains(.control) else { return false }
-        let isDelete = event.keyCode == 51 || event.keyCode == 117
-        let isPlainTyping = Self.isTyping(event)
-        // Dead keys and early IME key-downs may have no `characters`. They
-        // must still be delivered to NSTextInputClient, even before a glyph
-        // exists. Never consume navigation keys as text.
-        let isComposingKey = (event.characters?.isEmpty ?? true) && event.keyCode <= 50
-            && event.keyCode != 36 && event.keyCode != 48
-        guard isDelete || isPlainTyping || isComposingKey else { return false }
-        if pendingInputEvents.isEmpty {
-            pendingInputBaseQuery = query
-            pendingInputReplacesQuery = replacesQuery
-        }
-        pendingInputEvents.append(event)
+        guard textKey else { return false }
+        guard enqueuePendingInput(event) else { return true }
         pendingInputComposition = pendingInputComposition || isComposingKey || modifiers.contains(.option) || event.keyCode == 117
             || inputSourceComposes
         if !pendingInputComposition {
@@ -271,6 +268,30 @@ final class NoteFindController: ObservableObject {
             }
         }
         replacesQuery = false
+        return true
+    }
+
+    private func enqueuePendingInput(_ event: NSEvent) -> Bool {
+        guard pendingInputEvents.count < 256 else { abandonPendingInput(); return false }
+        if pendingInputEvents.isEmpty {
+            pendingInputBaseQuery = query
+            pendingInputReplacesQuery = replacesQuery
+        }
+        pendingInputEvents.append(event)
+        return true
+    }
+
+    private func abandonPendingInput() {
+        let original = pendingInputBaseQuery
+        close(returnFocus: false)
+        if let original, query != original { query = original }
+    }
+
+    @discardableResult
+    private func expirePendingInput() -> Bool {
+        guard awaitingField, let deadline = typeAheadDeadline,
+              inputHandoffUptime() >= deadline else { return false }
+        abandonPendingInput()
         return true
     }
 
@@ -320,6 +341,7 @@ final class NoteFindController: ObservableObject {
     /// keyboard went elsewhere meanwhile), the last query selected, or the
     /// caret after what was typed ahead.
     func topRowFieldAppeared() {
+        guard !expirePendingInput() else { return }
         guard shownInTopRow, isShown, fieldFocused, awaitingField,
               let field = topRowField(), let window = field.window else { return }
         let editor = field.currentEditor() as? NSTextView
@@ -377,9 +399,14 @@ final class NoteFindController: ObservableObject {
                 pendingInputReplacesQuery = false
                 pendingInputComposition = false
                 replacesQuery = !query.isEmpty
-                typeAheadDeadline = ProcessInfo.processInfo.systemUptime + 1
+                let deadline = inputHandoffUptime() + 1
+                typeAheadDeadline = deadline
                 awaitingField = true
                 isShown = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    guard let self, self.awaitingField, self.typeAheadDeadline == deadline else { return }
+                    self.expirePendingInput()
+                }
                 refresh(selectFirst: false)
             } else if let field = topRowField() {
                 // ⌘F again: the field takes the keyboard back, the query
