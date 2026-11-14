@@ -6,6 +6,20 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    /// A vetoed quit reveals the panel and takes the key, which is the product
+    /// behaviour. A coordinator these tests build then leaves a key AtticPanel
+    /// and an active application behind for every later test, and tests that
+    /// need no key window or an inactive host failed on it (CI 43520365761).
+    /// Whatever this test revealed goes away with the test.
+    @MainActor
+    override func tearDown() async throws {
+        for window in NSApp.windows where window is AtticPanel || window is PanelIslandWindow {
+            window.orderOut(nil)
+        }
+        if NSApp.isActive { NSApp.deactivate() }
+        try await super.tearDown()
+    }
+
     @MainActor
     func testR8QuitDrainsAllMatchingModelsVetoesFailureAndLeavesOtherStoresAlone() async throws {
         struct Rejected: Error {}
