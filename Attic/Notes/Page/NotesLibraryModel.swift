@@ -115,6 +115,11 @@ final class NotesLibraryModel: ObservableObject {
     @Published private(set) var showsLoading = false
     /// The row the keyboard's ↑ ↓ are on.
     @Published var highlightedID: UUID?
+
+    /// A note has taken input, before its first frame and document arrive.
+    /// Read only by the key monitor; no drawing depends on this handoff.
+    var openingNoteRequest: UUID?
+
     /// The tags All notes shows (none: every note), several since 13 Nov
     /// with Any · All (Accepted 2026-11-13: Notes uses the same bar, with
     /// its own picks). A search looks inside them. They stay while the

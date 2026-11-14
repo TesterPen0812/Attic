@@ -989,6 +989,7 @@ struct NotesEditorPage: View {
     }
 
     private func openFromLibrary(_ id: UUID) {
+        sharedChrome?.releasePlusKeyboard()
         IdleLatencyTrace.controlDispatched(.noteOpen)
         // A task's own note opens as its task's page (§ 5.3), over Notes.
         let query = library.query
@@ -1009,9 +1010,14 @@ struct NotesEditorPage: View {
                 library.clearSearch()
             }
         } else {
+            let request = UUID()
+            library.openingNoteRequest = request
             growNote(from: id)
             let style = noteGrow.style
             Task { @MainActor in
+                defer {
+                    if library.openingNoteRequest == request { library.openingNoteRequest = nil }
+                }
                 // The click's first frame goes out before the note is built.
                 await AtticGrowDriver.yieldFirstFrame(style)
                 if await controller.openFromLibrary(noteID: id, searchQuery: query) {

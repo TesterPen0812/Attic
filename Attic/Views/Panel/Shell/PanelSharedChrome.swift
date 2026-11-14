@@ -38,11 +38,21 @@ final class PanelSharedChrome: ObservableObject {
     private(set) var plusHasKeyboard = false
 
     private var plusKeyboardOwner: UUID?
+    private var releasePlus: (@MainActor () -> Void)?
 
-    func notePlusKeyboard(_ has: Bool, owner: UUID? = nil) {
+    func notePlusKeyboard(_ has: Bool, owner: UUID? = nil, release: (@MainActor () -> Void)? = nil) {
         if !has, let owner, plusKeyboardOwner != owner { return }
         plusKeyboardOwner = has ? owner : nil
+        releasePlus = has ? release : nil
         if plusHasKeyboard != has { plusHasKeyboard = has }
+    }
+
+    /// Release before opening a note yields its first frame: a second key
+    /// must already belong to that note, even while the bar is folding away.
+    func releasePlusKeyboard() {
+        let release = releasePlus
+        notePlusKeyboard(false)
+        release?()
     }
 
     /// What the controls do, per page. Not observable: only a click reads them.
@@ -315,7 +325,17 @@ private struct PanelPlusFocus: ViewModifier {
         if now {
             lender = requests
             requests?.note(PanelPlusFocusID(), focused: true, owner: keyboardOwner)
-            chrome?.notePlusKeyboard(true, owner: keyboardOwner)
+            let focus = $focused
+            let arming = $armed
+            let token = handoff
+            let owner = keyboardOwner
+            let focusRequests = requests
+            chrome?.notePlusKeyboard(true, owner: owner, release: {
+                token.cancel()
+                arming.wrappedValue = false
+                focus.wrappedValue = false
+                focusRequests?.note(PanelPlusFocusID(), focused: false, owner: owner)
+            })
         } else {
             lender?.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner)
             chrome?.notePlusKeyboard(false, owner: keyboardOwner)

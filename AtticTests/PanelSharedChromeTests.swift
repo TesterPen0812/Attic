@@ -1703,3 +1703,44 @@ extension PanelSharedChromeTests {
         }
     }
 }
+
+
+extension PanelSharedChromeTests {
+    func testR3ClickingANotesRowReleasesThePlusAndReturnKeepsTheNoteOpen() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        _ = try shell.notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Another launch note")]), tags: ["launch"]).get()
+        shell.spin(0.5)
+        let rows = library.groups(store: shell.notes, drafts: []).flatMap(\.rows)
+        XCTAssertEqual(rows.count, 2)
+        let clickedID = try XCTUnwrap(rows.first?.id)
+        shell.appKey(Self.downArrow, keyCode: 125)
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotEqual(library.highlightedID, clickedID, "the keyboard highlights a different note before the row click")
+        XCTAssertNotNil(library.highlightedID)
+        if NSApp.isFullKeyboardAccessEnabled { shell.tabTo("notes-new-note") }
+        else {
+            let report = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[.notes])
+            report(true)
+        }
+        let row = try XCTUnwrap(shell.element("notes-library-row"))
+        let object: AnyObject = row
+        let frame = try XCTUnwrap(object.accessibilityFrame?())
+        XCTAssertGreaterThan(frame.width, 0)
+        let point = shell.panel.convertPoint(fromScreen: CGPoint(x: frame.midX, y: frame.midY))
+        XCTAssertTrue(shell.panel.contentView!.bounds.contains(point))
+        // No view-update turn between the actual click and Return: neither
+        // a delayed registration nor a focus dump can hide stale ownership.
+        shell.appClick(at: point, settle: false)
+        let released = !shell.sharedChrome.plusHasKeyboard
+        ComposerOverlay.isPresented = false
+        shell.appKey("\r", keyCode: 36, settle: false)
+        shell.wait { !shell.draft.pages.isLibraryPresented }
+        XCTAssertFalse(shell.draft.pages.isLibraryPresented, "the click opened the chosen note")
+        shell.spin(0.5)
+        XCTAssertEqual(shell.draft.pages.active?.noteID, clickedID, "Return cannot replace the clicked note with the highlighted one while the first frame is pending")
+        XCTAssertTrue(released, "the row click releases + before another key can act")
+        XCTAssertFalse(ComposerOverlay.isPresented, "Return stays with the clicked note")
+    }
+}

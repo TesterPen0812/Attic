@@ -248,7 +248,9 @@ struct NotesLibraryView: View {
         // note is the note's, never the library's.
         // The library remains mounted under the shared '+' composer. Do not
         // interpret its title keystrokes as type-to-search or row shortcuts.
-        guard isCurrent, controller.isLibraryPresented, panelComposer?.isOpen() != true else { return false }
+        // The clicked note takes input before its first frame and bytes arrive.
+        guard isCurrent, controller.isLibraryPresented, model.openingNoteRequest == nil,
+              panelComposer?.isOpen() != true else { return false }
         // The tag bar holds the keys it uses while it has the keyboard, and
         // Esc while it is open (13 Nov).
         if PanelTagBarState.ownsKeys || (event.keyCode == 53 && PanelTagBarState.ownsEscape) { return false }
