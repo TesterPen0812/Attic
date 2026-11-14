@@ -532,6 +532,14 @@ private final class RealShell {
         spin(0.2)
     }
 
+    /// Runs the loop until `condition` holds, at most `seconds` (a release
+    /// goes through a SwiftUI update and one queued turn, which a loaded
+    /// machine delays).
+    func wait(_ seconds: TimeInterval = 4, until condition: () -> Bool) {
+        let end = Date().addingTimeInterval(seconds)
+        while !condition(), Date() < end { spin(0.05) }
+    }
+
     /// A click at `point` (window coordinates, origin bottom left) through
     /// `NSApp.sendEvent`.
     func appClick(at point: CGPoint) {
@@ -1072,6 +1080,7 @@ extension PanelSharedChromeTests {
             shell.spin(0.3)
             shell.state.panelDidReveal()
             shell.spin(0.6)
+            shell.wait { !shell.sharedChrome.plusHasKeyboard }
             XCTAssertFalse(shell.sharedChrome.plusHasKeyboard, "\(page): a reveal never leaves the keyboard on the plus")
         }
     }
@@ -1106,8 +1115,10 @@ extension PanelSharedChromeTests {
                 shell.sharedChrome.tagBar.close()
                 shell.spin(0.4)
             }
+            shell.wait { !shell.sharedChrome.tagBar.keyFocused }
             XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "\(how): # gave the keyboard up")
             shell.appKey(Self.downArrow, keyCode: 125)
+            shell.wait { library.highlightedID != nil }
             XCTAssertNotNil(library.highlightedID, "\(how): the arrows move the library highlight")
         }
     }
