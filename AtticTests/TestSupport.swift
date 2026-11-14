@@ -1,7 +1,37 @@
 import AppKit
 import Foundation
+import ObjectiveC
 import SwiftData
+import XCTest
 @testable import Attic
+
+/// A process-local system setting for hosted views. Attic's DEBUG seams
+/// control its policy; native SwiftUI/AppKit renderers also read NSWorkspace.
+@MainActor
+enum WorkspaceAccessibilityTestOverride {
+    // Keep the two blocks alive for the process, including native readers
+    // already in flight when a fixture restores the original implementation.
+    private static let readings: (off: IMP, on: IMP) = {
+        func getter(_ value: Bool) -> IMP {
+            let read: @convention(block) (AnyObject) -> Bool = { _ in value }
+            return imp_implementationWithBlock(read)
+        }
+        return (getter(false), getter(true))
+    }()
+
+    /// The caller must invoke the returned restoration in `defer`.
+    static func install(_ selector: Selector, value: Bool) throws -> @MainActor () -> Void {
+        let method = try XCTUnwrap(class_getInstanceMethod(NSWorkspace.self, selector))
+        let previous = method_setImplementation(method, value ? readings.on : readings.off)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                                   object: nil)
+        return {
+            method_setImplementation(method, previous)
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                                       object: nil)
+        }
+    }
+}
 
 /// An imported tombstone bypasses local Delete's input settlement and
 /// publication. Recovery tests need this external event (2026-10-23).

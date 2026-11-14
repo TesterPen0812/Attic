@@ -444,6 +444,10 @@ final class DeleteMotionHostedTests: XCTestCase {
         AtticMotionPreference.systemReduceMotionOverride = reduced
         AtticReducedMotionStyle.current = .fade
 
+        let restoreNativeMotion = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceMotion), value: reduced)
+        defer { restoreNativeMotion() }
+
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         var ids: [UUID] = []
         for title in ["Delete note", "Next note"] {
@@ -547,6 +551,19 @@ final class DeleteMotionHostedTests: XCTestCase {
                 }
                 try saveSheet(frames, surface: surface, dark: dark)
             }
+        }
+    }
+
+    /// Exercise the exact CI precondition even on a Mac with motion enabled,
+    /// including restoration of the native reading after every hosted check.
+    func testDeleteFixtureOverridesAndRestoresNativeReduceMotion() throws {
+        let restoreSystem = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceMotion), value: true)
+        defer { restoreSystem() }
+        for surface in [Surface.completedToday, .notesBoard, .notesLibrary, .tasks] {
+            try check(surface, reduced: false)
+            XCTAssertTrue(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                          "The hosted check must restore its caller's native setting")
         }
     }
 
