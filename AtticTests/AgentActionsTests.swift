@@ -1958,6 +1958,48 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertTrue(f.store.orderedTasks(for: .todo).allSatisfy { $0.priority == .none })
     }
 
+    func testBG53ExactItemNamesBeatShortenedMatchesAcrossTasksNotesAndDraw() async throws {
+        let store = try makeTestStore()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: store, notes: notes)
+        let draw = DrawInMemoryStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: store, noteStore: notes, library: library), draw: draw)
+        let tasks = try XCTUnwrap(library.createTasks([
+            TaskDraft(title: "The plan"), TaskDraft(title: "Plan")
+        ]))
+        let firstNote = try XCTUnwrap(notes.create(title: "The note", body: "First"))
+        let secondNote = try XCTUnwrap(notes.create(title: "Note", body: "Second"))
+        let firstCanvas = draw.create(name: "The plan")
+        let secondCanvas = draw.create(name: "Plan")
+        for canvas in [firstCanvas, secondCanvas] {
+            XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("Existing"))]), on: canvas.id).isSaved)
+        }
+        let request = actions.beginRequest(title: "Exact names")
+
+        _ = try performed(await actions.call(name: "update_task", arguments: [
+            "query": "The plan", "priority": "high"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(store.task(withID: tasks[0].id)?.priority, .high)
+        XCTAssertEqual(store.task(withID: tasks[1].id)?.priority, TaskPriority.none)
+
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "The note", "body": "Updated first"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: firstNote.id)?.body, "Updated first")
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Second")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "Note", "body": "Updated second"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Updated second")
+
+        let added = try performed(await actions.call(name: "draw_add_text", arguments: [
+            "canvas_name": "The plan", "text": "For this board", "x": 12, "y": 16
+        ], watching: false, requestID: request))
+        XCTAssertEqual(added.step.targets.first?.containerID, firstCanvas.id)
+        XCTAssertEqual(try draw.open(firstCanvas.id).objects.count, 2)
+        XCTAssertEqual(try draw.open(secondCanvas.id).objects.count, 1)
+    }
+
     func testRunConvenienceNoteEditsResolveTitleAndRevisionWithoutPreRead() async throws {
         let store = try makeTestStore()
         let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
