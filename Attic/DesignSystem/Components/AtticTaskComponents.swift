@@ -1497,6 +1497,9 @@ struct AtticTaskRow: View {
     static var evaluations: [UUID: Int] = [:]
     /// Test seam: whether each row last drew its ›.
     static var drawsOpen: [UUID: Bool] = [:]
+    /// Test seam: hover delivery while the pointer stays in place across a scroll.
+    static var hoverEvents: [UUID: Int] = [:]
+    static var hoverHistory: [UUID: [Bool]] = [:]
     #endif
 
     var body: some View {
@@ -1666,7 +1669,15 @@ struct AtticTaskRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
+        .onHover { inside in
+            #if DEBUG
+            Self.hoverEvents[model.id, default: 0] += 1
+            if Self.hoverHistory[model.id, default: []].count < 32 {
+                Self.hoverHistory[model.id, default: []].append(inside)
+            }
+            #endif
+            hovered = inside
+        }
         .onTapGesture {
             guard isEnabled else { return }
             switch Self.clickRoute(clickCount: Self.currentClickCount, edits: actions.editTitle != nil && capture == nil) {

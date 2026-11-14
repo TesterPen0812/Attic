@@ -679,16 +679,64 @@ struct TasksFoldLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        #if DEBUG
+        TasksFoldLayoutProbe.shared.measure(size.height)
+        #endif
         guard let visible else { return size }
         return CGSize(width: size.width, height: min(size.height, max(0, visible)))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let row = subviews.first else { return }
+        #if DEBUG
+        TasksFoldLayoutProbe.shared.place()
+        #endif
         let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
         row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }
+
+#if DEBUG
+/// Opt-in counter for a live lazy list. The lock also covers SwiftUI's
+/// off-main Layout calls; disabled unless a hosted hang regression enables it.
+final class TasksFoldLayoutProbe: @unchecked Sendable {
+    static let shared = TasksFoldLayoutProbe()
+    private let lock = NSLock()
+    private var enabled = false
+    private var measures = 0
+    private var placements = 0
+    private var heights: [Int: Int] = [:]
+
+    func start() {
+        lock.withLock {
+            enabled = true
+            measures = 0
+            placements = 0
+            heights = [:]
+        }
+    }
+
+    func stop() { lock.withLock { enabled = false } }
+
+    func measure(_ height: CGFloat) {
+        lock.withLock {
+            guard enabled else { return }
+            measures += 1
+            if height.isFinite { heights[Int((height * 256).rounded()), default: 0] += 1 }
+        }
+    }
+
+    func place() {
+        lock.withLock {
+            if enabled { placements += 1 }
+        }
+    }
+
+    func snapshot() -> (measures: Int, placements: Int, heights: [Int: Int]) {
+        lock.withLock { (measures, placements, heights) }
+    }
+}
+#endif
 
 /// Everything above `visible` points under the row's top (sideways and
 /// upwards unbounded, so a ring or shadow at the row's edge is kept).

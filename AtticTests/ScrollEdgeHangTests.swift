@@ -76,8 +76,17 @@ final class ScrollEdgeHangTests: XCTestCase {
         try check(reduceMotion: true, deltas: [], extraRows: 500, enablesAccessibility: false)
     }
 
+    /// CI's third pass: glass, dark, a stationary hovered row, and the
+    /// same two scroll deltas. A quiet run must stop measuring and placing
+    /// rows after the scroll and hover animations finish.
+    func testDarkGlassHoveredRowStopsUpdatingAfterScroll() throws {
+        try check(reduceMotion: false, deltas: [-140, 280], mode: .dark, surface: .glass, stationaryHover: true)
+    }
+
     private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340],
-                       extraRows: Int = 0, enablesAccessibility: Bool = true) throws {
+                       extraRows: Int = 0, enablesAccessibility: Bool = true,
+                       mode: AtticDesignContext.Mode = .light, surface: PanelSurfaceStyle = .solid,
+                       stationaryHover: Bool = false) throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(enablesAccessibility, forAttribute: enhanced)
@@ -93,7 +102,8 @@ final class ScrollEdgeHangTests: XCTestCase {
         for index in 0..<extraRows { container.mainContext.insert(TaskItem(title: "Dense row \(index)")) }
         if extraRows > 0 { try container.mainContext.save() }
         let store = TaskStore(container: container)
-        let services = TasksPageServices(chooseComposerFiles: {})
+        var services = TasksPageServices(chooseComposerFiles: {})
+        if stationaryHover { services.openTaskNote = { _ in } }
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
         // The UI test's panel: 320 × 464, solid, light.
         let size = CGSize(width: 320, height: 464)
@@ -103,10 +113,15 @@ final class ScrollEdgeHangTests: XCTestCase {
                              addBarFocused: Binding(get: { focused }, set: { focused = $0 }), pointer: pointer)
         let window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        if mode == .dark { window.appearance = NSAppearance(named: .darkAqua) }
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let design = AtticDesignContext(mode: .light, surface: .solid, reduceMotion: reduceMotion)
-        window.contentView = NSHostingView(rootView: page.atticDesign(design)
+        let design = AtticDesignContext(mode: mode, surface: surface, reduceMotion: reduceMotion)
+        window.contentView = NSHostingView(rootView: page
+            .background {
+                if stationaryHover { AtticPanelStageSurface(cornerSize: 52) }
+            }
+            .atticDesign(design)
             .environment(\.displayScale, 1)
             .frame(width: size.width, height: size.height))
         window.orderFront(nil)
@@ -147,6 +162,18 @@ final class ScrollEdgeHangTests: XCTestCase {
         let lists = window.contentView.map(Self.scrollViews) ?? []
         let list = try XCTUnwrap(lists.max { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 },
                                  "the Now list")
+        var tracked: Set<ObjectIdentifier> = []
+        if stationaryHover {
+            print("ATTIC_SCROLL_HOVER initial_frames=\(pointer.frames.values.sorted { $0.minY < $1.minY }.prefix(15)) clip=\(list.contentView.bounds) document=\(list.documentView?.frame ?? .zero)")
+            AtticTaskRow.drawsOpen = [:]
+            AtticTaskRow.hoverEvents = [:]
+            AtticTaskRow.hoverHistory = [:]
+            try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
+            settle(0.7)
+            print("ATTIC_SCROLL_HOVER before_scroll=\(AtticTaskRow.hoverHistory.values) open=\(AtticTaskRow.drawsOpen)")
+            TasksFoldLayoutProbe.shared.start()
+        }
+        defer { if stationaryHover { TasksFoldLayoutProbe.shared.stop() } }
         for (index, delta) in deltas.enumerated() {
             let (_, elapsed) = try watchdog.run("scroll \(index) by \(delta)") {
                 // As the UI test's wheel: at the panel's middle, through the window.
@@ -168,6 +195,9 @@ final class ScrollEdgeHangTests: XCTestCase {
                     list.contentView.scroll(to: CGPoint(x: 0, y: target))
                     list.reflectScrolledClipView(list.contentView)
                 }
+                if stationaryHover {
+                    try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
+                }
                 settle(1)
             }
             print("ATTIC_SCROLL_HANG step=\(index) delta=\(delta) seconds=\(elapsed) offset=\(list.contentView.bounds.minY)")
@@ -178,6 +208,58 @@ final class ScrollEdgeHangTests: XCTestCase {
             print("ATTIC_SCROLL_HANG step=\(index) ax_elements=\(count) ax_seconds=\(snapshot)")
             XCTAssertGreaterThan(count, 20, "the snapshot must walk the real SwiftUI rows and controls")
             XCTAssertLessThan(snapshot, 2, "the accessibility snapshot after step \(index) returns: reduceMotion \(reduceMotion)")
+            if stationaryHover {
+                let first = TasksFoldLayoutProbe.shared.snapshot()
+                let beforeHover = AtticTaskRow.hoverEvents.values.reduce(0, +)
+                settle(1)
+                let last = TasksFoldLayoutProbe.shared.snapshot()
+                let afterHover = AtticTaskRow.hoverEvents.values.reduce(0, +)
+                print("ATTIC_SCROLL_HOVER step=\(index) sizes=\(last.heights.sorted { $0.value > $1.value }.prefix(10)) measure=\(first.measures)->\(last.measures) place=\(first.placements)->\(last.placements) hover=\(beforeHover)->\(afterHover) history=\(AtticTaskRow.hoverHistory.values.filter { !$0.isEmpty })")
+                if index == 0 {
+                    XCTAssertTrue(AtticTaskRow.hoverHistory.values.contains { $0.contains(true) },
+                                  "the pointer reaches a real row after the list mounts tracking areas")
+                    print("ATTIC_SCROLL_HOVER first opens=\(AtticTaskRow.drawsOpen) opener=\(model.services.openTaskNote != nil)")
+                }
+                XCTAssertLessThan(last.measures - first.measures, 100, "layout measurement must stop after scroll/hover settles")
+                XCTAssertLessThan(last.placements - first.placements, 100, "row placement must stop after scroll/hover settles")
+                XCTAssertLessThan(afterHover - beforeHover, 8, "a stationary pointer must not flip hover repeatedly")
+            }
+        }
+    }
+
+    /// The same tracking-area delivery used by TasksGoingInTests' hover
+    /// regression. A hosted window is off screen; AppKit does not deliver
+    /// physical mouse movement to it.
+    private static func hover(window: NSWindow, at point: CGPoint, tracked: inout Set<ObjectIdentifier>) throws {
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let location = CGPoint(x: point.x, y: window.frame.height - point.y)
+        let now = ProcessInfo.processInfo.systemUptime
+        let windowNumber = window.windowNumber
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: location,
+            modifierFlags: [], timestamp: now, windowNumber: windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        for view in descendants(content) {
+            for area in view.trackingAreas {
+                guard let owner = area.owner as? NSResponder else { continue }
+                let rect = area.options.contains(.inVisibleRect) ? view.visibleRect : area.rect
+                let inside = rect.contains(view.convert(location, from: nil))
+                let key = ObjectIdentifier(area)
+                func edge(_ type: NSEvent.EventType) -> NSEvent? {
+                    NSEvent.enterExitEvent(with: type, location: location, modifierFlags: [], timestamp: now,
+                        windowNumber: windowNumber, context: nil, eventNumber: 0,
+                        trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil)
+                }
+                if inside, !tracked.contains(key), area.options.contains(.mouseEnteredAndExited), let event = edge(.mouseEntered) {
+                    tracked.insert(key)
+                    owner.mouseEntered(with: event)
+                } else if !inside, tracked.contains(key), let event = edge(.mouseExited) {
+                    tracked.remove(key)
+                    owner.mouseExited(with: event)
+                }
+                if inside, area.options.contains(.mouseMoved) { owner.mouseMoved(with: moved) }
+            }
         }
     }
 
