@@ -568,6 +568,47 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// R-3: a page that goes hidden mid-drag keeps the size it was last laid
+    /// out at, not the size at mouse-down, and is not laid out again before
+    /// the grip is released.
+    func testLiveResizePageHiddenMidDragStaysAtItsLastLiveSizeUntilRelease() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var layouts: [PanelPage: CGSize] = [:]
+        var tasksBodies = 0
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        PanelInvalidationProbe.tasksHost = { tasksBodies += 1 }
+        defer {
+            PanelInvalidationProbe.pageLayout = nil
+            PanelInvalidationProbe.tasksHost = nil
+        }
+        let held = try holdResizeGrip(building: [.notes])
+        defer { held.finish() }
+        try held.drag(24)
+        spin(0.06)
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        held.panel.uiState.switchPage(to: .notes, motion: motion)
+        spin(until: { !held.panel.uiState.isPageSwitchSliding }, timeout: 3)
+        XCTAssertFalse(held.panel.uiState.isPageSwitchSliding)
+        spin(0.15)
+        let atSettle = held.liveWidth()
+        XCTAssertGreaterThan(atSettle, held.initialWidth + 4)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, atSettle, accuracy: 1)
+        let before = tasksBodies
+        try held.drag(26)
+        try held.drag(28)
+        XCTAssertGreaterThan(held.liveWidth(), atSettle + 1)
+        XCTAssertEqual(tasksBodies, before,
+                       "the hidden Tasks page is not laid out again mid-gesture")
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, atSettle, accuracy: 1,
+                       "it kept its last live size, not the size at mouse-down")
+        try held.release()
+        spin(0.3)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, held.panel.uiState.panelSize.width, accuracy: 1)
+        #endif
+    }
+
     /// Every exit path must release the retained-page snapshot and catch up to
     /// the true native frame. A programmatic resize has no drag snapshot.
     func testLiveResizeCancelHideScreenChangeAndProgrammaticSizeCatchUp() throws {

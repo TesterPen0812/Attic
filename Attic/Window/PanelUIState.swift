@@ -408,7 +408,7 @@ final class PanelUIState: ObservableObject {
                 self.pageTransit.sliding = false
                 self.pageTransit.departingPage = nil
             }
-            self.liveResize?.settle(current: PanelPage(self.selectedSection))
+            self.liveResize?.settle(current: PanelPage(self.selectedSection), size: self.panelSize)
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }
@@ -560,6 +560,9 @@ struct PanelLiveResizeHold: Equatable {
     let base: CGSize
     /// The pages still drawn.
     private(set) var drawn: Set<PanelPage>
+    /// Where each page that stopped being drawn mid-gesture froze: the size
+    /// it was last laid out at, which nobody sees, not the size at mouse-down.
+    private var frozen: [PanelPage: CGSize] = [:]
 
     init(base: CGSize, drawn: Set<PanelPage>) {
         self.base = base
@@ -568,15 +571,18 @@ struct PanelLiveResizeHold: Equatable {
 
     /// The size a page nobody sees keeps, nil for a page still drawn.
     func heldSize(for page: PanelPage) -> CGSize? {
-        drawn.contains(page) ? nil : base
+        drawn.contains(page) ? nil : frozen[page] ?? base
     }
 
     mutating func keepDrawn(_ pages: PanelPage...) {
         drawn.formUnion(pages)
+        for page in pages { frozen[page] = nil }
     }
 
-    /// A page switch has finished: only the current page is still drawn.
-    mutating func settle(current: PanelPage) {
+    /// A page switch has finished: only the current page is still drawn. A
+    /// page that was leaving keeps the live `size` it was last laid out at.
+    mutating func settle(current: PanelPage, size: CGSize) {
+        for page in drawn where page != current { frozen[page] = size }
         drawn = [current]
     }
 }
