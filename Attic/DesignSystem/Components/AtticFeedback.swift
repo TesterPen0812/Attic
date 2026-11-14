@@ -569,16 +569,16 @@ struct AtticStatusPill: View {
             }
             .buttonStyle(AtticUndimmedButtonStyle())
             .focusEffectDisabled()
-            .focusable(false)
+            .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
             .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
             .accessibilityHint(String(localized: "Shows details"))
             .accessibilityIdentifier("notes-status-primary")
             if let inlineAction {
-                AtticToastButton(title: inlineAction.title, outerRadius: radius, acceptsKeyboardFocus: false,
+                AtticToastButton(title: inlineAction.title, outerRadius: radius,
                                  action: inlineAction.handler)
                     .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
             } else if let onCancel {
-                AtticSmallButton(systemName: "xmark", label: "Cancel", acceptsKeyboardFocus: false, action: onCancel)
+                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
                     .accessibilityIdentifier("notes-status-cancel")
             }
         }

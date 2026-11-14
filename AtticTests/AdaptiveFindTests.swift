@@ -223,6 +223,42 @@ final class AdaptiveFindTests: XCTestCase {
 
     // MARK: First-key speed
 
+    func testBG72ComposingDeadKeyBeforeFindFieldMountsStaysWithNativeInput() throws {
+        try withNote { host, panel, _, engine, _ in
+            let original = engine.textStorage.string
+            panel.makeFirstResponder(engine.textView)
+            engine.find.show()
+            // A dead key can have no characters. Keep it through the field
+            // handoff, then finish the composition in the native editor.
+            let deadKey = key(14, "", flags: .option)
+            let finishingKey = key(14, "e")
+            XCTAssertTrue(engine.find.typeAhead(deadKey), "Find must capture the composing dead key")
+            XCTAssertEqual(engine.find.query, "", "an unfinished composition must not be inserted as plain text")
+            XCTAssertEqual(engine.textStorage.string, original, "the composing sequence must not edit the note")
+            spin(0.8)
+            let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier })
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            XCTAssertTrue(editor.delegate as? NSTextField === field)
+            editor.interpretKeyEvents([finishingKey])
+            spin(0.2)
+            let acrossHandoff = editor.string
+            XCTAssertFalse(acrossHandoff.isEmpty, "composition completes in Find")
+            XCTAssertEqual(engine.find.query, acrossHandoff, "Find must search the native editor's composed value")
+
+            // The exact same events must be interpreted the same way when
+            // both arrive at the already-mounted editor (input-source safe).
+            engine.find.query = ""
+            editor.string = ""
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            editor.interpretKeyEvents([deadKey, finishingKey])
+            spin(0.2)
+            XCTAssertEqual(acrossHandoff, editor.string, "the handoff preserves native input-method composition")
+            XCTAssertEqual(engine.textStorage.string, original, "no composing key changes the note body")
+            XCTAssertFalse(engine.find.typeAhead(key(0, "a")), "the field owns subsequent input")
+        }
+    }
+
     func testKeysTypedBeforeTheFieldArrivesGoToTheQuery() throws {
         try withNote { host, panel, _, engine, _ in
             let text = engine.textStorage.string

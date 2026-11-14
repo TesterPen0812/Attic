@@ -248,6 +248,56 @@ final class NotesBoardTests: XCTestCase {
         }
     }
 
+    /// BG-12 (deferred P2): the list row needs to redraw its secondary tag
+    /// when the filter changes but the note ID, revision and row stay fixed.
+    func testBG12ChangingOnlyTagFilterRedrawsTheSameLibraryRow() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_DEFERRED_P2_RED"] == "1" else {
+            throw XCTSkip("Deferred BG-12 P2 regression; opt in with ATTIC_DEFERRED_P2_RED=1")
+        }
+        let id = try create("Meeting agenda", "Notes for a stable row", tags: ["work", "home"])
+        let controller = controller()
+        XCTAssertTrue(controller.showLibrary())
+        let model = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        XCTAssertEqual(model.layout, .list)
+        let revision = store.revision
+
+        func renderRow(_ host: NSView, window: NSWindow) throws -> Data {
+            host.layoutSubtreeIfNeeded()
+            let element = try XCTUnwrap(elements(host).first {
+                $0.accessibilityIdentifier?() == "notes-library-row"
+            }, "the same note's list row is visible")
+            let screen = try XCTUnwrap(element.accessibilityFrame?())
+            let frame = host.convert(window.convertFromScreen(screen), from: nil).intersection(host.bounds)
+            XCTAssertGreaterThan(frame.width, 30)
+            XCTAssertGreaterThan(frame.height, 20)
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(frame.width * 2), pixelsHigh: Int(frame.height * 2),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = frame.size
+            // Capture only the list row: the filter button and other chrome
+            // can redraw while the stale Equatable row itself does not.
+            host.cacheDisplay(in: frame, to: rep)
+            return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        }
+
+        try withAccessibility {
+            let (host, window) = host(library(model, controller))
+            defer { window.contentView = nil; window.close() }
+            spin(0.4)
+            let initial = try renderRow(host, window: window)
+            let row = try XCTUnwrap(model.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+            let initialTag = try XCTUnwrap(model.libraryRow(row, store: store).tag)
+            model.tagPicks = TagPicks([initialTag])
+            spin(0.4)
+            XCTAssertEqual(store.revision, revision, "filter changes do not mutate the note")
+            let nextTag = try XCTUnwrap(model.libraryRow(row, store: store).tag)
+            XCTAssertNotEqual(initialTag, nextTag, "the selected tag leaves the secondary tag slot")
+            let filtered = try renderRow(host, window: window)
+            XCTAssertNotEqual(initial, filtered, "the same visible row must replace its filtered tag")
+        }
+    }
+
     // MARK: Cards
 
     private func card(title: String, preview: String, pinned: Bool = false, selected: Bool = false,

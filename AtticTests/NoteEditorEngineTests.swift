@@ -11,6 +11,167 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    /// BG-14/18/25/26: the first *writing* paragraph in a task note is at
+    /// offset zero. An ordinary note's actual title is the only special case.
+    private func bgBodyOnly(_ blocks: [NoteBlock]) -> (NoteEditorEngine, NoteEditorTextView, NSScrollView) {
+        let document = NoteDocument(blocks: [.text("Compatibility title")] + blocks, requires: ["taskNote"])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document, bodyOnly: true)
+        let (scroll, view) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertTrue(engine.isBodyOnly)
+        XCTAssertEqual(engine.bodyStart, 0)
+        return (engine, view, scroll)
+    }
+
+    private func bgDeferredP2Reproduction() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_DEFERRED_P2_RED"] == "1" else {
+            throw XCTSkip("Deferred BG-14/18/26 P2 regression; opt in with ATTIC_DEFERRED_P2_RED=1")
+        }
+    }
+
+    private func bg25CaptureIfRequested(_ scroll: NSScrollView) throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" else { return }
+        let bounds = NSRect(x: 0, y: 0, width: 400, height: 240)
+        let window = NSWindow(contentRect: NSRect(x: -4_000, y: -4_000, width: 400, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        scroll.frame = bounds
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+        scroll.displayIfNeeded()
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 480,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = bounds.size // 2× even when the Air has no Retina display attached.
+        scroll.cacheDisplay(in: bounds, to: rep)
+        let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("BG25-\(UUID().uuidString).png")
+        try data.write(to: path)
+        print("BG25_SNAPSHOT=\(path.path) \(rep.pixelsWide)x\(rep.pixelsHigh)")
+        window.contentView = nil
+        window.close()
+    }
+
+    func testBG25FirstTaskBodyParagraphDrawsListAndBlockDecorations() throws {
+        var callout = NoteBlock.text("Tip", style: "quote")
+        callout.callout = "💡"
+        var inline = NoteBlock.text("A `code chip` here")
+        inline.marks = [NoteMark(.code, offset: 3, length: 9)]
+        for (label, blocks) in [
+            ("bullet", [NoteBlock.text("One", style: "bullet"), NoteBlock.text("Two", style: "bullet")]),
+            ("number", [NoteBlock.text("One", style: "number"), NoteBlock.text("Two", style: "number")]),
+            ("quote", [NoteBlock.text("Text", style: "quote")]),
+            ("code", [NoteBlock.text("let a = 1", style: "mono")]),
+            ("callout", [callout]),
+            ("inline-code", [inline])
+        ] {
+            let (engine, _, scroll) = bgBodyOnly(blocks)
+            defer { engine.detachView() }
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            if label == "bullet" { try bg25CaptureIfRequested(scroll) }
+            let first = try XCTUnwrap(engine.layoutManager?.textLayoutFragment(for: engine.contentStorage.documentRange.location))
+            let custom = try XCTUnwrap(first as? NoteBlockLayoutFragment, "\(label): the first block uses a decorated fragment")
+            if label == "inline-code" {
+                XCTAssertNotNil(custom.chipFill, "inline code on the first block has a drawn chip")
+            } else {
+                XCTAssertNotNil(engine.decoration(forParagraphAt: 0), "\(label): the first body block has its own decoration")
+            }
+            if label == "number" || label == "bullet" {
+                let next = (engine.textStorage.string as NSString).range(of: "Two").location
+                XCTAssertNotNil(engine.decoration(forParagraphAt: next), "\(label): the second marker also draws")
+                if label == "number" {
+                    XCTAssertEqual(engine.listMarker(at: 0), .number("1."))
+                    XCTAssertEqual(engine.listMarker(at: next), .number("2."))
+                } else {
+                    XCTAssertEqual(engine.listMarker(at: 0), .disc)
+                    XCTAssertEqual(engine.listMarker(at: next), .disc)
+                }
+            }
+        }
+        let (quotes, _, _) = bgBodyOnly([.text("First", style: "quote"), .text("Second", style: "quote")])
+        defer { quotes.detachView() }
+        let quoteSecond = (quotes.textStorage.string as NSString).range(of: "Second").location
+        guard case .quote(_, let firstJoinsAbove, let firstJoinsBelow) = quotes.decoration(forParagraphAt: 0),
+              case .quote(_, let secondJoinsAbove, let secondJoinsBelow) = quotes.decoration(forParagraphAt: quoteSecond) else {
+            return XCTFail("both quote bars must render")
+        }
+        XCTAssertEqual([firstJoinsAbove, firstJoinsBelow, secondJoinsAbove, secondJoinsBelow],
+                       [false, true, true, false], "the second quote connects to a first body-only line")
+
+        let (code, _, _) = bgBodyOnly([.text("let a = 1", style: "mono"), .text("let b = 2", style: "mono")])
+        defer { code.detachView() }
+        let codeSecond = (code.textStorage.string as NSString).range(of: "let b").location
+        guard case .mono(let firstStarts, let firstEnds, _) = code.decoration(forParagraphAt: 0),
+              case .mono(let secondStarts, _, _) = code.decoration(forParagraphAt: codeSecond) else {
+            return XCTFail("both code block fragments must draw")
+        }
+        XCTAssertEqual([firstStarts, firstEnds, secondStarts],
+                       [true, false, false], "the first body-only code paragraph joins the next one")
+
+        var firstCallout = NoteBlock.text("First", style: "quote")
+        firstCallout.callout = "💡"
+        var secondCallout = NoteBlock.text("Second", style: "quote")
+        secondCallout.callout = "💡"
+        let (callouts, _, _) = bgBodyOnly([firstCallout, secondCallout])
+        defer { callouts.detachView() }
+        let calloutSecond = (callouts.textStorage.string as NSString).range(of: "Second").location
+        guard case .callout(_, let starts, _, _) = callouts.decoration(forParagraphAt: calloutSecond) else {
+            return XCTFail("the second callout box must render")
+        }
+        XCTAssertFalse(starts, "the second body-only callout joins its first paragraph")
+        let ordinary = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("List", style: "bullet")]))
+        XCTAssertNil(ordinary.decoration(forParagraphAt: 0), "an ordinary title stays undecorated")
+    }
+
+    func testBG26FirstTaskBodyHeadingFoldsAndUnfoldsItsContent() throws {
+        try bgDeferredP2Reproduction()
+        var heading = NoteBlock.text("Section", id: UUID(), style: "heading")
+        heading.level = 2
+        let (engine, _, _) = bgBodyOnly([heading, .text("Hidden body"), .text("Tail")])
+        defer { engine.detachView() }
+        let section = try XCTUnwrap(engine.headingSections.first)
+        XCTAssertEqual(section.heading.location, 0)
+        XCTAssertTrue(engine.toggleHeadingFold(at: 0))
+        XCTAssertTrue(engine.isRangeFolded(section.content))
+        XCTAssertTrue(engine.toggleHeadingFold(at: 0))
+        XCTAssertFalse(engine.isRangeFolded(section.content))
+    }
+
+    func testBG18DownArrowExitsOnlyFormattedTaskBodyParagraph() throws {
+        try bgDeferredP2Reproduction()
+        var callout = NoteBlock.text("Tip", style: "quote")
+        callout.callout = "💡"
+        for (label, block) in [
+            ("quote", NoteBlock.text("Quote", style: "quote")),
+            ("code", NoteBlock.text("let a = 1", style: "mono")),
+            ("callout", callout)
+        ] {
+            let (engine, view, _) = bgBodyOnly([block])
+            defer { engine.detachView() }
+            let end = engine.textStorage.length
+            view.setSelectedRange(NSRange(location: end, length: 0))
+            XCTAssertTrue(engine.textView(view, doCommandBy: #selector(NSTextView.moveDown(_:))), "\(label): Down Arrow exits the final block")
+            XCTAssertEqual(engine.paragraphStyle(at: engine.textStorage.length), .body)
+            XCTAssertEqual(view.selectedRange().location, engine.textStorage.length)
+            XCTAssertTrue(engine.history.undo(), "\(label): new body line is one Undo")
+        }
+    }
+
+    func testBG14FirstTaskBodyParagraphInheritsInlineMarksWhileTyping() throws {
+        try bgDeferredP2Reproduction()
+        for command in [NoteMark.Kind.bold, .italic, .code] {
+            let (engine, view, _) = bgBodyOnly([.text("Marked words")])
+            defer { engine.detachView() }
+            XCTAssertTrue(engine.perform(.mark(command), selection: NSRange(location: 0, length: 6)))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            engine.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: view))
+            XCTAssertNotNil(view.typingAttributes[.noteMark(command)], "\(command): the first writing line inherits its inline mark")
+            view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertNotNil(engine.textStorage.attribute(.noteMark(command), at: 3, effectiveRange: nil))
+        }
+    }
+
     func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
         let renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let recent = renderer.dateChip("day 0")

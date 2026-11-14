@@ -854,6 +854,9 @@ extension AtticDesignSystemHostedTests {
 @MainActor
 private final class TransientFocusProbe: ObservableObject {
     @Published var shown = 0
+    var statusOpens = 0
+    var statusRetries = 0
+    var statusCancels = 0
 }
 
 private struct TransientFocusHost: View {
@@ -866,12 +869,18 @@ private struct TransientFocusHost: View {
             if probe.shown == 1 {
                 AtticStatusPill(item: AtticStatusItem(id: "save", systemName: "exclamationmark.circle",
                                                        title: "Not saved", tone: .error),
-                                inlineAction: AtticStatusItem.Action(title: "Retry", handler: {}),
-                                onCancel: {}, onOpen: {})
+                                inlineAction: AtticStatusItem.Action(title: "Retry", handler: { probe.statusRetries += 1 }),
+                                onCancel: {}, onOpen: { probe.statusOpens += 1 })
                     .id("status")
             } else if probe.shown == 2 {
                 AtticNotice(message: "Couldn't save", actionTitle: "Retry", onAction: {}, onDismiss: {})
                     .id("notice")
+            } else if probe.shown == 3 {
+                AtticStatusPill(item: AtticStatusItem(id: "import", systemName: nil,
+                                                      title: "Importing", tone: .normal),
+                                inlineAction: nil, onCancel: { probe.statusCancels += 1 },
+                                onOpen: { probe.statusOpens += 1 })
+                    .id("import")
             }
         }
         .frame(width: 340, height: 155)
@@ -879,6 +888,52 @@ private struct TransientFocusHost: View {
 }
 
 extension AtticDesignSystemHostedTests {
+    func testBG66StatusDetailsRetryAndCancelAreKeyboardReachableWithoutStealingTyping() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else {
+            throw XCTSkip("Status-button Tab traversal requires Full Keyboard Access")
+        }
+        let probe = TransientFocusProbe()
+        let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        func capture(_ state: String) throws {
+            guard ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" else { return }
+            hosting.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 700, pixelsHigh: 340,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = hosting.bounds.size
+            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent("BG66-\(state)-\(UUID().uuidString).png")
+            try data.write(to: path)
+            print("BG66_SNAPSHOT=\(path.path) \(rep.pixelsWide)x\(rep.pixelsHigh)")
+        }
+        func tabAndPress(captureFocus: Bool = false) throws {
+            window.selectNextKeyView(nil)
+            spin(0.1)
+            if captureFocus { try capture("keyboard-focus") }
+            key(window, " ", code: 49)
+        }
+        probe.shown = 1
+        spin(0.2)
+        try capture("appearance")
+        XCTAssertTrue(window.firstResponder === editor, "appearing save recovery must not grab the typing caret")
+        try tabAndPress(captureFocus: true)
+        XCTAssertEqual(probe.statusOpens, 1)
+        try tabAndPress()
+        XCTAssertEqual(probe.statusRetries, 1)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        probe.shown = 3
+        spin(0.2)
+        XCTAssertTrue(window.firstResponder === editor, "appearing import status must not grab the typing caret")
+        try tabAndPress()
+        XCTAssertEqual(probe.statusOpens, 2)
+        try tabAndPress()
+        XCTAssertEqual(probe.statusCancels, 1)
+    }
+
     func testR26TransientFeedbackMountPreservesEditorFirstResponder() throws {
         let probe = TransientFocusProbe()
         let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)

@@ -5204,7 +5204,7 @@ extension NoteEditorEngine {
 
     /// Shared by selection, Copy and the layout's existing box slices.
     func codeRunContinues(from first: Int, to second: Int) -> Bool {
-        guard first > 0, first <= textStorage.length, second > 0, second <= textStorage.length,
+        guard first >= bodyStart, first < textStorage.length, second > first, second <= textStorage.length,
               let format = paragraphStyle(at: first), format.isCode else { return false }
         return paragraphStyle(at: second) == format
     }
