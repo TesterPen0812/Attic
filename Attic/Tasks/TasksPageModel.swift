@@ -521,7 +521,12 @@ final class TasksPageModel: ObservableObject {
             // Its own generations are negative: the page counts up from 0, and
             // a turn's completion acts only on a turn of its own generation.
             reversedFoldGenerations -= 1
-            TasksFold.turn(key, on: tab, folded: false, animation: TasksDesignMetrics.curve(0.26),
+            // The motion a header click gets (the page's own choice).
+            let animation = AtticMotionPreference.reducesMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26)
+            #if DEBUG
+            foldReversalAnimations.append(animation)
+            #endif
+            TasksFold.turn(key, on: tab, folded: false, animation: animation,
                            generation: reversedFoldGenerations,
                            state: Binding(get: { [unowned self] in foldTurn }, set: { [unowned self] in foldTurn = $0 })) {
                 [unowned self] target, key in toggleGroup(key, on: target)
@@ -533,6 +538,10 @@ final class TasksPageModel: ObservableObject {
         foldAllGroups(closed, folded: false, on: tab)
     }
     private var reversedFoldGenerations = 0
+    #if DEBUG
+    /// Tests only: the animation each fold reversal was handed.
+    var foldReversalAnimations: [Animation?] = []
+    #endif
 
     /// A fold, filter, completion, or edit can remove a row from the current
     /// page. Don't leave a hidden row selected or holding keyboard shortcuts.

@@ -296,6 +296,31 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertFalse(model.folded(on: .now).contains(key))
     }
 
+    /// Opus R-15: the reversal of a closing fold takes the motion the page
+    /// would give a header click: the design's curve, or Reduce Motion's own
+    /// choice (instant, or the fade), never the full curve under Reduce Motion.
+    func testTheFoldReversalRespectsReduceMotion() throws {
+        let savedStyle = AtticReducedMotionStyle.current
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil; AtticReducedMotionStyle.current = savedStyle }
+        let cases: [(reduce: Bool, style: AtticReducedMotionStyle)] = [(false, .instant), (true, .instant), (true, .fade)]
+        for (index, setting) in cases.enumerated() {
+            AtticMotionPreference.systemReduceMotionOverride = setting.reduce
+            AtticReducedMotionStyle.current = setting.style
+            let anchor = try add("Today anchor \(index)", due: 0)
+            let key = try XCTUnwrap(model.groupKey(of: anchor, on: .now))
+            model.foldTurn = TasksFoldTurn(tab: .now, key: key, closing: true, headerFolded: true, progress: 0.5, generation: 7)
+            let before = model.foldReversalAnimations.count
+            model.addBar.text = "Added while Today closes \(index)"
+            model.addBar.picked.day = day(0)
+            _ = try XCTUnwrap(model.submitAddBar())
+            XCTAssertEqual(model.foldReversalAnimations.count, before + 1, "the closing turn was reversed")
+            let used = model.foldReversalAnimations[before]
+            let expected = setting.reduce ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26)
+            XCTAssertEqual(used, expected, "reduce \(setting.reduce), \(setting.style): the reversal's motion")
+            model.foldTurn = nil
+        }
+    }
+
     /// Dot R-3: a batch finds and opens its groups with work that grows with
     /// the batch: member ids looked at, and row lists built, for N and 2N
     /// tasks in N and 2N folded days.
