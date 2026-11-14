@@ -164,9 +164,12 @@ struct TasksPage: View {
         focusedRow.flatMap { $0.page == model.tab.rawValue ? $0.id : nil }
     }
 
-    /// Gives the keyboard to `id` on the page shown (nil lets it go).
+    /// Gives the keyboard to `id` on the page shown (nil lets it go). A row
+    /// taking it, by any route (the arrow keys, Find's ↓, a click), ends the
+    /// target of a heading Tab chose: this is the one place that does it.
     private func setFocus(_ id: UUID?) {
         focusedRow = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
+        if id != nil, heldGroupKey != nil { endTabTarget() }
     }
 
     /// The keyboard leaves a stop Tab chose (a heading) by another route: the
@@ -1236,16 +1239,21 @@ struct TasksPage: View {
                 open[row.id] = row.subtasks.map(\.id)
             }
         }
+        // Only a folded heading is a Tab stop (it holds hidden tasks); an open
+        // one stays out of the order between rows. The heading the keyboard is
+        // on stays a stop while it holds it (Space can open it under the ring).
+        let held = heldGroupKey
         var list: [TasksTabStop] = []
         if tab == .done {
             for day in model.doneDays() {
-                list.append(.group(day.key))
+                if day.folded || day.key == held { list.append(.group(day.key)) }
                 list.append(contentsOf: day.rows.map { .row($0.id) })
             }
         } else {
             let sections = model.sections(for: tab)
+            let folded = model.folded(on: tab)
             for group in sections.groups {
-                if group.showsHeader { list.append(.group(group.key)) }
+                if group.showsHeader, folded.contains(group.key) || group.key == held { list.append(.group(group.key)) }
                 for row in sections.groupRows[group.key] ?? [] {
                     list.append(.row(row.id))
                     list.append(contentsOf: (open[row.id] ?? []).map(TasksTabStop.subtask))
@@ -1268,6 +1276,32 @@ struct TasksPage: View {
                                    tagKey: panelComposer != nil && !model.tagChips().isEmpty && !selectionBarShown,
                                    tagMatch: tagBarState?.isOpen == true && model.tagPicks(on: tab).showsMatch,
                                    list: list)
+    }
+
+    /// The heading Tab chose and the keyboard is still on, if any.
+    private var heldGroupKey: String? {
+        if case let .group(key) = tabTarget.stop { return key }
+        if let group = focusRequests.current?.base as? TasksGroupFocusID, group.tab == model.tab { return group.key }
+        return nil
+    }
+
+    /// The row an arrow key reaches from a heading: the first row at or after
+    /// it in the page's order (↓), or the last row before it (↑).
+    private func rowBeside(group key: String, step: Int, in visible: [UUID]) -> UUID? {
+        var before = Set<UUID>()
+        if model.tab == .done {
+            for day in model.doneDays() {
+                if day.key == key { break }
+                before.formUnion(day.rows.map(\.id))
+            }
+        } else {
+            let sections = model.sections(for: model.tab)
+            for group in sections.groups {
+                if group.key == key { break }
+                before.formUnion((sections.groupRows[group.key] ?? []).map(\.id))
+            }
+        }
+        return step > 0 ? visible.first { !before.contains($0) } : visible.last { before.contains($0) }
     }
 
     /// Where the keyboard is among `stops`, if it is on one.
@@ -3129,7 +3163,18 @@ struct TasksPage: View {
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
-            endTabTarget()
+            // From a heading Tab chose the arrows start at that heading, not
+            // at a stale selection or the list's ends: ↓ is its group's first
+            // row (the next group's, while it is folded), ↑ the previous
+            // group's last. Nowhere to go: the heading keeps the keyboard.
+            if let key = heldGroupKey, modifiers.isEmpty || modifiers == .shift {
+                if let next = rowBeside(group: key, step: step, in: visible) {
+                    setFocus(next)
+                    model.selectOnly(next)
+                    focusTracker.noteKeyboardNavigation()
+                }
+                return .handled
+            }
             guard let current, let index = visible.firstIndex(of: current) else {
                 let first = step > 0 ? visible.first : visible.last
                 setFocus(first)

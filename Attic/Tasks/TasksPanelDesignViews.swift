@@ -41,7 +41,10 @@ private struct TasksGroupKeyboardFocus: ViewModifier {
                         selectedByTab = true
                         requests?.note(id, focused: true)
                         armed = true
-                        DispatchQueue.main.async { focused = true }
+                        // A key that arrives before this turn runs (↓ right
+                        // after Tab) has released the heading already: the
+                        // heading must not take the keyboard back.
+                        DispatchQueue.main.async { if selectedByTab { focused = true } }
                     } else if selectedByTab {
                         selectedByTab = false
                         requests?.note(id, focused: false)
