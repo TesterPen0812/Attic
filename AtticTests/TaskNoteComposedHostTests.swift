@@ -1643,7 +1643,9 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
         // Return and ⇧Return step; ⌘G steps too.
         find.query = "Line 1"
-        spin(0.1)
+        // Long task notes search on a worker; await its published result
+        // rather than relying on a fixed run-loop interval.
+        await find.waitForSearch()
         XCTAssertGreaterThan(find.matches.count, 2)
         let first = find.index
         XCTAssertTrue(find.handleKey(key(36, "\r")))

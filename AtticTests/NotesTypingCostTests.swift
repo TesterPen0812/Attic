@@ -83,7 +83,7 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
-    func testE01FirstDistantFindRevealsWrappedMatch() throws {
+    func testE01FirstDistantFindRevealsWrappedMatch() async throws {
         for width in [CGFloat(340), CGFloat(420)] {
             let blocks: [NoteBlock] = [.text("Title")] + (0..<5_000).map { number in
                 .text("Paragraph \(number) needle " +
@@ -100,6 +100,9 @@ final class NotesTypingCostTests: XCTestCase {
             engine.find.inTopRow = true
             engine.find.show()
             engine.find.query = "needle"
+            // Large documents publish matches after the immutable snapshot
+            // has been scanned off-main. Navigation begins once published.
+            await engine.find.waitForSearch()
             let target = try XCTUnwrap(engine.find.matches.last?.noteRange)
             let searches = engine.find.objectSearchPassCount
             let scans = engine.find.searchedUTF16Count
