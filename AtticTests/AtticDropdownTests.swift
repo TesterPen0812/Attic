@@ -582,13 +582,15 @@ final class AtticDropdownTests: XCTestCase {
         var preference: String?
     }
 
-    /// The tag card's limit: a whole row below the picker's natural height
-    /// (its field, "Tags" and six rows), so the card's own viewport has a
-    /// row of the picker to scroll to.
+    /// The tag card's limit, as a presenter gives it (`atticDropdownHeight`):
+    /// the picker shortens its list to fit what is left (here five rows below
+    /// its field and "Tags"), so the card's own viewport has nothing of its
+    /// own to scroll; only the picker's list does.
     private static let nestedCap = 2 * AtticDropdownMetrics.inset + AtticTagPicker.chromeHeight + 5 * AtticDropdownMetrics.rowHeight
 
     /// The real tag picker in a persistent card with a height limit, as a
-    /// presenter hosts it: the card's viewport around the picker's own.
+    /// presenter hosts it: the card's viewport around the picker's own. The
+    /// picker reads the card's limit (no override) and fits its list to it.
     struct NestedTagCard: View {
         @ObservedObject var model: NestedModel
         let tags: [AtticTagPicker.Tag]
@@ -602,9 +604,6 @@ final class AtticDropdownTests: XCTestCase {
                                    onHover: { index, inside in
                                        model.highlighted = AtticListHighlight.hovered(index, inside: inside, current: model.highlighted)
                                    })
-                        // The picker keeps its natural height (six rows) inside a
-                        // card limited to five: the card's viewport can scroll.
-                        .environment(\.atticDropdownHeight, nil)
                         .onPreferenceChange(AtticDropdownHighlightKey.self) { model.preference = $0 }
                         .onAppear { model.proxy = proxy }
                 }
@@ -646,10 +645,14 @@ final class AtticDropdownTests: XCTestCase {
     // MARK: Nested viewports share the pointer's origin (R-1)
 
     /// A presenter hosts a picker in a persistent, height-limited card: the
-    /// card's viewport around the picker's own. A hover on the cut-off row
-    /// scrolls neither (the pointer made the highlight, the row is under
-    /// the pointer); an arrow key's highlight on a cut-off row still does.
-    func testPF43AHoverInANestedPickerScrollsNeitherViewportAndAKeyboardRowStillScrolls() throws {
+    /// card's viewport around the picker's own, and the picker fits its list
+    /// to the card's limit, so only the list scrolls. A hover on a cut-off
+    /// row does not scroll the list under the pointer (the pointer made the
+    /// highlight); an arrow key's highlight on a hidden row still does. It
+    /// fails if the inner viewport stops sharing the outer one's origin
+    /// (the card's own offset is not asserted: no presenter's layout makes
+    /// the card overflow, so it cannot move).
+    func testPF43AHoverInANestedPickerDoesNotScrollListAndAKeyboardRowStillScrolls() throws {
         let window = makeWindow()
         defer { window.close() }
         leaveAMouseMoveAsTheCurrentEvent(in: window)
@@ -662,36 +665,32 @@ final class AtticDropdownTests: XCTestCase {
         spin(0.3)
         let views = scrollViews(in: host)
         XCTAssertEqual(views.count, 2, "the card's viewport around the picker's")
-        let outer = try XCTUnwrap(views.first), inner = try XCTUnwrap(views.last)
+        let inner = try XCTUnwrap(views.last)
         XCTAssertNotNil(model.origin, "the outermost viewport made the origin the rows see (no origin is injected)")
-        XCTAssertGreaterThanOrEqual((outer.documentView?.frame.height ?? 0) - outer.contentView.bounds.height,
-                                    AtticDropdownMetrics.rowHeight - 1, "the card can scroll: a hover that scrolled it would show")
         scroll(inner, to: 16)
         spin(0.3)
-        let start = (outer: outer.contentView.bounds.origin.y, inner: inner.contentView.bounds.origin.y)
-        XCTAssertEqual(start.inner, 16, accuracy: 0.5, "the list sits with a row cut off at its top")
+        let start = inner.contentView.bounds.origin.y
+        XCTAssertEqual(start, 16, accuracy: 0.5, "the list sits with a row cut off at its top")
 
-        // The list's top edge: its first row, half scrolled out. Then the card's
-        // bottom edge: the picker's sixth row, cut off by the card.
+        // The list's top edge: its first row, half scrolled out. Then its
+        // bottom edge: the row it cuts off there.
         try Pointer().moveToTopEdge(of: inner, in: host)
         wait(for: host) { model.highlighted != nil && model.preference != nil }
         XCTAssertNotNil(model.highlighted, "the pointer lit the cut-off row")
         spin(0.3)
-        XCTAssertEqual(outer.contentView.bounds.origin.y, start.outer, accuracy: 0.5, "a hover never scrolls the card")
-        XCTAssertEqual(inner.contentView.bounds.origin.y, start.inner, accuracy: 0.5, "a hover never scrolls the list under the pointer")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, start, accuracy: 0.5, "a hover never scrolls the list under the pointer")
 
         let first = model.highlighted
-        try Pointer().moveToBottomEdge(of: outer, in: host)
+        try Pointer().moveToBottomEdge(of: inner, in: host)
         wait(for: host) { model.highlighted != first }
-        XCTAssertNotEqual(model.highlighted, first, "the pointer lit the row the card cuts off")
+        XCTAssertNotEqual(model.highlighted, first, "the pointer lit the row the list cuts off below")
         spin(0.3)
-        XCTAssertEqual(outer.contentView.bounds.origin.y, start.outer, accuracy: 0.5, "a hover never scrolls the card")
-        XCTAssertEqual(inner.contentView.bounds.origin.y, start.inner, accuracy: 0.5, "a hover never scrolls the list under the pointer")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, start, accuracy: 0.5, "a hover never scrolls the list under the pointer")
 
         // The keyboard moves on to a row that is not in view at all.
         model.highlighted = 8
-        wait(for: host) { inner.contentView.bounds.origin.y > start.inner + 20 }
-        XCTAssertGreaterThan(inner.contentView.bounds.origin.y, start.inner + 20, "an arrow key's highlight is brought into view")
+        wait(for: host) { inner.contentView.bounds.origin.y > start + 20 }
+        XCTAssertGreaterThan(inner.contentView.bounds.origin.y, start + 20, "an arrow key's highlight is brought into view")
     }
 
     // MARK: A click on ‹ › in a cut-short date card (R-2, N-2)
@@ -928,8 +927,7 @@ final class AtticDropdownTests: XCTestCase {
             scroll(inner, to: 16)
             spin(0.3)
 
-            // The tag card is limited below its list's bottom: the card's edge.
-            try Pointer().moveToBottomEdge(of: kind == "tags" ? try XCTUnwrap(scrollViews(in: host).first) : inner, in: host)
+            try Pointer().moveToBottomEdge(of: inner, in: host)
             wait(for: host) { model.highlighted != nil && model.preference != nil && model.origin?.pointerRow != nil }
             let index = try XCTUnwrap(model.highlighted, "the pointer lit the cut-off row (\(kind))")
             let expected = kind == "tags" ? String(format: "tag-%02d", index) : choices[index].id.uuidString
@@ -938,8 +936,7 @@ final class AtticDropdownTests: XCTestCase {
 
             // `.id`: scrolling to a row's id, spelt as the pointer and the
             // highlight spell it, finds a row that is not in view at all.
-            // (The tag card's own viewport may be the one that scrolls, so the
-            // offsets of both are summed.)
+            // (The offsets of every viewport are summed.)
             let far = kind == "tags" ? String(format: "tag-%02d", 25) : choices[25].id.uuidString
             func offsets() -> CGFloat { scrollViews(in: host).reduce(0) { $0 + $1.contentView.bounds.origin.y } }
             let before = offsets()
