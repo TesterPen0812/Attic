@@ -195,6 +195,41 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(pair[0].frame.width, 110, accuracy: 0.001, "Lines a point apart must not scale eleven-fold")
     }
 
+    /// BG-31 round 2 (Dot R-4): with both extents below the pointer minimum,
+    /// an inward proportional drag never enlarges the object.
+    func testBG31InwardProportionalDragNeverEnlargesTwoShortAxes() {
+        let points = [DrawPoint(x: 10, y: 20), DrawPoint(x: 12, y: 22)]
+        let small = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        for handle in [DrawHandle.bottomRight, .topLeft, .topRight, .bottomLeft] {
+            let signX: CGFloat = handle == .topLeft || handle == .bottomLeft ? -1 : 1
+            let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
+            let pulled = DrawPageModel.resized([small], handle: handle, delta: CGPoint(x: -0.2 * signX, y: -0.2 * signY),
+                                               shift: true)[0]
+            XCTAssertLessThanOrEqual(pulled.frame.width, small.frame.width + 0.0001, "\(handle) must not grow")
+            XCTAssertLessThanOrEqual(pulled.frame.height, small.frame.height + 0.0001, "\(handle) must not grow")
+            let pushed = DrawPageModel.resized([small], handle: handle, delta: CGPoint(x: 1 * signX, y: 1 * signY),
+                                               shift: true)[0]
+            XCTAssertGreaterThan(pushed.frame.width, small.frame.width, "\(handle): an outward drag still grows it")
+        }
+    }
+
+    /// BG-31 round 2 (Opus R-11): a vertical Shift-drag, or a group drag, of a
+    /// thin stroke changes its size (it used to do nothing), scaled by the
+    /// pointer's travel against the long axis.
+    func testBG31VerticalProportionalDragOfAThinStrokeChangesItsSize() {
+        let points = [DrawPoint(x: 10, y: 20), DrawPoint(x: 60, y: 22), DrawPoint(x: 110, y: 21)]
+        let thin = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        let down = DrawPageModel.resized([thin], handle: .bottomRight, delta: CGPoint(x: 0, y: 10), shift: true)[0]
+        XCTAssertEqual(down.frame.width, thin.frame.width * 1.1, accuracy: 0.001, "10 pt of travel on a 100 pt stroke is 10 %")
+        XCTAssertEqual(down.frame.height, thin.frame.height * 1.1, accuracy: 0.001)
+        let up = DrawPageModel.resized([thin], handle: .bottomRight, delta: CGPoint(x: 0, y: -1), shift: true)[0]
+        XCTAssertEqual(up.frame.width, thin.frame.width * 0.99, accuracy: 0.001)
+        let a = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 100, height: 0), content: .shape(.line))
+        let b = DrawObject(frame: DrawFrame(x: 0, y: 1, width: 100, height: 0), content: .shape(.line))
+        let pair = DrawPageModel.resized([a, b], handle: .bottomRight, delta: CGPoint(x: 0, y: 10), shift: false)
+        XCTAssertEqual(pair[0].frame.width, 110, accuracy: 0.001, "a group drag of thin lines changes their size too")
+    }
+
     private func drag(_ points: [CGPoint], shift: Bool = false) {
         model.pointerDown(at: points[0], shift: shift)
         for point in points.dropFirst() { model.pointerDragged(to: point, shift: shift) }

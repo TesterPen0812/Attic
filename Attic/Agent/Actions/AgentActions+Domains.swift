@@ -472,8 +472,10 @@ extension AgentActions {
                 let width = try Self.number(args["width"], "width")
                 let height = try Self.number(args["height"], "height")
                 guard width > 0, height > 0 else { throw AgentActionsError.invalid("Draw dimensions must be positive.") }
+                // The size is explicit: the pointer's minimum extent has no say.
                 let resized = DrawPageModel.resized([existing], handle: .bottomRight,
-                    delta: CGPoint(x: width - existing.frame.width, y: height - existing.frame.height), shift: false)
+                    delta: CGPoint(x: width - existing.frame.width, y: height - existing.frame.height), shift: false,
+                    minimum: 0)
                 guard let updated = resized.first, updated != existing else {
                     throw AgentActionsError.invalid("The object already has that size.")
                 }

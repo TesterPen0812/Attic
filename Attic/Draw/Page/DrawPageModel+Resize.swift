@@ -122,13 +122,35 @@ extension DrawPageModel {
         let uniform = shift || originals.count > 1 || first.isImage || flatX || flatY
         if uniform {
             // A zero extent is a straight line or point, not a tiny length
-            // from which to derive a huge reciprocal scale. An axis shorter than the pointer minimum has that minimum win
-            // the pick (a 2 pt axis "doubles" to 4 pt), so it only decides
-            // when the other axis is just as short.
+            // from which to derive a huge reciprocal scale. An axis shorter
+            // than the pointer minimum must not let that minimum decide (a
+            // 2 pt axis "doubles" to 4 pt), so such a box is scaled from the
+            // pointer's travel instead, and never made larger by an inward drag.
+            let dx = signX * delta.x, dy = signY * delta.y
             let shortX = box.width < minimum, shortY = box.height < minimum
-            let s = flatX ? sy : flatY ? sx
-                : shortX != shortY ? (shortX ? sy : sx)
-                : abs(sx - 1) >= abs(sy - 1) ? sx : sy
+            var s: CGFloat
+            if !(shortX || shortY) {
+                s = flatX ? sy : flatY ? sx : abs(sx - 1) >= abs(sy - 1) ? sx : sy
+            } else {
+                let longest = max(box.width, box.height)
+                if longest < 0.001 {
+                    s = 1 // a point
+                } else if flatX || flatY {
+                    s = 1 + (flatX ? dy : dx) / longest
+                } else if shortX && shortY {
+                    let rx = (box.width + dx) / box.width, ry = (box.height + dy) / box.height
+                    s = abs(rx - 1) >= abs(ry - 1) ? rx : ry
+                } else {
+                    // One short axis: the larger pointer travel counts, against
+                    // the long axis (a tie goes to the long axis).
+                    let longIsX = !shortX
+                    let along = longIsX ? dx : dy, across = longIsX ? dy : dx
+                    s = 1 + (abs(across) > abs(along) ? across : along) / longest
+                }
+                // Not below the minimum on the long axis, but an object that
+                // is already short never grows from being dragged smaller.
+                s = max(s, min(1, minimum / longest))
+            }
             sx = s
             sy = s
         }

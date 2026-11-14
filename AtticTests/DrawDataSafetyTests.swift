@@ -465,4 +465,36 @@ final class DrawDataSafetyTests: XCTestCase {
             XCTAssertEqual(try store.open(canvas.id).objects, [object], "Rendering must never rewrite stored geometry")
         }
     }
+
+    /// BG-31 round 2 (Opus R-11): an agent's explicit size is the size asked
+    /// for. A 400 x 3 image asked for 400 x 6 scales proportionally to 800 x 6,
+    /// and a thin non-image stroke asked for 50 x 1 is not lifted to the pointer's
+    /// 4 pt minimum.
+    func testBG31AgentResizeOfThinObjectsUsesNoPointerMinimum() throws {
+        let store = try persistent()
+        let canvas = store.create(name: "Thin")
+        let agent = try actions(store)
+        let image = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 400, height: 3), content: .image(
+            DrawImage(original: Draw3Images.encoded(width: 20, height: 10), pixelWidth: 20, pixelHeight: 10)))
+        let points = [DrawPoint(x: 10, y: 20), DrawPoint(x: 60, y: 21), DrawPoint(x: 110, y: 22)]
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        XCTAssertTrue(store.perform(.put([image, stroke]), on: canvas.id).isSaved)
+        func token(of object: DrawObject) throws -> String {
+            let text = try agent.drawAction("draw_read_canvas", ["canvas_id": canvas.id.uuidString], beforeMutation: {}).0
+            let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            let objects = try XCTUnwrap(response["objects"] as? [[String: Any]])
+            let match = try XCTUnwrap(objects.first { ($0["id"] as? String) == object.id.uuidString || ($0["object_id"] as? String) == object.id.uuidString })
+            return try XCTUnwrap(match["object_token"] as? String)
+        }
+        _ = try agent.drawAction("draw_resize_object", ["canvas_id": canvas.id.uuidString,
+            "object_id": image.id.uuidString, "object_token": try token(of: image), "width": 400, "height": 6], beforeMutation: {})
+        let scaled = try XCTUnwrap(store.open(canvas.id).objects.first { $0.id == image.id })
+        XCTAssertEqual(scaled.frame.width, 800, accuracy: 0.001)
+        XCTAssertEqual(scaled.frame.height, 6, accuracy: 0.001)
+        _ = try agent.drawAction("draw_resize_object", ["canvas_id": canvas.id.uuidString,
+            "object_id": stroke.id.uuidString, "object_token": try token(of: stroke), "width": 50, "height": 1], beforeMutation: {})
+        let thin = try XCTUnwrap(store.open(canvas.id).objects.first { $0.id == stroke.id })
+        XCTAssertEqual(thin.frame.height, stroke.frame.height / 2, accuracy: 0.01, "no 4 pt floor on an explicit size")
+        XCTAssertEqual(thin.frame.width, stroke.frame.width / 2, accuracy: 0.01)
+    }
 }
