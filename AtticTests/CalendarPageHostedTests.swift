@@ -678,7 +678,9 @@ final class CalendarPageHostedTests: XCTestCase {
                 page.settle(0.6)
                 // Preserve the actual hosted Calendar view at 2× on both
                 // the baseline red and repaired green runs for visual review.
-                let capture = try page.capture()
+                let capture = try page.capture(scale: 2)
+                XCTAssertEqual(capture.pixelsWide, 640)
+                XCTAssertEqual(capture.pixelsHigh, 1800)
                 let screenshot = XCTAttachment(data: try XCTUnwrap(capture.representation(using: .png, properties: [:])),
                                                uniformTypeIdentifier: "public.png")
                 screenshot.name = "watched-day-after-failed-save"
@@ -1171,9 +1173,18 @@ final class CalendarPageHostedTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
         }
 
-        func capture() throws -> NSBitmapImageRep {
+        func capture(scale: CGFloat = 1) throws -> NSBitmapImageRep {
             host.layoutSubtreeIfNeeded()
-            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            let rep: NSBitmapImageRep
+            if scale == 1 {
+                rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            } else {
+                rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                    pixelsWide: Int(host.bounds.width * scale), pixelsHigh: Int(host.bounds.height * scale),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                rep.size = host.bounds.size
+            }
             host.cacheDisplay(in: host.bounds, to: rep)
             return rep
         }
