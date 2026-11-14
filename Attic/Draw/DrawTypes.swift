@@ -240,6 +240,10 @@ protocol DrawStoreProtocol: AnyObject {
     /// be consumed by Recently Deleted's grouped Undo.
     func undoStepID(on id: UUID) -> UUID?
     func redoStepID(on id: UUID) -> UUID?
+    /// An offer bound to a history step (a toast's Undo, a grouped Restore's
+    /// Undo) holds the returned token for as long as it can be used; the
+    /// bounded history keeps that step while the token lives.
+    func pinHistoryStep(_ stepID: UUID) -> AnyObject?
     /// A self-contained inverse sealed to the physical state after one saved
     /// edit, for the agent's versioned Undo journal across launches.
     func agentUndoProof(on id: UUID, stepID: UUID) -> Data?
@@ -255,6 +259,7 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    func pinHistoryStep(_ stepID: UUID) -> AnyObject? { nil }
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         var result: DrawSaveResult = .unchanged
         for command in commands { result = perform(command, on: id) }

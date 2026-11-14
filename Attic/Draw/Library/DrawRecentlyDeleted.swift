@@ -168,6 +168,10 @@ enum RecentlyDeletedRestoreUndo {
             redo: { step.redo() == .applied ? .changed : .failed }
         ) }
         let drawRefs = Set(actions.map { AtticItemRef(.canvas, $0.canvasID) })
+        // The offered Undo is bound to each canvas's newest step. The pins
+        // live as long as this step does, so the bounded history cannot drop
+        // a step the library is still offering to undo.
+        let pins = actions.compactMap { drawStore?.pinHistoryStep($0.historyStepID) }
 
         func replay(undo: Bool) -> UndoOutcome {
             let ordered = undo ? Array(members.reversed()) : members
@@ -195,8 +199,8 @@ enum RecentlyDeletedRestoreUndo {
             name: RecentlyDeletedPresentation.restoreTitle(count: restored),
             lifecycle: .restore,
             items: { drawRefs.union(librarySteps.reduce(into: Set<AtticItemRef>()) { $0.formUnion($1.affectedItems()) }) },
-            undoOutcome: { replay(undo: true) },
-            redoOutcome: { replay(undo: false) }
+            undoOutcome: { withExtendedLifetime(pins) { replay(undo: true) } },
+            redoOutcome: { withExtendedLifetime(pins) { replay(undo: false) } }
         )
     }
 }

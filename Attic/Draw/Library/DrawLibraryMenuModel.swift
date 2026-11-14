@@ -357,7 +357,11 @@ final class DrawLibraryMenuModel: ObservableObject {
         let store = store
         let actions = actions
         let deletionStepID = store.undoStepID(on: canvas.id)
+        // The toast's Undo is bound to the delete step: the bounded history
+        // keeps that step for as long as the toast holds this pin.
+        let offer = deletionStepID.flatMap { store.pinHistoryStep($0) }
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
+            _ = offer
             // The toast is an Undo of this deletion, not a new Restore edit.
             guard let deletionStepID else {
                 return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))

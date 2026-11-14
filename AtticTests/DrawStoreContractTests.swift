@@ -124,6 +124,165 @@ final class DrawStoreContractTests: XCTestCase {
         }
     }
 
+    // MARK: BG-27 round 3 (Dot R-8, R-9; Opus R-16, R-20)
+
+    private func heavyImage(fill: UInt8, bytes: Int) -> DrawObject {
+        DrawObject(content: .image(DrawImage(original: Data(repeating: fill, count: bytes), pixelWidth: 1_000, pixelHeight: 1_000)))
+    }
+
+    /// Enough saved, light canvases to push every earlier one out of the body cache.
+    private func evictEveryEarlierCanvas(_ store: DrawInMemoryStore, count: Int = 12) {
+        for index in 0..<count {
+            let canvas = store.create(name: "Filler \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Filler"))]), on: canvas.id).isSaved)
+        }
+    }
+
+    /// Dot R-9: a canvas whose text index is about 9 MB holds that one string
+    /// in every copy of the canvas a step keeps (before, after, change). It
+    /// is one buffer, so a two-item restore group over it must still Undo
+    /// once the canvas is out of the cache.
+    func testGroupedRestoreOfACanvasWithAHugeTextIndexStillUndoesAfterEviction() throws {
+        let store = DrawInMemoryStore()
+        let big = store.create(name: "Big text")
+        let text = String(repeating: "lorem ipsum dolor ", count: 500_000) // 9,000,000 bytes
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text(text))]), on: big.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: big.id).isSaved)
+        let light = store.create(name: "Light")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Light"))]), on: light.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: light.id).isSaved)
+        let report = DrawRecentlyDeleted.restoreTracked(
+            [DrawDeletedItem(canvasID: big.id, objectID: nil), DrawDeletedItem(canvasID: light.id, objectID: nil)],
+            store: store)
+        XCTAssertEqual(report.actions.count, 2)
+        let group = try XCTUnwrap(RecentlyDeletedRestoreUndo.make(
+            drawStore: store, actions: report.actions, librarySteps: [], restored: 2))
+        evictEveryEarlierCanvas(store)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(big.id), "the restored canvas was forced out of the cache")
+        XCTAssertEqual(group.undo(), .applied, "the offered group Undo must still work")
+        XCTAssertNotNil(try store.open(big.id).canvas.deletedAt)
+        XCTAssertNotNil(try store.open(light.id).canvas.deletedAt)
+    }
+
+    /// Dot R-8: when the heads an offered Undo is bound to are over the budget
+    /// by themselves, the offer either keeps its head or is gone; it is never
+    /// offered and then refused. Two restored images of 20 MB each are 40 MB.
+    func testAGroupRestoreWhoseHeadsAreOverBudgetKeepsItsOfferedUndo() throws {
+        let store = DrawInMemoryStore()
+        var items: [DrawDeletedItem] = []
+        var ids: [UUID] = []
+        for index in 0..<2 {
+            let canvas = store.create(name: "Photo \(index)")
+            let image = heavyImage(fill: UInt8(60 + index), bytes: 20_000_000)
+            XCTAssertTrue(store.perform(.put([image]), on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.remove([image.id]), on: canvas.id).isSaved)
+            items.append(DrawDeletedItem(canvasID: canvas.id, objectID: image.id))
+            ids.append(canvas.id)
+        }
+        let report = DrawRecentlyDeleted.restoreTracked(items, store: store)
+        XCTAssertEqual(report.actions.count, 2)
+        let group = try XCTUnwrap(RecentlyDeletedRestoreUndo.make(
+            drawStore: store, actions: report.actions, librarySteps: [], restored: 2))
+        evictEveryEarlierCanvas(store)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(ids[0]))
+        XCTAssertEqual(group.undo(), .applied, "offered, so it must not fail")
+        for id in ids { XCTAssertTrue(try store.open(id).objects.isEmpty, "both images are deleted again") }
+    }
+
+    /// The pin an offer holds exempts its history from the whole-history
+    /// fallback while the offer lives; an unpinned heavy head still goes, and
+    /// a released pin protects nothing.
+    func testAPinnedHeadSurvivesTheBudgetAndAReleasedOrMissingPinDoesNot() throws {
+        let store = DrawInMemoryStore()
+        func heavyCanvas(_ name: String, fill: UInt8) throws -> (id: UUID, head: UUID) {
+            let canvas = store.create(name: name)
+            XCTAssertTrue(store.perform(.put([heavyImage(fill: fill, bytes: 20_000_000), heavyImage(fill: fill + 1, bytes: 20_000_000)]),
+                                        on: canvas.id).isSaved)
+            return (canvas.id, try XCTUnwrap(store.undoStepID(on: canvas.id)))
+        }
+        let pinned = try heavyCanvas("Pinned", fill: 10)
+        let loose = try heavyCanvas("Loose", fill: 30)
+        let released = try heavyCanvas("Released", fill: 50)
+        var offer = store.pinHistoryStep(pinned.head)
+        var gone = store.pinHistoryStep(released.head)
+        gone = nil
+        evictEveryEarlierCanvas(store)
+        XCTAssertEqual(store.undoStepID(on: pinned.id), pinned.head, "the pinned head is still there")
+        XCTAssertNil(store.undoStepID(on: loose.id), "no offer, over budget: the history goes")
+        XCTAssertNil(store.undoStepID(on: released.id), "a released pin protects nothing")
+        XCTAssertTrue(store.undo(on: pinned.id).isSaved)
+        offer = nil
+        _ = gone; _ = offer
+    }
+
+    /// Opus R-16: one image moved 100 times is one buffer. Trimming its steps
+    /// frees almost nothing, so it must not be cut while another canvas holds
+    /// the bytes that are actually over budget.
+    func testTrimmingFreesRealBytesInsteadOfCuttingASharedBufferHistory() throws {
+        let store = DrawInMemoryStore()
+        let moved = store.create(name: "Moved")
+        var image = heavyImage(fill: 9, bytes: 5_000_000)
+        XCTAssertTrue(store.perform(.put([image]), on: moved.id).isSaved)
+        for step in 1...99 {
+            image.frame.x = Double(step)
+            XCTAssertTrue(store.perform(.put([image]), on: moved.id).isSaved)
+        }
+        let pasted = store.create(name: "Pasted")
+        for index in 0..<10 {
+            XCTAssertTrue(store.perform(.put([heavyImage(fill: UInt8(20 + index), bytes: 4_000_000)]), on: pasted.id).isSaved)
+        }
+        evictEveryEarlierCanvas(store)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(moved.id))
+        var undone = 0
+        while store.canUndo(on: moved.id), store.undo(on: moved.id).isSaved { undone += 1 }
+        XCTAssertEqual(undone, 100, "its steps hold one 5 MB buffer; cutting them frees nothing")
+    }
+
+    /// Opus R-20: evicting one more canvas must not walk the history of every
+    /// evicted canvas again. Evicted histories that fit the budget are
+    /// counted once; the next eviction visits only the newcomer's steps.
+    func testEvictionCountsOnlyTheNewlyEvictedHistory() throws {
+        let store = DrawInMemoryStore()
+        for index in 0..<21 {
+            let canvas = store.create(name: "Busy \(index)")
+            var objects = (0..<5).map { DrawObject(frame: DrawFrame(x: Double($0), y: 0, width: 10, height: 10), content: .shape(.rectangle)) }
+            XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+            for step in 1..<50 {
+                for slot in objects.indices { objects[slot].frame.x += Double(step) }
+                XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+            }
+        }
+        // 13 canvases are evicted by now; one more is evicted by creating this one.
+        HistoryLedgerProbe.reset()
+        _ = store.create(name: "One more")
+        let visits = HistoryLedgerProbe.stepVisits
+        XCTAssertLessThanOrEqual(visits, 120, "the ledger must not be rebuilt from every evicted history (\(visits) step visits)")
+    }
+
+    /// Opus R-20: the cost, measured. 20 evicted histories of 100 steps x 500
+    /// objects, then more evictions. Printed; the guard above is the count.
+    func testReportEvictionCostForTwentyBigEvictedHistories() throws {
+        let store = DrawInMemoryStore()
+        for index in 0..<28 {
+            let canvas = store.create(name: "Big \(index)")
+            var objects = (0..<500).map { DrawObject(frame: DrawFrame(x: Double($0), y: 0, width: 10, height: 10), content: .shape(.rectangle)) }
+            XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+            for step in 1..<100 {
+                for slot in objects.indices { objects[slot].frame.x += Double(step % 3) + 1 }
+                XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+            }
+        }
+        var samples: [Double] = []
+        for index in 0..<5 {
+            HistoryLedgerProbe.reset()
+            let start = ContinuousClock.now
+            _ = store.create(name: "Newcomer \(index)")
+            let elapsed = start.duration(to: .now)
+            samples.append(Double(elapsed.components.attoseconds) / 1e15 + Double(elapsed.components.seconds) * 1000)
+        }
+        print("BG27_R20_EVICTION_MS samples=\(samples.map { String(format: "%.2f", $0) }) lastVisits=\(HistoryLedgerProbe.stepVisits)")
+    }
+
     func testCachedCanvasesKeepActiveSessionAndUnsavedDraft() throws {
         let store = DrawInMemoryStore()
         let active = store.create(name: "Active")
