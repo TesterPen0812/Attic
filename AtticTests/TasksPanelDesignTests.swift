@@ -223,6 +223,26 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(created.allSatisfy { shown.contains($0.id) }, "every pasted task is drawn")
     }
 
+    /// Dot R-3: copies of two Done tasks land in two folded Now groups. Both
+    /// open, so no selected copy is hidden from the bulk actions.
+    func testBG2DuplicatingDoneTasksIntoTwoFoldedGroupsOpensBoth() throws {
+        let first = try add("Booked today", due: 0)
+        let second = try add("Booked tomorrow", due: 1)
+        let anchorToday = try add("Today anchor", due: 0)
+        let anchorTomorrow = try add("Tomorrow anchor", due: 1)
+        for id in [first, second] { XCTAssertTrue(library.completeTask(id).isApplied) }
+        XCTAssertGreaterThan(store.moveCompletedToDoneLog(before: clock.value.addingTimeInterval(60)), 0)
+        let keys = try [anchorToday, anchorTomorrow].map { try XCTUnwrap(model.groupKey(of: $0, on: .now)) }
+        model.foldAllGroups(keys, folded: true, on: .now)
+        model.select(tab: .done)
+        XCTAssertTrue(model.duplicate([first, second]).isApplied)
+        XCTAssertEqual(model.tab, .now)
+        for key in keys { XCTAssertFalse(model.folded(on: .now).contains(key), "BG-2: both destination groups open") }
+        let shown = Set(model.rows(for: .now).map(\.id))
+        XCTAssertFalse(model.selection.isEmpty)
+        XCTAssertTrue(model.selection.isSubset(of: shown), "no selected copy is hidden in a folded group")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])

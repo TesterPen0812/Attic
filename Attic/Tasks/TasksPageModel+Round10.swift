@@ -68,7 +68,9 @@ extension TasksPageModel {
             let target: TasksTab = first.listedStatus == .backlog ? .backlog : .now
             if tab != target { select(tab: target) }
             selectCopies(copyIDs)
-            unfoldAddedTask(first.id, on: target)
+            // Each copy opens its own folded group: a selected copy hidden in
+            // a folded one would still take part in a bulk action.
+            for copy in copies { unfoldAddedTask(copy.id, on: copy.listedStatus == .backlog ? .backlog : .now) }
             addedRequest = ScrollRequest(id: first.id)
         }
         let message = copies.count == 1 ? String(localized: "Duplicated") : String(localized: "Duplicated \(copies.count) tasks")
