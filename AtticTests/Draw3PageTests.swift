@@ -100,11 +100,13 @@ final class Draw3PageTests: XCTestCase {
         // reused the first (red) raster after replacement; the candidate
         // must display the blue replacement. These are offscreen image regions,
         // not fabricated full-panel screenshots.
-        if let path = capturePath {
-            let directory = URL(fileURLWithPath: path, isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            for (name, data) in captures {
-                try data.write(to: directory.appendingPathComponent("draw-\(name).png"))
+        if capturePath != nil {
+            for name in ["before-equivalent", "after-replacement"] {
+                let data = try XCTUnwrap(captures[name])
+                let screenshot = XCTAttachment(data: data, uniformTypeIdentifier: UTType.png.identifier)
+                screenshot.name = "draw-\(name)"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
             }
         }
     }
