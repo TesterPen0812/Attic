@@ -20,8 +20,9 @@ The viewport knows the source from the change itself, through a shared
   after the flick can therefore scroll to the row, without a timed grace period.
 - A click on ‹ or › in a date card cut short to fit the panel turns the month
   without scrolling the card; the arrow stays under the pointer. A key, or an
-  accessibility press on the arrow, still scrolls to the day it lights (only
-  a fresh left mouse-up at the button's action counts as a click).
+  accessibility press on the arrow, still scrolls to the day it lights. The
+  arrow's own hover identifies the pointer; an unrelated recent mouse-up does
+  not suppress the accessibility scroll.
 - A tag row's id, the id it publishes for the highlight and the id the
   pointer reports are one: the tag's name.
 

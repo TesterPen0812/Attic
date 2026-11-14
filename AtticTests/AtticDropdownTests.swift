@@ -782,11 +782,26 @@ final class AtticDropdownTests: XCTestCase {
     /// is not the keyboard: the card stays, or the arrow slides out from under
     /// the pointer.
     func testPF43AMouseClickOnTheMonthArrowDoesNotScrollACutShortDateCard() throws {
-        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { _, window, next in
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { host, window, next in
             let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) }, "the button has a frame")
-            try self.click(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY), in: window)
+            let point = CGPoint(x: frame.midX, y: frame.midY)
+            // The pointer is on the button before it clicks, as it always is.
+            try Pointer().move(in: host, toWindowPoint: point)
+            try self.click(atWindowPoint: point, in: window)
         }
         XCTAssertEqual(offset, 0, accuracy: 0.5, "a click on › does not scroll the card")
+    }
+
+    /// An accessibility press has no pointer on the button, whatever the
+    /// app's last event was: a mouse-up made elsewhere in the window a
+    /// moment ago (a real click on something else) is not this press's click.
+    func testPF43AAccessibilityPressRightAfterAMouseUpElsewhereScrollsTheLitDayIntoView() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, window, next in
+            try self.click(atWindowPoint: CGPoint(x: 300, y: 500), in: window)
+            XCTAssertEqual(NSApp.currentEvent?.type, .leftMouseUp, "the app's last event is a mouse-up elsewhere")
+            XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
+        }
+        XCTAssertGreaterThan(offset, 20, "the lit day is scrolled into view after an accessibility press, mouse-up or not")
     }
 
     /// A VoiceOver or other accessibility press on ›/‹ has no pointer under
