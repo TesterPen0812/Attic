@@ -1752,11 +1752,50 @@ final class Draw3PageTests: XCTestCase {
 
     // MARK: Opening a canvas that is already in Recently Deleted (BG-29 round 3)
 
+    func testBG29OpeningAPendingDeletionCannotLoopBackToItsDurableRow() throws {
+        var fail = false
+        let durable = try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        let target = try XCTUnwrap(model.canvasID)
+        let original = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([original])).isSaved)
+        XCTAssertTrue(durable.perform(.deleteCanvas, on: target).isSaved)
+        XCTAssertTrue(durable.perform(.restoreCanvas, on: target).isSaved)
+        model.open(target)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        _ = try XCTUnwrap(try durable.open(target).canvas.deletedAt, "Undo of this restore projects a deletion")
+        XCTAssertEqual(try durable.library().first?.id, target, "the failed Undo has not deleted the durable row")
+
+        model.open(target)
+        XCTAssertNotEqual(model.canvasID, target, "the optimistic deletion cannot be its own next live canvas")
+        let destination = try XCTUnwrap(model.canvasID)
+        XCTAssertNil(try durable.open(destination).canvas.deletedAt)
+        fail = false
+        model.retrySave()
+        let restored = try DrawPersistentStore(container: durable.container).open(target)
+        XCTAssertNil(restored.canvas.deletedAt)
+        XCTAssertEqual(restored.objects, [original],
+                       "navigation preserves the acknowledged Redo behind the failed Undo")
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .text("editable draft"))])).isSaved)
+    }
+
+    private func agentDelete(_ id: UUID) throws {
+        let tasks = try makeTestStore()
+        let agent = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)), draw: store)
+        _ = try agent.drawAction("draw_delete_canvas", ["canvas_id": id.uuidString], beforeMutation: {})
+    }
+
     /// Dot R-11, Opus R-18: the Draw page was hidden when the agent deleted
     /// the canvas it last showed, and the app quit. On the next launch the
     /// resume id names a deleted canvas: the board must open a live one.
     func testBG29LaunchAfterTheLastCanvasWasDeletedOpensALiveBoard() throws {
-        let durable = try persistentStore()
+        let durable = try persistentStore(fileBacked: true)
         use(durable)
         let live = store.create(name: "Live")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("L"))]), on: live.id).isSaved)
@@ -1766,7 +1805,7 @@ final class Draw3PageTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(stale.id.uuidString, forKey: "AtticDraw.lastCanvas")
-        XCTAssertTrue(store.perform(.deleteCanvas, on: stale.id).isSaved, "deleted while the page was hidden")
+        try agentDelete(stale.id) // deleted while the page was hidden
         let relaunched = DrawPageModel(store: DrawPersistentStore(container: durable.container), resumeDefaults: defaults)
         relaunched.setBoard(size: CGSize(width: 320, height: 460),
                             clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
@@ -1784,7 +1823,7 @@ final class Draw3PageTests: XCTestCase {
 
     /// With nothing live left, launch opens an editable draft, not the deleted board.
     func testBG29LaunchWithOnlyADeletedCanvasOpensAnEditableDraft() throws {
-        let durable = try persistentStore()
+        let durable = try persistentStore(fileBacked: true)
         use(durable)
         let only = try XCTUnwrap(model.canvasID)
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("S"))]), on: only).isSaved)
@@ -1792,7 +1831,7 @@ final class Draw3PageTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(only.uuidString, forKey: "AtticDraw.lastCanvas")
-        XCTAssertTrue(store.perform(.deleteCanvas, on: only).isSaved)
+        try agentDelete(only)
         let relaunched = DrawPageModel(store: DrawPersistentStore(container: durable.container), resumeDefaults: defaults)
         relaunched.setBoard(size: CGSize(width: 320, height: 460),
                             clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
@@ -1810,13 +1849,13 @@ final class Draw3PageTests: XCTestCase {
 
     /// Dot R-11: a search result clicked after an agent deleted that canvas.
     func testBG29AStaleSearchResultForADeletedCanvasDoesNotOpenIt() throws {
-        use(try persistentStore())
+        use(try persistentStore(fileBacked: true))
         let here = try XCTUnwrap(model.canvasID)
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("here"))]), on: here).isSaved)
         let hit = store.create(name: "Hit")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("needle"))]), on: hit.id).isSaved)
         XCTAssertEqual(try store.search("needle").map(\.canvas.id), [hit.id])
-        XCTAssertTrue(store.perform(.deleteCanvas, on: hit.id).isSaved, "an agent deletes it before the click")
+        try agentDelete(hit.id)
         model.open(hit.id)
         XCTAssertNotEqual(model.canvasID, hit.id)
         XCTAssertEqual(model.canvasID, here)

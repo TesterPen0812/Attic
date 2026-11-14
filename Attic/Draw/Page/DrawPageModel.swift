@@ -651,7 +651,7 @@ final class DrawPageModel: ObservableObject {
             if id != canvasID, let current, current.canvas.deletedAt == nil { return }
             externalSyncDeferred = false
             appliedRevision = store.revision
-            if let next = try? store.library().first { open(next.id) } else { newCanvas() }
+            leaveDeletedCanvas(id)
             return
         }
         IdleLatencyTrace.count("draw_objects_opened", snapshot.objects.count)
@@ -685,6 +685,19 @@ final class DrawPageModel: ObservableObject {
         contentRevision += 1
         board?.drawContentChanged()
         board?.drawSelectionChanged()
+    }
+
+    /// The durable library can still list a canvas whose failed Undo projects
+    /// a deletion. It must not send this hop back to that same deleted snapshot.
+    private func leaveDeletedCanvas(_ deletedID: UUID) {
+        let pending = store.pendingEdits
+        if let next = try? store.library().first(where: {
+            $0.id != deletedID && pending[$0.id]?.canvas.deletedAt == nil
+        }) {
+            open(next.id)
+        } else {
+            newCanvas()
+        }
     }
 
     /// "+": a new, empty canvas straight away (a draft until its first content).
@@ -1649,7 +1662,7 @@ final class DrawPageModel: ObservableObject {
         externalSyncDeferred = false
         appliedRevision = store.revision
         if snapshot.canvas.deletedAt != nil {
-            if let next = try? store.library().first { open(next.id) } else { newCanvas() }
+            leaveDeletedCanvas(canvasID)
             return
         }
         canvasName = confirmedName(in: snapshot)
