@@ -10,29 +10,66 @@ import XCTest
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
 
-    func testPF8RowKeyResponderRegistrationsAreConstantAtScale() throws {
-        // The live row owns its native focus target, but a SwiftUI key
-        // handler on every lazy row adds an extra focus responder. Check
-        // the modifier's actual source as well as hosted scrolling: a
-        // counter only incremented by an old handler would always read zero
-        // once that handler was removed and miss its accidental return.
-        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("../Attic/DesignSystem/Components/AtticTaskComponents.swift")
-            .standardizedFileURL
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let start = try XCTUnwrap(source.range(of: "private struct AtticListTaskFocusModifier: ViewModifier {"))
-        let bodyAndAfter = source[start.upperBound...]
-        let end = try XCTUnwrap(bodyAndAfter.range(of: "/// Editing a row"))
-        let modifierSource = bodyAndAfter[..<end.lowerBound]
-        let rowKeyHandlers = String(modifierSource).components(separatedBy: ".onKeyPress").count - 1
-        XCTAssertEqual(rowKeyHandlers, 0, "A realized list row must not register a private keyboard responder")
+    /// The top-level type each `.onKeyPress` in `path` sits in (comment lines
+    /// skipped), in file order: where every SwiftUI key handler of the file is.
+    private func onKeyPressOwners(in path: String) throws -> [String] {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../\(path)").standardizedFileURL
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let declaration = try NSRegularExpression(
+            pattern: #"^(?:(?:private|fileprivate|final|public|internal)\s+)*(?:struct|class|enum|extension)\s+([A-Za-z0-9_.]+)"#)
+        var owner = "(top level)"
+        var owners: [String] = []
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            if text.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = declaration.firstMatch(in: text, range: range), let name = Range(match.range(at: 1), in: text) {
+                owner = String(text[name])
+            }
+            // The word, not ".onKeyPress": an implicit-self call in an
+            // extension or a helper registers a handler just the same.
+            if text.range(of: #"\bonKeyPress\b"#, options: .regularExpression) != nil { owners.append(owner) }
+        }
+        return owners
+    }
 
+    /// Runs the main run loop in 1 ms turns until `condition` holds.
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return false }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+        }
+        return true
+    }
+
+    func testPF8RowKeyResponderRegistrationsAreConstantAtScale() throws {
+        // A realized Tasks row owns its native focus target but no key
+        // handler of its own: a SwiftUI key handler on every lazy row puts
+        // every realized row in the focus tree (PF-8). Guarded two ways, so
+        // that a handler returning by any route fails it.
+        //
+        // 1. Source: every `.onKeyPress` of the task components and the Tasks
+        //    folder, by the type it sits in. A new handler (in a helper, an
+        //    extension, or under any comment) changes this list.
+        XCTAssertEqual(try onKeyPressOwners(in: "Attic/DesignSystem/Components/AtticTaskComponents.swift"),
+                       ["AtticTaskFocusModifier", "AtticKeyedListTaskFocusModifier", "AtticPageTabs", "AtticSubtaskCommands"],
+                       "Only the card, the opt-in keyed list row, the tabs and the subtask line register key handlers")
+        XCTAssertEqual(try onKeyPressOwners(in: "Attic/Tasks/TasksPage.swift"), ["TasksPage"],
+                       "The Tasks page registers one key handler for all its rows")
+        XCTAssertEqual(try onKeyPressOwners(in: "Attic/Tasks/TasksPanelDesignViews.swift"), ["TasksTopTabs"])
+        XCTAssertEqual(try onKeyPressOwners(in: "Attic/Tasks/TaskPickers.swift"), ["TaskMovePickerView", "TaskPriorityPickerView"])
+
+        // 2. Runtime: count the row handlers a realized list attaches, at
+        //    three sizes, with a positive control that the seam sees one.
         let actions = AtticTaskActions(toggleDone: {}, openPage: {})
         func scrollView(in view: NSView) -> NSScrollView? {
             if let scroll = view as? NSScrollView { return scroll }
             return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
         }
-        for count in [50, 500, 5_000] {
+        func rows(_ count: Int, keyed: Bool, scrolling steps: Int) throws -> (handlers: Int, realized: Int, step: Int, peak: Int) {
+            AtticRowKeyHandlers.attached = 0
             let ids = (0..<count).map { _ in UUID() }
             var realized = 0
             var live = 0
@@ -43,8 +80,12 @@ final class TaskPerformanceGateTests: XCTestCase {
                         ForEach(ids.indices, id: \.self) { index in
                             AtticTaskRow(model: AtticTaskRowModel(title: "Focus task \(index)"),
                                          actions: actions, onToggleExpanded: {}, onSelect: {},
-                                         focus: AtticRowFocus(binding: binding,
-                                                              id: AtticRowFocusID(page: 0, id: ids[index]), isFocused: false))
+                                         focus: keyed
+                                            ? AtticRowFocus(binding: binding, id: AtticRowFocusID(page: 0, id: ids[index]),
+                                                            isFocused: false, answersRowKeys: true)
+                                            // What a list that does not opt in builds: the default.
+                                            : AtticRowFocus(binding: binding, id: AtticRowFocusID(page: 0, id: ids[index]),
+                                                            isFocused: false))
                                 .onAppear {
                                     realized += 1
                                     live += 1
@@ -58,28 +99,55 @@ final class TaskPerformanceGateTests: XCTestCase {
             let window = NSWindow(contentRect: CGRect(x: -5_000, y: -5_000, width: 360, height: 500),
                                   styleMask: .borderless, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            defer {
+                window.contentView = nil
+                window.close()
+            }
             window.contentView = NSHostingView(rootView: root.atticDesign(AtticDesignContext(mode: .light)))
             window.orderFront(nil)
             window.contentView?.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            XCTAssertTrue(waitUntil { window.contentView?.layoutSubtreeIfNeeded(); return live > 0 }, "the first rows realize")
             let scroll = try XCTUnwrap(window.contentView.flatMap(scrollView(in:)), "A genuine SwiftUI scroll view")
             var largestRowStep = 0
-            for _ in 0..<100 {
+            for _ in 0..<steps {
                 let beforeRows = realized
                 let clip = scroll.contentView
                 let maximum = max(0, (scroll.documentView?.frame.height ?? 0) - clip.bounds.height)
-                clip.scroll(to: CGPoint(x: clip.bounds.minX, y: min(clip.bounds.minY + 42, maximum)))
+                let target = min(clip.bounds.minY + 42, maximum)
+                clip.scroll(to: CGPoint(x: clip.bounds.minX, y: target))
                 scroll.reflectScrolledClipView(clip)
-                window.contentView?.layoutSubtreeIfNeeded()
-                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+                // Until the layout has taken this step: the clip is where it
+                // was sent and the realized count has stopped moving.
+                var last = realized
+                var stable = 0
+                XCTAssertTrue(waitUntil {
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    if realized == last { stable += 1 } else { last = realized; stable = 0 }
+                    return stable >= 3 && abs(scroll.contentView.bounds.minY - target) < 0.5
+                }, "the list settles after each scroll step")
                 largestRowStep = max(largestRowStep, realized - beforeRows)
             }
-            window.contentView = nil
-            window.close()
-            XCTAssertLessThanOrEqual(largestRowStep, 12, "One wheel step should realize only nearby rows")
-            XCTAssertLessThanOrEqual(maxLive, 45, "Realized rows stay bounded even for \(count) task rows")
-            print("ATTIC_PF8 count=\(count) steps=100 row_key_handlers_source=\(rowKeyHandlers) " +
-                  "realized_total=\(realized) max_realized_step=\(largestRowStep) peak_live=\(maxLive)")
+            return (AtticRowKeyHandlers.attached, realized, largestRowStep, maxLive)
+        }
+
+        let control = try rows(20, keyed: true, scrolling: 0)
+        XCTAssertGreaterThan(control.handlers, 0, "the counter sees a row that opts in to its own key handler")
+        for count in [50, 500, 5_000] {
+            let result = try rows(count, keyed: false, scrolling: 100)
+            XCTAssertEqual(result.handlers, 0, "A realized list row must not attach a private key handler (N=\(count))")
+            XCTAssertLessThanOrEqual(result.step, 12, "One wheel step should realize only nearby rows")
+            XCTAssertLessThanOrEqual(result.peak, 45, "Realized rows stay bounded even for \(count) task rows")
+            print("ATTIC_PF8 count=\(count) steps=100 row_key_handlers=\(result.handlers) " +
+                  "realized_total=\(result.realized) max_realized_step=\(result.step) peak_live=\(result.peak)")
+        }
+
+        // The real Tasks page, every tab, the long seed: no row attaches one.
+        AtticRowKeyHandlers.attached = 0
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false)
+        defer { hosted.close() }
+        for tab in TasksTab.allCases {
+            hosted.go(to: tab)
+            XCTAssertEqual(AtticRowKeyHandlers.attached, 0, "no row on the \(tab) page attaches a key handler")
         }
     }
 
