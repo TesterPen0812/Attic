@@ -385,18 +385,46 @@ final class NotesTypingCostTests: XCTestCase {
             let (engine, view) = editor([.text("Title"), block])
             defer { engine.detachView() }
             let start = (view.string as NSString).range(of: "launch").location
+            let original = engine.document()
             assertInlineCodeKernIsExact(engine, "\(name), before typing")
             view.setSelectedRange(NSRange(location: start + inRun, length: 0))
             for character in ["x", "y"] {
                 view.insertText(character, replacementRange: view.selectedRange())
                 assertInlineCodeKernIsExact(engine, "\(name) after typing \(character)")
             }
+            let typed = engine.document()
+            if name == "in the middle" { try renderInlineCodeIfRequested(view) }
             // The two typed characters coalesce into one Undo step.
             XCTAssertTrue(engine.history.undo(), name)
+            XCTAssertEqual(engine.document(), original, "Undo restores the code and its marks: \(name)")
             assertInlineCodeKernIsExact(engine, "\(name) after Undo")
             XCTAssertTrue(engine.history.redo(), name)
+            XCTAssertEqual(engine.document(), typed, "Redo restores the typed code and marks: \(name)")
             assertInlineCodeKernIsExact(engine, "\(name) after Redo")
         }
+    }
+
+    private func renderInlineCodeIfRequested(_ view: NoteEditorTextView) throws {
+        guard let variant = ProcessInfo.processInfo.environment["ATTIC_REVIEW_RENDER_VARIANT"] else { return }
+        let scroll = try XCTUnwrap(view.enclosingScrollView)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 150),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        scroll.frame = window.contentView!.bounds
+        scroll.layoutSubtreeIfNeeded()
+        view.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 300,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = NSSize(width: 400, height: 150)
+        scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = "inline-code-\(variant)"
+        attachment.lifetime = .keepAlways
+        XCTContext.runActivity(named: "Inline code at 2×") { $0.add(attachment) }
     }
 
     func testPF16SingleTableCellFindEditDoesNotScanUnrelatedCells() throws {
