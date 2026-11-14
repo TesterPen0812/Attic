@@ -1349,18 +1349,28 @@ final class DrawPageModel: ObservableObject {
         let entries = acknowledgedDraw
         acknowledgedDraw = []
         deletedCanvasHopDeferrals += 1
-        // Once an Undo/Redo has put a canvas in Recently Deleted, the actions
-        // still queued behind it are for a board nobody is looking at.
-        var deletedHere = Set<UUID>()
+        // Once an Undo/Redo has put a canvas in Recently Deleted, the edits and
+        // Undos still queued behind it are for a board nobody is looking at.
+        // The value counts the Undos skipped since, because a later Redo first
+        // cancels one of those; only a Redo that finds nothing left to cancel
+        // is the one that brings the canvas back.
+        var deletedHere: [UUID: Int] = [:]
         for entry in entries {
-            if deletedHere.contains(entry.canvas) { continue }
+            if let skipped = deletedHere[entry.canvas] {
+                switch entry.action {
+                case .command: continue
+                case .undo: deletedHere[entry.canvas] = skipped + 1; continue
+                case .redo where skipped > 0: deletedHere[entry.canvas] = skipped - 1; continue
+                case .redo: break
+                }
+            }
             let result: DrawSaveResult
             switch entry.action {
             case .command(let command): result = store.perform(command, on: entry.canvas)
             case .undo: result = store.undo(on: entry.canvas)
             case .redo: result = store.redo(on: entry.canvas)
             }
-            if case .saved(let delta) = result, delta.canvas.deletedAt != nil { deletedHere.insert(entry.canvas) }
+            if case .saved(let delta) = result { deletedHere[entry.canvas] = delta.canvas.deletedAt != nil ? 0 : nil }
             if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
         }
         deletedCanvasHopDeferrals -= 1

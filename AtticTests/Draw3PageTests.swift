@@ -1393,6 +1393,48 @@ final class Draw3PageTests: XCTestCase {
                        "No stray canvas may be created while a switch is in progress")
     }
 
+    /// BG-29 round 2 (Dot R-2): Undo then Redo of a restore, both queued
+    /// before the flush, nets out to a live canvas. The guard that skips
+    /// entries behind a deletion must not drop the Redo that undoes it.
+    func testBG29QueuedUndoThenRedoLeavesTheRestoredCanvasLive() throws {
+        use(try persistentStore())
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        let restoreStep = try XCTUnwrap(store.undoStepID(on: target.id))
+        model.open(target.id)
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNil(try store.open(target.id).canvas.deletedAt, "Undo then Redo ends with the canvas live")
+        XCTAssertEqual(model.canvasID, target.id, "the board stays on the canvas")
+        XCTAssertEqual(store.undoStepID(on: target.id), restoreStep, "both steps ran: the restore is back on the Undo stack")
+        XCTAssertFalse(store.canRedo(on: target.id))
+        XCTAssertEqual(try store.library().map(\.id), [target.id])
+    }
+
+    /// The Undos and Redos queued behind a deletion still balance: Undo,
+    /// Undo, Redo leaves one Undo applied, so the canvas stays deleted and
+    /// the older edit is untouched.
+    func testBG29QueuedUndoUndoRedoKeepsTheCanvasDeleted() throws {
+        use(try persistentStore())
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        model.open(target.id)
+        model.undoAcknowledged()
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt)
+        XCTAssertEqual(try store.open(target.id).objects.map(\.text), ["T"], "the older edit was never undone")
+        XCTAssertNotEqual(model.canvasID, target.id)
+    }
+
     // MARK: Quit
 
     func testQuitFinishesTheStrokeInProgress() async {
