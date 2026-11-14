@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 import ObjectiveC
 
+/// A custom AppKit control's actual menu hit region, including drawn controls.
+@MainActor
+protocol AtticMenuTrigger: AnyObject {
+    func opensAtticMenu(for event: NSEvent) -> Bool
+}
+
 // MARK: - Glass menus (Loam's, Accepted 2026-11-10)
 //
 // The look, placement and motion follow Loam's `GlassMenu.swift` (MIT,
@@ -95,6 +101,7 @@ final class AtticGlassMenu {
     private var graceTimer: Timer?
     private var lastPointer: NSPoint?
     private weak var source: NSWindow?
+    private var openingAnchor: NSRect?
     /// The window that opened the menu (the panel, mostly).
     var sourceWindow: NSWindow? { source }
     private var observers: [NSObjectProtocol] = []
@@ -216,6 +223,8 @@ final class AtticGlassMenu {
     func open(_ placement: ScreenPlacement, visible: NSRect, source: NSWindow?, container: NSRect? = nil, panel: NSRect? = nil) {
         self.visible = visible
         self.source = source
+        if case let .below(rect) = placement { openingAnchor = rect }
+        else { openingAnchor = nil }
         var minimum: CGFloat = 0
         if case let .below(rect) = placement { minimum = rect.width }
         let card = AtticGlassMenuCard(commands: commands, menu: self, level: 0, minimumWidth: minimum)
@@ -412,7 +421,8 @@ final class AtticGlassMenu {
                 // so a click on ⋯ while another menu tracked opened nothing.
                 // Only registered triggers get that press: ordinary controls
                 // must not act on the click used to dismiss a menu.
-                let opensMenu = AtticContextMenus.isMenuTrigger(for: event)
+                let pressesOpener = event.window === source && openingAnchor?.contains(Self.screenPoint(of: event)) == true
+                let opensMenu = !pressesOpener && AtticContextMenus.isMenuTrigger(for: event)
                 close()
                 if opensMenu {
                     NSApp.postEvent(event, atStart: true)
@@ -2252,8 +2262,17 @@ enum AtticContextMenus {
 
     static func isMenuTrigger(for event: NSEvent) -> Bool {
         if activeShields(for: event).contains(where: { $0.contains(event) }) { return false }
+        if !isContextPress(event), event.type == .leftMouseDown, AtticMenuAnchor.containsTrigger(for: event) { return true }
+        if let window = event.window, let hit = hitView(for: event, in: window), isShown(hit) {
+            var view: NSView? = hit
+            while let current = view {
+                if let trigger = current as? any AtticMenuTrigger { return trigger.opensAtticMenu(for: event) }
+                if current is NSTextView || (!isContextPress(event) && current is NSControl) { return false }
+                view = current.superview
+            }
+        }
         if isContextPress(event) { return routedTarget(for: event) != nil }
-        return event.type == .leftMouseDown && AtticMenuAnchor.containsTrigger(for: event)
+        return false
     }
 
     /// Native text and table controls are not triggers for this router.

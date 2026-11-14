@@ -163,7 +163,6 @@ final class ComposerModel: ObservableObject {
     private var draftGeneration = 0
     private var failedEventDrafts: [ComposerDraftStore.FailedEvent] = []
     private var recoveringFailedEvent: ComposerDraftStore.FailedEvent?
-    private var seededTags: [String]?
 
     static let lengths = [30, 60, 90, 120]
 
@@ -212,7 +211,7 @@ final class ComposerModel: ObservableObject {
     func startTags(_ tags: [String]) {
         guard !tags.isEmpty, tasks.addBar == TaskAddBarText(), writing.isEmpty else { return }
         tasks.addBar.picked.tags = tags
-        seededTags = tags
+        title.seededTags = tags
     }
 
     /// "+" opens on the page's own kind unless a note draft was kept; ⇧⌘N
@@ -268,8 +267,8 @@ final class ComposerModel: ObservableObject {
         // A filter's defaults belong to this opening unless there is writing
         // to keep. Explicitly changed picks remain the person's draft.
         if !hasDraft {
-            if tasks.addBar.picked.tags == seededTags { tasks.addBar.picked.tags = [] }
-            seededTags = nil
+            if tasks.addBar.picked.tags == title.seededTags { tasks.addBar.picked.tags = [] }
+            title.seededTags = nil
         }
         restoreFocus()
         saveKeptDraft()
@@ -538,7 +537,7 @@ final class ComposerModel: ObservableObject {
         })
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
-        if case .tasks = page { tasks.startDraftFromFilter() }
+        if !openingPage, case .tasks = page { tasks.startDraftFromFilter() }
         if openingPage { isOpen = false }
         else { fillCalendarDay(); focusRequest &+= 1 }
     }
@@ -561,7 +560,7 @@ final class ComposerModel: ObservableObject {
         guard made else { return false }
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
-        if kind == .task, case .tasks = page { tasks.startDraftFromFilter() }
+        if !openingPage, kind == .task, case .tasks = page { tasks.startDraftFromFilter() }
         saveKeptDraft()
         if openingPage {
             isOpen = false
@@ -669,7 +668,6 @@ final class ComposerModel: ObservableObject {
     /// length and calendar stay as the person last chose them.
     func clearDraft() {
         title.clearDraft()
-        seededTags = nil
         writing = ""
         pinned = false
         recoveringFailedEvent = nil

@@ -5,6 +5,18 @@ and live selected value while opening the accepted system-menu glass list.
 The replacement menu-button accessibility view had dropped the identifier
 and enabled state. The row's face, menu material and motion stay the same.
 
+## 2026-11-13 · Menu triggers (catchup-2 R-7)
+
+Switching menus also recognizes AppKit table grips, cell context menus, the
+code-language and callout-icon slots, and file-card menus. Notes row, board,
+title and note-menu buttons register their visible trigger regions. Ordinary
+dismissing clicks remain consumed; menu geometry and motion stay unchanged.
+
+## 2026-11-13 · Current menu opener (catchup-2 R-9)
+
+Clicking the control that opened the current menu closes it. Only a different
+menu trigger receives the press to switch menus.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another

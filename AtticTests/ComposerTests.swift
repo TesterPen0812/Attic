@@ -196,6 +196,60 @@ final class ComposerTests: XCTestCase {
 
     private func liveTasks() -> [TaskItem] { tasks.tasks.filter { $0.deletedAt == nil } }
 
+    func testCatchup2R2TasksAndCalendarAbandonOnlyTheirFilterSeed() async throws {
+        for calendar in [false, true] {
+            let nextFilters: [[String]] = calendar ? [[]] : [[], ["home"]]
+            for nextTags in nextFilters {
+                page.setTagPicks(TagPicks(["work"]))
+                page.startDraftFromFilter() // Tasks '+'; Calendar shares this draft.
+                model.open(on: calendar ? .calendar(selected: today) : .tasks(.now), as: .task)
+                XCTAssertEqual(page.addBar.picked.tags, ["work"])
+                model.close()
+                page.setTagPicks(TagPicks(nextTags))
+                page.startDraftFromFilter()
+                model.open(on: .tasks(.now))
+                let before = Set(liveTasks().map(\.id))
+                type("Buy milk")
+                await XCTAssertTrueAsync(await model.create())
+                XCTAssertEqual(liveTasks().first { !before.contains($0.id) }?.tags, nextTags, "calendar=\(calendar)")
+                model.clearDraft()
+                model.close()
+            }
+        }
+    }
+
+    func testCatchup2R2CreationReseedsOnlyAnOpenCardAndDismissalEndsTheSeed() async throws {
+        for acknowledged in [false, true] {
+            for openingPage in [false, true] {
+                page.setTagPicks(TagPicks(["work"]))
+                page.startDraftFromFilter()
+                model.open(on: .tasks(.now))
+                let before = Set(liveTasks().map(\.id))
+                type("Filtered task")
+                if acknowledged {
+                    model.submit(openingPage: openingPage)
+                    for _ in 0..<200 where model.isCreating { try await Task.sleep(for: .milliseconds(10)) }
+                    XCTAssertFalse(model.isCreating)
+                } else { await XCTAssertTrueAsync(await model.create(openingPage: openingPage)) }
+                XCTAssertEqual(liveTasks().first { !before.contains($0.id) }?.tags, ["work"])
+                XCTAssertEqual(model.isOpen, !openingPage)
+                if !openingPage {
+                    XCTAssertEqual(page.addBar.picked.tags, ["work"], "Return keeps the filter for the next task")
+                    model.close()
+                }
+                XCTAssertTrue(page.addBar.picked.tags.isEmpty, "ack=\(acknowledged), commandReturn=\(openingPage)")
+                page.setTagPicks(.none)
+                model.open(on: .calendar(selected: today), as: .task)
+                let beforeCalendar = Set(liveTasks().map(\.id))
+                type("Unfiltered calendar task")
+                await XCTAssertTrueAsync(await model.create())
+                XCTAssertTrue(try XCTUnwrap(liveTasks().first { !beforeCalendar.contains($0.id) }).tags.isEmpty)
+                model.clearDraft()
+                model.close()
+            }
+        }
+    }
+
     func testCatchupR4AbandonedFilterTagsDoNotTagTheNextTask() async throws {
         for atOnce in [false, true] {
             model.startTags(["work", "home"])

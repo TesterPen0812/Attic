@@ -190,6 +190,8 @@ final class TasksSubtaskDraftState: ObservableObject {
 @MainActor
 final class TasksAddBarState: ObservableObject {
     @Published var text = TaskAddBarText()
+    /// Filter defaults belong to this draft, whichever page opened it.
+    var seededTags: [String]?
     @Published var caret: Int?
     /// The whole selection, for the draft history (not observed: only
     /// undo reads it).
@@ -235,6 +237,7 @@ final class TasksAddBarState: ObservableObject {
     /// The draft is gone (added, or cleared on purpose).
     func clearDraft() {
         text.clear()
+        seededTags = nil
         history.reset()
         selection = nil
         hiddenSuggestion = nil
@@ -2713,6 +2716,7 @@ final class TasksPageModel: ObservableObject {
         let picks = tagPicks(on: tab)
         guard !picks.isEmpty, addBar == TaskAddBarText() else { return }
         addBar.picked.tags = picks.tags
+        addBarState.seededTags = picks.tags
     }
 
     var addPlaceholder: String {

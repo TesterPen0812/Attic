@@ -276,6 +276,143 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
+    func testCatchupR7SwitchPressReachesLiveTableGripsAndCellContextMenu() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .table(NoteTable(texts: [["A", "B"], ["1", "2"]]))]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
+        text.textContainerInset = NSSize(width: 28, height: 8)
+        let window = NSWindow(contentRect: scroll.frame.offsetBy(dx: -2_000_000, dy: 0),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { engine.detachView(); window.close() }
+        scroll.layoutSubtreeIfNeeded()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let table = try XCTUnwrap(engine.tableViews().first)
+        table.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+        let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+        defer { chrome.invalidate() }
+        chrome.place()
+        for (index, target) in ([chrome.rowGrip, chrome.columnGrip, table.canvas] as [NSView]).enumerated() {
+            XCTAssertFalse(target.isHidden)
+            let kind: NSEvent.EventType = index == 2 ? .rightMouseDown : .leftMouseDown
+            let press = try XCTUnwrap(NSEvent.mouseEvent(with: kind,
+                location: target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil),
+                modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9700 + index, clickCount: 1, pressure: 1))
+            let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "Other menu") {}])
+            menu.handle(press)
+            XCTAssertFalse(menu.isOpen)
+            let replayed = NSApp.nextEvent(matching: kind == .leftMouseDown ? .leftMouseDown : .rightMouseDown,
+                until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true)
+            XCTAssertEqual(replayed?.eventNumber, press.eventNumber, "trigger \(index) must open on the switch press")
+        }
+    }
+
+    func testCatchupR7NotesRowMenuAnchorReceivesTheSwitchPress() throws {
+        let anchors = AtticNoteRowAnchors()
+        let id = UUID()
+        let controls = [
+            AnyView(Color.clear.frame(width: 32, height: 32).background(AtticNoteRowAnchor(id: id, anchors: anchors))),
+            AnyView(AtticNoteMenuButton(action: {})),
+            AnyView(AtticHeaderTitle(title: "Note", action: {}))
+        ]
+        for (index, control) in controls.enumerated() {
+            let host = NSHostingView(rootView: control.frame(width: 320, height: 60))
+            let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 60),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            if index == 0 { XCTAssertNotNil(anchors.view(for: id)) }
+            let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: host.convert(CGPoint(x: host.bounds.midX, y: host.bounds.midY), to: nil),
+                modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9710 + index, clickCount: 1, pressure: 1))
+            let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "Other menu") {}])
+            menu.handle(press)
+            let replayed = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.02),
+                                          inMode: .default, dequeue: true)
+            XCTAssertEqual(replayed?.eventNumber, press.eventNumber, "Notes opener \(index)")
+        }
+    }
+
+    func testCatchupR7LanguageAndCalloutSlotsReceiveOnlyTheirMenuPresses() throws {
+        var callout = NoteBlock.text("Advice", style: "quote")
+        callout.callout = "💡"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .text("let value = 1", style: "mono"), callout]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
+        let window = NSWindow(contentRect: scroll.frame.offsetBy(dx: -2_000_000, dy: 0),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { engine.detachView(); window.close() }
+        scroll.layoutSubtreeIfNeeded()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        var points: [CGPoint] = []
+        text.textLayoutManager?.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location,
+            options: [.ensuresLayout]) { fragment in
+                if let block = fragment as? NoteBlockLayoutFragment,
+                   let slot = block.codeLabelRect ?? block.calloutIconRect {
+                    points.append(CGPoint(x: slot.minX + 6 + fragment.layoutFragmentFrame.minX + text.textContainerOrigin.x,
+                                          y: slot.midY + fragment.layoutFragmentFrame.minY + text.textContainerOrigin.y))
+                }
+                return true
+            }
+        XCTAssertEqual(points.count, 2)
+        for (index, point) in points.enumerated() {
+            XCTAssertTrue(text.codeLabel(at: point) != nil || text.calloutIcon(at: point) != nil)
+            let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: text.convert(point, to: nil), modifierFlags: [], timestamp: 120,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 9720 + index, clickCount: 1, pressure: 1))
+            let menu = openForAccessibilityGeometry([AtticMenuCommand(verbatim: "Other menu") {}])
+            menu.handle(press)
+            let replayed = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.02),
+                                          inMode: .default, dequeue: true)
+            XCTAssertEqual(replayed?.eventNumber, press.eventNumber)
+        }
+    }
+
+    func testCatchupR9PressOnCurrentOpenerClosesWithoutReposting() throws {
+        let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let holder = AtticMenuAnchor.Holder()
+        let trigger = AtticMenuAnchor.AnchorView(frame: NSRect(x: 20, y: 20, width: 32, height: 32))
+        trigger.holder = holder
+        window.contentView?.addSubview(trigger)
+        holder.remember(trigger)
+        let other = AtticMenuAnchor.AnchorView(frame: NSRect(x: 100, y: 20, width: 32, height: 32))
+        window.contentView?.addSubview(other)
+        for sameOpener in [true, false] {
+            let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: CGPoint(x: sameOpener ? 36 : 116, y: 36),
+                modifierFlags: [], timestamp: 120, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 9900, clickCount: 1, pressure: 1))
+            var opened = 0
+            AtticGlassMenu.testDriver = { menu in
+                opened += 1
+                menu.handle(press)
+                XCTAssertFalse(menu.isOpen)
+                let replayed = NSApp.nextEvent(matching: .leftMouseDown, until: Date().addingTimeInterval(0.02),
+                                              inMode: .default, dequeue: true)
+                XCTAssertEqual(replayed?.eventNumber, sameOpener ? nil : press.eventNumber,
+                               "only a different opener receives the switch press")
+            }
+            holder.open([AtticMenuCommand(verbatim: "Options") {}], event: nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+            XCTAssertEqual(opened, 1)
+            XCTAssertNil(AtticGlassMenu.current)
+        }
+    }
+
     func testCatchupR2OnlyVisibleMenuTriggersReceiveTheDismissingPress() throws {
         let window = NSWindow(contentRect: NSRect(x: -2_000_000, y: 0, width: 320, height: 280),
                               styleMask: .borderless, backing: .buffered, defer: false)

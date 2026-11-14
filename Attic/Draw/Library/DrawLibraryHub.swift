@@ -27,6 +27,14 @@ enum DrawLibraryHub {
         for model in models { model.flushLiveInput() }
     }
 
+    static func hasLiveGesture(on canvasID: UUID, in store: any DrawStoreProtocol) -> Bool {
+        pages.removeAll { $0.model == nil }
+        return pages.contains { page in
+            guard let model = page.model else { return false }
+            return model.store === store && model.canvasID == canvasID && model.live != nil
+        }
+    }
+
     static func register(_ store: (any DrawStoreProtocol)?) {
         registered = store
     }
