@@ -182,7 +182,9 @@ jobs:
             testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
             testR3AThrowWhileResolvingTheLibraryClosesItsKeyShell
             testR3AnOutsideClickCancelsAClosedHashKeysPendingHandoff
+            testR3PickedSummaryReturnNeverOpensTheHighlightedOrSearchedNote
             testR3RevealAddsNoShellBodyPass
+            testR3ThePickedSummaryButtonsShowFocusAndOwnReturnAndSpaceWithFullKeyboardAccess
             testR3TheTabDriverUsesTheApplicationsKeyboardPath
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
             testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen

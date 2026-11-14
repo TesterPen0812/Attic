@@ -451,24 +451,52 @@ private final class RealShell {
     private var tabHistory: [String] = []
 
     func focusDiagnostics() -> String {
-        let attr = NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")
-        let axFocus = NSApp.accessibilityAttributeValue(attr)
+        let axFocus = focusedAXDescription()
         let tree = elements(host).map { node in
-            "\(type(of: node)) id=\(node.accessibilityIdentifier?() ?? nil ?? "nil") role=\(String(describing: node.accessibilityRole?())) frame=\(String(describing: node.accessibilityFrame?())) settable=\((node as? NSObject)?.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused"))) focused=\((node as? NSObject)?.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocused")))"
+            "node=\(node) type=\(type(of: node)) id=\(node.accessibilityIdentifier?() ?? nil ?? "nil") role=\(String(describing: node.accessibilityRole?())) frame=\(String(describing: node.accessibilityFrame?())) settable=\((node as? NSObject)?.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused"))) focused=\((node as? NSObject)?.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocused")))"
         }.joined(separator: "\n")
-        return "panelFrame=\(panel.frame) visible=\(panel.isVisible) screenVisibleFrame=\(String(describing: panel.screen?.visibleFrame)) page=\(state.selectedSection) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) focusableInputs=\(PanelKeyStopSeam.plus) FKA=\(NSApp.isFullKeyboardAccessEnabled) active=\(NSApp.isActive) key=\(String(describing: NSApp.keyWindow)) panelKey=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder)) AXFocusedUIElement=\(String(describing: axFocus))\nTab stops actually visited:\n\(tabHistory.joined(separator: "\n"))\nAX tree:\n\(tree)\nNative key loop:\n\(nativeKeyLoop())"
+        return "panelFrame=\(panel.frame) visible=\(panel.isVisible) screenVisibleFrame=\(String(describing: panel.screen?.visibleFrame)) page=\(state.selectedSection) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) focusableInputs=\(PanelKeyStopSeam.plus) FKA=\(NSApp.isFullKeyboardAccessEnabled) active=\(NSApp.isActive) key=\(String(describing: NSApp.keyWindow)) panelKey=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder)) AXFocusedUIElement=\(axFocus)\nTab stops actually visited:\n\(tabHistory.joined(separator: "\n"))\nAX tree:\n\(tree)\nNative key loop:\n\(nativeKeyLoop())"
+    }
+
+    private func focusedAXDescription() -> String {
+        guard let focused = NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")) else { return "nil" }
+        let node: AnyObject = focused as AnyObject
+        return "\(focused) id=\(node.accessibilityIdentifier?() ?? nil ?? "nil") role=\(String(describing: node.accessibilityRole?())) frame=\(String(describing: node.accessibilityFrame?()))"
     }
 
     func writeFocusRenderIfRequested() throws {
         let env = ProcessInfo.processInfo.environment
         let path = env["ATTIC_R3_FOCUS_RENDER_DIR"] ?? env["TEST_RUNNER_ATTIC_R3_FOCUS_RENDER_DIR"] ?? "verification"
-        host.layoutSubtreeIfNeeded()
-        let bounds = host.bounds
+        // Native Liquid Glass cannot be rasterized offscreen. Use the
+        // design system's capture backdrop for the same production bar.
+        let size = CGSize(width: 340, height: 560)
+        let view = PanelSharedBottomBar(chrome: sharedChrome, page: .notes,
+                                       layout: PanelPageLayout(cornerSize: 52, panelSize: size))
+            .frame(width: size.width, height: 88, alignment: .bottom)
+            .background(Color(white: 0.95))
+            .atticDesignCorners()
+            .atticDesign(.default)
+            .environment(\.atticKeyboardFocusVisible, true)
+            .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey)))
+        let captureWindow = NSWindow(contentRect: CGRect(x: -7000, y: -7000, width: size.width, height: 88),
+                                     styleMask: [.borderless], backing: .buffered, defer: false)
+        captureWindow.isReleasedWhenClosed = false
+        let captureHost = NSHostingView(rootView: view)
+        captureWindow.contentView = captureHost
+        captureWindow.orderFront(nil)
+        defer {
+            captureWindow.orderOut(nil)
+            captureWindow.contentView = nil
+            captureWindow.close()
+        }
+        spin(0.2)
+        captureHost.layoutSubtreeIfNeeded()
+        let bounds = captureHost.bounds
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2),
             pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         bitmap.size = bounds.size
-        host.cacheDisplay(in: bounds, to: bitmap)
+        captureHost.cacheDisplay(in: bounds, to: bitmap)
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
         attachment.name = "picked-summary-\(URL(fileURLWithPath: path).lastPathComponent)"
@@ -559,7 +587,7 @@ private final class RealShell {
             NSApp.sendEvent(event)
         }
         spin(0.12)
-        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(String(describing: NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement"))))")
+        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(focusedAXDescription())")
     }
 
     func tabTo(_ identifier: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -1603,5 +1631,75 @@ extension PanelSharedChromeTests {
         XCTAssertFalse(shell.sharedChrome.tagBar.hasKeyboard)
         shell.appKey(Self.downArrow, keyCode: 125)
         XCTAssertNotNil(library.highlightedID)
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3PickedSummaryReturnNeverOpensTheHighlightedOrSearchedNote() throws {
+        try requireKeyWindowTests()
+        for searching in [false, true] {
+            let (shell, library) = try notesLibraryShell()
+            defer { shell.close() }
+            library.tagPicks = TagPicks(["launch"])
+            if searching {
+                library.query = "Launch"
+                shell.wait { !library.groups(store: shell.notes, drafts: []).isEmpty }
+                XCTAssertNil(library.highlightedID)
+            } else {
+                shell.appKey(Self.downArrow, keyCode: 125)
+                XCTAssertNotNil(library.highlightedID)
+            }
+            shell.spin(0.5)
+            for id in ["notes-tag-bar-picked", "notes-tag-bar-clear"] {
+                let node = try XCTUnwrap(shell.element(id))
+                let object: AnyObject = node
+                XCTAssertEqual(object.accessibilityRole?(), .button)
+                if NSApp.isFullKeyboardAccessEnabled {
+                    XCTAssertTrue(node.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused")))
+                }
+            }
+            // Report the native buttons' focus callback, as the plus seam does.
+            shell.sharedChrome.tagBar.noteSummaryKeyboard(true)
+            shell.state.keyboardFocus.noteKeyboardNavigation()
+            shell.spin(0.3)
+            if !searching { try shell.writeFocusRenderIfRequested() }
+            XCTAssertEqual(PanelKeyStopSeam.summaryFocusRings["notes-tag-bar-picked"], true, "the picked button draws its focus ring")
+            XCTAssertEqual(PanelKeyStopSeam.summaryFocusRings["notes-tag-bar-clear"], false, "only the focused button draws a ring")
+            shell.appKey("\r", keyCode: 36)
+            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return belongs to the focused summary button")
+            shell.sharedChrome.tagBar.noteSummaryKeyboard(false)
+            shell.appKey("\r", keyCode: 36)
+            shell.wait { !shell.draft.pages.isLibraryPresented }
+            XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: the library still opens a note when summary focus is released")
+        }
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3ThePickedSummaryButtonsShowFocusAndOwnReturnAndSpaceWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        for identifier in ["notes-tag-bar-picked", "notes-tag-bar-clear"] {
+            for key in [("\r", UInt16(36)), (" ", UInt16(49))] {
+                for searching in [false, true] {
+                    let (shell, library) = try notesLibraryShell()
+                    defer { shell.close() }
+                    library.tagPicks = TagPicks(["launch"])
+                    if searching { library.query = "Launch" } else { shell.appKey(Self.downArrow, keyCode: 125) }
+                    shell.spin(0.4)
+                    shell.tabTo(identifier)
+                    XCTAssertTrue(shell.sharedChrome.tagBar.summaryHasKeyboard, "the native summary button owns activation")
+                    XCTAssertEqual(PanelKeyStopSeam.summaryFocusRings[identifier], true)
+                    let other = identifier.hasSuffix("picked") ? "notes-tag-bar-clear" : "notes-tag-bar-picked"
+                    XCTAssertEqual(PanelKeyStopSeam.summaryFocusRings[other], false)
+                    shell.appKey(key.0, keyCode: key.1)
+                    XCTAssertTrue(shell.draft.pages.isLibraryPresented, "the highlighted or searched note stays closed")
+                    if identifier.hasSuffix("picked") { XCTAssertTrue(shell.sharedChrome.tagBar.isOpen) }
+                    else { XCTAssertTrue(library.tagPicks.isEmpty) }
+                }
+            }
+        }
     }
 }

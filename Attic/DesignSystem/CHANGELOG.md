@@ -1,3 +1,9 @@
+## 2026-11-14 · Notes picked-tags keyboard focus (BG-67 R-1)
+
+Each native summary button reports its own focus and shows the existing Attic
+focus ring. Return and Space activate that button. The picked tags, clear
+button, spacing, materials and Tasks' managed Tab order keep their existing design.
+
 ## 2026-11-14 · Shared keyboard ownership (BG-67 R-4)
 
 Focus requests can identify the physical control that acquired a stop. A late

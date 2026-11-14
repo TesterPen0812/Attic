@@ -50,6 +50,26 @@ final class PanelTagBarState: ObservableObject {
     private(set) var keyIntent: KeyIntent = .release(0)
     private(set) var keyFocusPending = false
 
+    /// The two native summary buttons leave row activation to the focused control.
+    enum SummaryFocus: Hashable { case picked, clear }
+    @Published private(set) var summaryFocus: SummaryFocus?
+    private var summaryOwner: UUID?
+    var summaryHasKeyboard: Bool { summaryFocus != nil }
+
+    func noteSummaryFocus(_ focus: SummaryFocus?, owner: UUID) {
+        if focus == nil, summaryOwner != owner { return }
+        summaryOwner = focus == nil ? nil : owner
+        if summaryFocus != focus { summaryFocus = focus }
+    }
+
+    #if DEBUG
+    /// Reports the native button's callback on a host without FKA enabled.
+    func noteSummaryKeyboard(_ has: Bool) {
+        summaryOwner = nil
+        summaryFocus = has ? .picked : nil
+    }
+    #endif
+
     private static let live = NSHashTable<PanelTagBarState>.weakObjects()
 
     init() { Self.live.add(self) }
@@ -156,6 +176,9 @@ struct NotesTagBar: View {
     /// The pill under the pointer.
     @State private var pointed: NotesTagBarPillID?
     @StateObject private var keys = PanelTagBarKeys()
+    @FocusState private var summaryFocus: PanelTagBarState.SummaryFocus?
+    @State private var summaryOwner = UUID()
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
 
     private var allID: String { "\(idPrefix)-all" }
 
@@ -225,6 +248,23 @@ struct NotesTagBar: View {
         .clipShape(shape)
         // The glass behind the pills, never over them.
         .background(Color.clear.atticRaisedMaterial(cornerRadius: m.radius, interactive: false, edgeLight: true))
+        .overlay(alignment: .leading) {
+            if !open, summaryRing(.picked) {
+                Color.clear.atticFocusRing(true, cornerRadius: m.pillRadius)
+                    .frame(height: m.pillHeight)
+                    .padding(.leading, m.tagBarPadding)
+                    .padding(.trailing, m.tagBarPadding + PanelTagBarMetrics.clearWidth)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if !open, summaryRing(.clear) {
+                Color.clear.atticFocusRing(true, cornerRadius: m.pillRadius)
+                    .frame(width: PanelTagBarMetrics.clearWidth, height: m.pillHeight)
+                    .padding(.trailing, m.tagBarPadding)
+                    .allowsHitTesting(false)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
         .accessibilityIdentifier(idPrefix)
@@ -264,8 +304,12 @@ struct NotesTagBar: View {
     private var summary: some View {
         let m = NotesBarMetrics.self
         let shape = Squircle(cornerRadius: m.pillRadius, exponent: AtticControlShape.designExponent)
+        #if DEBUG
+        let _ = PanelKeyStopSeam.summaryFocusRings["\(idPrefix)-picked"] = summaryRing(.picked)
+        let _ = PanelKeyStopSeam.summaryFocusRings["\(idPrefix)-clear"] = summaryRing(.clear)
+        #endif
         return HStack(spacing: 0) {
-            Button { state.open() } label: {
+            summaryButton(.picked, action: { state.open() }) {
                 PanelTagPhraseText(parts: picks.phraseParts, size: m.pillFontSize, weight: .semibold)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -280,7 +324,7 @@ struct NotesTagBar: View {
             .accessibilityValue(picks.spokenPhrase)
             .accessibilityHint(String(localized: "Opens the tag bar"))
             .accessibilityIdentifier("\(idPrefix)-picked")
-            Button { onSelect(nil) } label: {
+            summaryButton(.clear, action: { onSelect(nil) }) {
                 Image(systemName: "xmark")
                     .font(.system(size: PanelTagBarMetrics.clearGlyph, weight: .semibold))
                     .foregroundStyle(design.tokens.color(.helper))
@@ -295,9 +339,41 @@ struct NotesTagBar: View {
         }
         .background(AtticSelectionMarker(cornerRadius: m.pillRadius))
         .clipShape(shape)
-        .atticFocusRing(state.keyFocused && !state.isOpen, cornerRadius: m.pillRadius)
+        .atticFocusRing(managesOwnTabOrder && state.keyFocused && !state.isOpen, cornerRadius: m.pillRadius)
+        .onChange(of: summaryFocus) { _, now in state.noteSummaryFocus(now, owner: summaryOwner) }
+        .onChange(of: shown) { _, now in if !now { releaseSummary() } }
+        .onDisappear { releaseSummary() }
         .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown,
                                    plainStop: false))
+    }
+
+    private func summaryRing(_ stop: PanelTagBarState.SummaryFocus) -> Bool {
+        !managesOwnTabOrder && shown && keyboardFocusVisible && state.summaryFocus == stop
+    }
+
+    /// Tasks keeps its existing buttons and managed parent stop. Notes lends
+    /// each native button's focus to the library's Return arbitration.
+    @ViewBuilder
+    private func summaryButton<Label: View>(_ stop: PanelTagBarState.SummaryFocus,
+                                           action: @escaping () -> Void,
+                                           @ViewBuilder label: () -> Label) -> some View {
+        if managesOwnTabOrder {
+            Button(action: action, label: label)
+        } else {
+            Button(action: action, label: label)
+                .focused($summaryFocus, equals: stop)
+                .disabled(!shown)
+                .onKeyPress(keys: [.space, .return, KeyEquivalent(Character("\u{3}"))]) { press in
+                    guard shown, summaryFocus == stop, press.modifiers.isEmpty else { return .ignored }
+                    action()
+                    return .handled
+                }
+        }
+    }
+
+    private func releaseSummary() {
+        summaryFocus = nil
+        state.noteSummaryFocus(nil, owner: summaryOwner)
     }
 
     // MARK: Open: All and the tags

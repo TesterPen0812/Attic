@@ -254,7 +254,7 @@ struct NotesLibraryView: View {
         if PanelTagBarState.ownsKeys || (event.keyCode == 53 && PanelTagBarState.ownsEscape) { return false }
         // The shared "+" has the keyboard: Return is its, as Space is (it
         // would otherwise open the highlighted or first searched note).
-        if sharedChrome?.plusHasKeyboard == true, event.keyCode == 36 || event.keyCode == 76,
+        if sharedChrome?.plusHasKeyboard == true || sharedChrome?.tagBar.summaryHasKeyboard == true, event.keyCode == 36 || event.keyCode == 76,
            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
