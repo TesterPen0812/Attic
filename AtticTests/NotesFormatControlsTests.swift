@@ -688,6 +688,28 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(opened, "⌃Tab no longer opens Aa")
     }
 
+    /// BG-65 (P2): the keyboard colour picker must be equivalent to
+    /// clicking Highlight's chevron when the active selection is whole cells.
+    func testBG65WholeCellHighlightDownArrowOpensKeyboardPalette() throws {
+        let table = NoteTable(texts: [["First", "Second"], ["Third", "Fourth"]])
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title"), .table(table)]))
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let grid = try XCTUnwrap(attachment.hostedView)
+        grid.selectCells(NoteTableCellRange(anchor: NoteTable.Position(row: 0, column: 0),
+                                            head: NoteTable.Position(row: 1, column: 1)))
+        controls.refresh()
+        XCTAssertNotNil(controls.formatModel.snapshot.cells, "a range of cells drives the cells bar")
+        XCTAssertTrue(controls.formatModel.snapshot.isEnabled(.mark(.highlight)))
+        controls.enterBarKeyboard()
+        let index = try XCTUnwrap(NoteFormatBarItem.cells.firstIndex(of: .command(.mark(.highlight))))
+        controls.formatModel.barKeyboardIndex = index
+        let event = keyEvent("\u{f701}", "\u{f701}", keyCode: 125, [], window: try XCTUnwrap(textView.window))
+        XCTAssertTrue(controls.handleKey(event))
+        XCTAssertEqual(controls.formatModel.highlightPalette, .selectionBar,
+                       "Down Arrow opens Highlight colours for selected cells")
+        XCTAssertEqual(controls.formatModel.paletteKeyboardIndex, 0)
+    }
+
     /// OD-7: Tab in the title moves to the start of the body (making the
     /// body's first line when there is none); in the body it indents.
     func testTabInTheTitleMovesToTheBodyAndIndentsInTheBody() throws {

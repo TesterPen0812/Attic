@@ -857,7 +857,7 @@ final class NoteFormatControls: NSObject {
         case 125 where items[index] == .command(.mark(.highlight)):
             // ↓ on the highlighter widens it into its colours (N2), the
             // ring on the selection's colour.
-            guard formatModel.snapshot.isEnabled(.mark(.highlight)), formatModel.snapshot.cells == nil else {
+            guard formatModel.snapshot.isEnabled(.mark(.highlight)) else {
                 NSSound.beep(); return true
             }
             formatModel.highlightPalette = .selectionBar
