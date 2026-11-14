@@ -1650,7 +1650,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
     /// its new bytes off the main actor like a cold one, then validates the
     /// revision and the lease when it installs.
     func testPF13AStaleWarmTaskNoteDecodesOffMainAndOpensTheNewerBytes() async throws {
-        let taskID = try seed(.heavy)
+        let taskID = try seed(.long)
         let noteID = try XCTUnwrap(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
         let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
         let first = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
@@ -1658,7 +1658,12 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let closed4 = await first.close()
         XCTAssertTrue(closed4)
         XCTAssertNotNil(notes.workspaceSessionIfCached(noteID), "the closed note stays warm")
-        reviseExternally(noteID, "Newer writing from another writer")
+        let writer = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let source = try XCTUnwrap(writer.loadDocument(noteID: noteID))
+        var changed = try XCTUnwrap(source.content.document).blocks
+        changed.append(.text("Newer writing from another writer"))
+        _ = try writer.saveDocument(noteID: noteID, document: NoteDocument(blocks: changed),
+                                   baseRevisionID: source.revisionID).get()
         let before = notes.store.documentDecodeCountByIDForTesting[noteID, default: 0]
         let mainBefore = notes.coldDecodeOnMainCount, offBefore = notes.coldDecodeCount
         let again = try await notes.prepareTaskNoteOpen(taskID: taskID)
@@ -1671,6 +1676,30 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(notes.store.documentDecodeCountByIDForTesting[noteID, default: 0] - before, 0,
                        "reopening a stale warm note decodes nothing on the main actor")
         XCTAssertTrue(try XCTUnwrap(second.session).engine.textStorage.string.contains("Newer writing from another writer"))
+    }
+
+    func testPF13StaleWarmPreparationRejectsALeaseAcquiredDuringItsDecode() async throws {
+        let taskID = try seed(.heavy)
+        let hold = OpenDecodeHold(holdFirst: true)
+        useHeldDecode(hold)
+        let first = try open(taskID)
+        let noteID = try XCTUnwrap(first.session?.noteID)
+        let closed = await first.close()
+        XCTAssertTrue(closed)
+        reviseExternally(noteID, "new warm revision")
+        let preparing = Task { try await notes.prepareTaskNoteOpen(taskID: taskID) }
+        try await hold.waitUntilHeld()
+        let owner = try open(taskID)
+        let lease = owner.lease
+        XCTAssertNotNil(lease)
+        await hold.release()
+        do {
+            _ = try await preparing.value
+            XCTFail("a stale preparation cannot replace a session that acquired a lease")
+        } catch WorkspaceFoundationError.conflict { }
+        XCTAssertEqual(owner.lease, lease)
+        XCTAssertTrue(TaskNotePresenter.open(for: taskID) === owner)
+        XCTAssertTrue(try XCTUnwrap(owner.session).engine.textStorage.string.contains("new warm revision"))
     }
 
     /// § 9: scrolling the composed view shows no regression against the
