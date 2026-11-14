@@ -309,6 +309,20 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(CalendarMonthMath.shifted(today, by: -1, weekView: true, today: today, calendar: calendar), day(2026, 10, 22))
     }
 
+    func testReviewDateBoundaryPagingNeverWrapsIntoAnotherEra() {
+        let today = day(2026, 10, 29)
+        let first = day(1, 1, 1)
+        let last = day(9999, 12, 31)
+        for week in [false, true] {
+            XCTAssertEqual(CalendarMonthMath.shifted(last, by: 1, weekView: week, today: today, calendar: calendar),
+                           last, "Next at the supported last year must not jump to 2000 or persist year 10000")
+            XCTAssertEqual(CalendarMonthMath.shifted(first, by: -1, weekView: week, today: today, calendar: calendar),
+                           first, "Previous at the supported first year must remain a valid date")
+        }
+        XCTAssertEqual(CalendarMonthMath.adding(days: 7, to: last, calendar: calendar), last,
+                       "day navigation must not construct an invalid DueDay")
+    }
+
     // MARK: - Agenda
 
     func testAgendaGroupsSevenDaysInOrder() {

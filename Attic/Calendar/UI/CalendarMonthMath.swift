@@ -11,17 +11,19 @@ struct CalendarMonth: Hashable, Comparable, Sendable {
     let month: Int
 
     init(year: Int, month: Int) {
-        // Normalise 0 and 13 into the neighbouring years.
+        // Normalise 0 and 13 into neighbouring years, but keep the month's
+        // first day inside the 1...9999 range supported by DueDay.
         let index = year * 12 + (month - 1)
-        self.year = Int((Double(index) / 12).rounded(.down))
-        self.month = index - self.year * 12 + 1
+        let bounded = min(max(index, 12), 9999 * 12 - 1)
+        self.year = bounded / 12
+        self.month = bounded % 12 + 1
     }
 
     init(_ day: DueDay) { self.init(year: day.year, month: day.month) }
 
     func adding(months n: Int) -> CalendarMonth { CalendarMonth(year: year, month: month + n) }
 
-    var firstDay: DueDay { DueDay(year: year, month: month, day: 1) ?? DueDay(year: 2000, month: 1, day: 1)! }
+    var firstDay: DueDay { DueDay(year: year, month: month, day: 1)! }
 
     static func < (lhs: CalendarMonth, rhs: CalendarMonth) -> Bool {
         (lhs.year, lhs.month) < (rhs.year, rhs.month)
@@ -98,7 +100,12 @@ enum CalendarMonthMath {
     static func adding(days n: Int, to day: DueDay, calendar: Calendar) -> DueDay {
         guard n != 0, let start = day.startDate(in: calendar),
               let moved = calendar.date(byAdding: .day, value: n, to: start) else { return day }
-        return DueDay(date: moved, calendar: calendar)
+        // Reading only year/month/day would map a BCE date back into the CE
+        // range; keep the era and reject dates outside DueDay's stored domain.
+        let parts = DueDay.storageCalendar(matching: calendar).dateComponents([.era, .year, .month, .day], from: moved)
+        guard parts.era == 1, let year = parts.year, let month = parts.month,
+              let number = parts.day, let candidate = DueDay(year: year, month: month, day: number) else { return day }
+        return candidate
     }
 
     /// Whole days from `from` to `to`.
@@ -183,6 +190,7 @@ enum CalendarMonthMath {
     static func shifted(_ selected: DueDay, by n: Int, weekView: Bool, today: DueDay, calendar: Calendar) -> DueDay {
         if weekView { return adding(days: 7 * n, to: selected, calendar: calendar) }
         let month = CalendarMonth(selected).adding(months: n)
+        guard month != CalendarMonth(selected) else { return selected }
         return month == CalendarMonth(today) ? today : month.firstDay
     }
 
