@@ -360,6 +360,31 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(model.rows(for: .now).map(\.id), order, "⌘↑ moved a row the keyboard is not on")
     }
 
+    /// Dot R-5: ⇧↓ and ⇧↑ from a heading extend the selection from its anchor,
+    /// as they do from a row, not replace it.
+    func testShiftArrowsFromAHeadingExtendTheSelection() throws {
+        try requireKeyWindowTests()
+        for down in [true, false] {
+            let hosted = try Hosted(height: 520)
+            defer { hosted.close() }
+            let model = hosted.model
+            let groups = try nowGroups(model)
+            model.foldAllGroups([groups[1].key], folded: true, on: .now)
+            hosted.spin(0.2)
+            let above = groups[0].rows[0]
+            let below = try XCTUnwrap(groups[2].rows.first)
+            hosted.press("\t", keyCode: 48)
+            hosted.press("\t", keyCode: 48)
+            XCTAssertNil(model.keyboardFocus, "Tab is on the folded heading")
+            let start = down ? above : below
+            model.selectOnly(start)
+            if down { hosted.press("\u{F701}", keyCode: 125, modifiers: .shift) }
+            else { hosted.press("\u{F700}", keyCode: 126, modifiers: .shift) }
+            XCTAssertEqual(model.selection, [above, below], "\(down ? "⇧↓" : "⇧↑"): the selection grew from where it was")
+            XCTAssertEqual(model.selectionAnchorForTesting, start, "and its anchor held")
+        }
+    }
+
     /// A scroll event with the fields the page reads, in the page's window.
     private final class ScrollStub: NSEvent {
         var inWindow: NSWindow?

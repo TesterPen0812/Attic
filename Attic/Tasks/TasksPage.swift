@@ -3194,7 +3194,9 @@ struct TasksPage: View {
                 if modifiers.isEmpty || modifiers == .shift {
                     if let next = rowBeside(group: key, step: step, in: visible) {
                         setFocus(next)
-                        model.selectOnly(next)
+                        // ⇧ grows the selection from its anchor, as from a row.
+                        if modifiers == .shift { model.extendSelection(to: next, visible: visible, from: current) }
+                        else { model.selectOnly(next) }
                         focusTracker.noteKeyboardNavigation()
                     }
                     return .handled
