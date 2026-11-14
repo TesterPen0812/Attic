@@ -367,7 +367,7 @@ final class TasksReviewFixTests: XCTestCase {
         }
     }
 
-    private func mountDone(days: [(ago: Int, count: Int)]) throws -> DoneHost {
+    private func mountDone(days: [(ago: Int, count: Int)], foldedDays: Bool = false) throws -> DoneHost {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: base)
         let now = today.addingTimeInterval(16 * 3_600)
@@ -402,6 +402,15 @@ final class TasksReviewFixTests: XCTestCase {
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         let host = DoneHost(model: model, window: window, size: size)
+        if foldedDays {
+            // Every day of the log starts folded: no row is drawn, so the list
+            // cannot scroll and the sentinel is on screen from the start.
+            model.foldAllGroups(days.map {
+                TasksPanelDesign.GroupKind.finished(calendar.startOfDay(for: calendar.date(byAdding: .day, value: -$0.ago, to: today)!)).key
+            }, folded: true, on: .done)
+        }
+        TasksDonePagingProbe.builds = 0
+        TasksDonePagingProbe.visibility = nil
         model.select(tab: .done)
         host.spin(1.2)
         XCTAssertEqual(model.tab, .done)
@@ -454,9 +463,28 @@ final class TasksReviewFixTests: XCTestCase {
         let second = try XCTUnwrap(model.doneDays().dropFirst().first)
         model.toggleGroup(second.key, on: .done)
         host.spin(1.5)
+        // The guard means something only if the lazy stack really drew the
+        // sentinel while it was off screen (its prefetch), and the scroll view
+        // said it is not on screen.
+        XCTAssertGreaterThan(TasksDonePagingProbe.builds, 0, "the lazy stack built the sentinel below the viewport")
+        XCTAssertNotEqual(TasksDonePagingProbe.visibility, true, "and it is not on screen")
         XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize,
-                       "12 open rows and two headings fill the screen: the sentinel below them is not on screen")
+                       "open rows and two headings fill the screen: the sentinel below them is not on screen")
         XCTAssertTrue(model.doneLogHasMore)
+    }
+
+    /// Opus's unverified risk under R-3: a first page whose days are all
+    /// folded draws no rows, so the list cannot scroll. The sentinel is on
+    /// screen from the start and must keep paging, with nothing to scroll.
+    func testDoneSentinelKeepsPagingWhenEveryDayOfTheFirstPageIsFolded() throws {
+        let host = try mountDone(days: (0..<5).map { ($0, 60) }, foldedDays: true)
+        defer { host.close() }
+        let model = host.model
+        XCTAssertLessThan(TasksPageModel.doneLogPageSize, 300, "300 rows are more than one page")
+        for _ in 0..<200 where model.doneLogHasMore { host.spin(0.03) }
+        XCTAssertEqual(model.doneLogTasks.count, 300, "paging went on to the end with no scroll")
+        XCTAssertFalse(model.doneLogHasMore)
+        XCTAssertEqual(model.doneDays().flatMap(\.rows).count, 0, "every day stayed folded: there was never anything to scroll")
     }
 
     func testDoneLogPagesReachEveryTaskAcrossDuplicatesAndSupersededCopies() throws {

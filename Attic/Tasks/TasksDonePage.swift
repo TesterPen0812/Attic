@@ -175,6 +175,15 @@ struct TasksDonePage<Cell: View>: View {
     }
 }
 
+#if DEBUG
+/// What the paging sentinel did, for the guards that must know it was built
+/// (the lazy stack drew it) and what the scroll view said about it.
+enum TasksDonePagingProbe {
+    static var builds = 0
+    static var visibility: Bool?
+}
+#endif
+
 /// The Done log's next page is read while its loading rows are on screen, and
 /// only then: when they come into view, and again after each page settles if
 /// they are still in view (a folded day can hide several pages behind one
@@ -192,8 +201,14 @@ private struct TasksDonePagingSentinel: View {
     @State private var queued = false
 
     var body: some View {
+        #if DEBUG
+        let _ = { TasksDonePagingProbe.builds += 1 }()
+        #endif
         AtticLoadingRows(count: 2)
             .onScrollVisibilityChange { now in
+                #if DEBUG
+                TasksDonePagingProbe.visibility = now
+                #endif
                 visible = now
                 if now { requestPage() }
             }

@@ -252,6 +252,53 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(model.editingTitleID, focused.id)
     }
 
+    /// A scroll event with the fields the page reads, in the page's window.
+    private final class ScrollStub: NSEvent {
+        var inWindow: NSWindow?
+        var stubPhase: NSEvent.Phase = []
+        var stubMomentum: NSEvent.Phase = []
+        var dy: CGFloat = 0
+        var at = CGPoint.zero
+        override var window: NSWindow? { inWindow }
+        override var type: NSEvent.EventType { .scrollWheel }
+        override var phase: NSEvent.Phase { stubPhase }
+        override var momentumPhase: NSEvent.Phase { stubMomentum }
+        override var scrollingDeltaX: CGFloat { 0 }
+        override var scrollingDeltaY: CGFloat { dy }
+        override var hasPreciseScrollingDeltas: Bool { true }
+        override var isDirectionInvertedFromDevice: Bool { false }
+        override var locationInWindow: NSPoint { at }
+        override var modifierFlags: NSEvent.ModifierFlags { [] }
+        override var timestamp: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    }
+
+    /// Opus R-7, through the page's own scroll monitor (`pageScrolled`): a
+    /// vertical gesture and its momentum ask who owns them (a hit test and a
+    /// view walk) at most once. An eager question per event, in the monitor,
+    /// fails here.
+    func testThePagesScrollMonitorAsksWhoOwnsAGestureOnce() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        func send(dy: CGFloat, phase: NSEvent.Phase, momentum: NSEvent.Phase = []) {
+            let event = ScrollStub()
+            event.inWindow = hosted.window
+            event.stubPhase = phase
+            event.stubMomentum = momentum
+            event.dy = dy
+            event.at = CGPoint(x: hosted.window.frame.width / 2, y: hosted.window.frame.height / 2)
+            _ = TasksPage.pageScrolled(event, model: hosted.model, pointer: hosted.pointer, swipe: hosted.model.pagerSwipe,
+                                       stackHeight: 60, listProxies: TasksListProxies())
+        }
+        TasksPage.pagerTakesCalls = 0
+        send(dy: 0, phase: .began)
+        XCTAssertEqual(TasksPage.pagerTakesCalls, 1, "the gesture's start reached the page's scroll monitor and asked once")
+        for _ in 0..<30 { send(dy: -3, phase: .changed) }
+        send(dy: 0, phase: .ended)
+        for _ in 0..<20 { send(dy: -2, phase: [], momentum: .changed) }
+        XCTAssertLessThanOrEqual(TasksPage.pagerTakesCalls, 1, "the rest of the gesture and its momentum ask nothing")
+    }
+
     // MARK: - pro-bugs-tasks-r1 fix 1: Done headings below the fold take the ring (Opus R-2)
 
     func testShiftTabToTheLastFoldedDoneHeadingScrollsItIntoView() throws {

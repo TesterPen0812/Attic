@@ -154,6 +154,8 @@ struct TasksPage: View {
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
+    /// How many times a scroll event asked who owns it (`pagerTakes`).
+    static var pagerTakesCalls = 0
     #endif
 
     /// The row that has the keyboard on the page shown, if any. The focus
@@ -500,21 +502,8 @@ struct TasksPage: View {
             // horizontal swipe over the lists is its own, every other
             // scroll goes on to the list (or the panel) untouched.
             eventMonitors.add(matching: .scrollWheel) { [model, pointer, swipe, bottomStack, listProxies] event in
-                // Gated before any state is read (round 10): a page that
-                // is not shown, or not in this event's visible window,
-                // takes nothing, not even a gesture it owned before.
-                guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
-                      event.window === window else { return event }
-                if event.phase == .began { PerformanceSignposts.noteInput("scroll-began") }
-                let sample = TasksPagerSwipe.Sample(event)
-                // Asked only where a gesture or sideways wheel event starts
-                // (`TasksPagerSwipe.handle`): the hit test behind it is not
-                // paid per scroll event.
-                let consumed = model.pagerScrolled(sample, allowed: Self.pagerTakes(
-                    event, pointer: pointer, band: swipe.band, stackHeight: bottomStack.height,
-                    pageShown: model.isPageShown))
-                listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
-                return consumed ? nil : event
+                Self.pageScrolled(event, model: model, pointer: pointer, swipe: swipe,
+                                  stackHeight: bottomStack.height, listProxies: listProxies)
             }
             // Every mouse press: a secondary click or a Control-click
             // binds the menu about to open to its row; any other press
@@ -1593,6 +1582,26 @@ struct TasksPage: View {
         (responder as? NSTextView)?.hasMarkedText() == true
     }
 
+    /// One scroll event through the page's monitor: nil when the pager took it.
+    static func pageScrolled(_ event: NSEvent, model: TasksPageModel, pointer: TasksPointer, swipe: TasksPagerSwipe,
+                             stackHeight: CGFloat, listProxies: TasksListProxies) -> NSEvent? {
+        // Gated before any state is read (round 10): a page that
+        // is not shown, or not in this event's visible window,
+        // takes nothing, not even a gesture it owned before.
+        guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
+              event.window === window else { return event }
+        if event.phase == .began { PerformanceSignposts.noteInput("scroll-began") }
+        let sample = TasksPagerSwipe.Sample(event)
+        // Asked only where a gesture or sideways wheel event starts
+        // (`TasksPagerSwipe.handle`): the hit test behind it is not
+        // paid per scroll event.
+        let consumed = model.pagerScrolled(sample, allowed: Self.pagerTakes(
+            event, pointer: pointer, band: swipe.band, stackHeight: stackHeight,
+            pageShown: model.isPageShown))
+        listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
+        return consumed ? nil : event
+    }
+
     /// Where the pager takes a swipe or a wheel: over the lists, between
     /// the tabs' band and the bottom stack's (the header, the tabs and the
     /// add bar keep theirs; over the header a swipe toward the panel's
@@ -1600,6 +1609,9 @@ struct TasksPage: View {
     /// ⌘, ⌥ or ⌃ held.
     static func pagerTakes(_ event: NSEvent, pointer: TasksPointer, band: TasksPagerBand, stackHeight: CGFloat,
                            pageShown: Bool) -> Bool {
+        #if DEBUG
+        pagerTakesCalls += 1
+        #endif
         guard pageShown, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
               let point = pointer.location(of: event), let view = pointer.view else { return false }
         // The band first: it is a comparison, and outside it nothing below matters.
