@@ -1490,6 +1490,11 @@ final class WorkspaceCommitTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(5))
             }
             XCTAssertTrue(gate.startupReconciled, "launch path \(environment)")
+            // Receipt pruning now pages across suspension points after the
+            // reconciliation, and the hold is released when that ends. Join
+            // the launch the stores started (no Notes visit starts one here)
+            // instead of racing the hold's release.
+            try await gate.finishLaunch()
             let lease = gate.ownership.tryAcquire([UUID()], kind: .collection)
             XCTAssertNotNil(lease, "launch hold must finish without a Notes visit")
             lease?.release()
