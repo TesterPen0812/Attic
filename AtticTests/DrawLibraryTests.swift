@@ -31,6 +31,93 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertTrue(try store.open(canvas.id).objects.isEmpty)
         XCTAssertNil(try store.open(canvas.id).canvas.deletedAt)
     }
+    /// A repository whose next saves can fail with a retryable error (the
+    /// disk was full), then recover.
+    @MainActor
+    private final class FlakyDrawRepository: DrawRepository {
+        private let memory = DrawMemoryRepository()
+        var failuresRemaining = 0
+        func library() throws -> [DrawCanvas] { memory.library() }
+        func load(_ id: UUID) throws -> DrawSnapshot? { memory.load(id) }
+        func textMatches(_ words: [String], in id: UUID) throws -> [UUID] { memory.textMatches(words, in: id) }
+        func write(_ change: DrawChange) -> DrawWriteOutcome {
+            if failuresRemaining > 0 { failuresRemaining -= 1; return .retry("The disk is full.") }
+            return memory.write(change)
+        }
+        func reconcile(_ change: DrawChange) -> DrawWriteOutcome { .retry("Retry the edit.") }
+        func discardAttempt(for id: UUID) {}
+        func deletedImageHeaders() throws -> [DrawDeletedImage] { [] }
+        func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge { DrawRepositoryPurge() }
+    }
+
+    private final class IDLog { var ids: [UUID] = [] }
+
+    @MainActor
+    private final class DeletionToastFixture {
+        let repository = FlakyDrawRepository()
+        let log = IDLog()
+        let store: DrawStore
+        let menu: DrawLibraryMenuModel
+        let toast = PanelToastCenter()
+        let canvas: DrawCanvas
+        let deletionID: UUID
+        var opened: [UUID] { log.ids }
+
+        init() throws {
+            let store = DrawStore(repository: repository)
+            let canvas = store.create(name: "Retry target")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("first edit"))]), on: canvas.id).isSaved)
+            let log = self.log
+            let menu = DrawLibraryMenuModel(store: store, actions: DrawLibraryActions(
+                open: { log.ids.append($0) }, newCanvas: { _ in }, reveal: { _, _ in }, close: {}))
+            menu.toasts = toast
+            menu.currentCanvasID = canvas.id
+            menu.perform(.delete)
+            self.store = store
+            self.canvas = canvas
+            self.menu = menu
+            deletionID = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        }
+    }
+
+    /// BG-28 review (Dot R-1): the toast's Retry after a failed Undo write
+    /// must retry the pending inverse, bring the canvas back and open it.
+    func testBG28DeletionToastRetryAfterAFailedUndoWriteRestoresAndOpensTheCanvas() throws {
+        let fixture = try DeletionToastFixture()
+        fixture.repository.failuresRemaining = 1
+        let failed = fixture.toast.performAction()
+        XCTAssertNotNil(failed.failure, "the first Undo write failed")
+        XCTAssertEqual(fixture.toast.current?.isFailure, true)
+        XCTAssertTrue(fixture.opened.isEmpty)
+        let retried = fixture.toast.performAction()
+        XCTAssertEqual(retried, .applied, "Retry must settle the pending Undo once storage recovers")
+        XCTAssertNil(try fixture.store.open(fixture.canvas.id).canvas.deletedAt)
+        XCTAssertEqual(fixture.opened, [fixture.canvas.id], "the restored canvas reopens")
+        XCTAssertEqual(fixture.store.redoStepID(on: fixture.canvas.id), fixture.deletionID, "deletion is on Redo")
+    }
+
+    /// The separate save notice may settle the failed Undo first; the toast
+    /// must then recognise its own settled Undo, not call it a changed canvas.
+    func testBG28DeletionToastAfterTheSaveNoticeSettledItsUndoOpensTheCanvas() throws {
+        let fixture = try DeletionToastFixture()
+        fixture.repository.failuresRemaining = 1
+        XCTAssertNotNil(fixture.toast.performAction().failure)
+        XCTAssertTrue(fixture.store.retry(on: fixture.canvas.id).isSaved, "the notice's Retry settles the Undo")
+        XCTAssertEqual(fixture.toast.performAction(), .applied)
+        XCTAssertNil(try fixture.store.open(fixture.canvas.id).canvas.deletedAt)
+        XCTAssertEqual(fixture.opened, [fixture.canvas.id])
+    }
+
+    /// BG-28 review (Opus R-2): the canvas was restored from Recently Deleted
+    /// (or by the agent) while the toast was up; Undo then just opens it.
+    func testBG28DeletionToastAfterTheCanvasWasRestoredElsewhereOpensIt() throws {
+        let fixture = try DeletionToastFixture()
+        XCTAssertTrue(fixture.store.perform(.restoreCanvas, on: fixture.canvas.id).isSaved)
+        XCTAssertEqual(fixture.toast.performAction(), .applied)
+        XCTAssertNil(try fixture.store.open(fixture.canvas.id).canvas.deletedAt)
+        XCTAssertEqual(fixture.opened, [fixture.canvas.id])
+    }
+
     private final class Clock {
         var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
         func tick() -> Date { date += 60; return date }

@@ -359,19 +359,42 @@ final class DrawLibraryMenuModel: ObservableObject {
         let deletionStepID = store.undoStepID(on: canvas.id)
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
             // The toast is an Undo of this deletion, not a new Restore edit.
-            guard let deletionStepID, store.undoStepID(on: canvas.id) == deletionStepID else {
+            guard let deletionStepID else {
                 return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
             }
-            let restored = store.undo(on: canvas.id)
-            switch restored {
-            case .saved:
-                actions.open(canvas.id)
-                return .applied
-            case .unchanged:
-                return .failed(CommandFailure(String(localized: "The canvas deletion can no longer be undone.")))
-            case let .retry(message), let .held(message):
-                return .failed(CommandFailure(message))
+            let id = canvas.id
+            // An earlier press of this Undo wrote nothing (the disk was full):
+            // Retry settles that pending inverse instead of queueing another.
+            if let pending = store.pendingEdits[id] {
+                guard store.undoStepID(on: id) == deletionStepID, pending.canvas.deletedAt == nil else {
+                    return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
+                }
+                let settled: DrawSaveResult
+                if case .held = pending.outcome { settled = store.reconcile(on: id) } else { settled = store.retry(on: id) }
+                switch settled {
+                case .saved, .unchanged: break
+                case let .retry(message), let .held(message): return .failed(CommandFailure(message))
+                }
             }
+            if store.undoStepID(on: id) == deletionStepID {
+                switch store.undo(on: id) {
+                case .saved:
+                    actions.open(id)
+                    return .applied
+                case .unchanged:
+                    return .failed(CommandFailure(String(localized: "The canvas deletion can no longer be undone.")))
+                case let .retry(message), let .held(message):
+                    return .failed(CommandFailure(message))
+                }
+            }
+            // The deletion was undone already (the save notice's Retry), or the
+            // canvas came back through Recently Deleted or the agent: it is
+            // live, so Undo only has to show it.
+            if ((try? store.library()) ?? []).contains(where: { $0.id == id }) {
+                actions.open(id)
+                return .applied
+            }
+            return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
         }
         deletionToastID = toasts?.current?.id
     }
