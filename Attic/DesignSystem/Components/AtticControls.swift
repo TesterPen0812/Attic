@@ -2812,20 +2812,39 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         field.textColor = color
         field.placeholderAttributedString = NSAttributedString(string: placeholder,
             attributes: [.font: font, .foregroundColor: placeholderColor])
-        // The binding holds committed text. A view update must not replace
-        // the input context's in-progress candidate with that older value.
+        // An unchanged binding is the last committed text, not a replacement
+        // for the input context's candidate. An actual outside edit (Clear,
+        // for example) takes precedence and retires the obsolete composition.
+        if text != coordinator.lastBoundText,
+           let editor = field.currentEditor() as? NSTextView, editor.hasMarkedText() {
+            coordinator.isApplyingExternalText = true
+            coordinator.lastBoundText = text
+            editor.inputContext?.discardMarkedText()
+            editor.unmarkText()
+            field.stringValue = text
+            if editor.string != text { editor.string = text }
+            editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            coordinator.isApplyingExternalText = false
+        }
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
            field.stringValue != text { field.stringValue = text }
+        coordinator.lastBoundText = text
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var owner: AtticNativeSearchInput
-        init(_ owner: AtticNativeSearchInput) { self.owner = owner }
+        var lastBoundText: String
+        var isApplyingExternalText = false
+        init(_ owner: AtticNativeSearchInput) { self.owner = owner; lastBoundText = owner.text }
         func controlTextDidChange(_ notification: Notification) {
             guard owner.focusClaim == nil || owner.focusClaim?.field === notification.object as? NSTextField else { return }
-            guard let field = notification.object as? NSTextField,
+            guard !isApplyingExternalText, let field = notification.object as? NSTextField,
                   (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
-            owner.text = field.stringValue
+            // An outside replacement may be waiting for SwiftUI's next update.
+            // A native commit arriving first must not overwrite that newer value.
+            guard owner.text == lastBoundText else { return }
+            lastBoundText = field.stringValue
+            if owner.text != field.stringValue { owner.text = field.stringValue }
         }
         func controlTextDidBeginEditing(_ notification: Notification) {
             guard owner.focusClaim == nil || owner.focusClaim?.field === notification.object as? NSTextField else { return }

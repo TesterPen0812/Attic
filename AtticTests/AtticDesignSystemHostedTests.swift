@@ -947,6 +947,29 @@ extension AtticDesignSystemHostedTests {
         XCTAssertTrue(window.firstResponder === editor, "dismissing the status leaves the caret intact")
     }
 
+    func testR3ExternalSearchClearDuringCompositionCannotResurrectCandidate() throws {
+        try requireKeyWindowTests()
+        for commitBeforeUpdate in [false, true] {
+            let probe = SearchCompositionProbe()
+            let (window, hosting) = host(SearchCompositionHost(probe: probe), size: CGSize(width: 300, height: 70), key: true)
+            let field = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? AtticNativeSearchInput.Field }.first)
+            XCTAssertTrue(window.makeFirstResponder(field))
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 3))
+            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: field)
+            probe.text = ""
+            if commitBeforeUpdate { editor.unmarkText() }
+            probe.placeholder = "Cleared"; spin(0.2)
+            XCTAssertEqual(field.placeholderAttributedString?.string, "Cleared", "updateNSView ran during composition")
+            XCTAssertFalse(editor.hasMarkedText(), "an explicit outside replacement cancels the obsolete composition")
+            XCTAssertEqual(editor.string, "")
+            editor.unmarkText()
+            window.makeFirstResponder(nil); spin(0.1)
+            XCTAssertEqual(probe.text, "", "composition completion cannot undo the external clear")
+            XCTAssertEqual(field.stringValue, "")
+        }
+    }
+
     func testBG66StatusDetailsRetryAndCancelAreKeyboardReachableWithoutStealingTyping() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else {
@@ -1129,5 +1152,21 @@ extension AtticDesignSystemHostedTests {
         let (_, shut) = host(card(AtticUnfoldState(reveal: 0, fromTop: true, contentBlur: 0, shadow: 0)), size: size, context: context)
         XCTAssertGreaterThan(try ink(open), 3, "open, the rows show")
         XCTAssertLessThan(try ink(shut), 1.3, "one row high, the rows below are cut away")
+    }
+}
+
+
+@MainActor
+private final class SearchCompositionProbe: ObservableObject {
+    @Published var text = "old"
+    @Published var placeholder = "Search"
+}
+
+private struct SearchCompositionHost: View {
+    @ObservedObject var probe: SearchCompositionProbe
+    var body: some View {
+        AtticNativeSearchInput(text: $probe.text, placeholder: probe.placeholder, identifier: "r3-search",
+            isFocused: nil, color: .labelColor, placeholderColor: .secondaryLabelColor, headerFont: nil, onEscape: {})
+            .frame(width: 260, height: 24)
     }
 }
