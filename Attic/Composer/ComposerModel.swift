@@ -253,6 +253,12 @@ final class ComposerModel: ObservableObject {
     /// asks for Note. A kept event draft is a task outside Calendar.
     func open(on page: ComposerPage, as requested: ComposerKind? = nil) {
         draftGeneration += 1
+        // A file drop explicitly asks for Task before staging begins. Preserve
+        // a genuine kept Note; a refused Note switch still owns Task's files.
+        if requested == .task, kind == .note, asideDraft == nil, !tasks.composerFilesWait {
+            let note = draft(owner: .note)
+            if !note.isEmpty { asideDraft = note; clearDraft() }
+        }
         openedForQuickNote = requested == .note
         let keptNote = kind == .note && hasDraft
         self.page = page

@@ -267,6 +267,33 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(title.selectedRange(), NSRange(location: (title.string as NSString).length, length: 0))
     }
 
+
+    func testR5FileDropSetsAsideAKeptNoteBeforeForcingTask() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r5-drop-\(UUID().uuidString).txt")
+        try "dropped".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file); page.clearComposerFiles() }
+        model.open(on: .notes)
+        type("A kept note #home")
+        model.writing = "Only the Note owns these words"
+        model.pinned = true
+        page.addBarState.selection = NSRange(location: 2, length: 4)
+        let note = page.addBar
+        model.close()
+        let route = PanelComposerRoute(open: { [model] page, kind in model?.open(on: page, as: kind) })
+        XCTAssertTrue(page.dropFilesOnComposer([try XCTUnwrap(NSItemProvider(contentsOf: file))], card: route))
+        for _ in 0..<100 where page.addBarState.stagingFiles > 0 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.kind, .task)
+        XCTAssertEqual(page.addBar.text, "", "a file's Task must not borrow the kept Note's title")
+        XCTAssertEqual(model.writing, "")
+        XCTAssertFalse(model.pinned)
+        XCTAssertEqual(page.addBarState.fileNames.count, 1)
+        model.choose(.note)
+        XCTAssertEqual(page.addBar, note)
+        XCTAssertEqual(model.writing, "Only the Note owns these words")
+        XCTAssertTrue(model.pinned)
+        XCTAssertEqual(page.addBarState.selection, NSRange(location: 2, length: 4))
+    }
+
     private func type(_ text: String) {
         // Typing keeps the draft's picks (the Calendar's day), as the field does.
         var draft = TaskAddBarText(text: text)

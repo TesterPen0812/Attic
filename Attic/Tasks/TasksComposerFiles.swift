@@ -52,10 +52,9 @@ extension TasksPageModel {
     /// kind that shows them, even over a kept Note draft. Returns whether the
     /// panel's card took it (otherwise the old add bar takes the keyboard).
     func dropFilesOnComposer(_ providers: [NSItemProvider], card: PanelComposerRoute?) -> Bool {
+        card?.open(on: .tasks(tab), as: .task)
         addComposerFiles(providers)
-        guard let card else { return false }
-        card.open(on: .tasks(tab), as: .task)
-        return true
+        return card != nil
     }
 
     /// Files chosen with the strip's Attach button (the picker's originals,
