@@ -477,7 +477,7 @@ final class DrawDataSafetyTests: XCTestCase {
     func testBG31AgentResizeOfSignedLineAndArrowFramesIsExact() throws {
         for kind in [DrawShape.line, .arrow] {
             for (signX, signY) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
-                let store = try persistent()
+                let store = try persistent(at: directory())
                 let canvas = store.create(name: "Signed \(kind)")
                 let agent = try actions(store)
                 let original = DrawObject(frame: DrawFrame(x: 200, y: 200, width: 100 * signX, height: 50 * signY),
@@ -505,6 +505,11 @@ final class DrawDataSafetyTests: XCTestCase {
                 XCTAssertEqual(store.undoStepID(on: canvas.id) == nil, false)
                 XCTAssertTrue(store.undo(on: canvas.id).isSaved)
                 XCTAssertEqual(try store.open(canvas.id).objects.first, resized, "\(label): one Undo takes back one resize")
+                XCTAssertEqual(try DrawPersistentStore(container: store.container).open(canvas.id).objects.first, resized)
+                XCTAssertTrue(store.undo(on: canvas.id).isSaved)
+                XCTAssertEqual(try DrawPersistentStore(container: store.container).open(canvas.id).objects.first, original)
+                XCTAssertTrue(store.redo(on: canvas.id).isSaved)
+                XCTAssertEqual(try DrawPersistentStore(container: store.container).open(canvas.id).objects.first, resized)
             }
         }
     }

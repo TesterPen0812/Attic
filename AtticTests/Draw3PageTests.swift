@@ -870,6 +870,7 @@ final class Draw3PageTests: XCTestCase {
     /// short axis on the default, non-proportional drag either. Pulling the
     /// corner of a 100 x 2 stroke to the right changes its width only.
     func testBG31DraggingAThinStrokeSidewaysNeverChangesItsHeight() throws {
+        use(try persistentStore(fileBacked: true))
         let points = [DrawPoint(x: 0, y: 50), DrawPoint(x: 50, y: 51), DrawPoint(x: 100, y: 52)]
         let thin = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
         XCTAssertEqual(thin.frame.height, 2, accuracy: 0.0001)
@@ -879,6 +880,7 @@ final class Draw3PageTests: XCTestCase {
         let original = model.objects[0]
         let corner = spot(.bottomRight)
         drag([corner, CGPoint(x: corner.x + 5, y: corner.y), CGPoint(x: corner.x + 10, y: corner.y)])
+        model.flushAcknowledgedDraw()
         let after = model.objects[0]
         XCTAssertEqual(after.frame.height, original.frame.height, accuracy: 0.0001, "the height does not change")
         XCTAssertGreaterThan(after.frame.width, original.frame.width, "the width follows the pointer")
@@ -887,6 +889,7 @@ final class Draw3PageTests: XCTestCase {
             let start = spot(handle)
             let sideways: CGFloat = handle == .topLeft || handle == .bottomLeft ? -10 : 10
             drag([start, CGPoint(x: start.x + sideways, y: start.y)])
+            model.flushAcknowledgedDraw()
             XCTAssertEqual(model.objects[0].frame.height, before.height, accuracy: 0.0001, "\(handle): height unchanged")
             XCTAssertGreaterThan(model.objects[0].frame.width, before.width, "\(handle): the width grows")
         }
@@ -896,6 +899,7 @@ final class Draw3PageTests: XCTestCase {
     /// floor. A stroke already smaller than it is not made smaller by the
     /// pointer from any corner: its size is unchanged and no Undo step is added.
     func testBG31AnObjectBelowThePointerFloorIsNotShrunkFurtherByThePointer() throws {
+        use(try persistentStore(fileBacked: true))
         let points = [DrawPoint(x: 100, y: 100), DrawPoint(x: 102, y: 102)]
         let tiny = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
         put(tiny)
@@ -909,6 +913,7 @@ final class Draw3PageTests: XCTestCase {
             for shift in [false, true] {
                 let start = spot(handle)
                 drag([start, CGPoint(x: (start.x + centre.x) / 2, y: (start.y + centre.y) / 2), centre], shift: shift)
+                model.flushAcknowledgedDraw()
                 XCTAssertEqual(model.objects[0], original, "\(handle) shift=\(shift): size unchanged")
                 XCTAssertEqual(store.undoStepID(on: model.canvasID!), head, "\(handle) shift=\(shift): no Undo step added")
             }

@@ -205,8 +205,8 @@ final class DrawPageModelTests: XCTestCase {
             let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
             let pulled = DrawPageModel.resized([small], handle: handle, delta: CGPoint(x: -0.2 * signX, y: -0.2 * signY),
                                                shift: true)[0]
-            XCTAssertLessThanOrEqual(pulled.frame.width, small.frame.width + 0.0001, "\(handle) must not grow")
-            XCTAssertLessThanOrEqual(pulled.frame.height, small.frame.height + 0.0001, "\(handle) must not grow")
+            XCTAssertEqual(pulled.frame.width, small.frame.width, accuracy: 0.0001, "\(handle): already below the pointer floor, so unchanged")
+            XCTAssertEqual(pulled.frame.height, small.frame.height, accuracy: 0.0001, "\(handle): already below the pointer floor, so unchanged")
             let pushed = DrawPageModel.resized([small], handle: handle, delta: CGPoint(x: 1 * signX, y: 1 * signY),
                                                shift: true)[0]
             XCTAssertGreaterThan(pushed.frame.width, small.frame.width, "\(handle): an outward drag still grows it")
