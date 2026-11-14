@@ -1167,7 +1167,13 @@ final class TasksPageModel: ObservableObject {
     /// A task just made or changed on a filtered page stays in view until
     /// the view changes ("+" while filtered; Accepted 2026-11-13).
     func keepInView(_ id: UUID, on tab: TasksTab) {
-        guard tab != .done, var stay = filterStay[tab] else { return }
+        guard tab != .done else { return }
+        let picks = tagPicks(on: tab)
+        let view = viewOptions(for: tab)
+        guard trimmedQuery(for: tab).isEmpty, view.filters || !picks.isEmpty else { return }
+        let key = TasksStayKey(view: view, picks: picks)
+        if filterStay[tab]?.key != key { filterStay[tab] = (key, []) }
+        guard var stay = filterStay[tab] else { return }
         stay.ids.insert(id)
         filterStay[tab] = stay
         rowsCache[tab] = nil

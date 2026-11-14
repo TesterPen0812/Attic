@@ -381,6 +381,29 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(shown.isSuperset(of: ["pasted one", "pasted two"]), "R-12: the pasted rows are not hidden by the filter: \(shown)")
     }
 
+    /// Dot R-7: the same paste, before the filtered rows were ever built for the
+    /// filter now chosen (a new tag, with nothing selected so nothing built them),
+    /// and after switching from one built filter to another.
+    func testPasteRightAfterAFilterChangeKeepsTheNewRowsInView() throws {
+        _ = try add("Tagged", due: nil)
+        // A fresh filter, rows never read for it.
+        model.chooseTagChip("launch")
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer("fresh one\nfresh two"))
+        model.acceptPaste(asOne: false)
+        var shown = Set(model.rows(for: .now).map(\.model.title))
+        XCTAssertTrue(shown.isSuperset(of: ["fresh one", "fresh two"]), "R-7, first use of the filter: \(shown)")
+        // From a built filter to a different one, rows not read in between.
+        model.chooseTagChip("launch")
+        model.chooseTagChip("home")
+        _ = model.rows(for: .now)
+        model.chooseTagChip("home")
+        model.chooseTagChip("garden")
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer("switched one\nswitched two"))
+        model.acceptPaste(asOne: false)
+        shown = Set(model.rows(for: .now).map(\.model.title))
+        XCTAssertTrue(shown.isSuperset(of: ["switched one", "switched two"]), "R-7, a different built filter: \(shown)")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])
