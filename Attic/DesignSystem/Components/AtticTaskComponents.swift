@@ -231,7 +231,9 @@ enum AtticTextInput {
 /// Direction A changes it): Space (and ⌥Space) completes or un-completes,
 /// ⇧Space starts or stops working, ⌘Return opens the page; rows also take
 /// ⌘B (Later) and Delete. ↑ ↓ and ⌘↑ ⌘↓ belong to the list, and Return
-/// (edit title) to the row's title editor.
+/// (edit title) to the row's title editor. A card answers them itself; a
+/// list row does when its list opts in (`AtticRowFocus.answersRowKeys`),
+/// and otherwise its page does (`TasksPage.pageKey`).
 enum AtticTaskKeys {
     enum Command: Equatable { case toggleDone, toggleWorking, openPage, moveToBacklog, delete, editTitle, copy, duplicate, showActions }
 
@@ -246,8 +248,9 @@ enum AtticTaskKeys {
         }
         if key == .return, relevant == .command { return .openPage }
         guard listCommands else { return nil }
-        // Return edits the title. The row answers it itself: left to the
-        // list, a focused row would take Return as a click.
+        // Return edits the title. The focused row's owner answers it (the
+        // Tasks page for its lists, the row itself for an opt-in list):
+        // left unanswered, a focused row would take Return as a click.
         if key == .return, relevant == [] { return .editTitle }
         // Backspace arrives as U+007F (or U+0008), forward delete as U+F728.
         let deletes: Set<Character> = [KeyEquivalent.delete.character, KeyEquivalent.deleteForward.character, "\u{7F}", "\u{8}", "\u{F728}"]
@@ -305,7 +308,12 @@ private extension View {
     func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool,
                         external: AtticRowFocus? = nil, answersKeys: Bool = true) -> some View {
         if live, let external {
-            modifier(AtticListTaskFocusModifier(enabled: enabled, focus: external))
+            if external.answersRowKeys {
+                modifier(AtticKeyedListTaskFocusModifier(enabled: enabled, answersKeys: answersKeys, actions: actions,
+                                                         listCommands: listCommands, focus: external))
+            } else {
+                modifier(AtticListTaskFocusModifier(enabled: enabled, focus: external))
+            }
         } else if live {
             modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled && answersKeys, actions: actions, listCommands: listCommands))
         } else {
@@ -371,29 +379,39 @@ struct AtticRowFocus {
     let isFocused: Bool
     /// Whether the row's page is the one that answers the keyboard (round
     /// 12): a page kept built beside it draws its rows but takes no focus
-    /// and answers no key. A closure, read when a key arrives: a page shown
+    /// and answers no key. Read only by a row that answers its own keys
+    /// (`answersRowKeys`); the Tasks page asks its own model. A closure,
+    /// read when a key arrives: a page shown
     /// by a tab click keeps the rows it built while hidden (the row is not
     /// redrawn for the change, round 11), so a value read at build time
     /// would leave them deaf.
     let isActive: () -> Bool
+    /// Whether each row answers the task keys itself (Space, ⇧Space, Return,
+    /// ⇧⌘I, ⌘Return, Delete, ⌘B and so on) with its own key handler. Opt-in:
+    /// a short list (Calendar's agenda and Day view) turns it on; a long lazy
+    /// list (the Tasks pages) leaves it off and answers the keys once, from
+    /// its page, because a handler on every realized row is another
+    /// responder in SwiftUI's focus tree for each row it builds.
+    let answersRowKeys: Bool
 
     /// With the list's own record of which row has the keyboard: a lazy
     /// list's cell that reads the focus state reads it as it was when the
     /// list was built (the Tasks page, deep review P2-04), so the list
     /// keeps a copy and says whether this row has it.
     init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isFocused: Bool,
-         isActive: @escaping () -> Bool = { true }) {
+         isActive: @escaping () -> Bool = { true }, answersRowKeys: Bool = false) {
         self.binding = binding
         self.id = id
         self.isActive = isActive
         self.isFocused = isFocused
+        self.answersRowKeys = answersRowKeys
     }
 }
 
-/// The Tasks page owns one keyboard responder for its list. Its rows still
-/// expose native focus targets so keyboard focus, Full Keyboard Access and
-/// accessibility focus work as before, but adding a lazy row no longer adds
-/// another key responder to SwiftUI's focus tree.
+/// A list row's native focus target and nothing more: the row is a Tab and
+/// Full Keyboard Access stop and an accessibility focus target, and the
+/// list answers its keys once (`TasksPage.pageKey`). Adding a lazy row adds
+/// no key responder to SwiftUI's focus tree.
 private struct AtticListTaskFocusModifier: ViewModifier {
     let enabled: Bool
     let focus: AtticRowFocus
@@ -405,6 +423,46 @@ private struct AtticListTaskFocusModifier: ViewModifier {
             .focusEffectDisabled()
     }
 }
+
+/// The same focus target plus the task keys on the row itself, for a list
+/// that opts in (`AtticRowFocus.answersRowKeys`) and has no page-level
+/// handler of its own: Calendar's agenda and Day view.
+private struct AtticKeyedListTaskFocusModifier: ViewModifier {
+    let enabled: Bool
+    /// Off while the row's title is edited: the row stays focusable (so
+    /// its focus never jumps elsewhere as the editor appears), but the
+    /// editor, not the row, takes the keys.
+    let answersKeys: Bool
+    let actions: AtticTaskActions
+    let listCommands: Bool
+    let focus: AtticRowFocus
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        AtticRowKeyHandlers.attached += 1
+        #endif
+        return content
+            .focusable(enabled)
+            .focused(focus.binding, equals: focus.id)
+            .focusEffectDisabled()
+            .onKeyPress(phases: .down) { press in
+                guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
+                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
+                ), AtticTaskKeys.offers(command, actions) else { return .ignored }
+                AtticTaskKeys.perform(command, actions)
+                return .handled
+            }
+    }
+}
+
+#if DEBUG
+/// Test seam (PF-8): how many times a list row attached its own task-key
+/// handler. A realized Tasks row never does, at any list size.
+@MainActor
+enum AtticRowKeyHandlers {
+    static var attached = 0
+}
+#endif
 
 /// Editing a row's title in place (Return or a double-click): Return
 /// saves, Esc cancels, and leaving the field saves (nothing typed is lost).

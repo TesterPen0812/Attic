@@ -69,8 +69,9 @@ struct CalendarAgendaDay: View, Equatable {
     let taskActions: CalendarTaskRowActions
     @ObservedObject var rows = CalendarTaskRowState()
     var eventRows: CalendarEventRowState = CalendarEventRowState()
-    /// The page's keyboard focus for its task rows (Return, ⇧⌘I); nil
-    /// leaves each row its own.
+    /// The page's keyboard focus for its task rows; nil leaves each row its
+    /// own. The rows answer their keys themselves (Return, Space, ⇧⌘I,
+    /// ⌘Return): Calendar's lists are short and have no page-level handler.
     var focus: FocusState<AtticRowFocusID?>.Binding? = nil
     var focused: AtticRowFocusID? = nil
     let onSelectDay: (DueDay) -> Void
@@ -155,7 +156,7 @@ struct CalendarAgendaDay: View, Equatable {
                 focus?.wrappedValue = focusID
             },
             onOpenPage: open,
-            focus: focus.map { AtticRowFocus(binding: $0, id: focusID, isFocused: focused == focusID) },
+            focus: focus.map { AtticRowFocus(binding: $0, id: focusID, isFocused: focused == focusID, answersRowKeys: true) },
             titleEditing: rows.renaming == id ? AtticTitleEditing(
                 text: $rows.draft,
                 commit: {

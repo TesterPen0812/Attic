@@ -794,9 +794,10 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
-    private func agendaActions(opened: @escaping (UUID) -> Void) -> (TaskStore) -> CalendarTaskRowActions {
+    private func agendaActions(opened: @escaping (UUID) -> Void,
+                               toggled: @escaping (UUID) -> Void = { _ in }) -> (TaskStore) -> CalendarTaskRowActions {
         { store in
-            CalendarTaskRowActions(toggleDone: { _ in }, open: opened, rename: { id, title in
+            CalendarTaskRowActions(toggleDone: toggled, open: opened, rename: { id, title in
                 guard let task = store.task(withID: id) else { return false }
                 return store.rename(task, to: title)
             })
@@ -866,23 +867,43 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
-    /// The same with real keys (needs a key window and the desktop).
+    /// The same with real keys (needs a key window and the desktop), in the
+    /// month agenda, the week agenda and the Day view: Return renames, Esc
+    /// cancels, Space completes, ⇧⌘I and ⌘Return open the page. The rows
+    /// answer these themselves (Calendar opts in to a per-row key handler;
+    /// the Tasks lists do not, `AtticRowFocus.answersRowKeys`).
     func testAgendaTaskRowsAnswerRealReturnAndShiftCommandI() throws {
         try requireKeyWindowTests()
         let id = UUID()
         var opened: [UUID] = []
-        let makeActions = agendaActions { opened.append($0) }
-        try withPage(events: [], seed: seedAgendaTask(id), taskActions: makeActions, keyWindow: true) { page in
+        var toggled: [UUID] = []
+        let makeActions = agendaActions(opened: { opened.append($0) }, toggled: { toggled.append($0) })
+        try withReducedMotion { try withPage(events: [], seed: seedAgendaTask(id), taskActions: makeActions, keyWindow: true) { page in
             let rows = page.model.taskRows
-            page.click(at: try agendaRow(page, id).title, count: 1)
-            XCTAssertEqual(rows.selected, id)
-            page.press("\r", keyCode: 36)
-            XCTAssertEqual(rows.renaming, id, "Return renames")
-            page.press("\u{1b}", keyCode: 53)
-            XCTAssertNil(rows.renaming, "Esc cancels")
-            page.press("i", keyCode: 34, modifiers: [.command, .shift])
-            XCTAssertEqual(opened, [id], "⇧⌘I opens")
-        }
+            @MainActor func exercise(_ view: String) throws {
+                opened = []
+                toggled = []
+                page.click(at: try agendaRow(page, id).title, count: 1)
+                XCTAssertEqual(rows.selected, id, "\(view): a click selects")
+                page.press("\r", keyCode: 36)
+                XCTAssertEqual(rows.renaming, id, "\(view): Return renames")
+                page.press("\u{1b}", keyCode: 53)
+                XCTAssertNil(rows.renaming, "\(view): Esc cancels")
+                page.press(" ", keyCode: 49)
+                XCTAssertEqual(toggled, [id], "\(view): Space completes")
+                page.press("i", keyCode: 34, modifiers: [.command, .shift])
+                XCTAssertEqual(opened, [id], "\(view): ⇧⌘I opens")
+                page.press("\r", keyCode: 36, modifiers: .command)
+                XCTAssertEqual(opened, [id, id], "\(view): ⌘Return opens")
+            }
+            try exercise("month agenda")
+            page.model.pickWeek(true)
+            page.settle(0.5)
+            try exercise("week agenda")
+            page.model.setDayView(true)
+            page.settle(0.6)
+            try exercise("day view")
+        } }
     }
 
     // MARK: - Calendar hunt: generated actions against a mounted page
