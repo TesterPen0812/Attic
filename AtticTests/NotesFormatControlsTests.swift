@@ -710,6 +710,87 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.formatModel.paletteKeyboardIndex, 0)
     }
 
+    /// Round 2, Dot R-5: the keyboard palette asks the selected cells for
+    /// their colour, not the note's text view with its retained typing colour.
+    func testBG65CellHighlightPaletteStartsOnTheSelectedCellsColourAndRecolours() throws {
+        var table = NoteTable(texts: [["First", "Second"], ["Third", "Fourth"]])
+        for row in 0..<2 {
+            for column in 0..<2 {
+                let position = NoteTable.Position(row: row, column: column)
+                table[position] = NoteEditorEngine.cell(table[position], settingMark: .highlight, on: true, url: "blue")
+            }
+        }
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title"), .table(table)]))
+        textView.typingAttributes[.noteMark(.highlight)] = "yellow" // the note's retained typing colour
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let grid = try XCTUnwrap(attachment.hostedView)
+        grid.selectCells(NoteTableCellRange(anchor: NoteTable.Position(row: 0, column: 0),
+                                            head: NoteTable.Position(row: 1, column: 1)))
+        controls.refresh()
+        XCTAssertEqual(engine.highlightColour(), .blue, "the selected cells' colour, not the text view's typing colour")
+        controls.enterBarKeyboard()
+        controls.formatModel.barKeyboardIndex = try XCTUnwrap(NoteFormatBarItem.cells.firstIndex(of: .command(.mark(.highlight))))
+        let down = keyEvent("\u{f701}", "\u{f701}", keyCode: 125, [], window: try XCTUnwrap(textView.window))
+        XCTAssertTrue(controls.handleKey(down))
+        XCTAssertEqual(controls.formatModel.paletteKeyboardIndex, NoteHighlightColour.menuOrder.firstIndex(of: .blue),
+                       "Down Arrow starts the palette on the cells' blue")
+        XCTAssertEqual(controls.formatModel.currentHighlight, .blue)
+        let window = try XCTUnwrap(textView.window)
+        let left = keyEvent("\u{f702}", "\u{f702}", keyCode: 123, [], window: window)
+        for _ in 0..<NoteHighlightColour.menuOrder.count where controls.formatModel.paletteKeyboardIndex != NoteHighlightColour.menuOrder.firstIndex(of: .yellow) {
+            XCTAssertTrue(controls.handleKey(left))
+        }
+        XCTAssertEqual(controls.formatModel.paletteKeyboardIndex, NoteHighlightColour.menuOrder.firstIndex(of: .yellow))
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        if (ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1") {
+            let scroll = try XCTUnwrap(textView.enclosingScrollView)
+            scroll.layoutSubtreeIfNeeded()
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 640, pixelsHigh: 1000,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = scroll.bounds.size
+            scroll.cacheDisplay(in: scroll.bounds, to: rep)
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent("R2-BG65-picked-yellow.png")
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: path)
+            print("R2_SNAPSHOT=\(path.path)")
+        }
+        let recoloured = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first).table
+        for position in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            let cell = recoloured[NoteTable.Position(row: position.0, column: position.1)]
+            XCTAssertEqual(cell.marks.filter { $0.kind == .highlight }.map { NoteHighlightColour(storedKey: $0.colour) },
+                           [.yellow], "yellow recolours every selected cell: \(position)")
+        }
+        XCTAssertTrue(engine.history.undo())
+        let undone = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first).table
+        for position in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            let cell = undone[NoteTable.Position(row: position.0, column: position.1)]
+            XCTAssertEqual(cell.marks.filter { $0.kind == .highlight }.map { NoteHighlightColour(storedKey: $0.colour) },
+                           [.blue], "one Undo puts the blue back: \(position)")
+        }
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first).table, recoloured,
+                       "Redo restores all yellow cells together")
+    }
+
+    func testBG65CellsWithDifferentHighlightColoursAreMixedNotTheTextViewsColour() throws {
+        var table = NoteTable(texts: [["First", "Second"]])
+        let colours = ["blue", "green"]
+        for column in 0..<2 {
+            let position = NoteTable.Position(row: 0, column: column)
+            table[position] = NoteEditorEngine.cell(table[position], settingMark: .highlight, on: true, url: colours[column])
+        }
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title"), .table(table)]))
+        textView.typingAttributes[.noteMark(.highlight)] = "yellow"
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let grid = try XCTUnwrap(attachment.hostedView)
+        grid.selectCells(NoteTableCellRange(anchor: NoteTable.Position(row: 0, column: 0),
+                                            head: NoteTable.Position(row: 0, column: 1)))
+        controls.refresh()
+        XCTAssertNil(engine.highlightColour(), "different colours are mixed: no colour is current")
+        XCTAssertNil(controls.formatModel.currentHighlight)
+    }
+
     /// OD-7: Tab in the title moves to the start of the body (making the
     /// body's first line when there is none); in the body it indents.
     func testTabInTheTitleMovesToTheBodyAndIndentsInTheBody() throws {

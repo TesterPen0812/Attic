@@ -3874,6 +3874,9 @@ extension NoteEditorEngine {
     /// The highlight's colour over `selection` (or the typing attributes'):
     /// nil when there is none or the selection mixes colours.
     func highlightColour(selection: NSRange? = nil) -> NoteHighlightColour? {
+        // Whole cells, or text inside one, answer for themselves: the note's
+        // text view keeps its own (possibly stale) typing colour.
+        if selection == nil, focusedTable != nil { return tableHighlightColour() }
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         if selection.length == 0 {
             guard let value = textView?.typingAttributes[.noteMark(.highlight)] else { return nil }

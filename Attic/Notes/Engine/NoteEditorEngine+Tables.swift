@@ -380,6 +380,50 @@ extension NoteEditorEngine {
         return off == 0 ? .on : (on == 0 ? .off : .mixed)
     }
 
+    /// The highlight colour over the focused table's selected cells (or the
+    /// cell editor's selection or caret): nil when there is none or the
+    /// cells differ. The note's own text view never answers for cells.
+    func tableHighlightColour() -> NoteHighlightColour? {
+        guard let view = focusedTable, let attachment = view.attachment else { return nil }
+        if let range = view.cellSelection {
+            var found: NoteHighlightColour?
+            for position in range.positions where attachment.table.contains(position) {
+                let cell = attachment.table[position]
+                let units = (cell.text as NSString).length
+                guard units > 0 else { continue }
+                var coveredEnd = 0
+                let highlights = cell.marks.filter { $0.kind == .highlight && $0.length > 0 }
+                    .sorted { $0.offset < $1.offset }
+                for mark in highlights {
+                    let start = max(0, mark.offset), end = min(units, mark.offset + mark.length)
+                    guard start < end else { continue }
+                    guard start <= coveredEnd else { return nil }
+                    let colour = NoteHighlightColour(storedKey: mark.colour)
+                    if let found, found != colour { return nil }
+                    found = colour
+                    coveredEnd = max(coveredEnd, end)
+                }
+                if coveredEnd < units { return nil }
+            }
+            return found
+        }
+        guard view.isEditingCell || view.hasEditor, let storage = view.editor.textStorage else { return nil }
+        let selection = view.editor.selectedRange()
+        if selection.length == 0 {
+            return view.editor.typingAttributes[.noteMark(.highlight)].map { NoteHighlightColour(storedKey: $0 as? String) }
+        }
+        guard selection.location >= 0, NSMaxRange(selection) <= storage.length else { return nil }
+        var found: NoteHighlightColour?
+        var mixed = false
+        storage.enumerateAttribute(.noteMark(.highlight), in: selection) { value, _, stop in
+            guard let value else { mixed = true; stop.pointee = true; return }
+            let colour = NoteHighlightColour(storedKey: value as? String)
+            if let found, found != colour { mixed = true; stop.pointee = true }
+            found = colour
+        }
+        return mixed ? nil : found
+    }
+
     /// The table selection's first and last line, in the text view's
     /// coordinates (the selection bar sits above or below them).
     func tableSelectionRects(in textView: NSTextView) -> (first: NSRect, last: NSRect)? {
