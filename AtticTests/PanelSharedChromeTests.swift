@@ -935,3 +935,56 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-3 (the # key hands Tasks' Tab order back, as the plus does)
+
+extension PanelSharedChromeTests {
+    private func tagLook(_ page: PanelPage, picks: TagPicks = .none, shown: Bool = true) -> PanelBottomBarLook {
+        let prefix = page == .tasks ? "tasks-tag-bar" : "notes-tag-bar"
+        return PanelBottomBarLook(middle: .tags(tags: ["launch"], picks: picks, idPrefix: prefix, shown: shown),
+                                  plus: page == .tasks ? PanelBottomBarLook.tasksPlus : PanelBottomBarLook.notesPlus, shown: shown)
+    }
+
+    /// Round 2 review N-3 (Dot R-3): Tasks' "#" has the keyboard, then the
+    /// page switches to Notes. The shared "#" keeps its identity and its
+    /// requests become nil, so the Tab order that was told "#" had the
+    /// keyboard is the only one that can be told it left. (The record is set
+    /// the way the control sets it when it takes focus; Full Keyboard Access
+    /// is off on the Air.)
+    func testTheTagKeyHandsTasksTabOrderBackWhenThePageSwitchesToNotes() throws {
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        let model = SharedBarModel(page: .tasks)
+        let window = mountBar(chrome, model)
+        defer { close(window) }
+        requests.note(PanelTagKeyFocusID(), focused: true)
+        chrome.tagBar.noteKeyFocus(true)
+        XCTAssertEqual(requests.current, AnyHashable(PanelTagKeyFocusID()), "Tasks' Tab order has the # key")
+        model.page = .notes
+        spin(0.4)
+        XCTAssertNil(requests.current, "the Tab order is told the # key left")
+        XCTAssertFalse(chrome.tagBar.keyFocused, "and the bar no longer owns the keys")
+    }
+
+    /// The same with real focus (Full Keyboard Access, CI).
+    func testTheTagKeyNeverLeavesTasksTabOrderOnItAfterThePageSwitchWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        let model = SharedBarModel(page: .tasks)
+        let panel = mountKeyBar(chrome, model)
+        defer { close(panel) }
+        requests.focus(PanelTagKeyFocusID())
+        spin(0.4)
+        XCTAssertEqual(requests.current, AnyHashable(PanelTagKeyFocusID()), "Tasks' own Tab order reached the # key")
+        model.page = .notes
+        spin(0.4)
+        XCTAssertNil(requests.current, "Tasks' Tab order no longer has the # key")
+        XCTAssertFalse(chrome.tagBar.keyFocused, "the bar no longer owns the keys")
+    }
+}
+

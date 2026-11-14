@@ -601,6 +601,10 @@ private struct PanelTagKeyFocus: ViewModifier {
     let reachable: Bool
     @FocusState private var focused: Bool
     @State private var armed = false
+    /// The Tab order this "#" lends its requests from (Tasks'), so that Tab
+    /// order is told the keyboard left even after a page switch made the
+    /// requests nil (round 2 review N-3).
+    @State private var lender: AtticFocusRequests?
 
     func body(content: Content) -> some View {
         // Tasks keeps its own Tab order exactly as before (the page asks for
@@ -620,8 +624,18 @@ private struct PanelTagKeyFocus: ViewModifier {
             }
             .onChange(of: focused) { _, now in
                 state.noteKeyFocus(now)
-                requests?.note(PanelTagKeyFocusID(), focused: now)
-                if !now { armed = false }
+                if now {
+                    lender = requests
+                    requests?.note(PanelTagKeyFocusID(), focused: true)
+                } else {
+                    lender?.note(PanelTagKeyFocusID(), focused: false)
+                    armed = false
+                }
+            }
+            .onChange(of: requests.map(ObjectIdentifier.init), initial: true) { _, _ in
+                // Another page's requests: the old Tab order is told at once.
+                if let lender, lender !== requests { lender.note(PanelTagKeyFocusID(), focused: false) }
+                lender = requests
             }
             // Hidden, or on another kind of page, "#" gives the keyboard up.
             .onChange(of: reachable) { _, now in if !now, !managed { release() } }
@@ -630,13 +644,15 @@ private struct PanelTagKeyFocus: ViewModifier {
                 // The key and summary replace one another. Release native
                 // ownership, preserving a cursor deliberately opening the bar.
                 state.noteKeyFocus(false, closeWhenLeaving: false)
-                requests?.note(PanelTagKeyFocusID(), focused: false)
+                lender?.note(PanelTagKeyFocusID(), focused: false)
             }
     }
 
     private func release() {
         armed = false
         if focused { focused = false }
+        state.noteKeyFocus(false)
+        lender?.note(PanelTagKeyFocusID(), focused: false)
     }
 
     private func arm() {
