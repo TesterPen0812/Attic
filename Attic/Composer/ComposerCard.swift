@@ -1065,6 +1065,7 @@ private struct ComposerWritingLine: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
             if selector == #selector(NSResponder.insertTab(_:)) || selector == #selector(NSResponder.insertBacktab(_:)) {
                 let modifiers = (control as? ComposerWritingField)?.tabModifiers ?? []
                 guard modifiers.intersection([.command, .option, .control]).isEmpty else { return false }
@@ -1098,9 +1099,10 @@ private final class ComposerWritingField: NSTextField, NSTextViewDelegate {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown, event.keyCode == 36 || event.keyCode == 76,
-           event.modifierFlags.contains(.command), let editor = currentEditor(),
+           event.modifierFlags.contains(.command), let editor = currentEditor() as? NSTextView,
            window?.firstResponder === editor,
            let coordinator = delegate as? ComposerWritingLine.Coordinator {
+            guard !editor.hasMarkedText() else { return false }
             coordinator.parent.submit(true)
             return true
         }

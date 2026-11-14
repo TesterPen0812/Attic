@@ -171,6 +171,53 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(again.kind, .note)
     }
 
+
+    func testR5MarkedWritingLeavesCommandReturnToTheInputMethod() throws {
+        let (window, host, title) = try mountForKeys(on: .notes)
+        typeKeys(title, "Composition note")
+        let control = try XCTUnwrap(writingControl(in: host))
+        XCTAssertTrue(window.makeFirstResponder(control))
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        writing.insertText("before ", replacementRange: writing.selectedRange())
+        writing.setMarkedText("漢字", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        XCTAssertFalse(control.performKeyEquivalent(with: event), "the real key-equivalent path leaves marked input to the IME")
+        XCTAssertTrue(notes.notes.isEmpty)
+        XCTAssertTrue(model.isOpen)
+        XCTAssertTrue(writing.hasMarkedText())
+        XCTAssertEqual(writing.string, "before 漢字")
+        writing.insertText("漢字", replacementRange: writing.markedRange())
+        spin()
+        XCTAssertFalse(writing.hasMarkedText())
+        XCTAssertTrue(control.performKeyEquivalent(with: event))
+        spin()
+        XCTAssertEqual(notes.notes.filter { $0.deletedAt == nil }.count, 1)
+        XCTAssertTrue(try XCTUnwrap(notes.notes.first).body.contains("before 漢字"))
+    }
+
+    func testR5MarkedWritingDeclinesReturnLineBreakAndCancelCommands() throws {
+        let (window, host, title) = try mountForKeys(on: .notes)
+        typeKeys(title, "Composition note")
+        let control = try XCTUnwrap(writingControl(in: host))
+        XCTAssertTrue(window.makeFirstResponder(control))
+        spin()
+        let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        let selectors = [#selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)),
+            #selector(NSTextView.insertNewlineIgnoringFieldEditor(_:)), #selector(NSResponder.cancelOperation(_:))]
+        for selector in selectors {
+            writing.setMarkedText("漢字", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: (writing.string as NSString).length))
+            let handled = control.delegate?.control?(control, textView: writing, doCommandBy: selector) ?? false
+            XCTAssertFalse(handled, "marked command belongs to the input method: \(selector)")
+            XCTAssertTrue(notes.notes.isEmpty)
+            XCTAssertTrue(model.isOpen)
+            XCTAssertTrue(writing.hasMarkedText())
+            XCTAssertEqual(writing.string, "漢字")
+        }
+    }
+
     private func type(_ text: String) {
         // Typing keeps the draft's picks (the Calendar's day), as the field does.
         var draft = TaskAddBarText(text: text)
