@@ -36,6 +36,7 @@ class DrawStore: DrawStoreProtocol {
     /// The generation at which a pass could free no more (everything left is
     /// a head or pinned): nothing to do again until the ledger changes.
     @ObservationIgnored private var saturatedLedgerGeneration = -1
+    @ObservationIgnored private var saturatedPinRevision: UInt64 = 0
     /// The steps live offers are bound to; a history holding one is never
     /// dropped for the budget.
     @ObservationIgnored private let pins = DrawStepPins()
@@ -70,7 +71,17 @@ class DrawStore: DrawStoreProtocol {
                  beforePersisted: afterPersisted, afterPersisted: beforePersisted)
         }
     }
-    private struct History { var undo: [Step] = []; var redo: [Step] = [] }
+    private struct History {
+        var undo: [Step] = []
+        var redo: [Step] = []
+        var footprints: [UUID: StepFootprint] = [:]
+
+        mutating func discardUnusedFootprints() {
+            guard footprints.count != undo.count + redo.count else { return }
+            let kept = Set((undo + redo).map(\.id))
+            footprints = footprints.filter { kept.contains($0.key) }
+        }
+    }
     enum Action: String, Codable { case edit, undo, redo }
     struct Pending: Codable { var step: Step; var action: Action }
     /// How the first unsaved edit is settled: written again (Retry),
@@ -215,10 +226,10 @@ class DrawStore: DrawStoreProtocol {
     /// Keeps the Undo/Redo steps of evicted canvases under a budget, counted
     /// in resident memory (a buffer shared by several steps counts once).
     ///
-    /// The ledger is kept between calls, with each step measured once: a
-    /// canvas's steps enter it when its body is evicted and leave it when the
-    /// body is loaded again or the steps go, so one more eviction costs the
-    /// newcomer's steps, not every evicted history again.
+    /// Each committed step is measured once. Its footprint enters the running
+    /// ledger when the body is evicted and leaves when the body is loaded
+    /// again or the step goes. Eviction adds the newcomer's footprints without
+    /// walking its objects or any previously evicted history's objects again.
     ///
     /// Over budget, the oldest steps go first, from the history where that
     /// frees the most. The newest Undo and Redo step of every history stays
@@ -232,7 +243,9 @@ class DrawStore: DrawStoreProtocol {
     private func boundEvictedHistories() {
         syncHistoryLedger()
         let budget = Self.maxEvictedHistoryBytes
-        guard evictedLedger.total > budget, saturatedLedgerGeneration != ledgerGeneration else { return }
+        guard evictedLedger.total > budget else { return }
+        let pinRevision = pins.revision
+        guard saturatedLedgerGeneration != ledgerGeneration || saturatedPinRevision != pinRevision else { return }
 
         func rank(_ weights: [UUID: Int]) -> [UUID] {
             weights.keys.sorted { weights[$0]! != weights[$1]! ? weights[$0]! > weights[$1]! : (evictedAt[$0] ?? 0) < (evictedAt[$1] ?? 0) }
@@ -253,11 +266,19 @@ class DrawStore: DrawStoreProtocol {
 
         // Oldest steps first, where a trim frees the most.
         var freeable: [UUID: Int] = [:]
-        for (key, entry) in ledgered where entry.freeable > 0 { freeable[key] = entry.freeable }
+        for (key, entry) in ledgered {
+            guard let history = histories[key] else { continue }
+            let removable = (history.undo.dropLast() + history.redo.dropLast()).compactMap { step in
+                pins.isPinned(step.id) ? nil : entry.prints[step.id]
+            }
+            let bytes = evictedLedger.freed(by: removable)
+            if bytes > 0 { freeable[key] = bytes }
+        }
         for key in rank(freeable) where evictedLedger.total > budget {
             guard var history = histories[key], let entry = ledgered[key] else { continue }
             trimOldest(&history.undo, entry)
             trimOldest(&history.redo, entry)
+            history.discardUnusedFootprints()
             histories[key] = history
             setLedgered(key, history, measuring: entry)
         }
@@ -276,7 +297,10 @@ class DrawStore: DrawStoreProtocol {
                 ledgerGeneration &+= 1
             }
         }
-        if evictedLedger.total > budget { saturatedLedgerGeneration = ledgerGeneration }
+        if evictedLedger.total > budget {
+            saturatedLedgerGeneration = ledgerGeneration
+            saturatedPinRevision = pinRevision
+        }
     }
 
     private struct LedgeredHistory {
@@ -284,9 +308,6 @@ class DrawStore: DrawStoreProtocol {
         var steps: [Step]
         var prints: [UUID: StepFootprint]
         var fingerprint: HistoryFingerprint
-        /// What trimming every step but the heads and the pinned ones would
-        /// free, when this was measured.
-        var freeable = 0
     }
     private struct HistoryFingerprint: Equatable {
         var undoCount: Int, redoCount: Int
@@ -303,17 +324,10 @@ class DrawStore: DrawStoreProtocol {
     private func setLedgered(_ key: UUID, _ history: History, measuring earlier: LedgeredHistory? = nil) {
         var prints: [UUID: StepFootprint] = [:]
         for step in history.undo + history.redo {
-            prints[step.id] = earlier?.prints[step.id] ?? HistoryLedger.measure(step)
+            prints[step.id] = earlier?.prints[step.id] ?? history.footprints[step.id] ?? HistoryLedger.measure(step)
         }
-        var entry = LedgeredHistory(steps: history.undo + history.redo, prints: prints, fingerprint: HistoryFingerprint(history))
+        let entry = LedgeredHistory(steps: history.undo + history.redo, prints: prints, fingerprint: HistoryFingerprint(history))
         if earlier == nil { for print in prints.values { evictedLedger.add(print) } }
-        var removable: [StepFootprint] = []
-        for stack in [history.undo, history.redo] {
-            for (index, step) in stack.enumerated() where index != stack.count - 1 && !pins.isPinned(step.id) {
-                if let print = prints[step.id] { removable.append(print) }
-            }
-        }
-        entry.freeable = evictedLedger.freed(by: removable)
         ledgered[key] = entry
         ledgerGeneration &+= 1
     }
@@ -332,6 +346,25 @@ class DrawStore: DrawStoreProtocol {
             setLedgered(key, history)
         }
     }
+
+    #if DEBUG
+    /// Measure the former whole-ledger rebuild against the incremental
+    /// maintenance on the same real retained histories, without changing
+    /// their budget or dropping fixture steps before the measurement.
+    func historyLedgerWorkForTesting(rebuild: Bool) -> (histories: Int, steps: Int, bytes: Int) {
+        if !rebuild {
+            boundEvictedHistories()
+            return (ledgered.count, ledgered.values.reduce(0) { $0 + $1.steps.count }, evictedLedger.total)
+        }
+        var ledger = HistoryLedger()
+        var count = 0, steps = 0
+        for (id, history) in histories where states[id] == nil {
+            count += 1
+            for step in history.undo + history.redo { ledger.add(HistoryLedger.measure(step)); steps += 1 }
+        }
+        return (count, steps, ledger.total)
+    }
+    #endif
 
     private struct LedgerBuffer: Hashable { let address: UInt; let count: Int }
 
@@ -1038,6 +1071,7 @@ class DrawStore: DrawStoreProtocol {
             _ = histories[id]?.redo.popLast()
             appendUndo(step, on: id)
         }
+        histories[id]?.discardUnusedFootprints()
         revision &+= 1
         let delta = DrawDelta(canvas: step.after,
                               upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
@@ -1050,6 +1084,7 @@ class DrawStore: DrawStoreProtocol {
 
     private func appendUndo(_ step: Step, on id: UUID) {
         histories[id, default: History()].undo.append(step)
+        histories[id]?.footprints[step.id] = HistoryLedger.measure(step)
         if let excess = histories[id]?.undo.count, excess > Self.maxHistorySteps {
             histories[id]?.undo.removeFirst(excess - Self.maxHistorySteps)
         }
@@ -1131,9 +1166,15 @@ enum HistoryLedgerProbe {
 final class DrawStepPins: @unchecked Sendable {
     private let lock = NSLock()
     private var counts: [UUID: Int] = [:]
+    private var generation: UInt64 = 0
 
-    func pin(_ step: UUID) -> AnyObject {
-        lock.lock(); counts[step, default: 0] += 1; lock.unlock()
+    var revision: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return generation
+    }
+
+    func pin(_ step: UUID) -> Pin {
+        lock.lock(); counts[step, default: 0] += 1; generation &+= 1; lock.unlock()
         return Pin(book: self, step: step)
     }
 
@@ -1146,12 +1187,22 @@ final class DrawStepPins: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let held = counts[step] else { return }
         if held <= 1 { counts[step] = nil } else { counts[step] = held - 1 }
+        generation &+= 1
     }
 
-    private final class Pin {
+    final class Pin: @unchecked Sendable {
         let book: DrawStepPins
         let step: UUID
+        private let lock = NSLock()
+        private var cancelled = false
         init(book: DrawStepPins, step: UUID) { self.book = book; self.step = step }
-        deinit { book.release(step) }
+        func cancel() {
+            lock.lock()
+            guard !cancelled else { lock.unlock(); return }
+            cancelled = true
+            lock.unlock()
+            book.release(step)
+        }
+        deinit { cancel() }
     }
 }

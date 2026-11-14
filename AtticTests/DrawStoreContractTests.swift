@@ -126,12 +126,25 @@ final class DrawStoreContractTests: XCTestCase {
 
     // MARK: BG-27 round 3 (Dot R-8, R-9; Opus R-16, R-20)
 
+    private func round3PersistentStore() throws -> DrawPersistentStore {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawBudget-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        return DrawPersistentStore(container: try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none)))
+    }
+
     private func heavyImage(fill: UInt8, bytes: Int) -> DrawObject {
-        DrawObject(content: .image(DrawImage(original: Data(repeating: fill, count: bytes), pixelWidth: 1_000, pixelHeight: 1_000)))
+        // A renderable PNG with deterministic retained byte size, independent
+        // of the encoder's compression ratio. ImageIO accepts trailing data.
+        var data = Draw3Images.encoded(width: 1_000, height: 1_000)
+        data.append(Data(repeating: fill, count: max(0, bytes - data.count)))
+        XCTAssertNotNil(Draw3Images.cgImage(data), "the fixture must remain a real image")
+        return DrawObject(content: .image(DrawImage(original: data, pixelWidth: 1_000, pixelHeight: 1_000)))
     }
 
     /// Enough saved, light canvases to push every earlier one out of the body cache.
-    private func evictEveryEarlierCanvas(_ store: DrawInMemoryStore, count: Int = 12) {
+    private func evictEveryEarlierCanvas(_ store: DrawStore, count: Int = 12) {
         for index in 0..<count {
             let canvas = store.create(name: "Filler \(index)")
             XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Filler"))]), on: canvas.id).isSaved)
@@ -143,7 +156,7 @@ final class DrawStoreContractTests: XCTestCase {
     /// is one buffer, so a two-item restore group over it must still Undo
     /// once the canvas is out of the cache.
     func testGroupedRestoreOfACanvasWithAHugeTextIndexStillUndoesAfterEviction() throws {
-        let store = DrawInMemoryStore()
+        let store = try round3PersistentStore()
         let big = store.create(name: "Big text")
         let text = String(repeating: "lorem ipsum dolor ", count: 500_000) // 9,000,000 bytes
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text(text))]), on: big.id).isSaved)
@@ -164,11 +177,25 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertNotNil(try store.open(light.id).canvas.deletedAt)
     }
 
+    func testSharedTextCopiesKeepUnpinnedHistoryUnderBudget() throws {
+        let store = try round3PersistentStore()
+        let canvas = store.create(name: "Text")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text(String(repeating: "x", count: 9_000_000)))]), on: canvas.id).isSaved)
+        for step in 1..<4 {
+            XCTAssertTrue(store.perform(.rename("Name \(step)"), on: canvas.id).isSaved)
+        }
+        evictEveryEarlierCanvas(store)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(canvas.id))
+        var undone = 0
+        while store.canUndo(on: canvas.id), store.undo(on: canvas.id).isSaved { undone += 1 }
+        XCTAssertEqual(undone, 4, "the same text in before/after/change and the object is one buffer")
+    }
+
     /// Dot R-8: when the heads an offered Undo is bound to are over the budget
     /// by themselves, the offer either keeps its head or is gone; it is never
     /// offered and then refused. Two restored images of 20 MB each are 40 MB.
     func testAGroupRestoreWhoseHeadsAreOverBudgetKeepsItsOfferedUndo() throws {
-        let store = DrawInMemoryStore()
+        let store = try round3PersistentStore()
         var items: [DrawDeletedItem] = []
         var ids: [UUID] = []
         for index in 0..<2 {
@@ -189,11 +216,35 @@ final class DrawStoreContractTests: XCTestCase {
         for id in ids { XCTAssertTrue(try store.open(id).objects.isEmpty, "both images are deleted again") }
     }
 
+    func testRestorePinsEachMemberBeforeRestoringTheNextMember() throws {
+        let store = try round3PersistentStore()
+        var items: [DrawDeletedItem] = []
+        for index in 0..<2 {
+            let canvas = store.create(name: "Photo \(index)")
+            let image = heavyImage(fill: UInt8(90 + index), bytes: 34_000_000)
+            XCTAssertTrue(store.perform(.put([image]), on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.remove([image.id]), on: canvas.id).isSaved)
+            items.append(DrawDeletedItem(canvasID: canvas.id, objectID: image.id))
+        }
+        // These real unsaved drafts keep cache pressure high while the group
+        // is still being assembled, before `make` can acquire any pins.
+        for index in 0..<8 { _ = store.create(name: "Draft \(index)") }
+        let report = DrawRecentlyDeleted.restoreTracked(items, store: store)
+        XCTAssertEqual(report.actions.count, 2)
+        for action in report.actions {
+            XCTAssertEqual(store.undoStepID(on: action.canvasID), action.historyStepID,
+                           "the first member cannot lose its token while the second restores")
+        }
+        let group = try XCTUnwrap(RecentlyDeletedRestoreUndo.make(drawStore: store, actions: report.actions, librarySteps: [], restored: 2))
+        XCTAssertEqual(group.undo(), .applied)
+        for item in items { XCTAssertTrue(try store.open(item.canvasID).objects.isEmpty) }
+    }
+
     /// The pin an offer holds exempts its history from the whole-history
     /// fallback while the offer lives; an unpinned heavy head still goes, and
     /// a released pin protects nothing.
     func testAPinnedHeadSurvivesTheBudgetAndAReleasedOrMissingPinDoesNot() throws {
-        let store = DrawInMemoryStore()
+        let store = try round3PersistentStore()
         func heavyCanvas(_ name: String, fill: UInt8) throws -> (id: UUID, head: UUID) {
             let canvas = store.create(name: name)
             XCTAssertTrue(store.perform(.put([heavyImage(fill: fill, bytes: 20_000_000), heavyImage(fill: fill + 1, bytes: 20_000_000)]),
@@ -215,72 +266,147 @@ final class DrawStoreContractTests: XCTestCase {
         _ = gone; _ = offer
     }
 
+    func testReleasingTheLastOfferLetsTheBudgetReclaimItsHistory() throws {
+        let store = try round3PersistentStore()
+        let canvas = store.create(name: "Offered")
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 7, bytes: 34_000_000)]), on: canvas.id).isSaved)
+        let head = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        var offer = store.pinHistoryStep(head)
+        for index in 0..<8 { _ = store.create(name: "Draft \(index)") }
+        XCTAssertFalse(store.cachedCanvasIDs.contains(canvas.id))
+        withExtendedLifetime(offer) { XCTAssertEqual(store.undoStepID(on: canvas.id), head) }
+        offer = nil
+        _ = store.create(name: "Another draft") // no new saved history to invalidate the budget cache
+        XCTAssertNil(store.undoStepID(on: canvas.id), "a withdrawn offer must no longer exempt its history")
+    }
+
     /// Opus R-16: one image moved 100 times is one buffer. Trimming its steps
     /// frees almost nothing, so it must not be cut while another canvas holds
     /// the bytes that are actually over budget.
-    func testTrimmingFreesRealBytesInsteadOfCuttingASharedBufferHistory() throws {
-        let store = DrawInMemoryStore()
+    func testTrimmingFreesRealBytesInsteadOfCuttingASharedBufferHistory() async throws {
+        func nextEvent() async {
+            await withCheckedContinuation { ready in DispatchQueue.main.async { ready.resume() } }
+        }
+        let store = try round3PersistentStore()
         let moved = store.create(name: "Moved")
         var image = heavyImage(fill: 9, bytes: 5_000_000)
         XCTAssertTrue(store.perform(.put([image]), on: moved.id).isSaved)
-        for step in 1...99 {
+        for step in 1...100 {
             image.frame.x = Double(step)
-            XCTAssertTrue(store.perform(.put([image]), on: moved.id).isSaved)
+            // Separate pointer commits normally drain AppKit's autoreleases.
+            XCTAssertTrue(autoreleasepool { store.perform(.put([image]), on: moved.id).isSaved })
+            await nextEvent()
         }
         let pasted = store.create(name: "Pasted")
         for index in 0..<10 {
-            XCTAssertTrue(store.perform(.put([heavyImage(fill: UInt8(20 + index), bytes: 4_000_000)]), on: pasted.id).isSaved)
+            XCTAssertTrue(autoreleasepool {
+                store.perform(.put([heavyImage(fill: UInt8(20 + index), bytes: 4_000_000)]), on: pasted.id).isSaved
+            })
+            await nextEvent()
         }
         evictEveryEarlierCanvas(store)
         XCTAssertFalse(store.cachedCanvasIDs.contains(moved.id))
         var undone = 0
-        while store.canUndo(on: moved.id), store.undo(on: moved.id).isSaved { undone += 1 }
+        while store.canUndo(on: moved.id), autoreleasepool(invoking: { store.undo(on: moved.id).isSaved }) {
+            undone += 1
+            await nextEvent()
+        }
         XCTAssertEqual(undone, 100, "its steps hold one 5 MB buffer; cutting them frees nothing")
+        let restored = try DrawPersistentStore(container: store.container).open(moved.id).objects
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored.first?.frame.x, 0, "all 100 moves are undone durably")
     }
 
-    /// Opus R-20: evicting one more canvas must not walk the history of every
-    /// evicted canvas again. Evicted histories that fit the budget are
-    /// counted once; the next eviction visits only the newcomer's steps.
+    func testTrimmingRanksWhatIsFreedAfterAnotherHistorySharesTheBuffer() throws {
+        let store = try round3PersistentStore()
+        let original = store.create(name: "Original")
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 3, bytes: 20_000_000)]), on: original.id).isSaved)
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 4, bytes: 5_000_000)]), on: original.id).isSaved)
+        let duplicate = try XCTUnwrap(store.duplicate(original.id))
+        evictEveryEarlierCanvas(store, count: 7)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(original.id))
+        XCTAssertTrue(store.cachedCanvasIDs.contains(duplicate.id), "original measured before its duplicate enters the ledger")
+        evictEveryEarlierCanvas(store, count: 1)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(duplicate.id))
+
+        let distinct = store.create(name: "Distinct")
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 5, bytes: 10_000_000)]), on: distinct.id).isSaved)
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 6, bytes: 1_000_000)]), on: distinct.id).isSaved)
+        evictEveryEarlierCanvas(store)
+        XCTAssertEqual(store.historyChanges(on: original.id)?.undo.count, 2,
+                       "the duplicate now holds the 20 MB; only Distinct's old step frees its image")
+        XCTAssertTrue(store.undo(on: original.id).isSaved)
+        XCTAssertTrue(store.undo(on: original.id).isSaved)
+        XCTAssertTrue(try store.open(original.id).objects.isEmpty)
+    }
+
+    /// Opus R-20: accounting belongs to each committed step. Eviction adds
+    /// those footprints without walking any of the newcomer's objects.
     func testEvictionCountsOnlyTheNewlyEvictedHistory() throws {
-        let store = DrawInMemoryStore()
+        let store = try round3PersistentStore()
         for index in 0..<21 {
             let canvas = store.create(name: "Busy \(index)")
             var objects = (0..<5).map { DrawObject(frame: DrawFrame(x: Double($0), y: 0, width: 10, height: 10), content: .shape(.rectangle)) }
             XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
             for step in 1..<50 {
                 for slot in objects.indices { objects[slot].frame.x += Double(step) }
-                XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+                XCTAssertTrue(autoreleasepool { store.perform(.put(objects), on: canvas.id).isSaved })
             }
         }
         // 13 canvases are evicted by now; one more is evicted by creating this one.
         HistoryLedgerProbe.reset()
         _ = store.create(name: "One more")
         let visits = HistoryLedgerProbe.stepVisits
-        XCTAssertLessThanOrEqual(visits, 120, "the ledger must not be rebuilt from every evicted history (\(visits) step visits)")
+        XCTAssertEqual(visits, 0, "eviction must use the committed steps' footprints (\(visits) steps remeasured)")
     }
 
     /// Opus R-20: the cost, measured. 20 evicted histories of 100 steps x 500
     /// objects, then more evictions. Printed; the guard above is the count.
     func testReportEvictionCostForTwentyBigEvictedHistories() throws {
+        XCTAssertTrue(Thread.isMainThread)
         let store = DrawInMemoryStore()
+        var offers: [AnyObject] = []
         for index in 0..<28 {
             let canvas = store.create(name: "Big \(index)")
             var objects = (0..<500).map { DrawObject(frame: DrawFrame(x: Double($0), y: 0, width: 10, height: 10), content: .shape(.rectangle)) }
-            XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
-            for step in 1..<100 {
-                for slot in objects.indices { objects[slot].frame.x += Double(step % 3) + 1 }
+            for step in 0..<100 {
+                if step > 0 { for slot in objects.indices { objects[slot].frame.x += Double(step % 3) + 1 } }
                 XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+                offers.append(try XCTUnwrap(store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: canvas.id)))))
             }
         }
-        var samples: [Double] = []
-        for index in 0..<5 {
-            HistoryLedgerProbe.reset()
+        func timed(_ action: () -> Void) -> Double {
             let start = ContinuousClock.now
-            _ = store.create(name: "Newcomer \(index)")
-            let elapsed = start.duration(to: .now)
-            samples.append(Double(elapsed.components.attoseconds) / 1e15 + Double(elapsed.components.seconds) * 1000)
+            action()
+            let duration = start.duration(to: .now)
+            return Double(duration.components.attoseconds) / 1e15 + Double(duration.components.seconds) * 1000
         }
-        print("BG27_R20_EVICTION_MS samples=\(samples.map { String(format: "%.2f", $0) }) lastVisits=\(HistoryLedgerProbe.stepVisits)")
+        withExtendedLifetime(offers) {
+            var full: [Double] = [], incremental: [Double] = [], eviction: [Double] = []
+            // A/B interleaved in one process, same 20 histories, all 2,000
+            // steps really retained. Persistence is excluded from this ledger
+            // microbenchmark; the behavioral tests use file-backed stores.
+            for _ in 0..<5 {
+                var rebuilt = (histories: 0, steps: 0, bytes: 0)
+                full.append(timed {
+                    rebuilt = store.historyLedgerWorkForTesting(rebuild: true)
+                })
+                XCTAssertEqual(rebuilt.histories, 20)
+                XCTAssertEqual(rebuilt.steps, 2_000)
+                HistoryLedgerProbe.reset()
+                var maintained = (histories: 0, steps: 0, bytes: 0)
+                incremental.append(timed { maintained = store.historyLedgerWorkForTesting(rebuild: false) })
+                XCTAssertEqual(maintained.bytes, rebuilt.bytes, "incremental accounting agrees with a full rebuild")
+                XCTAssertEqual(HistoryLedgerProbe.stepVisits, 0, "already accounted histories are never remeasured")
+            }
+            for index in 0..<5 {
+                HistoryLedgerProbe.reset()
+                eviction.append(timed { _ = store.create(name: "Newcomer \(index)") })
+                XCTAssertEqual(HistoryLedgerProbe.stepVisits, 0, "even a newcomer uses its already measured steps")
+            }
+            func formatted(_ values: [Double]) -> String { values.map { String(format: "%.3f", $0) }.joined(separator: ",") }
+            print("BG27_R20_MS histories=20 steps=2000 objectsPerStep=500 rebuild=[\(formatted(full))] incremental=[\(formatted(incremental))] newcomerEviction=[\(formatted(eviction))]")
+        }
     }
 
     func testCachedCanvasesKeepActiveSessionAndUnsavedDraft() throws {

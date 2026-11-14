@@ -16,6 +16,13 @@ enum DrawRecentlyDeleted {
     struct RestoreAction {
         let canvasID: UUID
         let historyStepID: UUID
+        let pin: AnyObject?
+
+        init(canvasID: UUID, historyStepID: UUID, pin: AnyObject? = nil) {
+            self.canvasID = canvasID
+            self.historyStepID = historyStepID
+            self.pin = pin
+        }
     }
 
     struct RestoreResult {
@@ -93,7 +100,8 @@ enum DrawRecentlyDeleted {
             case .saved:
                 restored += count
                 if let stepID = store.undoStepID(on: canvasID) {
-                    actions.append(RestoreAction(canvasID: canvasID, historyStepID: stepID))
+                    actions.append(RestoreAction(canvasID: canvasID, historyStepID: stepID,
+                                                 pin: store.pinHistoryStep(stepID)))
                 }
             case .unchanged: restored += count
             case let .retry(message), let .held(message): failure = failure ?? message
@@ -171,7 +179,7 @@ enum RecentlyDeletedRestoreUndo {
         // The offered Undo is bound to each canvas's newest step. The pins
         // live as long as this step does, so the bounded history cannot drop
         // a step the library is still offering to undo.
-        let pins = actions.compactMap { drawStore?.pinHistoryStep($0.historyStepID) }
+        let pins = actions.compactMap { $0.pin ?? drawStore?.pinHistoryStep($0.historyStepID) }
 
         func replay(undo: Bool) -> UndoOutcome {
             let ordered = undo ? Array(members.reversed()) : members
