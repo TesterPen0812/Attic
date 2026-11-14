@@ -4078,7 +4078,7 @@ extension NoteEditorEngine {
         let start = location == textStorage.length ? location : paragraphRange(at: location).location
         guard start > 0 else { return nil }
         let above = paragraphRange(at: start - 1)
-        guard above.location > 0 else { return nil }
+        guard !isTitleLine(above.location) else { return nil }
         return textStorage.attribute(.noteCalloutIcon, at: above.location, effectiveRange: nil) as? String
     }
 

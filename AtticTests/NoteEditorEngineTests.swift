@@ -25,7 +25,7 @@ final class NoteEditorEngineTests: XCTestCase {
     }
 
     private func bg25CaptureIfRequested(_ scroll: NSScrollView) throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" else { return }
+        guard (ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1") else { return }
         let bounds = NSRect(x: 0, y: 0, width: 400, height: 240)
         let window = NSWindow(contentRect: NSRect(x: -4_000, y: -4_000, width: 400, height: 240),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -199,6 +199,24 @@ final class NoteEditorEngineTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.02))
     }
 
+    private func bg14NativeCaret(_ view: NoteEditorTextView) throws -> CGRect {
+        try requireKeyWindowTests()
+        bg14Settle(view)
+        func descendants(_ parent: NSView) -> [NSView] {
+            parent.subviews + parent.subviews.flatMap(descendants)
+        }
+        func owner(_ indicator: NSView) -> NSTextView? {
+            var parent = indicator.superview
+            while let node = parent, !(node is NSTextView) { parent = node.superview }
+            return parent as? NSTextView
+        }
+        let frames = descendants(view).compactMap { $0 as? NSTextInsertionIndicator }
+            .filter { owner($0) === view && !$0.isHiddenOrHasHiddenAncestor && $0.displayMode != .hidden && $0.alphaValue > 0 }
+            .map { view.convert($0.frame, from: $0.superview) }
+        XCTAssertEqual(frames.count, 1, "exactly one AppKit insertion indicator, as in RoundF3Harness")
+        return try XCTUnwrap(frames.first)
+    }
+
     private func bg14Reopen(_ document: NoteDocument, titled: Bool) throws -> NoteEditorEngine {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = UUID()
@@ -271,6 +289,102 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertTrue(engine.history.undo(), label)
             XCTAssertEqual(engine.document(), original, "\(label): Undo gives the first item back")
         }
+    }
+
+    /// Round 2, Opus R-1 / Dot R-3: picking a callout for the paragraph under
+    /// a same-icon callout makes a separate box, whether the callout above
+    /// is below a title or is a task note's first body paragraph.
+    func testBG25CalloutPickedUnderAFirstTaskBodyCalloutIsASeparateBox() throws {
+        var box = NoteBlock.text("Tip", style: "quote")
+        box.callout = "💡"
+        for titled in [true, false] {
+            let label = titled ? "titled note" : "task note"
+            let (engine, view, _, original) = bg14Engine(titled: titled, [box, .text("Next")])
+            defer { engine.detachView() }
+            let (window, scroll) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            let next = (engine.textStorage.string as NSString).range(of: "Next").location
+            view.setSelectedRange(NSRange(location: next, length: 0))
+            XCTAssertTrue(engine.perform(.paragraph(.callout(icon: "💡"))), label)
+            XCTAssertTrue(engine.startsSeparateCallout(paragraphAt: next), "\(label): the picked callout is its own box")
+            guard case .callout(_, let starts, _, _) = engine.decoration(forParagraphAt: next) else {
+                return XCTFail("\(label): the picked callout draws a box")
+            }
+            XCTAssertTrue(starts, "\(label): it starts a new box")
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            try bgRound2Capture(scroll, name: "BG25-\(titled)-picked-callout")
+            let picked = engine.document()
+            XCTAssertEqual(picked.blocks.last?.calloutStart, true, "\(label): the boundary is saved")
+            XCTAssertTrue(engine.history.undo(), label)
+            XCTAssertEqual(engine.document(), original, "\(label): Undo")
+            XCTAssertFalse(engine.startsSeparateCallout(paragraphAt: next), label)
+            XCTAssertTrue(engine.history.redo(), label)
+            XCTAssertEqual(engine.document(), picked, "\(label): Redo")
+            XCTAssertTrue(engine.startsSeparateCallout(paragraphAt: next), label)
+            let reopened = try bg14Reopen(picked, titled: titled)
+            defer { reopened.detachView() }
+            let again = (reopened.textStorage.string as NSString).range(of: "Next").location
+            XCTAssertTrue(reopened.startsSeparateCallout(paragraphAt: again), "\(label): the box survives reload")
+            XCTAssertEqual(reopened.document(), picked, label)
+        }
+    }
+
+    /// Round 2, Opus R-2 / Dot R-4: Return at the end of a first-paragraph
+    /// quote, callout or code block leaves an empty line that joins the block
+    /// the way it does under a title, and the first typed letter changes nothing.
+    func testBG25EmptyLineAfterAFirstTaskBodyQuoteCalloutOrCodeMatchesATitledNote() throws {
+        var callout = NoteBlock.text("Tip", style: "quote")
+        callout.callout = "💡"
+        func snapshot(titled: Bool, _ block: NoteBlock, exiting: Bool) throws -> [String] {
+            let (engine, view, start, _) = bg14Engine(titled: titled, [block])
+            defer { engine.detachView() }
+            let (window, scroll) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            if exiting {
+                XCTAssertTrue(engine.textView(view, doCommandBy: #selector(NSTextView.moveDown(_:))))
+            } else { view.insertNewline(nil) }
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            let immediateCaret = engine.caretRect(at: engine.textStorage.length)
+            let beforeCaret = try bg14NativeCaret(view)
+            try bgRound2Capture(scroll, name: "BG25-\(titled)-\(block.callout == nil ? block.style ?? "body" : "callout")-\(exiting ? "exit" : "continue")-empty")
+            let line = engine.emptyLastLineAttributes()[.paragraphStyle] as? NSParagraphStyle
+            var result = [String(describing: engine.emptyLastLineDecoration(afterParagraphAt: start)),
+                          "before \(line?.paragraphSpacingBefore ?? -1) line \(line?.lineSpacing ?? -1)"]
+            view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let typed = (engine.textStorage.string as NSString).range(of: "x").location
+            view.setSelectedRange(NSRange(location: typed, length: 0))
+            let afterCaret = try bg14NativeCaret(view)
+            print("R2_GEOMETRY titled=\(titled) style=\(block.style ?? "body") exiting=\(exiting) immediate=\(String(describing: immediateCaret)) settled=\(beforeCaret) typed=\(afterCaret)")
+            XCTAssertEqual(afterCaret.minY, beforeCaret.minY, accuracy: 0.5, "the first character stays on the empty line's baseline")
+            XCTAssertEqual(afterCaret.minX, beforeCaret.minX, accuracy: 0.5, "the first character keeps the empty line's inset")
+            XCTAssertEqual(afterCaret.height, beforeCaret.height, accuracy: 0.5, "the native caret keeps its height")
+            try bgRound2Capture(scroll, name: "BG25-\(titled)-\(block.callout == nil ? block.style ?? "body" : "callout")-\(exiting ? "exit" : "continue")-typed")
+            let after = engine.textStorage.attribute(.paragraphStyle, at: typed, effectiveRange: nil) as? NSParagraphStyle
+            result.append(String(describing: engine.decoration(forParagraphAt: typed)))
+            result.append("typed \(after?.paragraphSpacingBefore ?? -1)")
+            return result
+        }
+        for (label, block) in [("quote", NoteBlock.text("Quote", style: "quote")), ("callout", callout),
+                               ("code", NoteBlock.text("let a = 1", style: "mono"))] {
+            for exiting in [false, true] {
+                let ordinary = try snapshot(titled: true, block, exiting: exiting)
+                let task = try snapshot(titled: false, block, exiting: exiting)
+                XCTAssertEqual(task, ordinary, "\(label), exiting \(exiting): the empty line draws and spaces as under a title")
+            }
+        }
+        let (quote, view, start, _) = bg14Engine(titled: false, [.text("Quote", style: "quote")])
+        defer { quote.detachView() }
+        view.setSelectedRange(NSRange(location: quote.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        guard case .quote(_, let joins)? = quote.emptyLastLineDecoration(afterParagraphAt: start) else {
+            return XCTFail("the empty quote line draws a bar")
+        }
+        XCTAssertTrue(joins, "the bar runs on from the first paragraph without a gap")
+        let (titledNote, _, _, _) = bg14Engine(titled: true, [.text("Quote", style: "quote")])
+        defer { titledNote.detachView() }
+        XCTAssertTrue(titledNote.isTitleLine(0), "an ordinary note's title is still the title")
+        XCTAssertNil(titledNote.decoration(forParagraphAt: 0))
     }
 
     private func bgRound2Capture(_ view: NSView, name: String) throws {

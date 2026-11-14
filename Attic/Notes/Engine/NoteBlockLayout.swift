@@ -1581,7 +1581,7 @@ extension NoteEditorEngine {
         switch format {
         case .quote:
             let above = paragraphRange(at: end - 1)
-            let joins = above.location > 0 && paragraphStyle(at: above.location) == .quote
+            let joins = !isTitleLine(above.location) && paragraphStyle(at: above.location) == .quote
                 && (indentAt(above.location) ?? 0) == pending.state.indent
             return .quote(x: depth, joinsAbove: joins)
         case .bullet, .number:
@@ -1603,7 +1603,7 @@ extension NoteEditorEngine {
         let above = paragraphRange(at: end - 1)
         switch format {
         case let .callout(icon):
-            guard above.location > 0 else { return true }
+            guard !isTitleLine(above.location) else { return true }
             return textStorage.attribute(.noteCalloutIcon, at: above.location, effectiveRange: nil) as? String != icon
                 || startsSeparateCallout(paragraphAt: end)
         case .mono:
@@ -1653,7 +1653,7 @@ extension NoteEditorEngine {
         else { return }
         let above = paragraphRange(at: end - 1)
         var exit: CGFloat = 0
-        if above.location > 0, boxExitsAtEnd(above) {
+        if !isTitleLine(above.location), boxExitsAtEnd(above) {
             let format = paragraphStyle(at: above.location)
             if format?.isCode == true { exit = AtticNoteType.monoPaddingV + NoteTextStyle.baselineShift(AtticNoteType.mono) }
             if format?.isCallout == true { exit = AtticNoteType.calloutPaddingV + NoteTextStyle.baselineShift(AtticNoteType.body) }
@@ -1662,7 +1662,7 @@ extension NoteEditorEngine {
         // above, by that paragraph's own line spacing (none for the title, a
         // blank line or a block object): only the difference to the line's
         // own spacing is added here (less, under a body line, for a heading).
-        let host: CGFloat = if above.location == 0 || above.length <= 1 || isBlockObject(at: above.location) { 0 } else {
+        let host: CGFloat = if isTitleLine(above.location) || above.length <= 1 || isBlockObject(at: above.location) { 0 } else {
             (textStorage.attribute(.paragraphStyle, at: above.location, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
         }
         var before = max(0, paragraph.paragraphSpacingBefore + exit + paragraph.lineSpacing - host)
