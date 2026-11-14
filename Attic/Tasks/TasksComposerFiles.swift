@@ -98,10 +98,26 @@ extension TasksPageModel {
         let token = UUID()
         composerAttachmentTasks[token] = Task { @MainActor [self] in
             defer { composerAttachmentTasks[token] = nil }
-            guard let owner = store.attachmentOwnerID(for: id) else { staging.discard(); return true }
-            let added = await store.attachStagedFiles(to: owner) { staging }
-            guard let added, !added.isEmpty else { return false }
-            let title = self.store.task(withID: owner)?.title ?? ""
+            var owner = store.attachmentOwnerID(for: id)
+            // Task+writing is saved by NoteStore. If its subsequent task-list
+            // refresh failed, the committed owner is temporarily absent from
+            // the index. Recover that presentation before importing files.
+            // Yield on a failed read instead of repeatedly blocking a frame.
+            if owner == nil {
+                for attempt in 0..<3 {
+                    if store.prepareTaskEdit() {
+                        owner = store.attachmentOwnerID(for: id)
+                        break
+                    }
+                    if attempt < 2 { try? await Task.sleep(for: .milliseconds(30)) }
+                }
+            }
+            // On a persistent read failure, let the attachment transaction
+            // report the missing task; do not silently drop the submitted files.
+            let target = owner ?? id
+            let added = await store.attachStagedFiles(to: target) { staging }
+            guard let added, !added.isEmpty else { staging.discard(); return false }
+            let title = self.store.task(withID: target)?.title ?? ""
             AccessibilityNotification.Announcement(
                 added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")
             ).post()

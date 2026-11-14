@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// What the "+" card creates (Accepted 2026-10-29, "The '+' card"): a task
 /// with its writing, or a quick note, each as one undoable step in the
@@ -24,7 +25,25 @@ extension AtticLibrary {
                   case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)
             else { return nil }
             self.tasks.refresh()
-            guard let task = self.tasks.task(withID: taskID) else { return nil }
+            // The transaction already committed. A failed list read cannot
+            // turn it into a failed create or discard its Undo step.
+            if self.tasks.task(withID: taskID) == nil { self.tasks.refresh() }
+            let presented = self.tasks.task(withID: taskID)
+            let persisted: TaskItem?
+            if presented == nil {
+                persisted = try? ModelContext(tasks.container).fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { $0.id == taskID }
+                )).first
+            } else { persisted = nil }
+            let task = presented ?? persisted ?? TaskItem(
+                id: taskID, title: draft.title, status: draft.status,
+                priority: draft.priority, parentID: draft.parentID
+            )
+            if presented == nil && persisted == nil {
+                task.tags = draft.tags
+                task.dueDay = draft.dueDay
+                task.dueTimeMinutes = draft.dueTimeMinutes
+            }
             created = task
             let ids = [taskID]
             let owned = itemOwnership(liveFamilyMembers(of: ids), deleted: false)

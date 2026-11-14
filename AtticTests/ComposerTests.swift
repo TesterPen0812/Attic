@@ -725,6 +725,66 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
     }
 
+    func testConfirmedTaskWithWritingStillCreatesAndRecordsUndoAfterPresentationReadFailure() throws {
+        let id = UUID()
+        tasks.listRefreshFailures = 1
+        let created = library.createTask(TaskDraft(title: "Saved task"), writing: "Saved writing", in: .tasks, id: id)
+        let stored = try rows(TaskItem.self)
+        XCTAssertEqual(stored.map(\.id), [id], "the task+writing transaction committed durably")
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertEqual(tasks.listRefreshFailures, 0, "the injected failure reached the task-list refresh")
+        XCTAssertEqual(created?.id, id, "a failed presentation read cannot report a confirmed write as failed")
+        XCTAssertEqual(liveTasks().map(\.id), [id], "the committed task must become visible")
+        XCTAssertTrue(library.undo.canUndo(in: .tasks), "the confirmed write must retain its Undo step")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(try rows(TaskItem.self).allSatisfy { $0.deletedAt != nil })
+        XCTAssertFalse(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+    }
+
+    func testConfirmedTaskKeepsItsUndoWhenRepeatedPresentationReadsFail() throws {
+        let id = UUID()
+        tasks.listRefreshFailures = 3
+        let created = library.createTask(TaskDraft(title: "Repeated read failure"),
+                                         writing: "Durable writing", in: .tasks, id: id)
+        XCTAssertEqual(created?.id, id, "the committed task remains successful even when the list stays stale")
+        XCTAssertEqual(try rows(TaskItem.self).map(\.id), [id])
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+
+        tasks.listRefreshFailures = 0
+        tasks.refresh()
+        XCTAssertEqual(liveTasks().map(\.id), [id], "the next successful refresh recovers the list")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertFalse(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+    }
+
+    func testComposerAttachesStagedFilesAfterConfirmedTaskPresentationRecovers() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ComposerConfirmedTaskFiles")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("task-details.txt")
+        try Data("keep these files with the task".utf8).write(to: source)
+
+        model.open(on: .tasks(.now))
+        type("Saved task with files")
+        model.writing = "Saved writing"
+        page.addComposerFiles(urls: [source])
+        tasks.listRefreshFailures = 3
+        model.submit()
+        try await waitForComposer { !self.model.isCreating }
+        try await waitForComposer {
+            self.liveTasks().first?.attachments.count == 1
+        }
+
+        let task = try XCTUnwrap(liveTasks().first)
+        XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
+        let reference = try XCTUnwrap(task.attachments.first)
+        let url = try await tasks.taskImageFiles.verifiedURL(for: reference)
+        let saved = try XCTUnwrap(url)
+        XCTAssertEqual(try Data(contentsOf: saved), Data("keep these files with the task".utf8))
+    }
+
     func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
         model.open(on: .tasks(.now))
         type("Call Sam")
