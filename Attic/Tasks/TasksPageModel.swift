@@ -1798,8 +1798,43 @@ final class TasksPageModel: ObservableObject {
     /// Each list's scroll position while it is not on screen (its page is
     /// not built then): restored when it is built again (round 10). Not
     /// published: saving it redraws nothing.
-    var scrollOffsets: [TasksTab: CGFloat] = [:] {
-        didSet { memory?.saveScrollOffsets(scrollOffsets) }
+    private var storedScrollOffsets: [TasksTab: CGFloat] = [:]
+    private var scrollSaveWorkItem: DispatchWorkItem?
+
+    var scrollOffsets: [TasksTab: CGFloat] {
+        get { storedScrollOffsets }
+        set {
+            // Explicit navigation and restoration writes stay durable immediately.
+            if storedScrollOffsets == newValue {
+                flushScrollOffsets()
+                return
+            }
+            scrollSaveWorkItem?.cancel()
+            scrollSaveWorkItem = nil
+            storedScrollOffsets = newValue
+            memory?.saveScrollOffsets(newValue)
+        }
+    }
+
+    /// Bounds notifications can arrive many times during a single gesture.
+    /// Keep the position immediately for warm pages, but checkpoint the whole
+    /// three-tab dictionary at a bounded cadence instead of on each event.
+    func recordScrollOffset(_ y: CGFloat, on tab: TasksTab) {
+        guard y.isFinite, abs(y) < 10_000_000, storedScrollOffsets[tab] != y else { return }
+        storedScrollOffsets[tab] = y
+        guard memory != nil, scrollSaveWorkItem == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushScrollOffsets() }
+        }
+        scrollSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
+    func flushScrollOffsets() {
+        guard let item = scrollSaveWorkItem else { return }
+        scrollSaveWorkItem = nil
+        item.cancel()
+        memory?.saveScrollOffsets(storedScrollOffsets)
     }
 
     // MARK: - Selection

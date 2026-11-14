@@ -42,6 +42,38 @@ final class AtticGlassMenuTests: XCTestCase {
         ]
     }
 
+    /// The Tasks list can realize hundreds of rows over long scrolls. A
+    /// closed context menu needs one native anchor per row, not two separate
+    /// NSViewRepresentables that each enter the AppKit view hierarchy.
+    func testContextMenuRealizationUsesOneNativeAnchorPerRow() {
+        let count = 30
+        let root = VStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { index in
+                Text("Scale task \(index)")
+                    .frame(width: 300, height: 32)
+                    .atticContextMenu { [AtticMenuCommand(verbatim: "Edit") {}] }
+            }
+        }
+        let window = NSWindow(contentRect: NSRect(x: -8000, y: -8000, width: 320, height: 32 * count),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: root)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+
+        var contextAnchors = 0
+        var redundantMenuAnchors = 0
+        func walk(_ view: NSView) {
+            if view is AtticContextMenuAnchor.AnchorView { contextAnchors += 1 }
+            if view is AtticMenuAnchor.AnchorView { redundantMenuAnchors += 1 }
+            for child in view.subviews { walk(child) }
+        }
+        if let content = window.contentView { walk(content) }
+        XCTAssertEqual(contextAnchors, count, "all of the intentionally non-lazy rows were realized")
+        XCTAssertEqual(redundantMenuAnchors, 0, "one combined context/AX anchor per task row")
+    }
+
     private func open(_ commands: [AtticMenuCommand], at point: CGPoint = CGPoint(x: 400, y: 600)) -> AtticGlassMenu {
         let menu = AtticGlassMenu(commands, appearance: NSAppearance(named: .aqua), opener: nil)
         menu.open(.point(point), visible: screen, source: nil)
