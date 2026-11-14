@@ -629,9 +629,14 @@ final class NotesTypingCostTests: XCTestCase {
         engine.find.next()
         XCTAssertNotEqual(view.selectedRange(), before, "⌘G straight after a key is not dropped")
         let moved = view.selectedRange()
+        let navigatedIndex = engine.find.index
+        XCTAssertEqual(navigatedIndex, 1)
         await engine.find.waitForSearch()
         XCTAssertEqual(engine.find.matches.count, 3)
         XCTAssertEqual(view.selectedRange(), moved, "the late publication leaves the person's navigation alone")
+        XCTAssertEqual(engine.find.index, navigatedIndex, "publication keeps the occurrence chosen with ⌘G")
+        engine.find.next()
+        XCTAssertEqual(engine.find.index, 2, "the next ⌘G advances instead of repeating that occurrence")
     }
 
     func testPF16AnEditKeepsUnchangedPreviousMatchesNavigableDuringTheReplacementScan() async {
@@ -651,6 +656,40 @@ final class NotesTypingCostTests: XCTestCase {
         await engine.find.waitForSearch()
         XCTAssertEqual(engine.find.matches.count, 3)
         XCTAssertEqual(view.selectedRange(), moved)
+    }
+
+    func testPF16ExplicitNavigationSurvivesAnEditCancelledScan() async {
+        // A settled search must retain an unchanged occurrence too, even
+        // when the rest of its paragraph needs searching again.
+        do {
+            let (engine, view) = editor([.text("Title"), .text("needle first, needle last tail")])
+            defer { engine.find.close(); engine.detachView() }
+            engine.find.show()
+            engine.find.query = "needle"
+            engine.find.next()
+            XCTAssertEqual(engine.find.index, 1)
+            view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+            view.insertText("!", replacementRange: view.selectedRange())
+            XCTAssertEqual(engine.find.matches.count, 2)
+            XCTAssertEqual(engine.find.index, 1, "editing after the current occurrence must not erase it")
+        }
+        for target in ["middle", "needle two"] {
+            let (engine, view) = longFindEditor()
+            defer { engine.find.close(); engine.detachView() }
+            engine.find.show()
+            engine.find.query = "needle"
+            await engine.find.waitForSearch()
+            engine.find.query = "needl"
+            engine.find.next()
+            XCTAssertEqual(engine.find.index, 1)
+            let typedAt = NSMaxRange((view.string as NSString).range(of: target))
+            view.setSelectedRange(NSRange(location: typedAt, length: 0))
+            view.insertText("x", replacementRange: view.selectedRange())
+            await engine.find.waitForSearch()
+            XCTAssertEqual(engine.find.matches.count, 3)
+            XCTAssertEqual(engine.find.index, 1, "an explicit ⌘G survives cancellation after editing \(target)")
+            XCTAssertEqual(view.selectedRange(), NSRange(location: typedAt + 1, length: 0))
+        }
     }
 
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {

@@ -109,6 +109,7 @@ final class NoteFindController: ObservableObject {
     private var pendingOldMatch: Match?
     private var pendingFullSearch = false
     private var searchGeneration: UInt64 = 0
+    private var navigationGeneration: UInt64 = 0
     private var searchTask: Task<Void, Never>?
     private var immutableSnapshot: NoteFindSnapshot?
     /// Where the person's attention was when a select-first search began. The
@@ -121,6 +122,7 @@ final class NoteFindController: ObservableObject {
         var cell: NoteTable.Position?
         var cellSelection: NSRange?
         var composition: NSRange?
+        var navigation: UInt64
     }
     private var searchOrigin: Interaction?
     /// Only notes large enough to stall the query callback use the worker.
@@ -223,7 +225,8 @@ final class NoteFindController: ObservableObject {
                     responder: engine.textView?.window?.firstResponder.map { ObjectIdentifier($0) },
                     table: table.map { ObjectIdentifier($0) },
                     cell: table?.activeCell, cellSelection: editor?.selectedRange(),
-                    composition: editor?.hasMarkedText() == true ? editor?.markedRange() : nil)
+                    composition: editor?.hasMarkedText() == true ? editor?.markedRange() : nil,
+                    navigation: navigationGeneration)
     }
 
     private func scheduleBackgroundSearch(in engine: NoteEditorEngine, origin: Interaction?,
@@ -231,6 +234,7 @@ final class NoteFindController: ObservableObject {
         let selectFirst = origin != nil
         searchOrigin = origin
         let current = searchGeneration
+        let navigationAtStart = origin?.navigation ?? navigationGeneration
         let needle = query
         let input = snapshot(in: engine)
         // The matches already shown stay (and stay navigable, so Return or ⌘G
@@ -277,8 +281,21 @@ final class NoteFindController: ObservableObject {
                           hit.cellLength.map { NSRange(location: offset, length: $0) }
                       })
             }
+            // A person can navigate the retained results while this scan is
+            // running. Keep that occurrence even when the new query changes
+            // its range length, including after an edit cancels the scan.
+            let navigated = self.navigationGeneration != navigationAtStart
+            let displayed = self.index.flatMap { self.matches.indices.contains($0) ? self.matches[$0] : nil }
+            let preferred = navigated ? (displayed ?? previous) : nil
+            let navigatedIndex = preferred.flatMap { chosen in
+                found.firstIndex { hit in
+                    guard hit.tableID == chosen.tableID, hit.cell == chosen.cell else { return false }
+                    return NSIntersectionRange(hit.cellRange ?? hit.noteRange,
+                                               chosen.cellRange ?? chosen.noteRange).length > 0
+                }
+            }
             self.matches = found
-            self.index = selectFirst ? found.indices.first : previous.flatMap { found.firstIndex(of: $0) }
+            self.index = navigatedIndex ?? (selectFirst ? found.indices.first : previous.flatMap { found.firstIndex(of: $0) })
             self.updateHighlights()
             // The first match is revealed only while the person is still where
             // the query was typed: not after a click into the body, a focused
@@ -585,7 +602,10 @@ final class NoteFindController: ObservableObject {
             return Match(noteRange: rebased(match.noteRange), tableID: match.tableID, cell: match.cell, cellRange: match.cellRange)
         }
         pendingMatches = shown.compactMap(rebasedMatch)
-        pendingOldMatch = old.flatMap(rebasedMatch)
+        // The rescan decides whether the current occurrence still matches.
+        // Editing elsewhere in its paragraph must not discard that candidate.
+        pendingOldMatch = old.map { Match(noteRange: rebased($0.noteRange), tableID: $0.tableID,
+                                          cell: $0.cell, cellRange: $0.cellRange) }
         if alreadyPending || pendingFullSearch || query.contains(where: \.isNewline) {
             pendingFullSearch = true
             pendingSearchRange = nil
@@ -682,6 +702,7 @@ final class NoteFindController: ObservableObject {
 
     func next(backward: Bool = false) {
         guard !matches.isEmpty else { return }
+        navigationGeneration &+= 1
         index = index.map { ($0 + (backward ? matches.count - 1 : 1)) % matches.count }
             ?? (backward ? matches.count - 1 : 0)
         reveal(activateCell: true)
