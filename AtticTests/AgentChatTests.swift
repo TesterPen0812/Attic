@@ -1315,6 +1315,48 @@ final class AgentChatHostedTests: XCTestCase {
         XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")
     }
 
+    func testBG43ShiftReturnReplacesTheSelectedRangeInTheLiveComposer() throws {
+        model.open()
+        spin(0.5)
+        model.draft = "ABCDEF"
+        spin(0.15)
+
+        func fields(in view: NSView) -> [NSTextField] {
+            let own = (view as? NSTextField).map { [$0] } ?? []
+            return own + view.subviews.flatMap { fields(in: $0) }
+        }
+        let field = try XCTUnwrap(fields(in: try XCTUnwrap(window.contentView))
+            .first { $0.placeholderString == "Ask Attic" }, "Find the real SwiftUI composer text field")
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView, "Editing the composer uses the native text editor")
+
+        func pressReturn(shift: Bool) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                isARepeat: false, keyCode: 36))
+            window.sendEvent(event)
+            spin(0.12)
+        }
+
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        try pressReturn(shift: true)
+        XCTAssertEqual(model.draft, "ABC\nDEF", "Shift-Return inserts at the caret")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+
+        model.draft = "AB🎯CDEF"
+        spin(0.1)
+        editor.setSelectedRange(NSRange(location: 4, length: 2))
+        try pressReturn(shift: true)
+        XCTAssertEqual(model.draft, "AB🎯\nEF", "Selected text is replaced at UTF-16 offsets after an emoji")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0))
+
+        try pressReturn(shift: false)
+        XCTAssertEqual(runner.sent.count, 1, "Unmodified Return still sends once")
+        XCTAssertEqual(runner.sent.first?.text, "AB🎯\nEF")
+    }
+
     override func setUp() async throws {
         model = AgentChatModel()
         model.pacing = .instant

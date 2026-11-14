@@ -622,6 +622,28 @@ private struct AgentChatGrow: ViewModifier, Animatable {
     }
 }
 
+/// The composer's own window is needed to edit the native selection. The box
+/// is weak so a long-lived SwiftUI state cannot retain a closed panel.
+@MainActor
+private final class AgentChatInputWindow {
+    weak var value: NSWindow?
+}
+
+private struct AgentChatInputWindowAnchor: NSViewRepresentable {
+    let owner: AgentChatInputWindow
+
+    func makeNSView(context: Context) -> NSView { Anchor(owner: owner) }
+    func updateNSView(_ view: NSView, context: Context) { owner.value = view.window }
+
+    private final class Anchor: NSView {
+        let owner: AgentChatInputWindow
+        init(owner: AgentChatInputWindow) { self.owner = owner; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { nil }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); owner.value = window }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// The input, in the bar's place. An approval takes its place, and it goes back.
 struct AgentChatComposer: View {
     @ObservedObject var model: AgentChatModel
@@ -634,6 +656,7 @@ struct AgentChatComposer: View {
 
     @Environment(\.atticDesign) private var design
     @FocusState private var focused: Bool
+    @State private var inputWindow = AgentChatInputWindow()
     @State private var grown = false
     @State private var height: CGFloat = 62
     @State private var shake: CGFloat = 0
@@ -847,13 +870,20 @@ struct AgentChatComposer: View {
             .focused($focused)
             .padding(.horizontal, Self.textInset)
             .padding(.vertical, 2)
+            .background { AgentChatInputWindowAnchor(owner: inputWindow) }
             .onSubmit(model.send)
             .onKeyPress(.return, phases: .down) { press in
                 if press.modifiers.contains(.shift) {
-                    model.draft += "\n"
-                } else {
-                    model.send()
+                    // SwiftUI's default Return action submits even with Shift.
+                    // Insert via AppKit so the selection, caret and IME stay in
+                    // the text editor's coordinate system.
+                    if let editor = inputWindow.value?.firstResponder as? NSTextView {
+                        if editor.hasMarkedText() { return .ignored }
+                        editor.insertText("\n", replacementRange: editor.selectedRange())
+                    }
+                    return .handled
                 }
+                model.send()
                 return .handled
             }
             .accessibilityLabel(String(localized: "Message"))
