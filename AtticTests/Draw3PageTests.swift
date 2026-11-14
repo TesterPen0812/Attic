@@ -1435,6 +1435,105 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNotEqual(model.canvasID, target.id)
     }
 
+    /// BG-29 round 3 (Dot R-10, Opus R-17): the first write fails (an injected
+    /// rejected checkpoint) with a Redo queued right behind the Undo. The
+    /// Redo is not consumed and dropped: it waits behind the pending Undo and
+    /// runs once Retry has settled it, so Undo then Redo nets out to the
+    /// restored canvas, as the person asked.
+    func testBG29ARedoQueuedBehindAFailedUndoRunsAfterRetry() throws {
+        var fail = false
+        let durable = try persistentStore(save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        let restoreStep = try XCTUnwrap(store.undoStepID(on: target.id))
+        model.open(target.id)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(model.saveNotice, "the Undo's write failed and says so")
+        XCTAssertEqual(model.canvasID, target.id)
+        fail = false
+        model.retrySave()
+        XCTAssertNil(model.saveNotice)
+        XCTAssertNil(try store.open(target.id).canvas.deletedAt, "Undo then Redo ends with the canvas restored")
+        XCTAssertEqual(model.canvasID, target.id, "the board stays on the canvas")
+        XCTAssertEqual(store.undoStepID(on: target.id), restoreStep, "the Redo ran: the restore is back on the Undo stack")
+        XCTAssertFalse(store.canRedo(on: target.id))
+    }
+
+    /// The same failed write with a Redo behind an ordinary edit's Undo:
+    /// after Retry the object is back, not left undone.
+    func testBG29ARedoBehindAFailedUndoOfAnEditRestoresTheEdit() throws {
+        var fail = false
+        let durable = try persistentStore(save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        model.setTool(.pen)
+        drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        model.flushAcknowledgedDraw()
+        XCTAssertEqual(stored.count, 1)
+        fail = true
+        model.undoAcknowledged()
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(stored.count, 1, "Undo then Redo leaves the stroke")
+        XCTAssertEqual(model.objects.count, 1)
+        XCTAssertNil(model.saveNotice)
+    }
+
+    /// BG-29 round 3 (Opus R-17): the deletion came from a Redo, not an
+    /// Undo. The deletion toast's Undo restored the canvas, so its delete
+    /// step is on the Redo stack; Redo then Undo in one flush delete and
+    /// restore it again, instead of skipping the Undo as if it were deeper.
+    func testBG29QueuedRedoThenUndoAfterAToastUndoKeepsTheCanvasLive() throws {
+        use(try persistentStore())
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.undo(on: target.id).isSaved, "the toast's Undo restores the canvas")
+        XCTAssertTrue(store.canRedo(on: target.id))
+        model.open(target.id)
+        XCTAssertEqual(model.canvasID, target.id)
+        model.redoAcknowledged()
+        model.undoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNil(try store.open(target.id).canvas.deletedAt, "Redo deleted it and the Undo brought it back")
+        XCTAssertEqual(model.canvasID, target.id)
+        XCTAssertEqual(try store.library().map(\.id).sorted { $0.uuidString < $1.uuidString },
+                       [other.id, target.id].sorted { $0.uuidString < $1.uuidString })
+    }
+
+    /// The same Redo alone does delete it, and a second Redo is the deeper one.
+    func testBG29QueuedRedoDeletesTheCanvasAndTheNextUndoIsNotSkippedBlindly() throws {
+        use(try persistentStore())
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.undo(on: target.id).isSaved)
+        model.open(target.id)
+        model.redoAcknowledged()
+        model.flushAcknowledgedDraw()
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt)
+        XCTAssertNotEqual(model.canvasID, target.id)
+    }
+
     /// BG-29 round 2 (Dot R-3, Opus R-13): `open` of the very canvas whose
     /// queued Undo its own flush applies must leave that deleted canvas, not
     /// accept its snapshot and drop the deferred hop.

@@ -179,7 +179,33 @@ final class DrawPageModel: ObservableObject {
         case command(DrawCommand)
         case undo
         case redo
+        /// Which way an Undo or Redo moves history; a command counts as an Undo
+        /// (the longstanding reading of a deletion a command caused).
+        var direction: HistoryDirection {
+            if case .redo = self { return .redo }
+            return .undo
+        }
+        var isHistory: Bool {
+            if case .command = self { return false }
+            return true
+        }
     }
+    private enum HistoryDirection { case undo, redo }
+    /// A canvas that a queued action put in Recently Deleted: what did it,
+    /// and how many same-way actions queued since were skipped.
+    private struct DeletionState {
+        var cause: HistoryDirection
+        var skipped: Int
+    }
+    /// Undo and Redo actions that waited behind an Undo or Redo whose write
+    /// failed. The store keeps that failed step pending and refuses further
+    /// history until Retry settles it, so they wait here and run, in order,
+    /// once it has; any newer input discards them.
+    private struct HeldHistory {
+        var cause: HistoryDirection
+        var entries: [AcknowledgedDraw]
+    }
+    private var heldHistory: [UUID: HeldHistory] = [:]
     private struct AcknowledgedDraw {
         let canvas: UUID
         let action: AcknowledgedAction
@@ -359,12 +385,18 @@ final class DrawPageModel: ObservableObject {
     /// reconciled with what the store has.
     func retrySave() {
         dismissedSaveProblem = nil
+        // A settled write that deletes the open canvas must not navigate
+        // before the Undo/Redo that waited behind it has run.
+        deletedCanvasHopDeferrals += 1
         for (id, edit) in store.pendingEdits {
             let result: DrawSaveResult
             if case .held = edit.outcome { result = store.reconcile(on: id) } else { result = store.retry(on: id) }
             if id == canvasID { apply(result) }
             library.renameSavedByRetry(on: id)
         }
+        flushAcknowledgedDraw()
+        deletedCanvasHopDeferrals -= 1
+        if externalSyncDeferred { syncExternalChanges() }
         objectWillChange.send()
     }
 
@@ -598,6 +630,7 @@ final class DrawPageModel: ObservableObject {
             guard !library.isRenaming else { return }
         }
         finishLiveInput()
+        discardHeldHistory()
         deletedCanvasHopDeferrals += 1
         canvasesDeletedByLastFlush = []
         endEditing()
@@ -958,6 +991,7 @@ final class DrawPageModel: ObservableObject {
 
     func undo() {
         guard let canvasID, live == nil else { return }
+        discardHeldHistory()
         flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
@@ -971,6 +1005,7 @@ final class DrawPageModel: ObservableObject {
 
     func redo() {
         guard let canvasID, live == nil else { return }
+        discardHeldHistory()
         flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
@@ -1248,6 +1283,7 @@ final class DrawPageModel: ObservableObject {
     /// run once a frame has had a chance to render. Commands stay ordered.
     func performAcknowledged(_ command: DrawCommand) {
         guard let canvasID else { return }
+        discardHeldHistory()
         // Test/in-memory stores have no disk latency to remove. Keep their
         // immediate command and history semantics for direct model callers.
         guard store is DrawPersistentStore else { _ = perform(command); return }
@@ -1297,6 +1333,7 @@ final class DrawPageModel: ObservableObject {
 
     private func acknowledgeHistory(redo: Bool) {
         guard let canvasID, live == nil else { return }
+        discardHeldHistory()
         guard store is DrawPersistentStore else {
             if redo { self.redo() } else { self.undo() }
             return
@@ -1358,24 +1395,42 @@ final class DrawPageModel: ObservableObject {
         acknowledgedDrawTimer = nil
         acknowledgedUndoChanges = nil
         acknowledgedRedoChanges = []
-        guard !acknowledgedDraw.isEmpty else { return }
-        let entries = acknowledgedDraw
+        var entries = acknowledgedDraw
         acknowledgedDraw = []
+        // Actions that waited for a failed write run first once it is settled.
+        var deletedHere: [UUID: DeletionState] = [:]
+        for (canvas, held) in heldHistory where store.pendingEdits[canvas] == nil {
+            heldHistory[canvas] = nil
+            entries = held.entries + entries
+            if (try? store.open(canvas))?.canvas.deletedAt != nil {
+                deletedHere[canvas] = DeletionState(cause: held.cause, skipped: 0)
+            }
+        }
+        guard !entries.isEmpty else { return }
         deletedCanvasHopDeferrals += 1
         // Once an Undo/Redo has put a canvas in Recently Deleted, the edits and
-        // Undos still queued behind it are for a board nobody is looking at.
-        // The value counts the Undos skipped since, because a later Redo first
-        // cancels one of those; only a Redo that finds nothing left to cancel
-        // is the one that brings the canvas back.
-        var deletedHere: [UUID: Int] = [:]
+        // same-way actions still queued behind it are for a board nobody is
+        // looking at. Those are skipped and counted, because the opposite
+        // action first cancels one of them; only an opposite action that
+        // finds nothing left to cancel is the one that brings the canvas back
+        // (a Redo after an Undo deleted it, an Undo after a Redo did).
+        var heldBack: [UUID: HeldHistory] = [:]
         for entry in entries {
-            if let skipped = deletedHere[entry.canvas] {
+            if var state = deletedHere[entry.canvas] {
                 switch entry.action {
                 case .command: continue
-                case .undo: deletedHere[entry.canvas] = skipped + 1; continue
-                case .redo where skipped > 0: deletedHere[entry.canvas] = skipped - 1; continue
-                case .redo: break
+                case .undo, .redo:
+                    if entry.action.direction == state.cause { state.skipped += 1; deletedHere[entry.canvas] = state; continue }
+                    if state.skipped > 0 { state.skipped -= 1; deletedHere[entry.canvas] = state; continue }
                 }
+            }
+            // Behind a failed write the store refuses history: wait, in order.
+            if entry.action.isHistory,
+               heldBack[entry.canvas] != nil || store.pendingEdits[entry.canvas] != nil {
+                var held = heldBack[entry.canvas] ?? HeldHistory(cause: .undo, entries: [])
+                held.entries.append(entry)
+                heldBack[entry.canvas] = held
+                continue
             }
             let result: DrawSaveResult
             switch entry.action {
@@ -1383,9 +1438,20 @@ final class DrawPageModel: ObservableObject {
             case .undo: result = store.undo(on: entry.canvas)
             case .redo: result = store.redo(on: entry.canvas)
             }
-            if case .saved(let delta) = result { deletedHere[entry.canvas] = delta.canvas.deletedAt != nil ? 0 : nil }
+            switch result {
+            case .saved(let delta):
+                deletedHere[entry.canvas] = delta.canvas.deletedAt != nil
+                    ? DeletionState(cause: entry.action.direction, skipped: 0) : nil
+            case .retry, .held:
+                if entry.action.isHistory, heldBack[entry.canvas] == nil {
+                    heldBack[entry.canvas] = HeldHistory(cause: entry.action.direction, entries: [])
+                }
+            case .unchanged:
+                break
+            }
             if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
         }
+        for (canvas, held) in heldBack where !held.entries.isEmpty { heldHistory[canvas] = held }
         for canvas in Set(entries.map(\.canvas)) {
             if deletedHere[canvas] != nil { canvasesDeletedByLastFlush.insert(canvas) }
             else { canvasesDeletedByLastFlush.remove(canvas) }
@@ -1394,9 +1460,16 @@ final class DrawPageModel: ObservableObject {
         if externalSyncDeferred { syncExternalChanges() }
     }
 
+    /// New input means the person has moved on: what waited behind a failed
+    /// write would no longer be what they asked for.
+    private func discardHeldHistory() {
+        if !heldHistory.isEmpty { heldHistory = [:] }
+    }
+
     @discardableResult
     func perform(_ command: DrawCommand) -> DrawSaveResult {
         guard let canvasID else { return .unchanged }
+        discardHeldHistory()
         flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
