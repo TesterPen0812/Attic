@@ -651,6 +651,77 @@ final class AgentChatTests: XCTestCase {
         XCTAssertEqual(model.phase, .idle)
     }
 
+    func testBG44EmptyNewChatStillProvidesAccessToSavedConversations() throws {
+        let saved = AgentChatSummary(id: UUID(), title: "Earlier plan", updated: Date())
+        runner.saved = [saved]
+        runner.savedEntries[saved.id] = [AgentThreadEntry(id: UUID(), role: "user", text: "Earlier plan")]
+        model.open()
+        model.newChat()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertEqual(model.history, [saved])
+
+        let size = CGSize(width: 320, height: 480)
+        let stage = AgentChatStage(model: model, fx: AgentChatFX(), shown: true,
+                                   layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                                   rows: { _ in [] }, setTyping: { _ in }, didClose: {})
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        let host = NSHostingView(rootView: stage.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -7000, y: -7000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+        func hasHistory(_ node: AnyObject, seen: inout Set<ObjectIdentifier>) -> Bool {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return false }
+            if (node.accessibilityIdentifier?() ?? nil) == "agent-chat-history" { return true }
+            return ((node.accessibilityChildren?() ?? nil) ?? []).contains {
+                hasHistory($0 as AnyObject, seen: &seen)
+            }
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        var seen = Set<ObjectIdentifier>()
+        XCTAssertTrue(hasHistory(host, seen: &seen), "A blank thread must still expose saved Chats")
+        if let capturePath = ProcessInfo.processInfo.environment["ATTIC_BG44_CAPTURE_DIR"] {
+            let directory = URL(fileURLWithPath: capturePath, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            func capture(_ name: String) throws {
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                bitmap.size = size
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: directory.appendingPathComponent(name))
+            }
+            try capture("blank-with-history-after.png")
+            // With zero saved chats, the current empty stage has the same
+            // control-free visual state as the original broken branch.
+            runner.saved = []
+            model.newChat()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            try capture("blank-with-history-before-equivalent.png")
+            runner.saved = [saved]
+            model.newChat()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        model.reopen(saved.id)
+        XCTAssertFalse(model.entries.isEmpty, "Saved conversation opens without sending a new question")
+        model.newChat()
+        model.close()
+        model.open()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        seen = []
+        XCTAssertTrue(hasHistory(host, seen: &seen), "History stays reachable after closing and reopening a blank chat")
+    }
+
     func testHistoryDaysReadTodayAWeekdayOrTheDate() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))

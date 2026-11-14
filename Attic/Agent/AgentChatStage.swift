@@ -288,7 +288,7 @@ struct AgentChatStage: View {
                 .allowsHitTesting(!aside)
                 AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, alive: alive, setTyping: setTyping, didClose: didClose)
             }
-            if !model.entries.isEmpty {
+            if !model.entries.isEmpty || !model.history.isEmpty {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) { topControls }
                     .padding(.top, layout.chromeInsets.top)
                     .padding(.trailing, PanelSharedBottomBar.plusInsets(layout: layout).trailing)
