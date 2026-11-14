@@ -757,6 +757,42 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    /// BG-59 review (Opus R-3, Dot R-5): the agent is handed the Draw canvas
+    /// id through This page; `show` of that id must open it in Draw, while a
+    /// legacy canvas id still resolves in the legacy session.
+    func testBG59AgentShowOpensTheDrawCanvasThatThisPageReports() throws {
+        let previous = DrawPageModel.shared
+        let switchSetting = AtticDraw.enabledOverride
+        defer {
+            DrawPageModel.replaceShared(previous)
+            AtticDraw.enabledOverride = switchSetting
+        }
+        AtticDraw.enabledOverride = true
+        let store = DrawInMemoryStore()
+        let draw = DrawPageModel(store: store)
+        let first = store.create(name: "Draw first")
+        let second = store.create(name: "Draw second")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("A"))]), on: first.id).isSaved)
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("B"))]), on: second.id).isSaved)
+        draw.start()
+        draw.open(first.id)
+        DrawPageModel.replaceShared(draw)
+        let panel = try makePanel()
+        let legacy = try XCTUnwrap(panel.canvasSession.createCanvas(name: "Dormant old Canvas"))
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        XCTAssertEqual(draw.canvasID, first.id)
+
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, second.id))), .shown("the canvas"))
+        XCTAssertEqual(draw.canvasID, second.id, "the agent's show opens the Draw canvas")
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, second.id)
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, UUID()))), .notFound("canvas"))
+        XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, legacy.id))), .shown("the canvas"),
+                       "the legacy fallback still resolves a legacy canvas id")
+        XCTAssertEqual(panel.canvasSession.selectedCanvasID, legacy.id)
+        XCTAssertEqual(draw.canvasID, second.id, "a legacy id leaves the Draw board where it was")
+    }
+
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {

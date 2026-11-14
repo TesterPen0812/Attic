@@ -70,6 +70,21 @@ final class PanelAgentPresenter: AgentPanelPresenting {
                 noteDraft.pages.dismissLibrary()
                 return .shown("the note “\(note.title)”")
             case .canvas:
+                // The page context hands out the Draw canvas id, so a Draw id
+                // is shown in Draw; any other id still resolves in the legacy
+                // session.
+                if AtticDraw.isEnabled {
+                    let draw = DrawPageModel.shared
+                    let listed = ((try? draw.store.library(deleted: false)) ?? []).contains { $0.id == ref.id }
+                    if listed || draw.canvasID == ref.id {
+                        if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
+                        if draw.canvasID != ref.id { draw.open(ref.id) }
+                        guard draw.canvasID == ref.id else {
+                            return .failed("the Canvas page is open, but that canvas could not be opened.")
+                        }
+                        return .shown("the canvas")
+                    }
+                }
                 guard canvasSession.canvases.contains(where: { $0.id == ref.id }) else { return .notFound("canvas") }
                 // The board changes only once the Canvas page is showing.
                 if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
