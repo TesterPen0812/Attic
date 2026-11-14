@@ -165,10 +165,21 @@ final class DrawSwiftDataRepository: DrawRepository {
         metrics.metadataRowsRead += rows.count
         // Metadata contains no original images or stroke bodies. Only explicitly
         // requested thumbnail rows are materialised during library presentation.
-        return try Dictionary(grouping: rows, by: \.id).values.map { replicas in
-            let row = try canvasWinner(replicas)
-            return try row.value(thumbnail: hydrateThumbnails ? thumbnail(for: row, in: context) : nil)
+        // A record that cannot be decoded is left out of the list: one
+        // damaged canvas never empties the library or a search. It is only
+        // left out of this presentation, never rewritten or deleted.
+        return try Dictionary(grouping: rows, by: \.id).values.compactMap { replicas in
+            guard let row = presentableWinner(replicas), var canvas = try? row.value() else { return nil }
+            if hydrateThumbnails { canvas.thumbnail = try thumbnail(for: row, in: context) }
+            return canvas
         }
+    }
+
+    /// The winning replica among those that decode; nil when none does.
+    private func presentableWinner(_ replicas: [DrawCanvasRecord]) -> DrawCanvasRecord? {
+        if let winner = try? canvasWinner(replicas) { return winner }
+        let readable = replicas.filter { (try? $0.value()) != nil }
+        return readable.isEmpty ? nil : try? canvasWinner(readable)
     }
 
     func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {

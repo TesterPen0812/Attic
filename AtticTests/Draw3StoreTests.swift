@@ -581,6 +581,24 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(probe.reads(including: bad) - beforeNext, afterFirst, "one retry cycle for the new revision")
     }
 
+    /// R-16: one damaged record is left out of the lists, never taking the
+    /// whole library or a search down with it, and is never rewritten.
+    func testR16ADamagedRecordNeverEmptiesTheLibraryOrSearch() throws {
+        let container = try container()
+        try seedBoards(container, count: 20)
+        let store = DrawPersistentStore(container: container)
+        let menu = try store.presentationLibrary()
+        let damaged = menu[5].id
+        try damage(damaged, in: container)
+        XCTAssertTrue(store.perform(.put([stroke()]), on: menu[8].id).isSaved) // a new revision
+        XCTAssertEqual(try store.presentationLibrary().count, 19)
+        XCTAssertEqual(try store.search("Board").count, 19)
+        XCTAssertEqual(try store.library().count, 19)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<DrawCanvasRecord>())
+        XCTAssertEqual(rows.count, 20, "nothing is deleted")
+        XCTAssertEqual(rows.first { $0.id == damaged }?.tagsJSON, "{not json", "nothing is rewritten")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)
