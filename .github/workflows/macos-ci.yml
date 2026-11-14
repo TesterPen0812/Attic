@@ -170,18 +170,21 @@ jobs:
           # The shared "+" and "#" keyboard tests that only run with Full Keyboard Access on
           # (BG-67 and its review rounds). Each must have run, not skipped.
           shared_chrome=(
-            testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
+            testAHashKeyHoldingTheKeyboardOnNotesNeverLeavesTheLibraryKeysDead
             testAPageSwitchNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
-            testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
-            testARevealOfTheRetainedPanelReleasesTheSharedPlusOnTheRealShell
-            testTheCardTakingTheRowNeverLeavesTasksTabOrderOnThePlusWithFullKeyboardAccess
-            testTheTagKeyNeverLeavesTasksTabOrderOnItAfterThePageSwitchWithFullKeyboardAccess
-            testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
-            testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess
-            testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess
             testAQueuedPlusHandoffNeverOutlivesTheReleaseThatCameBetween
             testAQueuedTagKeyHandoffNeverOutlivesTheReleaseThatCameBetween
+            testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
+            testARevealOfTheRetainedPanelReleasesTheSharedPlusOnTheRealShell
+            testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
+            testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard
             testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
+            testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
+            testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen
+            testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess
+            testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess
+            testTheCardTakingTheRowNeverLeavesTasksTabOrderOnThePlusWithFullKeyboardAccess
+            testTheTagKeyNeverLeavesTasksTabOrderOnItAfterThePageSwitchWithFullKeyboardAccess
           )
           only=(); for t in "${shared_chrome[@]}"; do only+=(-only-testing:"AtticTests/PanelSharedChromeTests/$t"); done
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \

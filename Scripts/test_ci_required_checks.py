@@ -281,21 +281,99 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('fka-task-focus-summary.json', focused)
 
     def test_focused_fka_runs_every_shared_chrome_native_keyboard_regression(self):
-        import re
         root = Path(__file__).resolve().parent.parent
-        source = (root / 'AtticTests/PanelSharedChromeTests.swift').read_text()
-        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        self.check_shared_chrome_fka((root / '.github/workflows/macos-ci.yml').read_text(),
+                                    (root / 'AtticTests/PanelSharedChromeTests.swift').read_text())
+
+    def check_shared_chrome_fka(self, workflow, source):
+        import re
         focused = workflow.split('  fka:', 1)[1].split('\n  round-trips:', 1)[0]
         selected = focused.split('          shared_chrome=(', 1)[1].split('          )', 1)[0].split()
-        tests = re.split(r'\n    func (test\w+)\(', source)
-        methods = set(tests[1::2])
-        required = {name for name, body in zip(tests[1::2], tests[2::2])
-                    if 'NSApp.isFullKeyboardAccessEnabled' in body}
+        # Follow helper calls too; a gate hidden behind a helper is still native coverage.
+        functions = {}
+        for match in re.finditer(r'\bfunc (\w+)\(', source):
+            start = source.index('{', match.end())
+            depth, end = 1, start + 1
+            while depth and end < len(source):
+                depth += (source[end] == '{') - (source[end] == '}')
+                end += 1
+            functions[match[1]] = source[start + 1:end - 1]
+        native = {'requireKeyWindowTests'}
+        while True:
+            discovered = {name for name, body in functions.items()
+                          if 'NSApp.isFullKeyboardAccessEnabled' in body
+                          or any(re.search(r'\b' + re.escape(helper) + r'\s*\(', body) for helper in native)}
+            if discovered <= native:
+                break
+            native |= discovered
+        methods = {name for name in functions if name.startswith('test')}
+        required = methods & native
         self.assertTrue(required, 'the native keyboard tests must be discovered')
         self.assertFalse(required - set(selected), f'FKA regressions missing from the focused lane: {required - set(selected)}')
         self.assertFalse(set(selected) - methods, 'the focused lane must select real test methods')
         self.assertEqual(len(selected), len(set(selected)))
-        self.assertIn('s["skippedTests"]==0', focused)
+
+        # Execute this block alone with inert build/result tools. Verify the actual
+        # xcodebuild arguments and that this result's validator rejects each bad summary.
+        import json
+        import os
+        import subprocess
+        shared = focused.split('          shared_chrome=(', 1)[1].split('          exit $status', 1)[0]
+        script = 'status=0\nshared_chrome=(' + shared + '\nexit $status\n'
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base / 'Scripts').mkdir()
+            build = base / 'Scripts/xcodebuild_locked.sh'
+            build.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["RECORDED_BUILD"]).write_text(json.dumps(sys.argv[1:]))\n')
+            build.chmod(0o755)
+            result = base / 'xcrun'
+            result.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["RECORDED_RESULT"]).write_text(json.dumps(sys.argv[1:]))\nprint(Path(os.environ["SUMMARY_FIXTURE"]).read_text())\n')
+            result.chmod(0o755)
+            fixture, recorded = base / 'fixture.json', base / 'build.json'
+            env = dict(os.environ, PATH=f'{base}:{os.environ["PATH"]}', RUNNER_TEMP=str(base),
+                       SUMMARY_FIXTURE=str(fixture), RECORDED_BUILD=str(recorded), RECORDED_RESULT=str(base / 'result.json'))
+            for bad in [None, 'passedTests', 'skippedTests', 'failedTests', 'expectedFailures']:
+                summary = dict(passedTests=len(selected), skippedTests=0, failedTests=0, expectedFailures=0)
+                if bad:
+                    summary[bad] = len(selected) - 1 if bad == 'passedTests' else 1
+                fixture.write_text(json.dumps(summary))
+                run = subprocess.run(['bash', '-c', script], cwd=base, env=env, capture_output=True, text=True)
+                self.assertEqual(run.returncode == 0, bad is None,
+                                 f'shared result must pass exactly the selected tests and reject {bad}: {run.stderr}')
+            self.assertTrue(recorded.exists(), 'the shared tests must actually be passed to xcodebuild')
+            args = json.loads(recorded.read_text())
+            self.assertIn('test-without-building', args)
+            self.assertCountEqual([arg for arg in args if arg.startswith('-only-testing:')],
+                                  [f'-only-testing:AtticTests/PanelSharedChromeTests/{name}' for name in selected])
+            result_args = json.loads((base / 'result.json').read_text())
+            self.assertEqual(result_args, ['xcresulttool', 'get', 'test-results', 'summary', '--path',
+                                           str(base / 'AtticFKA-shared-chrome.xcresult'), '--format', 'json'])
+            self.assertIn('-resultBundlePath', args)
+
+            self.assertEqual(args[args.index('-resultBundlePath') + 1], str(base / 'AtticFKA-shared-chrome.xcresult'))
+
+    def test_shared_chrome_fka_guard_rejects_missing_execution_validation_and_helper_tests(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        names = workflow.split('          shared_chrome=(', 1)[1].split('          )', 1)[0].split()
+        source = '\n' + '\n'.join(f'    func {name}() throws {{ guard NSApp.isFullKeyboardAccessEnabled else {{ return }} }}' for name in names)
+        shared = workflow.index('          shared_chrome=(')
+        prefix, block = workflow[:shared], workflow[shared:]
+        invocation_start = block.index('          Scripts/xcodebuild_locked.sh test-without-building')
+        invocation_end = block.index('\n          xcrun xcresulttool', invocation_start)
+        mutations = {
+            'shared xcodebuild invocation removed': block[:invocation_start] + block[invocation_end:],
+            'selection never passed to xcodebuild': block.replace('"${only[@]}" || status=1', '|| status=1', 1),
+            'a different result summary is read': block.replace('summary --path "$RUNNER_TEMP/AtticFKA-shared-chrome.xcresult"', 'summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult"', 1),
+            'shared result not validated': '\n'.join(line for line in block.split('\n') if not ('python3 -c' in line and 'fka-shared-chrome-summary.json' in line)),
+            'shared summary never read': '\n'.join(line for line in block.split('\n') if not ('xcrun xcresulttool' in line and 'AtticFKA-shared-chrome.xcresult' in line)),
+        }
+        for description, changed in mutations.items():
+            with self.subTest(description=description), self.assertRaises(AssertionError):
+                self.check_shared_chrome_fka(prefix + changed, source)
+        helper = source + "\n    func requireNativeFocus() throws { try requireKeyWindowTests() }\n    func testHelperGatedNativeKeyboard() throws { try requireNativeFocus() }\n"
+        with self.assertRaises(AssertionError):
+            self.check_shared_chrome_fka(workflow, helper)
 
     def test_shared_chrome_key_window_helper_requires_explicit_opt_in(self):
         source = (Path(__file__).resolve().parent.parent / 'AtticTests/PanelSharedChromeTests.swift').read_text()
