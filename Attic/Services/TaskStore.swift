@@ -2876,6 +2876,13 @@ final class TaskStore: ObservableObject {
             }
             itemTaskTerms[root] = texts.isEmpty ? nil : texts.joined(separator: "\n") as NSString
         }
+        // The cached Done search results read these terms. An incremental save
+        // that edits a child (or tag, or attachment name) of a logged task
+        // changes no Done entry, so `updateDoneSearch` returns early and would
+        // leave the stale match list in place.
+        if doneSearchMatches != nil, changed.contains(where: doneSearchEntryIDs.contains) {
+            doneSearchMatches = nil
+        }
     }
 
     func matchesItemSearch(_ task: TaskItem, query: String) -> Bool {
