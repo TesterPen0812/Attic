@@ -701,6 +701,275 @@ final class TaskLifecycleSliceTests: XCTestCase {
         return (presenter, session.noteID, before)
     }
 
+    func testBG13TaskReviewSaveAsNewWorksWithAnotherOrdinaryNoteActive() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Unrelated ordinary note"), .text("Leave me alone")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+
+        let original = try storedDocument(session.noteID)
+        var proposed = original
+        proposed.blocks.append(.text("Agent's proposed task writing"))
+        let revision = try XCTUnwrap(notes.store.note(withID: session.noteID)?.revisionToken)
+        guard case let .success(.pending(proposalID)) = notes.store.agentWrite(noteID: session.noteID,
+            baseRevisionToken: revision, document: proposed, agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("task note proposal fixture")
+        }
+        await XCTAssertTrueAsync(await notes.beginProposalReview(id: proposalID))
+        XCTAssertEqual(notes.proposalReview?.sessionID, session.id)
+        let copied = await notes.saveReviewedProposalAsNew()
+        XCTAssertTrue(copied, "the task's leased review must work even when ordinary A is active")
+        XCTAssertEqual(try storedDocument(session.noteID), original, "original task writing is retained")
+        XCTAssertEqual(notes.store.note(withID: ordinaryID)?.title, "Unrelated ordinary note")
+        var detachedProposal = proposed
+        detachedProposal.requires.removeAll { $0 == "taskNote" }
+        XCTAssertTrue(notes.store.notes.contains { $0.id != ordinaryID && $0.id != session.noteID
+            && $0.taskID == nil && notes.store.loadDocument(noteID: $0.id)?.content.document == detachedProposal })
+        XCTAssertNil(notes.proposalReview)
+        XCTAssertTrue(notes.store.pendingEdits(noteID: session.noteID).isEmpty)
+    }
+
+    func testBG17PrivateFragmentPasteIntoTaskNoteUsesItsMountedLeaseAndUndo() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        var markedCopy = NoteBlock.text("Copied writing")
+        markedCopy.marks = [NoteMark(.bold, offset: 0, length: 14)]
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Ordinary"), markedCopy])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        let ordinary = try XCTUnwrap(notes.active)
+        let sourceView = ordinary.engine.makeView().1
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let sourceRange = (sourceView.string as NSString).range(of: "Copied writing")
+        XCTAssertNotEqual(sourceRange.location, NSNotFound)
+        XCTAssertTrue(ordinary.engine.writeSelection(sourceRange, to: board,
+            types: [NoteEditorEngine.fragmentType, .string]))
+        let fragment = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+
+        let engine = session.engine, before = engine.document()
+        let insertion = NSRange(location: engine.textStorage.length, length: 0)
+        presenter.host.textView.setSelectedRange(insertion)
+        let pasted = await engine.pasteDurably(fragmentData: fragment, at: insertion)
+        XCTAssertTrue(pasted, "the receiving task workspace is live even though another ordinary note is active")
+        XCTAssertTrue(engine.plainText.contains("Copied writing"))
+        XCTAssertTrue(engine.document().blocks.contains { $0.text.contains("Copied writing") &&
+            $0.marks.contains(where: { $0.kind == .bold }) },
+            "a private fragment keeps its formatting in the task note")
+        XCTAssertTrue(engine.canUndoCommand)
+        XCTAssertTrue(engine.undoCommand())
+        // A task workspace routes this command through an asynchronous durable
+        // replay. Wait for the edit to be restored before comparing snapshots.
+        for _ in 0..<200 where engine.document() != before {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(engine.document(), before, "a fragment paste is one reversible task-note edit")
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+    }
+
+    func testBG16TaskNoteStatusCancelAndCopyActOnDisplayedSession() async throws {
+        let taskID = try seed(.boundary)
+        let existingStore = notes.store
+        notes = NotesPageController(store: existingStore, journal: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in
+                try? await Task.sleep(for: .seconds(30))
+                return nil
+            })
+        notes.attachUndoRoute(library.undo)
+        let presenter = try open(taskID)
+        let taskSession = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Other ordinary"), .text("Do not copy this text")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        XCTAssertNotEqual(notes.active?.noteID, taskSession.noteID)
+        let originalText = taskSession.engine.plainText
+
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("BG16-\(UUID()).png")
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        notes.importFiles([source], into: taskSession)
+        XCTAssertTrue(notes.statusItems(for: taskSession).contains(.importing))
+        let damaged = NoteDamagedRecoveryExit(perform: { [controller = notes!] in await controller.perform($0) })
+        var slot = NoteStatusSlot(controller: notes, store: notes.store, session: taskSession,
+            damaged: damaged, maxWidth: 240)
+        let importing = try XCTUnwrap(slot.item(.importing))
+        slot.cancel(for: importing)?()
+        XCTAssertFalse(notes.statusItems(for: taskSession).contains(.importing),
+            "Cancel on task B must cancel its batch, even when ordinary A is active")
+
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        slot.copyPasteboard = board
+        let failedSave = try XCTUnwrap(slot.item(.notSaved("Write retained in recovery")))
+        try XCTUnwrap(failedSave.actions.first { $0.identifier == "notes-copy-text" }).handler()
+        XCTAssertEqual(board.string(forType: .string), originalText,
+            "Copy Text on task B's status must use B's draft")
+        XCTAssertFalse(originalText.contains("Do not copy this text"))
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+    }
+
+    func testBG16KeepAsNewFromTaskConflictCopiesItsDraftWithoutStealingTheOrdinaryNote() async throws {
+        let taskID = try seed(.boundary)
+        let presenter = try open(taskID), session = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        type(" Recovery-only task writing", into: presenter.host.textView)
+        let originalID = session.noteID, originalText = session.engine.plainText
+        var external = try storedDocument(originalID)
+        external.blocks.append(.text("External edit that makes the task draft stale"))
+        _ = try notes.store.saveDocument(noteID: originalID, document: external,
+            baseRevisionID: notes.store.note(withID: originalID)?.revisionID).get()
+        _ = notes.refreshWorkspaceSession(session)
+        XCTAssertEqual(session.state, .conflict(.changed))
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Ordinary"), .text("Other writing")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        let existingIDs = Set(notes.store.notes.map(\.id))
+        let damaged = NoteDamagedRecoveryExit(perform: { [controller = notes!] in await controller.perform($0) })
+        let slot = NoteStatusSlot(controller: notes, store: notes.store, session: session,
+                                  damaged: damaged, maxWidth: 240)
+        let conflict = try XCTUnwrap(slot.item(.changedElsewhere))
+        try XCTUnwrap(conflict.actions.first { $0.identifier == "notes-keep-as-new" }).handler()
+        var newIDs = Set<UUID>()
+        for _ in 0..<200 {
+            newIDs = Set(notes.store.notes.map(\.id)).subtracting(existingIDs)
+            if !newIDs.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let copiedID = try XCTUnwrap(newIDs.first, "the displayed task draft must be copied as an ordinary note")
+        XCTAssertNil(notes.store.note(withID: copiedID)?.taskID)
+        XCTAssertFalse(try storedDocument(copiedID).requires.contains("taskNote"),
+                       "the detached recovery copy must open as an ordinary note")
+        XCTAssertTrue(NoteTextExport.plainText(try storedDocument(copiedID)).contains(originalText),
+                      "the copy is from task B rather than ordinary A")
+        XCTAssertEqual(session.noteID, originalID, "the task page retains its original lease and identity")
+        XCTAssertNotNil(presenter.lease)
+        XCTAssertEqual(notes.active?.noteID, ordinaryID)
+        // The copy holds the person's version, so the task note adopts the
+        // other version and leaves the conflict, as the ordinary Notes path does.
+        for _ in 0..<200 where session.state == .conflict(.changed) { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotEqual(session.state, .conflict(.changed), "Keep as new note must resolve the task note's conflict")
+        XCTAssertTrue(session.engine.plainText.contains("External edit that makes the task draft stale"))
+        XCTAssertFalse(session.engine.plainText.contains("Recovery-only task writing"))
+        // A second click makes no second copy.
+        let again = await notes.keepAsNewNoteDurably(session)
+        XCTAssertFalse(again)
+        XCTAssertEqual(Set(notes.store.notes.map(\.id)).subtracting(existingIDs), [copiedID],
+                       "only one copy of the person's version exists")
+    }
+
+    func testBG23TaskNoteObjectControlsInstallSourcePickerForRetryAndLocate() throws {
+        let taskID = try seed(.boundary)
+        let presenter = try open(taskID)
+        let controls = TaskNoteHostRepresentable.configuredControlsForTesting(presenter: presenter)
+        defer { controls.invalidate() }
+        let objects = try XCTUnwrap(controls.objects)
+        XCTAssertNotNil(presenter.host.engine.onRetryImportObject)
+        XCTAssertNotNil(presenter.host.engine.onLocateObject)
+        XCTAssertNotNil(objects.requestSource,
+            "both object actions must have a live task-note source picker destination")
+    }
+
+    func testBG23TaskNoteRetryReplacesTheTaskSessionsFileWhileAnOrdinaryNoteIsActive() async throws {
+        let taskID = try seed(.boundary)
+        let png = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP8z4AdMOEQH6QSAM1BAQ/oQeJvAAAAAElFTkSuQmCC"))
+        let image = StagedNoteAttachment(id: UUID(), filename: "retry.png", contentTypeIdentifier: "public.png",
+            byteCount: Int64(png.count), digest: NotePayloadDigest.sha256(png), data: png)
+        let existingStore = notes.store
+        notes = NotesPageController(store: existingStore, journal: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in (image, CGSize(width: 8, height: 8)) })
+        notes.attachUndoRoute(library.undo)
+        let noteID = try XCTUnwrap(ownNotes(taskID).first?.id)
+        var failing = try storedDocument(noteID)
+        failing.blocks.append(.file(filename: "retry.png", contentTypeIdentifier: "public.png",
+                                    byteCount: 0, importFailure: "Failed"))
+        _ = try existingStore.saveDocument(noteID: noteID, document: failing,
+            baseRevisionID: existingStore.note(withID: noteID)?.revisionID).get()
+        let presenter = try open(taskID), taskSession = try XCTUnwrap(presenter.session)
+        await notes.startAndWait()
+        let failedID = try XCTUnwrap(taskSession.engine.document().blocks.first { $0.importFailure != nil }?.id)
+        let ordinaryID = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinaryID,
+            document: NoteDocument(blocks: [.text("Other ordinary"), .text("Not the task")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinaryID))
+        XCTAssertNotEqual(notes.active?.noteID, taskSession.noteID)
+
+        let controls = TaskNoteHostRepresentable.configuredControlsForTesting(presenter: presenter)
+        defer { controls.invalidate() }
+        let objects = try XCTUnwrap(controls.objects)
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("BG23-\(UUID()).png")
+        try png.write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        TaskAttachmentPickerSession.presentationOverride = { _, completion in completion([source]) }
+        defer { TaskAttachmentPickerSession.presentationOverride = nil }
+        try XCTUnwrap(objects.requestSource)(.retry(failedID))
+        for _ in 0..<200 where taskSession.engine.document().blocks.contains(where: { $0.importFailure != nil }) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(taskSession.engine.document().blocks.contains { $0.importFailure != nil },
+            "Retry on the task's file must replace it in the task session")
+        XCTAssertEqual(notes.active?.noteID, ordinaryID, "the ordinary note stays active and untouched")
+    }
+
+    // MARK: Fix round pro-bugs-notes-owner-r1
+
+    func testBGFix1PanelFallbackUndoOfAnOpenTaskNoteHonoursTheWorkspaceHistoryGates() throws {
+        let taskID = try seed(.boundary)
+        let presenter = try open(taskID)
+        let history = presenter.page.history
+        var applied = 0
+        notes.undoRoute.record(UndoStep(name: "Probe", undo: { applied += 1; return true }, redo: { true }),
+                               in: history.historyID)
+        // A publication or input reservation is pending: the page's own Undo is off.
+        XCTAssertTrue(history.reserveInput())
+        XCTAssertFalse(history.canUndo)
+        XCTAssertFalse(AtticPanelController.canPerformUnhandledUndo(redo: false, section: .notes,
+            openTaskNoteID: taskID, store: tasks, notes: notes),
+            "the Edit menu must match the page's Undo")
+        AtticPanelController.performUnhandledUndo(redo: false, section: .notes, openTaskNoteID: taskID,
+            store: tasks, notes: notes)
+        XCTAssertEqual(applied, 0, "no step may replay on top of a pending publication")
+        history.releaseInput()
+        XCTAssertTrue(history.canUndo)
+        XCTAssertTrue(AtticPanelController.canPerformUnhandledUndo(redo: false, section: .notes,
+            openTaskNoteID: taskID, store: tasks, notes: notes))
+        AtticPanelController.performUnhandledUndo(redo: false, section: .notes, openTaskNoteID: taskID,
+            store: tasks, notes: notes)
+        XCTAssertEqual(applied, 1)
+    }
+
+    func testBGFix5RestoreReopenDuringMoveToPanelLeavesNoOrphanedLease() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), ui = PanelUIState()
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                    design: .default, uiState: ui)
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        // Restore Note closes the page, then reopens it; Move to Panel starts
+        // while that close is in flight and joins the same close.
+        let restore = Task { @MainActor () -> Bool in
+            guard await presenter.close() else { return false }
+            return TaskNoteWindows.shared.reopenFromWindow(id)
+        }
+        await Task.yield()
+        let move = Task { @MainActor in await TaskNoteWindows.shared.moveToPanel(taskID: id) }
+        _ = await restore.value
+        _ = await move.value
+        XCTAssertNil(TaskNotePresenter.open(for: id)?.lease,
+            "no presenter may keep a lease for a task that moved to the panel")
+    }
+
     private func waitForStoredTexts(_ noteID: UUID, _ texts: [String]) async throws {
         for _ in 0..<200 where (try? storedDocument(noteID).blocks.map(\.text)) != texts {
             try await Task.sleep(for: .milliseconds(10))
@@ -1836,6 +2105,23 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
     }
 
+    func testBG19ReopenAndContinueKeepsAutoCompletedChildUnchecked() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let child = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title == "Write release notes" })
+        XCTAssertEqual(child.status, .todo)
+        XCTAssertTrue(presenter.model.toggleTask())
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .done)
+        XCTAssertFalse(presenter.model.toggle(child.id), "a Done parent requires the reopen confirmation")
+        XCTAssertEqual(presenter.model.pendingReopen, .toggle(child.id))
+
+        presenter.model.continueAfterReopen()
+        XCTAssertEqual(tasks.task(withID: id)?.status, .inProgress)
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .todo,
+                       "reopen already unchecked this child; continuation must not check it again")
+        XCTAssertNil(presenter.model.pendingReopen)
+    }
+
     // Build rules 2026-10-23: the same writing survives circle removal.
     // Owner answer: only children become checkboxes; task details are dropped.
     // Orchestrator decision: Undo is the sole return to the old task.
@@ -2670,6 +2956,66 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(retained.engine.history.workspace === history)
         XCTAssertFalse(retained.engine.isBodyOnly)
         XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id))
+    }
+
+    func testBG20WindowMoveIntoNoteRemountsTheVisiblePageAfterReleasingItsLease() async throws {
+        let id = try seed(.boundary)
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("AtticBG20-\(UUID()).txt")
+        try Data("BG20 earlier file".utf8).write(to: input)
+        defer { try? FileManager.default.removeItem(at: input) }
+        let references = try await tasks.taskImageFiles.importAttachments([input], existing: [])
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = try JSONEncoder().encode(references)
+        }
+        try context.save(); tasks.refresh()
+        tasks.fileMigration.refreshAfterLegacyChange(id, tasks: tasks)
+        await notes.startAndWait()
+        // The window must own the first mounting of this editor. The ordinary
+        // open(id) fixture attaches its scroll view to a different NSWindow.
+        let original = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: notes,
+                                             design: .default, columnInset: 28, defaults: nil)
+        presenters.append(original)
+        let session = try XCTUnwrap(original.session)
+        XCTAssertEqual(tasks.fileMigration.status(of: id).earlier.map(\.id), references.map(\.id),
+                       "the task has legacy files before opening its window")
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes,
+                                    noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
+        for _ in 0..<200 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            if original.host.scrollView.window === window,
+               original.menus.earlierFiles().contains(where: { $0.identifier == "task-note-earlier-move" }) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(original.host.scrollView.window === window, "the original page must mount in its native window")
+        let move = try XCTUnwrap(original.menus.earlierFiles().first { $0.identifier == "task-note-earlier-move" },
+                                 "the visible window must install its Earlier Files menu")
+        XCTAssertFalse(move.isDisabled)
+        move.action()
+
+        for _ in 0..<200 {
+            if (try? storedDocument(session.noteID).attachmentIDs) == references.map(\.id) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id),
+                       "the window action migrated the earlier file into the note")
+        for _ in 0..<200 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            if let current = TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes),
+               current.engine.textView?.window === window { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let remounted = try XCTUnwrap(TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes),
+                                     "the same window must have an editable leased page after Move into Note")
+        XCTAssertEqual(window.frame, frame)
+        XCTAssertTrue(remounted.usesWorkspaceBinding)
+        XCTAssertTrue(remounted.engine.textView?.isEditable == true,
+                      "the replacement lease must restore an editable window, not only the stored note")
+        XCTAssertTrue(remounted.engine.textView?.window === window,
+                      "the new editor must be mounted in the original native window")
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
     }
 
     func testBAddPreservesLiteralTitleAndFailureRollsBack() async throws {

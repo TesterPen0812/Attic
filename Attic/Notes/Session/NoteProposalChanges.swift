@@ -113,6 +113,29 @@ struct NoteProposalChangeSet: Equatable, Sendable {
             added: proposed.blocks[change.added].map(Self.fingerprint))
     }
 
+    /// Neighbouring blocks anchor a repeated replacement without making its
+    /// display index an identity. An ambiguous context must not inherit a
+    /// different occurrence's choice when a comparison is refreshed.
+    struct Context: Hashable {
+        let previousCurrent: String?
+        let nextCurrent: String?
+        let previousProposed: String?
+        let nextProposed: String?
+    }
+
+    func context(for change: NoteProposalChange) -> Context {
+        func previous(_ blocks: [NoteBlock], _ range: Range<Int>) -> String? {
+            range.lowerBound > 0 ? Self.fingerprint(blocks[range.lowerBound - 1]) : nil
+        }
+        func next(_ blocks: [NoteBlock], _ range: Range<Int>) -> String? {
+            range.upperBound < blocks.count ? Self.fingerprint(blocks[range.upperBound]) : nil
+        }
+        return Context(previousCurrent: previous(current.blocks, change.removed),
+                       nextCurrent: next(current.blocks, change.removed),
+                       previousProposed: previous(proposed.blocks, change.added),
+                       nextProposed: next(proposed.blocks, change.added))
+    }
+
     // MARK: Comparison
 
     /// Blocks match on what they hold, not their object ids (an agent may
@@ -241,10 +264,23 @@ struct NoteProposalDecisions: Equatable {
     /// Carries decisions over to a refreshed comparison: a change keeps its
     /// decision when it still removes and adds the same blocks.
     func carried(from old: NoteProposalChangeSet, to new: NoteProposalChangeSet) -> NoteProposalDecisions {
-        var byKey: [NoteProposalChangeSet.Key: Bool] = [:]
-        for change in old.changes { if let decision = accepted[change.id] { byKey[old.key(for: change)] = decision } }
         var result = NoteProposalDecisions()
-        for change in new.changes { if let decision = byKey[new.key(for: change)] { result.accepted[change.id] = decision } }
+        let oldGroups = Dictionary(grouping: old.changes, by: { old.key(for: $0) })
+        let newGroups = Dictionary(grouping: new.changes, by: { new.key(for: $0) })
+        for (key, refreshed) in newGroups {
+            guard let original = oldGroups[key] else { continue }
+            if original.count == 1, refreshed.count == 1 {
+                result.accepted[refreshed[0].id] = accepted[original[0].id]
+                continue
+            }
+            let oldContexts = Dictionary(grouping: original, by: { old.context(for: $0) })
+            let newContexts = Dictionary(grouping: refreshed, by: { new.context(for: $0) })
+            for (context, matches) in newContexts where matches.count == 1 {
+                guard let previous = oldContexts[context], previous.count == 1,
+                      let choice = accepted[previous[0].id] else { continue }
+                result.accepted[matches[0].id] = choice
+            }
+        }
         return result
     }
 }
