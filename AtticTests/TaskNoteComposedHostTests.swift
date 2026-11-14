@@ -1371,6 +1371,41 @@ final class TaskNoteComposedHostTests: XCTestCase {
                      "stale background preparation must not install a page or acquire a writer lease")
     }
 
+    /// Review R-5: a task note whose external document bytes are missing is a
+    /// recovery surface (read-only, "unreadable"), never an open that fails on
+    /// every attempt, and the preparation never invents bytes.
+    func testPF13MissingDocumentBytesStillOpenTheReadOnlyUnreadablePage() async throws {
+        let taskID = try seed(.heavy)
+        let context = ModelContext(container)
+        let noteID = try XCTUnwrap(try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
+        for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.content = nil }
+        try context.save()
+        notes.store.refresh()
+        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        XCTAssertNil(prepared.load)
+        let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                              design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+        presenters.append(presenter)
+        let session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(session.isReadOnly)
+        XCTAssertEqual(session.readOnlyReason, .unreadable("missing document bytes"))
+        XCTAssertTrue(await presenter.close())
+        XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content,
+                     "opening the recovery page never writes bytes")
+
+        // Relaunch: a fresh controller over the same store opens it again.
+        let relaunched = NotesPageController(store: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+                                             journal: coordinator.journal, defaults: nil,
+                                             saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        let again = try await relaunched.prepareTaskNoteOpen(taskID: taskID)
+        let second = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: relaunched,
+                                           design: .default, columnInset: columnInset, defaults: nil, prepared: again)
+        presenters.append(second)
+        XCTAssertEqual(second.session?.readOnlyReason, .unreadable("missing document bytes"))
+        XCTAssertTrue(await second.close())
+        XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content)
+    }
+
     /// § 9: scrolling the composed view shows no regression against the
     /// plain note of the same length (40 pt steps, layout and display).
     func testScrollingTheComposedViewDoesNotRegressAgainstThePlainNote() throws {

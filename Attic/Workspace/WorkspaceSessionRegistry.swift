@@ -197,9 +197,11 @@ final class WorkspaceSessionRegistry {
                     throw WorkspaceFoundationError.conflict
                 }
             } else if let noteID, notes.workspaceSessionIfCached(noteID) == nil,
-                      notes.store.note(withID: noteID)?.usesDocumentFormat == true {
+                      let row = notes.store.note(withID: noteID), row.usesDocumentFormat, row.content != nil {
                 // A document appeared after the route was prepared. Retry the
                 // async route instead of decoding it while mounting the page.
+                // A row whose bytes are missing has nothing to decode: it opens
+                // as the read-only "unreadable" recovery page, as before.
                 throw WorkspaceFoundationError.conflict
             }
         }
