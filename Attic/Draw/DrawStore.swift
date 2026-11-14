@@ -201,46 +201,119 @@ class DrawStore: DrawStoreProtocol {
         boundEvictedHistories()
     }
 
-    /// Keeps the Undo/Redo steps of evicted canvases under a budget by
-    /// dropping the heaviest whole histories first (ties: evicted earliest),
-    /// so light steps such as a grouped restore's survive image payloads.
+    /// Keeps the Undo/Redo steps of evicted canvases under a budget, counted
+    /// in resident memory (a buffer shared by several steps counts once).
+    ///
+    /// First the oldest steps go, heaviest history first, but the newest
+    /// Undo and Redo step of every history stays: a grouped restore's Undo
+    /// (and an agent's or the deletion toast's) is bound to that head.
+    /// Only if the heads alone are over budget does a whole history go,
+    /// heaviest first (ties: evicted earliest).
     private func boundEvictedHistories() {
-        var weights: [UUID: Int] = [:]
-        var total = 0
+        var ledger = HistoryLedger()
+        var evicted: [UUID] = []
         for (key, history) in histories where states[key] == nil {
-            let weight = (history.undo + history.redo).reduce(0) { $0 + Self.weight($1) }
-            weights[key] = weight
-            total += weight
+            evicted.append(key)
+            for step in history.undo + history.redo { ledger.add(step) }
         }
-        guard total > Self.maxEvictedHistoryBytes else { return }
-        let order = weights.keys.sorted {
-            weights[$0]! != weights[$1]! ? weights[$0]! > weights[$1]! : (evictedAt[$0] ?? 0) < (evictedAt[$1] ?? 0)
+        guard ledger.total > Self.maxEvictedHistoryBytes else { return }
+        func heavier(_ weights: [UUID: Int]) -> (UUID, UUID) -> Bool {
+            { weights[$0]! != weights[$1]! ? weights[$0]! > weights[$1]! : (self.evictedAt[$0] ?? 0) < (self.evictedAt[$1] ?? 0) }
         }
-        for key in order where total > Self.maxEvictedHistoryBytes {
-            total -= weights[key] ?? 0
+        var older: [UUID: Int] = [:]
+        for key in evicted {
+            guard let history = histories[key] else { continue }
+            older[key] = (history.undo.dropLast() + history.redo.dropLast()).reduce(0) { $0 + HistoryLedger.weight($1) }
+        }
+        for key in evicted.sorted(by: heavier(older)) where ledger.total > Self.maxEvictedHistoryBytes {
+            guard var history = histories[key] else { continue }
+            while ledger.total > Self.maxEvictedHistoryBytes, history.undo.count > 1 { ledger.remove(history.undo.removeFirst()) }
+            while ledger.total > Self.maxEvictedHistoryBytes, history.redo.count > 1 { ledger.remove(history.redo.removeFirst()) }
+            histories[key] = history
+        }
+        guard ledger.total > Self.maxEvictedHistoryBytes else { return }
+        var heads: [UUID: Int] = [:]
+        for key in evicted {
+            guard let history = histories[key] else { continue }
+            heads[key] = (history.undo + history.redo).reduce(0) { $0 + HistoryLedger.weight($1) }
+        }
+        for key in heads.keys.sorted(by: heavier(heads)) where ledger.total > Self.maxEvictedHistoryBytes {
+            for step in (histories[key]?.undo ?? []) + (histories[key]?.redo ?? []) { ledger.remove(step) }
             histories[key] = nil
         }
     }
 
-    private static func weight(_ step: Step) -> Int {
-        var bytes = weight(step.before) + weight(step.after)
-        if let before = step.change.before { bytes += weight(before) }
-        if let after = step.change.after { bytes += weight(after) }
-        for object in step.change.objectsBefore.values { bytes += weight(object) }
-        for object in step.change.objectsAfter.values { bytes += weight(object) }
-        return bytes
-    }
+    /// What Undo/Redo steps hold in memory. A copy-on-write buffer (an
+    /// image's bytes, a stroke's points, a thumbnail stamped onto several
+    /// copies of a canvas) is counted once however many steps refer to it.
+    private struct HistoryLedger {
+        private struct Buffer: Hashable { let address: UInt; let count: Int }
+        private var sizes: [Buffer: Int] = [:]
+        private var references: [Buffer: Int] = [:]
+        private(set) var total = 0
 
-    private static func weight(_ canvas: DrawCanvas) -> Int {
-        256 + (canvas.thumbnail?.count ?? 0) + canvas.textIndex.utf8.count
-    }
+        mutating func add(_ step: Step) {
+            Self.visit(step) { buffer, bytes in
+                guard let buffer else { total += bytes; return }
+                references[buffer, default: 0] += 1
+                if references[buffer] == 1 { sizes[buffer] = bytes; total += bytes }
+            }
+        }
 
-    private static func weight(_ object: DrawObject) -> Int {
-        switch object.content {
-        case .stroke(let points): 256 + points.count * MemoryLayout<DrawPoint>.stride
-        case .text(let text): 256 + text.utf8.count
-        case .image(let image): 256 + image.original.count
-        case .shape: 256
+        mutating func remove(_ step: Step) {
+            Self.visit(step) { buffer, bytes in
+                guard let buffer else { total -= bytes; return }
+                guard let held = references[buffer] else { return }
+                if held <= 1 { references[buffer] = nil; total -= sizes.removeValue(forKey: buffer) ?? bytes }
+                else { references[buffer] = held - 1 }
+            }
+        }
+
+        /// The step's bytes with no sharing, to rank histories.
+        static func weight(_ step: Step) -> Int {
+            var bytes = 0
+            visit(step) { _, size in bytes += size }
+            return bytes
+        }
+
+        private static func visit(_ step: Step, _ body: (Buffer?, Int) -> Void) {
+            visit(step.before, body)
+            visit(step.after, body)
+            if let before = step.change.before { visit(before, body) }
+            if let after = step.change.after { visit(after, body) }
+            for object in step.change.objectsBefore.values { visit(object, body) }
+            for object in step.change.objectsAfter.values { visit(object, body) }
+        }
+
+        private static func visit(_ canvas: DrawCanvas, _ body: (Buffer?, Int) -> Void) {
+            body(nil, 256 + canvas.textIndex.utf8.count)
+            if let data = canvas.thumbnail { body(buffer(data), data.count) }
+        }
+
+        private static func visit(_ object: DrawObject, _ body: (Buffer?, Int) -> Void) {
+            body(nil, 256)
+            switch object.content {
+            case .stroke(let points):
+                body(buffer(points), points.count * MemoryLayout<DrawPoint>.stride)
+            case .text(let text): body(nil, text.utf8.count)
+            case .image(let image): body(buffer(image.original), image.original.count)
+            case .shape: break
+            }
+        }
+
+        private static func buffer(_ points: [DrawPoint]) -> Buffer? {
+            guard points.count > 16 else { return nil }
+            return points.withUnsafeBufferPointer { raw in
+                raw.baseAddress.map { Buffer(address: UInt(bitPattern: $0), count: points.count) }
+            }
+        }
+
+        /// Small payloads are copied inline, with no identity: count each.
+        private static func buffer(_ data: Data) -> Buffer? {
+            guard data.count > 64 else { return nil }
+            return data.withUnsafeBytes { raw in
+                raw.baseAddress.map { Buffer(address: UInt(bitPattern: $0), count: data.count) }
+            }
         }
     }
 
