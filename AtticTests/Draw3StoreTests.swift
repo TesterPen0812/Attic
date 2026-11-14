@@ -705,6 +705,22 @@ final class Draw3StoreTests: XCTestCase {
         let rows = try ModelContext(container).fetch(FetchDescriptor<DrawCanvasRecord>())
         XCTAssertEqual(rows.count, 20, "nothing is deleted")
         XCTAssertEqual(rows.first { $0.id == damaged }?.tagsJSON, "{not json", "nothing is rewritten")
+
+        // A healthy physical replica still presents the same UUID. The bad
+        // replica is retained verbatim, even when it has the newer timestamp.
+        let other = ModelContext(container)
+        let healthy = try XCTUnwrap(rows.first { $0.id == damaged }).copy()
+        healthy.tagsJSON = try DrawCodec.string(menu[5].tags)
+        healthy.updatedAt = healthy.updatedAt.addingTimeInterval(-60)
+        other.insert(healthy)
+        try other.save()
+        XCTAssertTrue(store.perform(.put([stroke()]), on: menu[8].id).isSaved)
+        XCTAssertEqual(try store.presentationLibrary().count, 20)
+        XCTAssertEqual(try store.search("Board").count, 20)
+        XCTAssertEqual(try store.library().first { $0.id == damaged }?.thumbnail, Data(repeating: 37, count: 256))
+        let replicas = try ModelContext(container).fetch(FetchDescriptor<DrawCanvasRecord>()).filter { $0.id == damaged }
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertEqual(replicas.filter { $0.tagsJSON == "{not json" }.count, 1)
     }
 
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
