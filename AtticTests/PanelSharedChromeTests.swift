@@ -1490,3 +1490,18 @@ extension PanelSharedChromeTests {
         }
     }
 }
+
+
+extension PanelSharedChromeTests {
+    func testR3RevealAddsNoShellBodyPass() throws {
+        try requireKeyWindowTests()
+        let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+        defer { PanelInvalidationProbe.shell = nil; shell.close() }
+        shell.go(to: .calendar)
+        var passes = 0
+        PanelInvalidationProbe.shell = { passes += 1 }
+        shell.state.panelDidReveal()
+        shell.spin(0.6)
+        XCTAssertEqual(passes, 0, "an idle reveal releases controls without rebuilding the retained shell")
+    }
+}

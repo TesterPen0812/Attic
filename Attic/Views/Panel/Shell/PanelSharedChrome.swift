@@ -243,6 +243,7 @@ private struct PanelPlusFocus: ViewModifier {
     let reachable: Bool
     /// A reveal never leaves the keyboard on "+".
     let revealCount: UInt64
+    let reveals: AnyPublisher<UInt64, Never>
     let requests: AtticFocusRequests?
     /// Told whether "+" has the keyboard: the Notes library leaves Return
     /// to it then (round 2 review N-6).
@@ -304,6 +305,7 @@ private struct PanelPlusFocus: ViewModifier {
             .onChange(of: reachable) { _, now in if !now { release() } }
             .onChange(of: page) { _, _ in release() }
             .onChange(of: revealCount) { _, _ in release() }
+            .onReceive(reveals) { _ in release() }
             // A rebuilt subtree (`PanelFoldAccessibility` switching on the
             // card, the Draw page) never runs the changes above.
             .onDisappear { release() }
@@ -400,6 +402,7 @@ struct PanelSharedBottomBar: View {
     /// How many times the panel has been revealed: the keyboard never stays
     /// on "+" across one.
     var revealCount: UInt64 = 0
+    var reveals: AnyPublisher<UInt64, Never> = Empty().eraseToAnyPublisher()
 
     @Environment(\.atticDesign) private var design
 
@@ -465,7 +468,7 @@ struct PanelSharedBottomBar: View {
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
                                               action: actions.plus)
                                 .atticDesignCorners()
-                                .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken, revealCount: revealCount,
+                                .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken, revealCount: revealCount, reveals: reveals,
                                                          requests: actions.focusRequests, chrome: chrome, action: actions.plus))
                         }
                             .allowsHitTesting(!taken)

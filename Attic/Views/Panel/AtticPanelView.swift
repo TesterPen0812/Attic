@@ -65,11 +65,7 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
             changed(uiState.$isPanelPinned),
             changed(uiState.$primaryInputFocusRequest),
             changed(uiState.$openTaskNoteID),
-            changed(uiState.$isComposerPresented),
-            // A reveal: the shell closes the tag bar and the shared "+" lets
-            // the keyboard go (`PanelSharedBottomBar.revealCount`); neither
-            // happened while nothing else the shell observes changed.
-            changed(uiState.$revealCount)
+            changed(uiState.$isComposerPresented)
         ])
         .sink { [weak self] in self?.objectWillChange.send() }
         .store(in: &subscriptions)
@@ -238,7 +234,7 @@ struct AtticPanelView: View {
             // once, so a page switch never moves, fades or rebuilds it.
             if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
                 PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout, agentChat: uiState.agentChat,
-                                     revealCount: uiState.revealCount)
+                                     reveals: uiState.$revealCount.dropFirst().eraseToAnyPublisher())
             }
         }
         .overlay {
@@ -646,7 +642,7 @@ struct AtticPanelView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { sharedChrome.tagBar.open() }
             }
             #endif
-            .onChange(of: uiState.revealCount) { _, _ in sharedChrome.tagBar.close() }
+            .onReceive(uiState.$revealCount.dropFirst()) { _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.hideCount) { _, _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.selectedSection) { _, _ in
                 // Gone whole, at once: never folding over the sliding pages.
