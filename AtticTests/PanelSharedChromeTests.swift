@@ -1077,3 +1077,59 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-4 (a # that holds the keyboard on Notes never leaves the library's keys dead)
+
+extension PanelSharedChromeTests {
+    /// Round 2 review N-4: the keyboard on "#" (Tab) stops the library's
+    /// arrows, Return, ⌘F and type-to-search (`PanelTagBarState.ownsKeys`).
+    /// Nothing but Tab gave it back. A click in the library (rows are no
+    /// focus targets), the panel's reveal and `close()` now do. (Full
+    /// Keyboard Access is off on the Air, so the keyboard reaches "#" the
+    /// way its focus callback reports it.)
+    func testAHashKeyHoldingTheKeyboardOnNotesNeverLeavesTheLibraryKeysDead() throws {
+        try requireKeyWindowTests()
+        for how in ["a click in the library", "a hide and a reveal", "the bar closing"] {
+            let (shell, library) = try notesLibraryShell()
+            defer { shell.close() }
+            shell.sharedChrome.tagBar.noteKeyFocus(true)
+            XCTAssertTrue(PanelTagBarState.ownsKeys, "\(how): # has the keyboard")
+            shell.appKey(Self.downArrow, keyCode: 125)
+            XCTAssertNil(library.highlightedID, "\(how): while # holds the keys, the arrows wait")
+            switch how {
+            case "a click in the library": shell.appClick(at: CGPoint(x: 170, y: 250))
+            case "a hide and a reveal":
+                shell.state.panelDidHide()
+                shell.spin(0.3)
+                shell.state.panelDidReveal()
+                shell.spin(0.6)
+            default:
+                shell.sharedChrome.tagBar.close()
+                shell.spin(0.4)
+            }
+            XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "\(how): # gave the keyboard up")
+            shell.appKey(Self.downArrow, keyCode: 125)
+            XCTAssertNotNil(library.highlightedID, "\(how): the arrows move the library highlight")
+        }
+    }
+
+    /// The same with the real Tab walk (Full Keyboard Access, CI).
+    func testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        var reached = false
+        for _ in 0..<24 where !reached {
+            shell.tab()
+            reached = shell.focusedIdentifiers().contains("notes-tag-bar-key")
+        }
+        XCTAssertTrue(reached, "Tab reaches the # key on Notes")
+        guard reached else { return }
+        XCTAssertTrue(PanelTagBarState.ownsKeys, "# holds the keyboard")
+        shell.appClick(at: CGPoint(x: 170, y: 250))
+        XCTAssertFalse(PanelTagBarState.ownsKeys, "the click took the keyboard from #")
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID, "the arrows move the library highlight")
+    }
+}
+

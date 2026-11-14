@@ -42,6 +42,8 @@ final class PanelTagBarState: ObservableObject {
     @Published private(set) var keyFocused = false
     /// Bumped to give "#" the keyboard.
     @Published private(set) var keyFocusRequest: UInt64 = 0
+    /// Bumped to make "#" give the keyboard up (`releaseKeyFocus`).
+    @Published private(set) var keyReleaseRequest: UInt64 = 0
 
     private static let live = NSHashTable<PanelTagBarState>.weakObjects()
 
@@ -59,12 +61,22 @@ final class PanelTagBarState: ObservableObject {
         if self.cursor != cursor { self.cursor = cursor }
     }
 
-    func close() {
+    /// Folds the bar. A "#" that holds the keyboard on a page whose key loop
+    /// is AppKit's gives it up with the bar (its keys would otherwise stay
+    /// the bar's, `ownsKeys`), unless the caller means to keep it there.
+    func close(keepingKeyboard: Bool = false) {
         if isOpen { isOpen = false }
         if cursor != nil { cursor = nil }
+        if !keepingKeyboard { releaseKeyFocus() }
     }
 
     func toggle() { isOpen ? close() : open() }
+
+    /// Asks "#" to give the keyboard up (a click elsewhere, the panel's
+    /// reveal, the bar closing). Tasks orders its own Tab and ignores it.
+    func releaseKeyFocus() {
+        if keyFocused { keyReleaseRequest &+= 1 }
+    }
 
     func setCursor(_ stop: PanelTagBarStop?) {
         if cursor != stop { cursor = stop }
@@ -157,7 +169,7 @@ struct NotesTagBar: View {
         .background {
             PanelTagBarAnchor(keys: keys, context: PanelTagBarKeys.Context(
                 tags: tags, picks: picks, enabled: shown && !hidden, state: state,
-                select: onSelect, match: onMatch))
+                managed: managesOwnTabOrder, select: onSelect, match: onMatch))
         }
         .onChange(of: shown) { _, now in if !now { state.close() } }
         .onChange(of: hidden) { _, now in if now { state.close() } }
@@ -208,7 +220,7 @@ struct NotesTagBar: View {
         let tokens = design.tokens
         let shape = Squircle(cornerRadius: m.pillRadius, exponent: AtticControlShape.designExponent)
         return Button {
-            state.isOpen ? state.close() : state.open()
+            state.isOpen ? state.close(keepingKeyboard: true) : state.open()
         } label: {
             Text(verbatim: "#")
                 .font(.system(size: PanelTagBarMetrics.keyFontSize, weight: .semibold))
@@ -618,6 +630,13 @@ private struct PanelTagKeyFocus: ViewModifier {
             .focusable(focusable, interactions: .activate)
             .focused($focused)
             .onChange(of: state.keyFocusRequest) { _, _ in arm() }
+            .onChange(of: state.keyReleaseRequest) { _, _ in
+                guard !managed else { return }
+                // After the click (or reveal) that asked has been dispatched:
+                // a field it focused already has the keyboard, and "#" then
+                // has nothing to give up.
+                DispatchQueue.main.async { if state.keyFocused { release() } }
+            }
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
                 guard asked == AnyHashable(PanelTagKeyFocusID()) else { return }
                 arm()
@@ -681,6 +700,8 @@ final class PanelTagBarKeys: ObservableObject {
         var picks: TagPicks
         var enabled: Bool
         var state: PanelTagBarState
+        /// The page orders its own Tab (Tasks): a click elsewhere leaves "#" to it.
+        var managed = false
         var select: (String?) -> Void
         var match: (TagPicks.Match) -> Void
     }
@@ -743,14 +764,14 @@ final class PanelTagBarKeys: ObservableObject {
             return false
         case .toggle:
             if state.isOpen {
-                state.close()
+                state.close(keepingKeyboard: true)
             } else {
                 state.open(cursor: PanelTagBarStop.first(tags: context.tags))
             }
             state.requestKeyFocus()
         case .close:
             let keyboard = state.hasKeyboard
-            state.close()
+            state.close(keepingKeyboard: true)
             // The keyboard stays on "#", where it was.
             if keyboard { state.requestKeyFocus() }
         case let .move(step):
@@ -783,11 +804,15 @@ final class PanelTagBarKeys: ObservableObject {
         AccessibilityNotification.Announcement(words).post()
     }
 
-    /// A click anywhere else in the bar's window closes it (1A).
+    /// A click anywhere else in the bar's window closes it (1A), and takes
+    /// the keyboard from a "#" that holds it where AppKit orders the keys
+    /// (a library row is no focus target, so nothing else would).
     private func handleClick(_ event: NSEvent) {
-        guard let context, context.state.isOpen, let view, let window = view.window, event.window === window else { return }
+        guard let context, let view, let window = view.window, event.window === window else { return }
+        guard context.state.isOpen || context.state.keyFocused else { return }
         let point = view.convert(event.locationInWindow, from: nil)
-        if !view.bounds.contains(point) { context.state.close() }
+        guard !view.bounds.contains(point) else { return }
+        if context.state.isOpen { context.state.close() } else if !context.managed { context.state.releaseKeyFocus() }
     }
 }
 
