@@ -341,7 +341,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         let result = store.perform(.deleteCanvas, on: canvas.id)
         switch result {
         case .saved: AtticSounds.play(.trashed)
-        case .unchanged: break
+        case .unchanged: return
         case let .retry(message), let .held(message):
             AtticSounds.play(.failed)
             toasts?.show(message.isEmpty ? String(localized: "The canvas couldn’t be deleted.") : message,
@@ -356,12 +356,19 @@ final class DrawLibraryMenuModel: ObservableObject {
         }
         let store = store
         let actions = actions
+        let deletionStepID = store.undoStepID(on: canvas.id)
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
-            let restored = store.perform(.restoreCanvas, on: canvas.id)
+            // The toast is an Undo of this deletion, not a new Restore edit.
+            guard let deletionStepID, store.undoStepID(on: canvas.id) == deletionStepID else {
+                return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
+            }
+            let restored = store.undo(on: canvas.id)
             switch restored {
-            case .saved, .unchanged:
+            case .saved:
                 actions.open(canvas.id)
                 return .applied
+            case .unchanged:
+                return .failed(CommandFailure(String(localized: "The canvas deletion can no longer be undone.")))
             case let .retry(message), let .held(message):
                 return .failed(CommandFailure(message))
             }

@@ -8,6 +8,29 @@ import XCTest
 /// on the in-memory Draw store only.
 @MainActor
 final class DrawLibraryTests: XCTestCase {
+    func testBG28DeletionToastUndoKeepsTheRealRedoAndEarlierEditHistory() throws {
+        let store = DrawInMemoryStore()
+        let canvas = store.create(name: "Undo target")
+        let object = DrawObject(content: .text("first edit"))
+        XCTAssertTrue(store.perform(.put([object]), on: canvas.id).isSaved)
+        let menu = DrawLibraryMenuModel(store: store, actions: DrawLibraryActions(
+            open: { _ in }, newCanvas: { _ in }, reveal: { _, _ in }, close: {}))
+        let toast = PanelToastCenter()
+        menu.toasts = toast
+        menu.currentCanvasID = canvas.id
+        menu.perform(.delete)
+        let deletionID = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        XCTAssertNotNil(try store.open(canvas.id).canvas.deletedAt)
+        XCTAssertTrue(menu.undoDeletionIfOffered(), "Command-Z and the toast share this route")
+        XCTAssertNil(try store.open(canvas.id).canvas.deletedAt)
+        XCTAssertEqual(store.redoStepID(on: canvas.id), deletionID, "Undo must move deletion to Redo")
+        XCTAssertTrue(store.redo(on: canvas.id).isSaved)
+        XCTAssertNotNil(try store.open(canvas.id).canvas.deletedAt)
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved)
+        XCTAssertTrue(store.undo(on: canvas.id).isSaved, "The next Undo must reach the earlier drawing edit")
+        XCTAssertTrue(try store.open(canvas.id).objects.isEmpty)
+        XCTAssertNil(try store.open(canvas.id).canvas.deletedAt)
+    }
     private final class Clock {
         var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
         func tick() -> Date { date += 60; return date }
