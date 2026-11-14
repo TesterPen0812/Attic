@@ -617,6 +617,7 @@ private struct PanelTagKeyFocus: ViewModifier {
     /// order is told the keyboard left even after a page switch made the
     /// requests nil (round 2 review N-3).
     @State private var lender: AtticFocusRequests?
+    @State private var handoff = PanelKeyHandoffToken()
 
     func body(content: Content) -> some View {
         // Tasks keeps its own Tab order exactly as before (the page asks for
@@ -662,12 +663,14 @@ private struct PanelTagKeyFocus: ViewModifier {
             .onDisappear {
                 // The key and summary replace one another. Release native
                 // ownership, preserving a cursor deliberately opening the bar.
+                handoff.cancel()
                 state.noteKeyFocus(false, closeWhenLeaving: false)
                 lender?.note(PanelTagKeyFocusID(), focused: false)
             }
     }
 
     private func release() {
+        handoff.cancel()
         armed = false
         if focused { focused = false }
         state.noteKeyFocus(false)
@@ -677,7 +680,10 @@ private struct PanelTagKeyFocus: ViewModifier {
     private func arm() {
         guard reachable || managed else { return }
         armed = true
+        let queued = handoff.next()
         panelKeyHandoff {
+            // Released since (a page switch, a reveal, a click): stay put.
+            guard handoff.generation == queued else { return }
             #if DEBUG
             PanelKeyStopSeam.tagKeyAssignments += 1
             #endif

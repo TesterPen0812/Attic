@@ -196,6 +196,21 @@ enum PanelKeyStopSeam {
 }
 #endif
 
+/// Tells a queued focus handoff it was released in between: a release
+/// cancels, and a handoff runs only if nothing bumped the generation since
+/// it was queued (round 2 review N-7).
+@MainActor
+final class PanelKeyHandoffToken {
+    private(set) var generation = 0
+
+    func next() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    func cancel() { generation &+= 1 }
+}
+
 /// A focus handoff one run-loop turn after the request (the control is
 /// being updated as the request arrives). The closure checks again that it
 /// is still wanted when it runs.
@@ -233,6 +248,7 @@ private struct PanelPlusFocus: ViewModifier {
     /// so that Tab order is told when the keyboard leaves "+" even after a
     /// page switch changed the requests, or after the subtree went.
     @State private var lender: AtticFocusRequests?
+    @State private var handoff = PanelKeyHandoffToken()
 
     /// One structure on every page: a branch here would rebuild the "+" on
     /// each page switch.
@@ -252,7 +268,11 @@ private struct PanelPlusFocus: ViewModifier {
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
                 guard reachable, asked == AnyHashable(PanelPlusFocusID()) else { return }
                 armed = true
+                let queued = handoff.next()
                 panelKeyHandoff {
+                    // A page switch, the card or a reveal may have released
+                    // "+" since: then the keyboard stays where it is.
+                    guard handoff.generation == queued else { return }
                     #if DEBUG
                     PanelKeyStopSeam.plusAssignments += 1
                     #endif
@@ -287,6 +307,7 @@ private struct PanelPlusFocus: ViewModifier {
     }
 
     private func release() {
+        handoff.cancel()
         armed = false
         if focused { focused = false }
         lender?.note(PanelPlusFocusID(), focused: false)

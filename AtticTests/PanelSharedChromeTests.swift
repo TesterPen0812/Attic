@@ -1133,3 +1133,60 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-7 (a queued handoff checks again when it runs)
+
+extension PanelSharedChromeTests {
+    /// Round 2 review N-7 (Dot R-4): the focus handoff is queued one turn
+    /// after the request. A page switch or the card taking the row in
+    /// between releases the "+", and the old closure must not give the
+    /// control the keyboard again (on Calendar or Notes it is a plain stop,
+    /// where Space would press the new page's action). The test holds the
+    /// queued closures and drains them after the release.
+    func testAQueuedPlusHandoffNeverOutlivesTheReleaseThatCameBetween() throws {
+        for change in ["a page switch", "the card taking the row"] {
+            let chrome = PanelSharedChrome()
+            let requests = AtticFocusRequests()
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                          actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
+                          actions: PanelBottomBarActions(), for: .calendar)
+            let model = SharedBarModel(page: .tasks)
+            let window = mountBar(chrome, model)
+            defer { close(window) }
+            PanelKeyStopSeam.holdsHandoffs = true
+            PanelKeyStopSeam.held = []
+            PanelKeyStopSeam.plusAssignments = 0
+            requests.focus(PanelPlusFocusID())
+            XCTAssertEqual(PanelKeyStopSeam.held.count, 1, "\(change): the request queued its handoff")
+            if change == "a page switch" { model.page = .calendar } else { chrome.plusHandedOver = true }
+            spin(0.4)
+            let held = PanelKeyStopSeam.held
+            PanelKeyStopSeam.held = []
+            for run in held { run() }
+            XCTAssertEqual(PanelKeyStopSeam.plusAssignments, 0, "\(change): the old handoff must not take the keyboard")
+        }
+    }
+
+    /// The same for "#" (a release between the request and the handoff).
+    func testAQueuedTagKeyHandoffNeverOutlivesTheReleaseThatCameBetween() throws {
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        let model = SharedBarModel(page: .tasks)
+        let window = mountBar(chrome, model)
+        defer { close(window) }
+        PanelKeyStopSeam.holdsHandoffs = true
+        PanelKeyStopSeam.held = []
+        PanelKeyStopSeam.tagKeyAssignments = 0
+        requests.focus(PanelTagKeyFocusID())
+        XCTAssertEqual(PanelKeyStopSeam.held.count, 1, "the request queued its handoff")
+        model.page = .notes
+        spin(0.4)
+        let held = PanelKeyStopSeam.held
+        PanelKeyStopSeam.held = []
+        for run in held { run() }
+        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "the old handoff must not take the keyboard")
+    }
+}
+
