@@ -48,8 +48,16 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertGreaterThan(realized.count, 0)
         XCTAssertLessThan(realized.count, 50,
                           "a fixed-height Settings viewport may prefetch, but must not realize all 5,000 rows (mounted \(realized.count))")
-        XCTAssertTrue(realized.contains(entries[entries.count - 1].id),
-                      "keyboard scrolling must still reach the last logical entry")
+        // The scroll lands on the layout pass that follows the proxy call, not
+        // after a fixed delay: wait on the last row's appearance (the event),
+        // bounded only so a real regression still fails.
+        let last = entries[entries.count - 1].id
+        let deadline = Date().addingTimeInterval(10)
+        while !realized.contains(last), Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(realized.contains(last), "keyboard scrolling must still reach the last logical entry")
     }
 
     /// PF-46: stale Draw observation callbacks must not multiply work when
