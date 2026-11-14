@@ -2987,26 +2987,21 @@ struct TasksPage: View {
         // the focused subtask's own, so ⌘↑ ⌘↓ and Return would otherwise move
         // and rename the parent (round 13). Any other key acts from the
         // parent, as ↑ ↓ and Esc always did.
-        if let owner = subtaskKeyboardOwner(visible: visible) {
+        let owner = subtaskKeyboardOwner(visible: visible)
+        if let owner {
             if AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
                                                   modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
             current = owner.parent
         }
-        // A list's native row focus is still a separate Tab/FKA stop, but
-        // its task commands have one handler here. Attaching onKeyPress to
-        // every lazy row made every realized row another focus responder,
-        // including rows cached after scrolling far through Done.
-        // Return and the arrow keys retain their existing list routing.
-        if model.isPageShown, model.focusedSubtaskID == nil,
-           let focusedID, focusedID == current,
-           let command = AtticTaskKeys.command(key: press.key, characters: press.characters,
-                                               modifiers: press.modifiers, listCommands: true),
-           command != .editTitle {
-            let rowActions = actions(for: focusedID, in: model.tab)
-            if AtticTaskKeys.offers(command, rowActions) {
-                AtticTaskKeys.perform(command, rowActions)
-                return .handled
-            }
+        // The row commands: native
+        // focus is on a row but the selection has since moved elsewhere (⌘D
+        // selects the duplicate), so they act on the row the keyboard
+        // resolves to, as Return does. Only a validated subtask owner holds
+        // them back, not a stale `focusedSubtaskID` (a collapsed quick look).
+        // A row must hold the focus: a focused button or field is not a row.
+        if owner == nil, model.isPageShown, focusedID != nil, let current,
+           performRowCommand(press, on: current) {
+            return .handled
         }
         switch press.key {
         case .downArrow, .upArrow:
@@ -3059,6 +3054,19 @@ struct TasksPage: View {
             }
             return .ignored
         }
+    }
+
+    /// The row command a key stands for (Space, ⇧Space, ⌘B, Delete, ⌘Return,
+    /// ⇧⌘I, ⌘C, ⌘D), run on `id` when its row offers it. Return (edit title)
+    /// is not one: the list's `.return` routing owns it.
+    private func performRowCommand(_ press: KeyPress, on id: UUID) -> Bool {
+        guard let command = AtticTaskKeys.command(key: press.key, characters: press.characters,
+                                                  modifiers: press.modifiers, listCommands: true),
+              command != .editTitle else { return false }
+        let rowActions = actions(for: id, in: model.tab)
+        guard AtticTaskKeys.offers(command, rowActions) else { return false }
+        AtticTaskKeys.perform(command, rowActions)
+        return true
     }
 
     /// A key that starts a Done search: one printable character, not a

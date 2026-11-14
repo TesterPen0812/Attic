@@ -45,6 +45,33 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - owner-scroll-r3 review fixes (R-2, R-3, R-4, R-6)
 
+    private func status(_ hosted: Hosted, _ id: UUID) -> TaskStatus? {
+        hosted.model.rows(for: .now).first { $0.id == id }?.status
+    }
+
+    /// R-2: after ⌘D the selection has moved to the duplicate while native
+    /// focus stayed on the original. A row command acts on the row the
+    /// page's keyboard resolves to (`keyboardRow`), as Return does, and one
+    /// Undo restores it.
+    func testR2RowCommandsActOnTheKeyboardRowAfterDuplicateAndUndoRestoresIt() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let original = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+        hosted.press("d", keyCode: 2, modifiers: .command)
+        XCTAssertEqual(hosted.model.selection.count, 1, "⌘D selects the duplicate alone")
+        let duplicate = try XCTUnwrap(hosted.model.selection.first)
+        XCTAssertNotEqual(duplicate, original, "the selection moved to the duplicate")
+        let before = try XCTUnwrap(status(hosted, duplicate))
+        let originalBefore = try XCTUnwrap(status(hosted, original))
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(status(hosted, duplicate), .done, "Space completes the row the keyboard resolves to")
+        XCTAssertEqual(status(hosted, original), originalBefore, "and not a row it does not")
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertEqual(status(hosted, duplicate), before, "Undo restores it")
+    }
+
     /// R-3: Return on a focused row inside a multi-selection collapses the
     /// selection to that row before the editor opens (the row's old
     /// `editTitle` did), so the next Space or Delete does not act on both.
@@ -62,6 +89,20 @@ final class TasksRound13Tests: XCTestCase {
             XCTAssertEqual(hosted.model.editingTitleID, focused, "\(tab): Return edits the focused row")
             XCTAssertEqual(hosted.model.selection, [focused], "\(tab): and collapses the selection to it")
         }
+    }
+
+    /// R-4: a stale `focusedSubtaskID` (the quick look collapsed or the
+    /// subtask deleted while it held focus) must not silence the parent's
+    /// row commands; only the validated subtask owner does.
+    func testR4AStaleSubtaskFocusDoesNotSilenceTheFocusedRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let focused = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+        hosted.model.focusedSubtaskID = UUID()
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(status(hosted, focused), .done, "Space still completes the focused row")
     }
 
     func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
