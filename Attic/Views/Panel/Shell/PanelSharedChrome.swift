@@ -226,9 +226,10 @@ private struct PanelPlusFocus: ViewModifier {
     /// The other pages leave it to AppKit's key loop: a plain stop while it
     /// shows, never asked for.
     @State private var armed = false
-    /// Whose Tab order was told the "+" has the keyboard, so it is told when
-    /// the keyboard leaves even after a page switch.
-    @State private var noted: AtticFocusRequests?
+    /// The Tab order this "+" lends its requests from (a page's, or none),
+    /// so that Tab order is told when the keyboard leaves "+" even after a
+    /// page switch changed the requests, or after the subtree went.
+    @State private var lender: AtticFocusRequests?
 
     /// One structure on every page: a branch here would rebuild the "+" on
     /// each page switch.
@@ -257,13 +258,17 @@ private struct PanelPlusFocus: ViewModifier {
             }
             .onChange(of: focused) { _, now in
                 if now {
-                    noted = requests
+                    lender = requests
                     requests?.note(PanelPlusFocusID(), focused: true)
                 } else {
-                    noted?.note(PanelPlusFocusID(), focused: false)
-                    noted = nil
+                    lender?.note(PanelPlusFocusID(), focused: false)
                     armed = false
                 }
+            }
+            .onChange(of: requests.map(ObjectIdentifier.init), initial: true) { _, _ in
+                // Another page's requests: the old Tab order is told at once.
+                if let lender, lender !== requests { lender.note(PanelPlusFocusID(), focused: false) }
+                lender = requests
             }
             // The one "+" keeps its identity on every page, so its focus
             // would otherwise carry over: it never does (it would press the
@@ -271,15 +276,15 @@ private struct PanelPlusFocus: ViewModifier {
             .onChange(of: reachable) { _, now in if !now { release() } }
             .onChange(of: page) { _, _ in release() }
             .onChange(of: revealCount) { _, _ in release() }
+            // A rebuilt subtree (`PanelFoldAccessibility` switching on the
+            // card, the Draw page) never runs the changes above.
+            .onDisappear { release() }
     }
 
     private func release() {
         armed = false
         if focused { focused = false }
-        if let noted {
-            noted.note(PanelPlusFocusID(), focused: false)
-            self.noted = nil
-        }
+        lender?.note(PanelPlusFocusID(), focused: false)
     }
 }
 

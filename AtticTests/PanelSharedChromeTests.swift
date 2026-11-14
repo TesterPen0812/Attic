@@ -887,3 +887,51 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-2 (the plus releases its Tab order when its subtree is rebuilt)
+
+extension PanelSharedChromeTests {
+    /// Round 2 review N-2: `PanelFoldAccessibility` and the Draw page give
+    /// the "+" a new subtree, so the old one goes without its `onChange`
+    /// running. Tasks' Tab order, told the "+" had the keyboard, must hear
+    /// that it no longer does. (Full Keyboard Access is off on the Air, so
+    /// real focus cannot take: the Tab order's record is set the way the
+    /// control sets it when it takes focus.)
+    func testTheSharedPlusHandsTasksTabOrderBackWheneverItsSubtreeIsRebuilt() throws {
+        for change in ["handover", "draw", "calendar"] {
+            AtticDraw.enabledOverride = true
+            let (chrome, requests, model, window) = armedTasksBar()
+            defer { close(window) }
+            requests.note(PanelPlusFocusID(), focused: true)
+            XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "\(change): Tasks' Tab order has the plus")
+            switch change {
+            case "handover": chrome.plusHandedOver = true
+            case "draw": model.page = .canvas
+            default: model.page = .calendar
+            }
+            spin(0.4)
+            XCTAssertNil(requests.current, "\(change): the Tab order is told the plus no longer has the keyboard")
+        }
+    }
+
+    /// The same with real focus (Full Keyboard Access, CI): the keyboard on
+    /// Tasks' "+", then the card takes the row. Back on Tasks the Tab order
+    /// must not still think it is on "+".
+    func testTheCardTakingTheRowNeverLeavesTasksTabOrderOnThePlusWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                      actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        let model = SharedBarModel(page: .tasks)
+        let panel = mountKeyBar(chrome, model)
+        defer { close(panel) }
+        requests.focus(PanelPlusFocusID())
+        spin(0.4)
+        XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "Tasks' own Tab order reached the plus")
+        chrome.plusHandedOver = true
+        spin(0.4)
+        XCTAssertNil(requests.current, "the card has the row: the Tab order no longer has the plus")
+    }
+}
+
