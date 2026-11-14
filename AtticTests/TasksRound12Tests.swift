@@ -52,16 +52,21 @@ final class TasksRound12Tests: XCTestCase {
     /// Key presses delivered one after the other with the main queue never
     /// drained between them, as fast typing arrives (Dot R-2).
     private func pressBackToBack(_ hosted: Hosted, _ keys: [(String, UInt16)]) {
+        pressBackToBack(hosted.window, keys)
+    }
+
+    private func pressBackToBack(_ window: NSWindow, _ keys: [(String, UInt16)], beforeDrain: () -> Void = {}) {
         for (characters, code) in keys {
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                     context: nil, characters: characters, charactersIgnoringModifiers: characters,
                     isARepeat: false, keyCode: code)!
                 NSApp.sendEvent(event)
             }
         }
-        hosted.spin(0.4)
+        beforeDrain()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
     }
 
     /// Opus R-1 = Dot R-2: Tab to a (folded) heading, then ↓ to a row. Return
@@ -249,6 +254,56 @@ final class TasksRound12Tests: XCTestCase {
         hosted.press("\r", keyCode: 36)
         XCTAssertTrue(model.folded(on: .now).contains(groups[0].key), "the heading did not reclaim Return")
         XCTAssertEqual(model.editingTitleID, focused.id)
+    }
+
+    /// R-16: Tab queues the bottom control, then ↑ takes the keyboard back
+    /// to a row before that request runs. The next Tab continues from the row.
+    func testAnArrowAfterTabToAQueuedControlEndsTheTabsPendingFocus() throws {
+        try requireKeyWindowTests()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        _ = try WorkspaceLegacyBridge.coordinator(for: container)
+        let store = TaskStore(container: container)
+        let library = AtticLibrary(tasks: store)
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "One"), TaskDraft(title: "Two"), TaskDraft(title: "Three")]))
+        let model = TasksPageModel(library: library)
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 520)
+        let page = TasksPage(model: model, store: store,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size), addBarFocused: .constant(false))
+        let route = PanelComposerRoute(open: { _, _ in }, isOpen: { false })
+        let host = NSHostingView(rootView: page.environment(\.panelComposer, route)
+            .atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
+        let window = ProbePanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(window.isKeyWindow)
+        let rows = model.rows(for: .now).map(\.id)
+        XCTAssertEqual(rows.count, 3, "only the three open rows, no demo data or pending completion")
+        let last = try XCTUnwrap(rows.last)
+        pressBackToBack(window, [("\t", 48)])
+        XCTAssertEqual(model.keyboardFocus?.id, rows.first, "the first Tab reached the first actual row")
+        pressBackToBack(window, [("\u{F701}", 125)])
+        pressBackToBack(window, [("\u{F701}", 125)])
+        XCTAssertEqual(model.keyboardFocus?.id, last)
+        model.selectOnly(last)
+        let requests = try XCTUnwrap(model.rowPointer?.keyboardControlRequests)
+        var controlRequests = 0
+        let subscription = requests.requests.sink { target in
+            if target.base is PanelPlusFocusID { controlRequests += 1 }
+        }
+        defer { subscription.cancel() }
+        let previous = rows[rows.count - 2]
+        pressBackToBack(window, [("\t", 48), ("\u{F700}", 126)], beforeDrain: {
+            XCTAssertEqual(model.selection, [previous], "↑ chose the preceding row before the control's queued handoff")
+        })
+        XCTAssertEqual(model.keyboardFocus?.id, previous)
+        XCTAssertEqual(model.selection, [previous])
+        XCTAssertEqual(controlRequests, 0, "the bottom control received no stale focus command after ↑ took the keyboard")
+        pressBackToBack(window, [("\t", 48)])
+        XCTAssertEqual(model.keyboardFocus?.id, last, "Tab continued from ↑'s row, not from the stale queued control")
     }
 
     /// A scroll event with the fields the page reads, in the page's window.

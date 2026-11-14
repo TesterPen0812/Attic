@@ -3189,6 +3189,10 @@ struct TasksPage: View {
                 }
                 return .handled
             }
+            // The arrows end any other Tab target still settling (a row being
+            // scrolled into view, a queued control): it must not take the
+            // keyboard back from the row the arrow chose.
+            endTabTarget()
             guard let current, let index = visible.firstIndex(of: current) else {
                 let first = step > 0 ? visible.first : visible.last
                 setFocus(first)
