@@ -507,6 +507,25 @@ private final class RealShell {
         spin(0.12)
     }
 
+    func tabTo(_ identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<32 {
+            if focusedIdentifiers().contains(identifier) { break }
+            tab()
+        }
+        XCTAssertTrue(focusedIdentifiers().contains(identifier), "Tab reaches \(identifier)", file: file, line: line)
+    }
+
+    func hideAndReveal() {
+        panel.orderOut(nil)
+        state.panelDidHide()
+        spin(0.2)
+        panel.orderFront(nil)
+        panel.makeKey()
+        state.panelDidReveal()
+        spin(0.6)
+        XCTAssertTrue(panel.isKeyWindow)
+    }
+
     func press(_ characters: String, keyCode: UInt16) {
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
@@ -927,19 +946,23 @@ extension PanelSharedChromeTests {
     func testTheCardTakingTheRowNeverLeavesTasksTabOrderOnThePlusWithFullKeyboardAccess() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
-        let chrome = PanelSharedChrome()
-        let requests = AtticFocusRequests()
-        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
-                      actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
-        let model = SharedBarModel(page: .tasks)
-        let panel = mountKeyBar(chrome, model)
-        defer { close(panel) }
-        requests.focus(PanelPlusFocusID())
-        spin(0.4)
-        XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "Tasks' own Tab order reached the plus")
-        chrome.plusHandedOver = true
-        spin(0.4)
-        XCTAssertNil(requests.current, "the card has the row: the Tab order no longer has the plus")
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = nil }
+        for change in ["handover", "draw"] {
+            let chrome = PanelSharedChrome()
+            let requests = AtticFocusRequests()
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                          actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+            let model = SharedBarModel(page: .tasks)
+            let panel = mountKeyBar(chrome, model)
+            defer { close(panel) }
+            requests.focus(PanelPlusFocusID())
+            spin(0.4)
+            XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "\(change): Tasks' own Tab order reached the plus")
+            if change == "handover" { chrome.plusHandedOver = true } else { model.page = .canvas }
+            spin(0.4)
+            XCTAssertNil(requests.current, "\(change): the Tab order no longer has the plus")
+        }
     }
 }
 
@@ -1020,16 +1043,26 @@ extension PanelSharedChromeTests {
     /// it; what the "+" then does is the CI test below.)
     func testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen() throws {
         try requireKeyWindowTests()
-        let (shell, library) = try notesLibraryShell()
-        defer { shell.close() }
-        shell.appKey(Self.downArrow, keyCode: 125)
-        XCTAssertNotNil(library.highlightedID, "a row is highlighted")
-        shell.sharedChrome.notePlusKeyboard(true)
-        shell.appKey("\r", keyCode: 36)
-        XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return with the keyboard on + never opens the highlighted note")
-        shell.sharedChrome.notePlusKeyboard(false)
-        shell.appKey("\r", keyCode: 36)
-        XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: with the keyboard elsewhere Return opens it")
+        for searching in [false, true] {
+            let (shell, library) = try notesLibraryShell()
+            defer { shell.close() }
+            if searching {
+                library.query = "Launch"
+                shell.wait { !library.groups(store: shell.notes, drafts: []).isEmpty }
+                XCTAssertFalse(library.query.isEmpty)
+                XCTAssertNil(library.highlightedID, "search supplies its first result without a highlight")
+            } else {
+                shell.appKey(Self.downArrow, keyCode: 125)
+                XCTAssertNotNil(library.highlightedID, "a row is highlighted")
+            }
+            shell.sharedChrome.notePlusKeyboard(true)
+            shell.appKey("\r", keyCode: 36)
+            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return on + never opens a highlighted or searched note")
+            shell.sharedChrome.notePlusKeyboard(false)
+            shell.appKey("\r", keyCode: 36)
+            shell.wait { !shell.draft.pages.isLibraryPresented }
+            XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: with the keyboard elsewhere Return opens it")
+        }
     }
 
     /// Return and Space on the Notes "+" both open the new-note card, with a
@@ -1037,24 +1070,33 @@ extension PanelSharedChromeTests {
     func testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
-        for key in [("\r", UInt16(36)), (" ", UInt16(49))] {
-            let (shell, library) = try notesLibraryShell()
-            defer { shell.close() }
-            let notesBefore = shell.notes.notes.count
-            shell.appKey(Self.downArrow, keyCode: 125)
-            XCTAssertNotNil(library.highlightedID, "a row is highlighted")
-            var reached = false
-            for _ in 0..<24 where !reached {
-                shell.tab()
-                reached = shell.focusedIdentifiers().contains(PanelBottomBarLook.notesPlus.identifier)
+        for searching in [false, true] {
+            for key in [("\r", UInt16(36)), (" ", UInt16(49))] {
+                let (shell, library) = try notesLibraryShell()
+                defer { shell.close() }
+                let notesBefore = shell.notes.notes.count
+                if searching {
+                    library.query = "Launch"
+                    shell.wait { !library.groups(store: shell.notes, drafts: []).isEmpty }
+                    XCTAssertFalse(library.query.isEmpty)
+                    XCTAssertNil(library.highlightedID)
+                } else {
+                    shell.appKey(Self.downArrow, keyCode: 125)
+                    XCTAssertNotNil(library.highlightedID, "a row is highlighted")
+                }
+                var reached = false
+                for _ in 0..<24 where !reached {
+                    shell.tab()
+                    reached = shell.focusedIdentifiers().contains(PanelBottomBarLook.notesPlus.identifier)
+                }
+                XCTAssertTrue(reached, "Tab reaches the plus")
+                guard reached else { continue }
+                ComposerOverlay.isPresented = false
+                shell.appKey(key.0, keyCode: key.1)
+                XCTAssertTrue(ComposerOverlay.isPresented, "\(key.1): the plus opens the new-note card")
+                XCTAssertEqual(shell.notes.notes.count, notesBefore, "\(key.1): the card makes the note, not the key")
+                XCTAssertTrue(shell.draft.pages.isLibraryPresented, "\(key.1): the highlighted note stays closed")
             }
-            XCTAssertTrue(reached, "Tab reaches the plus")
-            guard reached else { continue }
-            ComposerOverlay.isPresented = false
-            shell.appKey(key.0, keyCode: key.1)
-            XCTAssertTrue(ComposerOverlay.isPresented, "\(key.1): the plus opens the new-note card")
-            XCTAssertEqual(shell.notes.notes.count, notesBefore, "\(key.1): the card makes the note, not the key")
-            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "\(key.1): the highlighted note stays closed")
         }
     }
 }
@@ -1075,13 +1117,27 @@ extension PanelSharedChromeTests {
             let shell = try RealShell(attachments: makeTestAttachmentFileStore())
             defer { shell.close() }
             shell.go(to: page)
-            shell.sharedChrome.notePlusKeyboard(true)
-            shell.state.panelDidHide()
-            shell.spin(0.3)
-            shell.state.panelDidReveal()
-            shell.spin(0.6)
+            if page == .notes {
+                XCTAssertTrue(shell.draft.pages.showLibrary())
+                shell.spin(0.8)
+            }
+            let plus = page == .notes ? PanelBottomBarLook.notesPlus : PanelBottomBarLook.calendarPlus
+            if NSApp.isFullKeyboardAccessEnabled {
+                shell.tabTo(plus.identifier)
+                XCTAssertTrue(shell.sharedChrome.plusHasKeyboard)
+            } else {
+                shell.sharedChrome.notePlusKeyboard(true)
+            }
+            let size = shell.state.panelSize
+            shell.hideAndReveal()
+            XCTAssertEqual(shell.state.selectedSection, page)
+            XCTAssertEqual(shell.state.panelSize, size)
             shell.wait { !shell.sharedChrome.plusHasKeyboard }
             XCTAssertFalse(shell.sharedChrome.plusHasKeyboard, "\(page): a reveal never leaves the keyboard on the plus")
+            XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier))
+            ComposerOverlay.isPresented = false
+            shell.appKey(" ", keyCode: 49)
+            XCTAssertFalse(ComposerOverlay.isPresented, "Space after the reveal cannot press the old plus")
         }
     }
 }
@@ -1106,11 +1162,7 @@ extension PanelSharedChromeTests {
             XCTAssertNil(library.highlightedID, "\(how): while # holds the keys, the arrows wait")
             switch how {
             case "a click in the library": shell.appClick(at: CGPoint(x: 170, y: 250))
-            case "a hide and a reveal":
-                shell.state.panelDidHide()
-                shell.spin(0.3)
-                shell.state.panelDidReveal()
-                shell.spin(0.6)
+            case "a hide and a reveal": shell.hideAndReveal()
             default:
                 shell.sharedChrome.tagBar.close()
                 shell.spin(0.4)
@@ -1127,20 +1179,35 @@ extension PanelSharedChromeTests {
     func testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
-        let (shell, library) = try notesLibraryShell()
-        defer { shell.close() }
-        var reached = false
-        for _ in 0..<24 where !reached {
-            shell.tab()
-            reached = shell.focusedIdentifiers().contains("notes-tag-bar-key")
+        for how in ["a click in the library", "a row click", "a hide and a reveal", "the bar closing"] {
+            let (shell, library) = try notesLibraryShell()
+            defer { shell.close() }
+            shell.tabTo("notes-tag-bar-key")
+            XCTAssertTrue(PanelTagBarState.ownsKeys, "\(how): # holds the keyboard")
+            switch how {
+            case "a click in the library": shell.appClick(at: CGPoint(x: 170, y: 250))
+            case "a row click":
+                let row = try XCTUnwrap(shell.elements(shell.host).first { $0.accessibilityIdentifier?() == "notes-library-row" })
+                let frame = try XCTUnwrap(row.accessibilityFrame?())
+                XCTAssertGreaterThan(frame.width, 0)
+                shell.appClick(at: shell.panel.convertPoint(fromScreen: CGPoint(x: frame.midX, y: frame.midY)))
+                // A row opens its note (Accepted). Return to All notes
+                // before asking its arrows to move; do not change that action.
+                shell.wait { !shell.draft.pages.isLibraryPresented }
+                XCTAssertFalse(shell.draft.pages.isLibraryPresented, "the row click opened the note")
+                XCTAssertTrue(shell.draft.pages.showLibrary())
+                shell.spin(0.8)
+            case "a hide and a reveal": shell.hideAndReveal()
+            default: shell.sharedChrome.tagBar.close()
+            }
+            shell.wait { !shell.sharedChrome.tagBar.keyFocused }
+            XCTAssertFalse(PanelTagBarState.ownsKeys, "\(how): # gave up the keys")
+            let currentLibrary = try XCTUnwrap(shell.draft.pages.liveLibraryModel)
+            let before = currentLibrary.highlightedID
+            shell.appKey(Self.downArrow, keyCode: 125)
+            shell.wait { currentLibrary.highlightedID != before }
+            XCTAssertNotEqual(currentLibrary.highlightedID, before, "\(how): the arrows move the library highlight")
         }
-        XCTAssertTrue(reached, "Tab reaches the # key on Notes")
-        guard reached else { return }
-        XCTAssertTrue(PanelTagBarState.ownsKeys, "# holds the keyboard")
-        shell.appClick(at: CGPoint(x: 170, y: 250))
-        XCTAssertFalse(PanelTagBarState.ownsKeys, "the click took the keyboard from #")
-        shell.appKey(Self.downArrow, keyCode: 125)
-        XCTAssertNotNil(library.highlightedID, "the arrows move the library highlight")
     }
 }
 
@@ -1162,7 +1229,7 @@ extension PanelSharedChromeTests {
             chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
                           actions: PanelBottomBarActions(), for: .calendar)
             let model = SharedBarModel(page: .tasks)
-            let window = mountBar(chrome, model)
+            let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
             defer { close(window) }
             PanelKeyStopSeam.holdsHandoffs = true
             PanelKeyStopSeam.held = []
@@ -1174,6 +1241,8 @@ extension PanelSharedChromeTests {
             let held = PanelKeyStopSeam.held
             PanelKeyStopSeam.held = []
             for run in held { run() }
+            spin(0.2)
+            XCTAssertFalse(chrome.plusHasKeyboard)
             XCTAssertEqual(PanelKeyStopSeam.plusAssignments, 0, "\(change): the old handoff must not take the keyboard")
         }
     }
@@ -1185,7 +1254,7 @@ extension PanelSharedChromeTests {
         chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
         chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
         let model = SharedBarModel(page: .tasks)
-        let window = mountBar(chrome, model)
+        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
         defer { close(window) }
         PanelKeyStopSeam.holdsHandoffs = true
         PanelKeyStopSeam.held = []
@@ -1197,6 +1266,8 @@ extension PanelSharedChromeTests {
         let held = PanelKeyStopSeam.held
         PanelKeyStopSeam.held = []
         for run in held { run() }
+        spin(0.2)
+        XCTAssertFalse(chrome.tagBar.keyFocused)
         XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "the old handoff must not take the keyboard")
     }
 }
@@ -1233,6 +1304,7 @@ extension PanelSharedChromeTests {
         for _ in 0..<24 {
             shell.tab()
             visited.append(shell.focusedIdentifiers())
+            XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "the summary container must never own a Tab stop, even without an AX identifier")
         }
         let flat = Set(visited.flatMap { $0 })
         XCTAssertTrue(flat.contains("notes-tag-bar-picked"), "Tab reaches the summary's picked button")
@@ -1240,6 +1312,7 @@ extension PanelSharedChromeTests {
         XCTAssertFalse(flat.contains("notes-tag-bar"), "the summary's container is not a stop")
     }
 }
+
 
 extension PanelSharedChromeTests {
     /// Closing the bar must beat a request whose next-turn focus handoff
