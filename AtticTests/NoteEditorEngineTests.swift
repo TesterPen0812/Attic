@@ -226,6 +226,28 @@ final class NoteEditorEngineTests: XCTestCase {
         return NoteEditorEngine(noteID: id, document: loaded, bodyOnly: !titled)
     }
 
+    func testR3BlankFirstBodyReturnKeepsTheCaretOnFirstTyping() throws {
+        try requireKeyWindowTests()
+        for titled in [true, false] {
+            let (engine, view, _, _) = bg14Engine(titled: titled, [.text("")])
+            defer { engine.detachView() }
+            let (window, scroll) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            view.insertNewline(nil)
+            let before = try bg14NativeCaret(view)
+            try bgRound2Capture(scroll, name: "R3-blank-\(titled)-empty")
+            view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length - 1, length: 0))
+            let after = try bg14NativeCaret(view)
+            print("R3_BLANK_CARET titled=\(titled) beforeY=\(before.minY) afterY=\(after.minY)")
+            try bgRound2Capture(scroll, name: "R3-blank-\(titled)-typed")
+            XCTAssertEqual(after.minY, before.minY, accuracy: 0.5, "titled=\(titled): no first-letter jump")
+            XCTAssertEqual(after.minX, before.minX, accuracy: 0.5)
+            XCTAssertEqual(after.height, before.height, accuracy: 0.5)
+        }
+    }
+
     func testBG14ClearingTheOnlyTaskBodyParagraphKeepsItsIdentityStyleAndExtras() throws {
         var block = NoteBlock.text("Plan", id: UUID(), style: "heading")
         block.level = 3

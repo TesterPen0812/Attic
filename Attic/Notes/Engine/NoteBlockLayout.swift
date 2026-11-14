@@ -60,6 +60,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
     var linkSuggestionRoom: CGFloat = 0
+    var firstBlankBodyRoom: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
     /// `NoteTextStyle.baselineShift`): the quote's bar follows the draft's.
     var boxShift: CGFloat = 0
@@ -100,7 +101,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         if let mono { own = mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
         else if let callout { own = callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
         else { own = super.topMargin }
-        return own + linkSuggestionRoom
+        return own + linkSuggestionRoom + firstBlankBodyRoom
     }
     override var bottomMargin: CGFloat {
         let own: CGFloat
@@ -660,13 +661,18 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let inStorage = offset >= bodyStart && offset < textStorage.length
         let native = inStorage ? decoration(forParagraphAt: offset) : nil
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
+        let firstBlankBody = isBodyOnly && offset == 0 && textStorage.string == "\n"
+            && paragraphStyle(at: 0) == .body
         let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil || linkRoom > 0 ? .plain : nil)) else {
+              let decoration = native ?? (changed ? .history : (chips || firstBlankBody || lastLine != nil || review != nil || linkRoom > 0 ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
         fragment.linkSuggestionRoom = linkRoom
+        if firstBlankBody {
+            fragment.firstBlankBodyRoom = ((emptyLastLineAttributes()[.paragraphStyle] as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0) / 2
+        }
         if let lastLine {
             fragment.lastLine = lastLine
             let kind = pendingParagraphStyle.map { NoteParagraphKind.of(
@@ -1666,7 +1672,7 @@ extension NoteEditorEngine {
             (textStorage.attribute(.paragraphStyle, at: above.location, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
         }
         var before = max(0, paragraph.paragraphSpacingBefore + exit + paragraph.lineSpacing - host)
-        if above.location > 0, above.length == 1 {
+        if !isTitleLine(above.location), above.length == 1 {
             // A blank line above: TextKit sets the extra line straight under
             // that empty paragraph's line, ignoring every spacing attribute
             // (measured: its top is the blank line's top plus its own
@@ -1690,7 +1696,7 @@ extension NoteEditorEngine {
         let length = textStorage.length
         guard range.length > 0, NSMaxRange(range) == length,
               (textStorage.string as NSString).character(at: length - 1) == 0x0A else { return false }
-        return range.location > 0 || range.length > 1
+        return !isTitleLine(range.location) || range.length > 1
     }
 
     /// The empty last line's format changed: its paragraph above is laid
