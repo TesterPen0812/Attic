@@ -1,4 +1,7 @@
 import SwiftUI
+#if DEBUG
+import Synchronization
+#endif
 
 /// A date group's header (the owner's panel design, 2026-10-27): 11 pt in
 /// the design's header grey, the primary ink under the pointer. A click folds or
@@ -720,37 +723,46 @@ struct TasksFoldLayout: Layout {
 
 #if DEBUG
 /// Opt-in counter for a live lazy list. The lock also covers SwiftUI's
-/// off-main Layout calls; disabled unless a hosted hang regression enables it.
+/// off-main Layout calls. Disabled unless a hosted hang regression enables it,
+/// and then a layout pass costs one atomic read: it never reaches the lock.
 final class TasksFoldLayoutProbe: @unchecked Sendable {
     static let shared = TasksFoldLayoutProbe()
+    private let enabledFlag = Atomic<Bool>(false)
     private let lock = NSLock()
-    private var enabled = false
     private var measures = 0
     private var placements = 0
     private var heights: [Int: Int] = [:]
+    private var lockEntryCount = 0
+
+    /// Test seam: how many calls reached the lock (zero while disabled).
+    var lockEntries: Int { lock.withLock { lockEntryCount } }
 
     func start() {
         lock.withLock {
-            enabled = true
             measures = 0
             placements = 0
             heights = [:]
+            lockEntryCount = 0
         }
+        enabledFlag.store(true, ordering: .sequentiallyConsistent)
     }
 
-    func stop() { lock.withLock { enabled = false } }
+    func stop() { enabledFlag.store(false, ordering: .sequentiallyConsistent) }
 
     func measure(_ height: CGFloat) {
+        guard enabledFlag.load(ordering: .relaxed) else { return }
         lock.withLock {
-            guard enabled else { return }
+            lockEntryCount += 1
             measures += 1
             if height.isFinite { heights[Int((height * 256).rounded()), default: 0] += 1 }
         }
     }
 
     func place() {
+        guard enabledFlag.load(ordering: .relaxed) else { return }
         lock.withLock {
-            if enabled { placements += 1 }
+            lockEntryCount += 1
+            placements += 1
         }
     }
 

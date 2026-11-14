@@ -1506,8 +1506,18 @@ struct AtticTaskRow: View {
     /// Test seam: whether each row last drew its ›.
     static var drawsOpen: [UUID: Bool] = [:]
     /// Test seam: hover delivery while the pointer stays in place across a scroll.
+    /// Recorded only while a hosted test opts in (`recordsHoverDiagnostics`):
+    /// a Local build never grows these per-row maps.
+    static var recordsHoverDiagnostics = false
     static var hoverEvents: [UUID: Int] = [:]
     static var hoverHistory: [UUID: [Bool]] = [:]
+
+    /// Stop recording and drop everything recorded.
+    static func stopHoverDiagnostics() {
+        recordsHoverDiagnostics = false
+        hoverEvents = [:]
+        hoverHistory = [:]
+    }
     #endif
 
     var body: some View {
@@ -1682,9 +1692,11 @@ struct AtticTaskRow: View {
             #if DEBUG
             AtticHangProbe.note("row.hover", key: model.id.uuidString, value: String(inside),
                                 detail: "old=\(hovered) global-pointer=\(NSEvent.mouseLocation)")
-            Self.hoverEvents[model.id, default: 0] += 1
-            if Self.hoverHistory[model.id, default: []].count < 32 {
-                Self.hoverHistory[model.id, default: []].append(inside)
+            if Self.recordsHoverDiagnostics {
+                Self.hoverEvents[model.id, default: 0] += 1
+                if Self.hoverHistory[model.id, default: []].count < 32 {
+                    Self.hoverHistory[model.id, default: []].append(inside)
+                }
             }
             #endif
             hovered = inside

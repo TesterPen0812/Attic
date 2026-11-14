@@ -172,9 +172,9 @@ struct TasksScrollKeeper: NSViewRepresentable {
         private weak var observedClip: NSClipView?
         private var observer: NSObjectProtocol?
         #if DEBUG
-        private weak var observedDocument: NSView?
         private var documentObserver: NSObjectProtocol?
-        private var documentPostedFrames = false
+        /// Test seam: how often the production `record()` ran.
+        static var recordCalls = 0
         #endif
         /// Until the remembered place is back, the list's own first layout
         /// (at the top) is not recorded over it.
@@ -274,14 +274,19 @@ struct TasksScrollKeeper: NSViewRepresentable {
                 MainActor.assumeIsolated { self?.record() }
             }
             #if DEBUG
+            // Observe, never perturb: the probe only notes geometry. It never
+            // calls `record()`, never restyles, never writes the model, and
+            // never turns on a notification the unprobed run does not have.
             if AtticHangProbe.isEnabled, let document = clip.enclosingScrollView?.documentView {
-                observedDocument = document
-                documentPostedFrames = document.postsFrameChangedNotifications
-                document.postsFrameChangedNotifications = true
-                documentObserver = NotificationCenter.default.addObserver(
-                    forName: NSView.frameDidChangeNotification, object: document, queue: .main
-                ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.record() }
+                if document.postsFrameChangedNotifications {
+                    documentObserver = NotificationCenter.default.addObserver(
+                        forName: NSView.frameDidChangeNotification, object: document, queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.noteDocumentGeometry() }
+                    }
+                } else {
+                    AtticHangProbe.note("scroll.documentFrame", key: String(describing: tab),
+                                        value: "document frame notifications are off; geometry not observed")
                 }
             }
             #endif
@@ -292,8 +297,6 @@ struct TasksScrollKeeper: NSViewRepresentable {
             #if DEBUG
             if let documentObserver { NotificationCenter.default.removeObserver(documentObserver) }
             documentObserver = nil
-            observedDocument?.postsFrameChangedNotifications = documentPostedFrames
-            observedDocument = nil
             #endif
             marquee = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
@@ -305,8 +308,18 @@ struct TasksScrollKeeper: NSViewRepresentable {
             lifecycleObservers.removeAll()
         }
 
+        #if DEBUG
+        private func noteDocumentGeometry() {
+            guard let clip = observedClip else { return }
+            AtticHangProbe.note("scroll.documentFrame", key: String(describing: tab),
+                                value: "document=\(String(describing: enclosingScrollView?.documentView?.frame))",
+                                detail: "clip=\(clip.bounds) restoring=\(restoring)")
+        }
+        #endif
+
         private func record() {
             #if DEBUG
+            Self.recordCalls += 1
             if let clip = observedClip {
                 AtticHangProbe.note("scroll.geometry", key: String(describing: tab),
                                     value: "clip=\(clip.bounds) document=\(String(describing: enclosingScrollView?.documentView?.frame))",

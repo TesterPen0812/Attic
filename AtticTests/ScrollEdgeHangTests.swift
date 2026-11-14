@@ -29,6 +29,308 @@ final class ScrollEdgeHangTests: XCTestCase {
         #endif
     }
 
+    // MARK: - The probe's own logic (fake clock, no run loop, no app)
+
+    #if DEBUG
+    private final class FakeClock: @unchecked Sendable {
+        var now: UInt64 = 0
+        func advance(milliseconds: Double) { now += UInt64(milliseconds * 1_000_000) }
+    }
+
+    private func makeProbe(_ clock: FakeClock) -> (probe: AtticHangProbe, url: URL) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-hang-test-\(UUID().uuidString).txt")
+        let probe = AtticHangProbe(outputURL: url, clock: { clock.now })
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".first"))
+        }
+        return (probe, url)
+    }
+
+    private func dump(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+
+    /// Opus R-1 = Dot R-1 (P0). The watchdog read its clock before the lock, so
+    /// run-loop state written in between could be newer than `now`, and the
+    /// unsigned subtraction trapped: the app crashed mid-hang instead of dumping.
+    func testTheWatchdogNeverTrapsWhenRunLoopStateIsNewerThanItsClockReading() {
+        // lastCompletedTurn > now, with no genuine wait for 3 s.
+        let clock = FakeClock()
+        clock.now = 100_000_000
+        let (probe, url) = makeProbe(clock)
+        clock.now = 10_000_000_000
+        probe.runLoop(.beforeWaiting)
+        for _ in 0..<2 {
+            clock.advance(milliseconds: 0.2)
+            probe.runLoop(.afterWaiting)
+            probe.runLoop(.beforeWaiting)
+        }
+        clock.advance(milliseconds: 0.2)
+        probe.runLoop(.afterWaiting)
+        clock.now = 5_000_000_000
+        probe.checkForHang()
+        XCTAssertEqual(dump(url)?.hasPrefix("HANG:"), true, "a dump is written, and nothing trapped")
+        XCTAssertTrue(dump(url)?.contains("last-turn=0ms ago") == true, "an age that would be negative reads as zero")
+
+        // lastRealWait > now, with an unfinished turn.
+        let later = FakeClock()
+        later.now = 1_000_000_000
+        let (second, secondURL) = makeProbe(later)
+        second.runLoop(.beforeWaiting)
+        later.now = 20_000_000_000
+        second.runLoop(.afterWaiting)
+        later.now = 5_000_000_000
+        second.checkForHang()
+        XCTAssertEqual(dump(secondURL)?.hasPrefix("HANG:"), true, "a dump is written, and nothing trapped")
+        XCTAssertTrue(dump(secondURL)?.contains("last-real-wait=0ms ago") == true)
+    }
+
+    /// Opus R-3 (a). AppKit dispatches events between the loop's exit and its next
+    /// entry, so `.exit` is not sleep and `.entry` is not a wake.
+    func testASpinInsideEventHandlingCountsAsBusy() {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        clock.advance(milliseconds: 1_000)
+        probe.runLoop(.beforeWaiting)
+        clock.advance(milliseconds: 50)
+        probe.runLoop(.afterWaiting)
+        // The loop returns from its wait, then AppKit sends the scroll event.
+        clock.advance(milliseconds: 10)
+        probe.runLoop(.exit)
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HANG: unfinished-run-loop-turn") == true,
+                      "a spin inside event handling is a busy run loop: \(dump(url) ?? "no dump")")
+    }
+
+    /// Opus R-3 (b). A long, healthy 120 Hz animation leaves ~1.3 ms of real
+    /// sleep per 8.3 ms frame: it is not a stall. A loop that wakes at once is.
+    func testAHealthy120HzAnimationIsNotAStallButAnImmediateWakeLoopIs() {
+        func run(waitMilliseconds: Double) -> String? {
+            let clock = FakeClock()
+            let (probe, url) = makeProbe(clock)
+            for frame in 0..<1_200 {
+                clock.advance(milliseconds: waitMilliseconds)
+                probe.runLoop(.afterWaiting)
+                clock.advance(milliseconds: 7)
+                if frame % 30 == 0 { probe.checkForHang() }
+                probe.runLoop(.beforeWaiting)
+            }
+            return dump(url)
+        }
+        XCTAssertNil(run(waitMilliseconds: 1.3), "ten seconds of a healthy 120 Hz animation write no dump")
+        XCTAssertTrue(run(waitMilliseconds: 0.1)?.hasPrefix("HANG: no-genuine-wait") == true,
+                      "a loop that wakes again at once for ten seconds is the stall")
+    }
+
+    /// Dot R-6 (the probe's half). Every dump says how many real waits the loop
+    /// has had, so a reader can tell a continuous stall from busy bursts.
+    func testEveryDumpCarriesTheHealthyWaitCount() {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        for _ in 0..<2 {
+            clock.advance(milliseconds: 5)
+            probe.runLoop(.afterWaiting)
+            probe.runLoop(.beforeWaiting)
+            clock.advance(milliseconds: 5)
+        }
+        probe.runLoop(.afterWaiting)
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HANG: unfinished-run-loop-turn") == true)
+        XCTAssertTrue(dump(url)?.contains("healthy-waits=2") == true, "two real waits so far: \(dump(url) ?? "")")
+        // The loop sleeps for real, then spins again: the count moves.
+        probe.runLoop(.beforeWaiting)
+        clock.advance(milliseconds: 5)
+        probe.runLoop(.afterWaiting)
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.contains("healthy-waits=3") == true, "a real wait changes the count: \(dump(url) ?? "")")
+    }
+
+    /// Opus R-2 (the app's half). A signed app is sandboxed: the test names a
+    /// leaf, which resolves into the app's own temporary folder.
+    func testProbeFilesResolveIntoTheAppsOwnTemporaryFolder() {
+        let temporary = "/private/var/folders/xx/T/"
+        func resolve(_ environment: [String: String]) -> String? {
+            AtticHangProbe.outputURL(environment: environment, temporaryDirectory: temporary)?.path
+        }
+        XCTAssertEqual(resolve(["ATTIC_HANG_PROBE_FILE": "attic-hang-1A2B.txt"]), "/private/var/folders/xx/T/attic-hang-1A2B.txt")
+        XCTAssertEqual(resolve(["ATTIC_HANG_PROBE_PATH": "/tmp/x/probe.txt"]), "/tmp/x/probe.txt")
+        for unsafe in ["", "../escape.txt", "a/b.txt", ".hidden", "/abs.txt", "bad name.txt"] {
+            XCTAssertNil(resolve(["ATTIC_HANG_PROBE_FILE": unsafe]), "\(unsafe) is not a leaf name")
+        }
+        XCTAssertNil(resolve(["ATTIC_HANG_PROBE_PATH": "relative.txt"]))
+        XCTAssertNil(resolve([:]))
+    }
+
+    /// Opus R-5 / Dot R-5. `detail` can be slow; it must never run inside the
+    /// lock the run loop and the watchdog share.
+    func testDetailsAreFormattedOutsideTheGlobalLock() {
+        let clock = FakeClock()
+        let (probe, _) = makeProbe(clock)
+        AtticHangProbe.testInstance = probe
+        defer { AtticHangProbe.testInstance = nil }
+        var lockWasFree: Bool?
+        func detail() -> String {
+            lockWasFree = probe.lockIsFree
+            return "detail"
+        }
+        AtticHangProbe.note("kind", key: "key", value: "value", detail: detail())
+        XCTAssertEqual(lockWasFree, true, "the lock is not held while a detail is formatted")
+    }
+    #endif
+
+    // MARK: - Nothing runs or grows when the diagnostics are off
+
+    /// Dot R-3 / R-4. With the hang probe unset and no hosted test opted in, a
+    /// heavy list that lays out and is hovered row by row takes no layout lock
+    /// and adds no entry to the per-row hover maps (a Local build runs for days).
+    func testDisabledDiagnosticsTakeNoLockAndAddNoPerRowEntriesWhileAHeavyListLaysOutAndHovers() throws {
+        #if DEBUG
+        XCTAssertFalse(AtticHangProbe.isEnabled)
+        TasksFoldLayoutProbe.shared.start()
+        TasksFoldLayoutProbe.shared.stop()
+        AtticTaskRow.stopHoverDiagnostics()
+        defer { AtticTaskRow.stopHoverDiagnostics() }
+        let mounted = try mountLongList(extraRows: 300)
+        defer { mounted.window.close() }
+        var tracked: Set<ObjectIdentifier> = []
+        for pass in 0..<3 {
+            for fraction in stride(from: 0.2, through: 0.85, by: 0.05) {
+                try Self.hover(window: mounted.window, at: CGPoint(x: 160, y: 464 * fraction), tracked: &tracked)
+                mounted.frame()
+            }
+            // Reveal other rows, so many distinct rows are hovered.
+            let list = mounted.list
+            list.contentView.scroll(to: CGPoint(x: 0, y: list.contentView.bounds.minY + 160 * CGFloat(pass + 1)))
+            list.reflectScrolledClipView(list.contentView)
+            mounted.settle(0.3)
+        }
+        XCTAssertEqual(TasksFoldLayoutProbe.shared.lockEntries, 0, "no layout call reaches the probe's lock while it is off")
+        XCTAssertTrue(AtticTaskRow.hoverEvents.isEmpty, "no per-row hover counts are kept while diagnostics are off")
+        XCTAssertTrue(AtticTaskRow.hoverHistory.isEmpty, "no per-row hover history is kept while diagnostics are off")
+
+        // Opted in, the same instruments still record.
+        AtticTaskRow.recordsHoverDiagnostics = true
+        TasksFoldLayoutProbe.shared.start()
+        defer { TasksFoldLayoutProbe.shared.stop() }
+        TasksFoldLayoutProbe.shared.measure(44)
+        TasksFoldLayoutProbe.shared.place()
+        XCTAssertEqual(TasksFoldLayoutProbe.shared.lockEntries, 2)
+        XCTAssertEqual(TasksFoldLayoutProbe.shared.snapshot().measures, 1)
+        for fraction in stride(from: 0.2, through: 0.85, by: 0.1) {
+            try Self.hover(window: mounted.window, at: CGPoint(x: 160, y: 464 * fraction), tracked: &tracked)
+            mounted.frame()
+        }
+        XCTAssertFalse(AtticTaskRow.hoverEvents.isEmpty, "opted in, hover delivery is recorded")
+        AtticTaskRow.stopHoverDiagnostics()
+        XCTAssertTrue(AtticTaskRow.hoverHistory.isEmpty, "stopping clears what was recorded")
+        #endif
+    }
+
+    // MARK: - Observe, never perturb
+
+    /// Opus R-5 / Dot R-5. Armed, the document-frame observer may only note
+    /// geometry. A frame change with a clip offset the model has not recorded
+    /// must write the same model state and run the same production paths as an
+    /// unprobed run.
+    func testTheArmedDocumentObserverNotesGeometryAndChangesNothing() throws {
+        #if DEBUG
+        struct Outcome: Equatable {
+            var recordCalls: Int
+            var offset: CGFloat?
+        }
+        func run(armed: Bool) throws -> (Outcome, notes: Int) {
+            let probe = armed ? AtticHangProbe(outputURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-hang-observer-\(UUID().uuidString).txt")) : nil
+            AtticHangProbe.testInstance = probe
+            defer { AtticHangProbe.testInstance = nil }
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices(chooseComposerFiles: {}))
+            let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 320, height: 300),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 300))
+            let document = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 2_000))
+            let keeper = TasksScrollKeeper.KeeperView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+            keeper.model = model
+            keeper.tab = .now
+            document.addSubview(keeper)
+            scroll.documentView = document
+            window.contentView = scroll
+            defer { window.contentView = nil; window.close() }
+            scroll.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            // A clip offset nobody has recorded: no bounds notification goes out.
+            let clip = scroll.contentView
+            clip.postsBoundsChangedNotifications = false
+            clip.scroll(to: CGPoint(x: 0, y: 300))
+            clip.postsBoundsChangedNotifications = true
+            TasksScrollKeeper.KeeperView.recordCalls = 0
+            document.setFrameSize(CGSize(width: 300, height: 2_400))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            return (Outcome(recordCalls: TasksScrollKeeper.KeeperView.recordCalls, offset: model.scrollOffsets[.now]),
+                    probe?.callCount(kind: "scroll.documentFrame", key: "now") ?? 0)
+        }
+        let off = try run(armed: false)
+        let on = try run(armed: true)
+        XCTAssertEqual(on.0, off.0, "a document frame change writes the same model state and runs the same production paths probed or not")
+        XCTAssertEqual(off.notes, 0)
+        XCTAssertGreaterThan(on.notes, 0, "the armed observer notes the geometry")
+        #endif
+    }
+
+    private struct Mounted {
+        let window: NSWindow
+        let list: NSScrollView
+        let frame: () -> Void
+        let settle: (TimeInterval) -> Void
+        let keepAlive: Any
+    }
+
+    /// The UI test's panel (320 x 464, dark glass) hosting the long Now list, off screen.
+    private func mountLongList(extraRows: Int) throws -> Mounted {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container, long: true)
+        for index in 0..<extraRows { container.mainContext.insert(TaskItem(title: "Dense row \(index)")) }
+        if extraRows > 0 { try container.mainContext.save() }
+        let store = TaskStore(container: container)
+        var services = TasksPageServices(chooseComposerFiles: {})
+        services.openTaskNote = { _ in }
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let size = CGSize(width: 320, height: 464)
+        var focused = false
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                             addBarFocused: Binding(get: { focused }, set: { focused = $0 }), pointer: TasksPointer())
+        let window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.isReleasedWhenClosed = false
+        let design = AtticDesignContext(mode: .dark, surface: .glass, reduceMotion: false)
+        window.contentView = NSHostingView(rootView: page
+            .background { AtticPanelStageSurface(cornerSize: 52) }
+            .atticDesign(design)
+            .environment(\.displayScale, 1)
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        window.makeKey()
+        func frame() {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            CATransaction.flush()
+        }
+        func settle(_ seconds: TimeInterval) {
+            let end = Date().addingTimeInterval(seconds)
+            while Date() < end { frame() }
+        }
+        settle(1)
+        let lists = window.contentView.map(Self.scrollViews) ?? []
+        let list = try XCTUnwrap(lists.max { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 })
+        return Mounted(window: window, list: list, frame: frame, settle: settle, keepAlive: (container, model, store))
+    }
+
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { true }
         override var backingScaleFactor: CGFloat { 1 }
@@ -185,14 +487,19 @@ final class ScrollEdgeHangTests: XCTestCase {
         if stationaryHover {
             print("ATTIC_SCROLL_HOVER initial_frames=\(pointer.frames.values.sorted { $0.minY < $1.minY }.prefix(15)) clip=\(list.contentView.bounds) document=\(list.documentView?.frame ?? .zero)")
             AtticTaskRow.drawsOpen = [:]
-            AtticTaskRow.hoverEvents = [:]
-            AtticTaskRow.hoverHistory = [:]
+            AtticTaskRow.stopHoverDiagnostics()
+            AtticTaskRow.recordsHoverDiagnostics = true
             try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
             settle(0.7)
             print("ATTIC_SCROLL_HOVER before_scroll=\(AtticTaskRow.hoverHistory.values) open=\(AtticTaskRow.drawsOpen)")
             TasksFoldLayoutProbe.shared.start()
         }
-        defer { if stationaryHover { TasksFoldLayoutProbe.shared.stop() } }
+        defer {
+            if stationaryHover {
+                TasksFoldLayoutProbe.shared.stop()
+                AtticTaskRow.stopHoverDiagnostics()
+            }
+        }
         for (index, delta) in deltas.enumerated() {
             let (_, elapsed) = try watchdog.run("scroll \(index) by \(delta)") {
                 // As the UI test's wheel: at the panel's middle, through the window.
@@ -230,7 +537,14 @@ final class ScrollEdgeHangTests: XCTestCase {
             if stationaryHover {
                 let first = TasksFoldLayoutProbe.shared.snapshot()
                 let beforeHover = AtticTaskRow.hoverEvents.values.reduce(0, +)
-                settle(1)
+                // The pointer has not moved. AppKit re-sends it when rows move
+                // under it, so deliver it at the same place on every frame for
+                // a second: a regression that flips hover shows up in the count.
+                let hoverEnd = Date().addingTimeInterval(1)
+                while Date() < hoverEnd {
+                    try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
+                    frame()
+                }
                 let last = TasksFoldLayoutProbe.shared.snapshot()
                 let afterHover = AtticTaskRow.hoverEvents.values.reduce(0, +)
                 print("ATTIC_SCROLL_HOVER step=\(index) sizes=\(last.heights.sorted { $0.value > $1.value }.prefix(10)) measure=\(first.measures)->\(last.measures) place=\(first.placements)->\(last.placements) hover=\(beforeHover)->\(afterHover) history=\(AtticTaskRow.hoverHistory.values.filter { !$0.isEmpty })")
@@ -243,6 +557,18 @@ final class ScrollEdgeHangTests: XCTestCase {
                 XCTAssertLessThan(last.placements - first.placements, 100, "row placement must stop after scroll/hover settles")
                 XCTAssertLessThan(afterHover - beforeHover, 8, "a stationary pointer must not flip hover repeatedly")
             }
+        }
+        if stationaryHover {
+            // The check above can fail: a pointer that does cross rows flips hover
+            // far more often than it allows.
+            let beforeMoves = AtticTaskRow.hoverEvents.values.reduce(0, +)
+            for move in 0..<12 {
+                try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * (move.isMultiple(of: 2) ? 0.35 : 0.75)),
+                               tracked: &tracked)
+                frame()
+            }
+            XCTAssertGreaterThan(AtticTaskRow.hoverEvents.values.reduce(0, +) - beforeMoves, 8,
+                                 "positive control: crossing rows is counted as hover flips")
         }
     }
 
