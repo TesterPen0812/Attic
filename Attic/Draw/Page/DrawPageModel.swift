@@ -44,6 +44,9 @@ struct DrawTextEdit: Equatable {
     var width: CGFloat? = nil
     /// The box's scale from a group resize (1 for a new box).
     var scale: CGFloat = 1
+    /// Original metadata stays available while clearing text removes its
+    /// stored object; retyping must keep its width, scale and layer.
+    var retainedObject: DrawObject? = nil
     /// The text's size as drawn, in points.
     var pointSize: CGFloat { CGFloat(style.size.textSize) * scale }
 }
@@ -974,7 +977,7 @@ final class DrawPageModel: ObservableObject {
         endEditing()
         editing = DrawTextEdit(id: id, origin: CGPoint(x: object.frame.x, y: object.frame.y), text: text,
                                style: object.style, stored: true, width: object.textWidth.map { CGFloat($0) },
-                               scale: CGFloat(object.textScale ?? 1))
+                               scale: CGFloat(object.textScale ?? 1), retainedObject: object)
         editingID = id
         select([])
         contentRevision += 1
@@ -1000,14 +1003,16 @@ final class DrawPageModel: ObservableObject {
             }
             return
         }
-        var object = object(edit.id) ?? DrawObject(id: edit.id, frame: DrawFrame(x: edit.origin.x, y: edit.origin.y),
-                                                   zIndex: topZ + 1, style: edit.style, content: .text(text))
+        var object = object(edit.id) ?? edit.retainedObject ?? DrawObject(
+            id: edit.id, frame: DrawFrame(x: edit.origin.x, y: edit.origin.y),
+            zIndex: topZ + 1, style: edit.style, content: .text(text))
         object.content = .text(text)
         object.style = edit.style
         object.frame.x = edit.origin.x
         object.frame.y = edit.origin.y
         Self.measure(&object, text: text)
         edit.stored = true
+        edit.retainedObject = object
         editing = edit
         if store is DrawPersistentStore {
             queueTyping(.put([object]), changed: object, id: edit.id)
@@ -1457,6 +1462,7 @@ final class DrawPageModel: ObservableObject {
                 edit.width = object.textWidth.map { CGFloat($0) }
                 edit.scale = CGFloat(object.textScale ?? 1)
                 edit.stored = true
+                edit.retainedObject = object
             } else {
                 edit.text = ""
                 edit.stored = false

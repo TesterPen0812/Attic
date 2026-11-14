@@ -48,6 +48,30 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertNotEqual(model.canvasID, target, "Queued store observation must not revive it")
     }
 
+    func testBG30ReplacingAllTextPreservesWidthScaleLayerAndUndo() throws {
+        let canvas = try XCTUnwrap(model.canvasID)
+        let text = DrawObject(frame: DrawFrame(x: 25, y: 50, width: 70, height: 30), zIndex: 1,
+                              content: .text("Original long text"), textWidth: 70, textScale: 1.5)
+        let front = DrawObject(frame: DrawFrame(x: 20, y: 40, width: 100, height: 80), zIndex: 2,
+                               content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([text, front]), on: canvas).isSaved)
+        model.open(canvas)
+        model.edit(text.id)
+        model.typed("")
+        model.typed("Replacement long enough to wrap")
+        model.endEditing()
+        let replacement = try XCTUnwrap(stored.first { $0.id == text.id })
+        XCTAssertEqual(replacement.id, text.id)
+        XCTAssertEqual(replacement.frame.x, text.frame.x)
+        XCTAssertEqual(replacement.frame.y, text.frame.y)
+        XCTAssertEqual(replacement.textWidth, 70)
+        XCTAssertEqual(replacement.textScale, 1.5)
+        XCTAssertEqual(replacement.zIndex, 1, "Text must remain behind the other shape")
+        model.undo()
+        model.redo()
+        XCTAssertEqual(try XCTUnwrap(stored.first { $0.id == text.id }), replacement)
+    }
+
     private func drag(_ points: [CGPoint], shift: Bool = false) {
         model.pointerDown(at: points[0], shift: shift)
         for point in points.dropFirst() { model.pointerDragged(to: point, shift: shift) }
