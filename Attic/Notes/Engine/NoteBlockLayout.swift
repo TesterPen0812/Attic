@@ -12,7 +12,7 @@ import SwiftUI
 /// slice of it: the first carries the box's top padding, the last its
 /// bottom padding, and every slice draws the box's fill clipped to itself,
 /// so a box of any length reads as one rounded rectangle with no seams.
-final class NoteBlockLayoutFragment: NSTextLayoutFragment {
+class NoteBlockLayoutFragment: NSTextLayoutFragment {
     enum Decoration: Equatable {
         case history
         /// Nothing beside the text: the paragraph only has inline code chips.
@@ -184,7 +184,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
     /// The note's empty last line, when TextKit laid it out in this fragment.
     var emptyLastLine: NSTextLineFragment? {
-        guard lastLine != nil, textLineFragments.count > 1, let line = textLineFragments.last,
+        guard lastLine != nil, let line = textLineFragments.last,
               line.characterRange.length == 0 else { return nil }
         return line
     }
@@ -235,7 +235,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         }
     }
 
-    private func drawLastLine(at point: CGPoint, in context: CGContext) {
+    fileprivate func drawLastLine(at point: CGPoint, in context: CGContext) {
         guard let line = emptyLastLine, let lastLine else { return }
         switch lastLine {
         case let .mono(label):
@@ -1364,6 +1364,74 @@ final class NoteHeadingButton: NSButton {
     }
 }
 
+/// TextKit's zero-character document owns an extra line, independent of the
+/// paragraph factory. Its pending format lives outside storage, so drawing it
+/// must read that current state rather than the cached native fragment.
+private final class NoteEmptyBodyLayoutFragment: NoteBlockLayoutFragment {
+    private let source: NSTextLayoutFragment
+    private let width: CGFloat
+
+    init(source: NSTextLayoutFragment, element: NSTextElement, width: CGFloat) {
+        self.source = source
+        self.width = width
+        super.init(textElement: element, range: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var textLineFragments: [NSTextLineFragment] { source.textLineFragments }
+    override var layoutFragmentFrame: CGRect {
+        CGRect(x: 0, y: source.layoutFragmentFrame.minY, width: width, height: source.layoutFragmentFrame.height)
+    }
+}
+
+@MainActor
+extension NoteEditorEngine {
+    /// The first line in an empty body has no paragraph before it to supply
+    /// a box's top margin. Move the native text origin by that same margin.
+    var emptyBodyTopInset: CGFloat {
+        guard isBodyOnly, textStorage.length == 0 else { return 0 }
+        switch pendingParagraphStyle?.state.style {
+        case .callout: return AtticNoteType.calloutPaddingV - NoteTextStyle.baselineShift(AtticNoteType.body)
+        case .mono: return NoteBlockLayoutFragment.monoTopInset - NoteTextStyle.baselineShift(AtticNoteType.mono)
+        default: return 0
+        }
+    }
+
+    func emptyBodyDecorationFragment() -> NoteBlockLayoutFragment? {
+        guard isBodyOnly, textStorage.length == 0, let layoutManager,
+              let lastLine = emptyLastLineDecoration(afterParagraphAt: 0) else { return nil }
+        // A location lookup excludes the document-end extra fragment. This
+        // is the same native enumeration used for empty table-cell carets.
+        var native: NSTextLayoutFragment?
+        layoutManager.enumerateTextLayoutFragments(from: contentStorage.documentRange.location,
+            options: [.ensuresLayout, .ensuresExtraLineFragment]) { fragment in
+                native = fragment
+                return false
+            }
+        guard let source = native, let element = source.textElement else { return nil }
+        let fragment = NoteEmptyBodyLayoutFragment(source: source, element: element,
+            width: layoutManager.textContainer?.size.width ?? source.layoutFragmentFrame.width)
+        fragment.decoration = .plain
+        fragment.lastLine = lastLine
+        let kind = pendingParagraphStyle.map { NoteParagraphKind.of(
+            style: $0.state.style.storageName, level: $0.state.style.level,
+            callout: $0.state.style.calloutIcon, isChecklist: false) } ?? .body
+        if case .marker(let marker, _) = lastLine, marker.isOrdinal {
+            fragment.lastLineFont = Self.markerNumberFont
+        } else { fragment.lastLineFont = style.font(for: kind) }
+        fragment.lastLineInk = if case .quote = lastLine { style.quoteBarColor } else { style.bodyColor }
+        fragment.fill = style.codeBlockColor
+        fragment.border = style.codeBlockBorder
+        fragment.labelInk = style.secondaryColor
+        if case .mono = lastLine { fragment.hairlineInk = style.tokens.divider.nsColor }
+        return fragment
+    }
+
+    func drawEmptyBodyDecoration(at origin: CGPoint, in context: CGContext) {
+        guard let fragment = emptyBodyDecorationFragment() else { return }
+        fragment.drawLastLine(at: CGPoint(x: origin.x, y: origin.y + fragment.layoutFragmentFrame.minY), in: context)
+    }
+}
+
 // MARK: - Code languages and callout icons, as the chrome names them
 
 /// The code block's language menu (spec C: Plain Text and twelve languages)
@@ -1569,9 +1637,9 @@ extension NoteEditorEngine {
     /// paragraph at `location` is the one TextKit lays that line out in
     /// (the note's last, ending with its separator). Nil for Body.
     func pendingLastLineStyle(afterParagraphAt location: Int) -> NoteParagraphStyle? {
-        guard let pending = pendingParagraphStyle, pending.location == textStorage.length, pending.location > 0,
+        guard let pending = pendingParagraphStyle, pending.location == textStorage.length,
               pending.state.style != .body,
-              (textStorage.string as NSString).character(at: pending.location - 1) == 0x0A,
+              pending.location == 0 ? isBodyOnly : (textStorage.string as NSString).character(at: pending.location - 1) == 0x0A,
               NSMaxRange(paragraphRange(at: location)) == pending.location else { return nil }
         return pending.state.style
     }
@@ -1586,8 +1654,8 @@ extension NoteEditorEngine {
         let depth = CGFloat(pending.state.indent) * AtticNoteType.listLevelStep
         switch format {
         case .quote:
-            let above = paragraphRange(at: end - 1)
-            let joins = !isTitleLine(above.location) && paragraphStyle(at: above.location) == .quote
+            let above = paragraphRange(at: max(0, end - 1))
+            let joins = end > 0 && !isTitleLine(above.location) && paragraphStyle(at: above.location) == .quote
                 && (indentAt(above.location) ?? 0) == pending.state.indent
             return .quote(x: depth, joinsAbove: joins)
         case .bullet, .number:
@@ -1605,7 +1673,7 @@ extension NoteEditorEngine {
     /// starts its own box there (no box of the same kind ends just above).
     func startsEmptyLastLineBox(_ format: NoteParagraphStyle) -> Bool {
         let end = textStorage.length
-        guard end > 0 else { return false }
+        guard end > 0 else { return isBodyOnly && (format.isCode || format.isCallout) }
         let above = paragraphRange(at: end - 1)
         switch format {
         case let .callout(icon):
@@ -1703,7 +1771,11 @@ extension NoteEditorEngine {
     /// out again (TextKit lays the line out there). One paragraph.
     func refreshEmptyLastLine() {
         let end = textStorage.length
-        guard end > 0, textStorage.editedMask.isEmpty else { return }
+        guard textStorage.editedMask.isEmpty else { return }
+        guard end > 0 else {
+            if isBodyOnly { invalidateLayout(NSRange(location: 0, length: 0)) }
+            return
+        }
         let above = paragraphRange(at: end - 1)
         textStorage.edited(.editedAttributes, range: above, changeInLength: 0)
         invalidateLayout(above)

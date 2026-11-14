@@ -1103,9 +1103,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         updatePlaceholder()
     }
 
+    override var textContainerOrigin: NSPoint {
+        var origin = super.textContainerOrigin
+        origin.y += engine?.emptyBodyTopInset ?? 0
+        return origin
+    }
+
     /// "Title" on a new note's empty first line.
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        if let context = NSGraphicsContext.current?.cgContext {
+            engine?.drawEmptyBodyDecoration(at: textContainerOrigin, in: context)
+        }
         drawsPlaceholder = showsPlaceholder
         guard drawsPlaceholder, let engine else { return }
         let origin = textContainerOrigin

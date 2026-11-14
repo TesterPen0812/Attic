@@ -248,6 +248,69 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testR3ClearedSoleBodyParagraphDrawsItsPendingDecoration() throws {
+        var callout = NoteBlock.text("item", style: "quote"); callout.callout = "💡"
+        for block in [NoteBlock.text("item", style: "bullet"), .text("item", style: "quote"), callout,
+                      .text("item", style: "mono")] {
+            for titled in [true, false] {
+                let (engine, view, start, _) = bg14Engine(titled: titled, [block])
+                defer { engine.detachView() }
+                let (window, scroll) = try bg14Window(for: view)
+                defer { window.contentView = nil; window.close() }
+                view.setSelectedRange(NSRange(location: start, length: (block.text as NSString).length))
+                view.deleteBackward(nil)
+                bg14Settle(view)
+                let expected: NoteBlockLayoutFragment.LastLine = switch block.style {
+                case "bullet": .marker(.disc, x: 0)
+                case "mono": .mono(label: NoteCodeLanguageName.label(for: nil))
+                default: block.callout.map { .callout(icon: $0) } ?? .quote(x: 0, joinsAbove: false)
+                }
+                XCTAssertEqual(engine.emptyLastLineDecoration(afterParagraphAt: 0), expected)
+                let fragment = engine.layoutManager?.textLayoutFragment(for: engine.contentStorage.documentRange.location)
+                let decorated = titled ? fragment as? NoteBlockLayoutFragment : engine.emptyBodyDecorationFragment()
+                XCTAssertEqual(decorated?.lastLine, expected, "the renderer uses the current pending format and native line geometry")
+                XCTAssertNotNil(decorated?.emptyLastLine, "the native empty line reaches the decoration's draw path")
+                switch expected {
+                case .quote: XCTAssertGreaterThan(decorated?.lastLineQuoteBar?.height ?? 0, 0)
+                case .callout, .mono: XCTAssertGreaterThan(decorated?.lastLineBoxRect?.height ?? 0, 0)
+                case .marker: break
+                }
+                try bgRound2Capture(scroll, name: "R3-pending-\(titled)-\(block.style ?? "body")-\(block.callout != nil)")
+                let before = try bg14NativeCaret(view)
+                if !titled {
+                    let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+                    // Exclude the native caret. A cleared body has no glyphs:
+                    // only the requested marker, bar, icon or code label can
+                    // paint in this region.
+                    let region: CGRect = if case .mono = expected {
+                        CGRect(x: 10, y: 0, width: 120, height: max(0, before.minY - 2))
+                    } else {
+                        CGRect(x: 0, y: 0, width: max(0, before.minX - 3), height: before.maxY + 4)
+                    }
+                    // The Accepted light quote bar uses 22% alpha.
+                    let alphaThreshold: CGFloat = if case .quote = expected { engine.style.quoteBarColor.alphaComponent / 2 } else { 0.25 }
+                    var painted = 0
+                    for y in Int(region.minY * scale)..<Int(region.maxY * scale) {
+                        for x in Int(region.minX * scale)..<Int(region.maxX * scale) {
+                            if (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > alphaThreshold { painted += 1 }
+                        }
+                    }
+                    XCTAssertGreaterThan(painted, 3, "the real text view paints \(expected) before typing")
+                }
+                view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+                view.setSelectedRange(NSRange(location: start, length: 0))
+                let after = try bg14NativeCaret(view)
+                XCTAssertEqual(after.minX, before.minX, accuracy: 0.5, "the first letter keeps the empty block's inset")
+                XCTAssertEqual(after.minY, before.minY, accuracy: 0.5, "the first letter keeps the empty block's baseline")
+                XCTAssertEqual(after.height, before.height, accuracy: 0.5)
+                print("R3_EMPTY_STYLE titled=\(titled) style=\(block.style ?? "body") callout=\(block.callout != nil) before=\(before) after=\(after)")
+                try bgRound2Capture(scroll, name: "R3-pending-\(titled)-\(block.style ?? "body")-\(block.callout != nil)-typed")
+            }
+        }
+    }
+
     func testBG14ClearingTheOnlyTaskBodyParagraphKeepsItsIdentityStyleAndExtras() throws {
         var block = NoteBlock.text("Plan", id: UUID(), style: "heading")
         block.level = 3
