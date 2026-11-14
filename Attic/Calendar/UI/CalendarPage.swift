@@ -379,8 +379,12 @@ struct CalendarPage: View {
         let board = AgentWatchBoard.shared
         guard board.acceptsDayRequest(id: request.id, generation: request.generation,
                                       pageIsVisible: isReallyVisible) else { return }
-        board.consumeDay(request.id)
-        model.select(request.day)
+        afterClosingEvent {
+            guard board.acceptsDayRequest(id: request.id, generation: request.generation,
+                                          pageIsVisible: isReallyVisible) else { return }
+            board.consumeDay(request.id)
+            model.select(request.day)
+        }
     }
 
     private func beginSearch() {

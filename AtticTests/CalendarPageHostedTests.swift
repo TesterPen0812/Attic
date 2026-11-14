@@ -642,6 +642,56 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    /// A watched agent day change must use the same owned-event save barrier
+    /// as the page's own day keys; otherwise the open draft disappears when
+    /// its event row scrolls out of the agenda.
+    func testReviewWatchedDaySavesOwnedEventBeforeSwitchingDays() throws {
+        let backend = FakeCalendarEventWriteStore()
+        backend.availableCalendars = [CalendarWriteCalendar(id: "test", title: "Test",
+            colour: .init(red: 0.2, green: 0.5, blue: 0.9), sourceID: "fake", sourceTitle: "Fake", isWritable: true)]
+        let undo = UndoRoute()
+        let writer = EventKitCalendarEventWriter(store: backend, record: try CalendarOwnershipRecord(),
+            undoRoute: undo, notificationCenter: NotificationCenter())
+        let start = date(2026, 10, 30, 9)
+        let owned = try writer.create(CalendarEventDraft(title: "Original", start: start, length: 3600,
+            calendarID: "test", timeZoneID: "Europe/London"))
+        let event = CalendarEvent(id: owned.occurrenceID, title: "Original", start: start,
+            end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
+            calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
+        let chat = AgentChatModel()
+        let board = AgentWatchBoard.shared
+        chat.open()
+        board.bindWatching(to: chat)
+        defer { chat.close(); board.retireDayRequest() }
+
+        try withReducedMotion {
+            try withPage(events: [event], height: 900, makeWriter: { writer }) { page in
+                page.model.select(day(2026, 10, 30))
+                page.model.setDayView(true)
+                page.settle(0.3)
+                try press(page, "calendar-event-\(event.id)")
+                page.settle(0.3)
+                XCTAssertTrue(page.model.eventRows.canEdit)
+                page.model.eventRows.title = "Edited while watching"
+                backend.commitError = .saveFailed("Simulated unavailable calendar")
+                board.pick(day(2026, 10, 31), generation: chat.watchingGeneration)
+                page.settle(0.6)
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 30),
+                               "a failed save keeps the day and the unsaved editor")
+                XCTAssertEqual(page.model.eventRows.title, "Edited while watching")
+                XCTAssertEqual(backend.events.values.first?.draft.title, "Original")
+
+                backend.commitError = nil
+                board.pick(day(2026, 10, 31), generation: chat.watchingGeneration)
+                page.settle(0.6)
+                XCTAssertEqual(backend.events.values.first?.draft.title, "Edited while watching",
+                               "watched navigation saves the user's draft before the old event row disappears")
+                XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31))
+                XCTAssertNil(page.model.eventRows.rowID, "a successful save closes the editor")
+            }
+        }
+    }
+
     func testDayTimelineIsBuiltLazilyAndScrollingWithinAnHourDoesNotRebuildIt() throws {
         try withReducedMotion {
             try withPage(events: [timed("a", 30, (9, 0), (10, 0))], height: 460) { page in
