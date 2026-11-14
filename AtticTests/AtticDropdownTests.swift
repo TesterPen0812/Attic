@@ -869,7 +869,27 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
-    // MARK: A flick that left no highlight behind (N-1)
+    // MARK: A flick that left no highlight behind (N-1, T-1, T-2)
+
+    /// A list scrolled so that its first row is half out of view, no highlight
+    /// anywhere, and the origin the rows' hovers report to.
+    private func makeAFlickableList(viaParameter: Bool) throws
+        -> (window: NSWindow, host: NSHostingView<ViewportRows>, origin: AtticHighlightOrigin, list: NSScrollView, start: CGFloat, box: OriginBox) {
+        let window = makeWindow()
+        let box = OriginBox()
+        let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        let origin = try XCTUnwrap(box.origin)
+        let list = try XCTUnwrap(scrollViews(in: host).first)
+        scroll(list, to: AtticDropdownMetrics.rowHeight / 2)
+        spin(0.3)
+        let start = list.contentView.bounds.origin.y
+        XCTAssertEqual(start, AtticDropdownMetrics.rowHeight / 2, accuracy: 0.5, "the first row is half scrolled out")
+        return (window, host, origin, list, start, box)
+    }
 
     /// The pointer crosses a row that is cut off at the top and is gone again
     /// before any highlight was reported (a list that clears its highlight on
@@ -878,31 +898,60 @@ final class AtticDropdownTests: XCTestCase {
     /// or typing its exact name, scrolls the row into view.
     func testPF43AFlickAcrossACutOffRowLeavesNoPointerOriginBehind() throws {
         for viaParameter in [false, true] {
-            let window = makeWindow()
+            let (window, host, origin, list, start, box) = try makeAFlickableList(viaParameter: viaParameter)
             defer { window.close() }
-            let box = OriginBox()
-            let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
-            host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
-            window.contentView?.addSubview(host)
-            host.layoutSubtreeIfNeeded()
-            spin(0.2)
-            let origin = try XCTUnwrap(box.origin)
-            let scrollView = try XCTUnwrap(scrollViews(in: host).first)
-            scroll(scrollView, to: AtticDropdownMetrics.rowHeight / 2)
-            spin(0.3)
-            let start = scrollView.contentView.bounds.origin.y
-            XCTAssertEqual(start, AtticDropdownMetrics.rowHeight / 2, accuracy: 0.5, "the first row is half scrolled out")
-
             origin.pointerEntered("row-0")
             origin.pointerLeft("row-0")
             wait { origin.pointerRow == nil }
             XCTAssertNil(origin.pointerRow, "the flick's origin is gone once the update that carried it has run (parameter: \(viaParameter))")
             host.rootView = ViewportRows(highlighted: 0, viaParameter: viaParameter, box: box)
             host.layoutSubtreeIfNeeded()
-            wait(for: host) { scrollView.contentView.bounds.origin.y < start - 4 }
-            XCTAssertLessThan(scrollView.contentView.bounds.origin.y, start - 4,
+            wait(for: host) { list.contentView.bounds.origin.y < start - 4 }
+            XCTAssertLessThan(list.contentView.bounds.origin.y, start - 4,
                               "the keyboard's highlight on the cut-off row scrolls to it (parameter: \(viaParameter))")
         }
+    }
+
+    /// The same flick, and the keyboard's key press lands at once (no turn of
+    /// the run loop in between, no clock): the row is still brought into view.
+    func testPF43AKeyboardMoveRightAfterAFlickScrollsTheCutOffRow() throws {
+        for viaParameter in [false, true] {
+            let (window, host, origin, list, start, box) = try makeAFlickableList(viaParameter: viaParameter)
+            defer { window.close() }
+            origin.pointerEntered("row-0")
+            origin.pointerLeft("row-0")
+            host.rootView = ViewportRows(highlighted: 0, viaParameter: viaParameter, box: box)
+            wait { list.contentView.bounds.origin.y < start - 4 }
+            XCTAssertLessThan(list.contentView.bounds.origin.y, start - 4,
+                              "a key press right after a flick scrolls the row into view (parameter: \(viaParameter))")
+        }
+    }
+
+    /// The production tag picker has both an inner viewport and a card. Its
+    /// keyboard highlight must reveal a half-hidden tag immediately after a
+    /// flick that left no highlighted tag behind.
+    func testPF43ATagPickerKeyboardHighlightImmediatelyAfterFlickRevealsTheTag() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let model = NestedModel()
+        let host = NSHostingView(rootView: NestedTagCard(model: model, tags: tagNames(30)))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 420)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        wait(for: host) { model.origin != nil }
+        let origin = try XCTUnwrap(model.origin)
+        let list = try XCTUnwrap(scrollViews(in: host).last)
+        scroll(list, to: AtticDropdownMetrics.rowHeight / 2)
+        spin(0.3)
+        let start = list.contentView.bounds.origin.y
+        XCTAssertEqual(start, AtticDropdownMetrics.rowHeight / 2, accuracy: 0.5)
+
+        origin.pointerEntered("tag-00")
+        origin.pointerLeft("tag-00")
+        model.highlighted = 0
+        wait(for: host) { list.contentView.bounds.origin.y < start - 4 }
+        XCTAssertLessThan(list.contentView.bounds.origin.y, start - 4,
+                          "the real tag picker's keyboard highlight reveals the cut-off row after the flick")
     }
 
     /// A row that is lit already has no highlight for the pointer to make: a

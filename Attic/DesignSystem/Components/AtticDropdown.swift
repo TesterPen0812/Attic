@@ -2450,21 +2450,18 @@ final class AtticHighlightOrigin {
     /// Whether the list has reported the pointer row's highlight yet: a
     /// pointer that leaves first (a flick across the edge) still made it.
     private var reported = false
-    /// How long a pointer that left a row before the list reported it stays
-    /// that row's origin. The report of a highlight the pointer made comes
-    /// with the same update; a flick that moved no highlight at all
-    /// (nil, the row, nil within one update) never reports, and must not
-    /// leave the row as the origin of the keyboard's next visit to it.
-    private static let unreportedLeaveGrace: Duration = .milliseconds(300)
-    private var pendingLeave: Task<Void, Never>?
+    /// A leave with no highlight report keeps its origin through the current
+    /// update, then expires on the next main-queue turn. A flick that changes
+    /// nil → row → nil never reports a row, so its next keyboard visit must
+    /// not inherit that pointer origin. New entries invalidate queued leaves.
+    private var leaveGeneration = 0
 
     func pointerEntered(_ id: String) {
         // Every move inside a row says so again: only a different row is a
         // new pointer highlight still to be reported.
         if pointerRow != id { reported = false }
         pointerRow = id
-        pendingLeave?.cancel()
-        pendingLeave = nil
+        leaveGeneration &+= 1
     }
 
     func pointerLeft(_ id: String) {
@@ -2473,12 +2470,11 @@ final class AtticHighlightOrigin {
             pointerRow = nil
             return
         }
-        pendingLeave?.cancel()
-        pendingLeave = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.unreportedLeaveGrace)
-            guard !Task.isCancelled, let self, self.pointerRow == id else { return }
+        leaveGeneration &+= 1
+        let generation = leaveGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.leaveGeneration == generation, self.pointerRow == id else { return }
             self.pointerRow = nil
-            self.pendingLeave = nil
         }
     }
 
