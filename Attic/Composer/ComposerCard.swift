@@ -930,6 +930,22 @@ extension TaskPriority {
     }
 }
 
+/// Where the composer's Tab trap hands a Tab typed while text is marked: the
+/// focused text view's input context, which an input method may use to pick a
+/// candidate. Only an input method is asked: with a plain keyboard layout the
+/// text is marked by a dead key, nothing there takes Tab, and asking would let
+/// AppKit run its own Tab command, which moves the keyboard out of the field.
+/// Tests replace `deliver` to see what reaches it.
+@MainActor
+enum ComposerInputMethod {
+    static let native: (NSTextView, NSEvent) -> Bool = { view, event in
+        guard let context = view.inputContext, let source = context.selectedKeyboardInputSource,
+              !source.contains(".keylayout.") else { return false }
+        return context.handleEvent(event)
+    }
+    static var deliver = native
+}
+
 /// Catches Tab and ⇧Tab in this view's window while `active` (the writing
 /// line has the keyboard), before the field editor moves the keyboard out
 /// of the card.
@@ -954,10 +970,14 @@ private struct ComposerTabTrap: NSViewRepresentable {
                     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                         guard let self, event.keyCode == 48, event.window === self.window,
                               event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
-                        if (event.window?.firstResponder as? NSTextView)?.hasMarkedText() == true {
-                            // AppKit's default Tab action resigns the field
-                            // even when text is marked. Keep composition in
-                            // its native input editor until it commits.
+                        if let text = event.window?.firstResponder as? NSTextView, text.hasMarkedText() {
+                            // The input method sees Tab and ⇧Tab first (it may
+                            // use them to pick a candidate). AppKit's default
+                            // Tab action would resign the field even with
+                            // text marked, so the event ends here whatever
+                            // the input method did: composition stays in its
+                            // native input editor until it commits.
+                            _ = ComposerInputMethod.deliver(text, event)
                             return nil
                         }
                         return self.onTab(event.modifierFlags.contains(.shift)) ? nil : event
