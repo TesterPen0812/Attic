@@ -72,6 +72,58 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stored.first { $0.id == text.id }), replacement)
     }
 
+    func testBG31ZeroHeightAndWidthResizeUseOnlyNonzeroAxis() {
+        for vertical in [false, true] {
+            let original = DrawObject(frame: DrawFrame(x: 10, y: 20,
+                                                        width: vertical ? 0 : 100, height: vertical ? 100 : 0),
+                                      content: .stroke([DrawPoint(x: 10, y: 20),
+                                                        DrawPoint(x: vertical ? 10 : 110, y: vertical ? 120 : 20)]))
+            let resized = DrawPageModel.resized([original], handle: .bottomRight,
+                                                delta: CGPoint(x: 10, y: 10), shift: false)[0]
+            let length = vertical ? resized.frame.height : resized.frame.width
+            XCTAssertGreaterThan(length, 100)
+            XCTAssertLessThan(length, 150, "A straight stroke must not explode in size")
+            XCTAssertEqual(vertical ? resized.frame.width : resized.frame.height, 0)
+        }
+    }
+
+    func testBG31AccessibilityScalingShrinksAndGrowsStraightLinesWithUndo() throws {
+        let canvas = try XCTUnwrap(model.canvasID)
+        let line = DrawObject(frame: DrawFrame(x: 10, y: 20, width: 100, height: 0),
+                              content: .shape(.line))
+        XCTAssertTrue(store.perform(.put([line]), on: canvas).isSaved)
+        model.open(canvas)
+        model.setTool(.select)
+        model.select([line.id])
+        model.scaleSelection(by: 0.9)
+        let smaller = try XCTUnwrap(model.objects.first { $0.id == line.id })
+        XCTAssertEqual(smaller.frame.width, 90, accuracy: 0.001)
+        model.undoAcknowledged()
+        XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == line.id }).frame, line.frame)
+        model.select([line.id])
+        model.scaleSelection(by: 1.1)
+        XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == line.id }).frame.width, 110, accuracy: 0.001)
+    }
+
+    func testBG31AccessibilityScalingVerticalLineIsExactAndUndoable() throws {
+        let canvas = try XCTUnwrap(model.canvasID)
+        let line = DrawObject(frame: DrawFrame(x: 10, y: 20, width: 0, height: 100),
+                              content: .shape(.arrow))
+        XCTAssertTrue(store.perform(.put([line]), on: canvas).isSaved)
+        model.open(canvas)
+        model.setTool(.select)
+        model.select([line.id])
+        model.scaleSelection(by: 0.9)
+        let smaller = try XCTUnwrap(model.objects.first { $0.id == line.id })
+        XCTAssertEqual(smaller.frame.height, 90, accuracy: 0.001)
+        XCTAssertEqual(smaller.frame.width, 0)
+        model.undoAcknowledged()
+        XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == line.id }).frame, line.frame)
+        model.select([line.id])
+        model.scaleSelection(by: 1.1)
+        XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == line.id }).frame.height, 110, accuracy: 0.001)
+    }
+
     private func drag(_ points: [CGPoint], shift: Bool = false) {
         model.pointerDown(at: points[0], shift: shift)
         for point in points.dropFirst() { model.pointerDragged(to: point, shift: shift) }

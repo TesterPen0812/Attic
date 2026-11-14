@@ -110,13 +110,15 @@ extension DrawPageModel {
                              y: handle == .topLeft || handle == .topRight ? box.maxY : box.minY)
         let signX: CGFloat = handle == .topLeft || handle == .bottomLeft ? -1 : 1
         let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
-        let width = max(box.width, 0.0001), height = max(box.height, 0.0001)
-        var sx = max(Self.minimumResize, box.width + signX * delta.x) / width
-        var sy = max(Self.minimumResize, box.height + signY * delta.y) / height
+        let flatX = box.width < 0.001, flatY = box.height < 0.001
+        var sx = flatX ? 1 : max(Self.minimumResize, box.width + signX * delta.x) / box.width
+        var sy = flatY ? 1 : max(Self.minimumResize, box.height + signY * delta.y) / box.height
         // Images and groups keep their proportions; Shift keeps a shape's.
-        let uniform = shift || originals.count > 1 || first.isImage || box.width < 0.001 || box.height < 0.001
+        let uniform = shift || originals.count > 1 || first.isImage || flatX || flatY
         if uniform {
-            let s = abs(sx - 1) >= abs(sy - 1) ? sx : sy
+            // A zero extent is a straight line or point, not a tiny length
+            // from which to derive a huge reciprocal scale.
+            let s = flatX ? sy : flatY ? sx : abs(sx - 1) >= abs(sy - 1) ? sx : sy
             sx = s
             sy = s
         }
@@ -195,8 +197,13 @@ extension DrawPageModel {
     func scaleSelection(by factor: CGFloat) {
         syncExternalChanges()
         let chosen = selectedObjects
-        guard let union = DrawGeometry.union(chosen), live == nil else { return }
-        let delta = CGPoint(x: union.width * (factor - 1), y: union.height * (factor - 1))
+        guard let first = chosen.first, DrawGeometry.union(chosen) != nil, live == nil else { return }
+        // Match resized(_:)'s raw object frames. The painted union includes
+        // half the stroke width, which distorts a requested 0.9× or 1.1×.
+        let box = chosen.dropFirst().reduce(DrawGeometry.frame(first.frame)) {
+            $0.union(DrawGeometry.frame($1.frame))
+        }
+        let delta = CGPoint(x: box.width * (factor - 1), y: box.height * (factor - 1))
         let handle: DrawHandle = chosen.count == 1 && chosen[0].text.isEmpty == false ? .right : .bottomRight
         performAcknowledged(.put(Self.resized(chosen, handle: handle, delta: delta, shift: true)))
     }
