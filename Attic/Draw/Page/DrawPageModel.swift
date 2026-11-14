@@ -232,6 +232,8 @@ final class DrawPageModel: ObservableObject {
     /// it: the switch finishes its own navigation, and a flush hops once at
     /// its end.
     private var deletedCanvasHopDeferrals = 0
+    /// The canvases acknowledged flushes left in Recently Deleted (`open` clears it before its own).
+    private var canvasesDeletedByLastFlush: Set<UUID> = []
     private var flashGeneration = 0
     /// Canvases whose thumbnail is behind their content.
     private var thumbnailDirty: Set<UUID> = []
@@ -597,14 +599,25 @@ final class DrawPageModel: ObservableObject {
         }
         finishLiveInput()
         deletedCanvasHopDeferrals += 1
+        canvasesDeletedByLastFlush = []
         endEditing()
         flushAcknowledgedDraw()
         deletedCanvasHopDeferrals -= 1
+        let flushDeletedTarget = canvasesDeletedByLastFlush.contains(id)
         // The canvas being left gets its thumbnail now.
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
         flushViewportMemory()
         guard let snapshot = try? IdleLatencyTrace.span("draw_board_open", { try store.open(id) }) else { return }
+        if flushDeletedTarget, snapshot.canvas.deletedAt != nil {
+            // The queued Undo that just ran put this very canvas in Recently
+            // Deleted. Leave it the way an external deletion does, instead of
+            // accepting the deleted snapshot and dropping the deferred hop.
+            externalSyncDeferred = false
+            appliedRevision = store.revision
+            if let next = try? store.library().first { open(next.id) } else { newCanvas() }
+            return
+        }
         IdleLatencyTrace.count("draw_objects_opened", snapshot.objects.count)
         store.activate(id)
         canvasID = id
@@ -1372,6 +1385,10 @@ final class DrawPageModel: ObservableObject {
             }
             if case .saved(let delta) = result { deletedHere[entry.canvas] = delta.canvas.deletedAt != nil ? 0 : nil }
             if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
+        }
+        for canvas in Set(entries.map(\.canvas)) {
+            if deletedHere[canvas] != nil { canvasesDeletedByLastFlush.insert(canvas) }
+            else { canvasesDeletedByLastFlush.remove(canvas) }
         }
         deletedCanvasHopDeferrals -= 1
         if externalSyncDeferred { syncExternalChanges() }

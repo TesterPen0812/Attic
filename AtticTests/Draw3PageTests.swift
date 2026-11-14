@@ -1435,6 +1435,30 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNotEqual(model.canvasID, target.id)
     }
 
+    /// BG-29 round 2 (Dot R-3, Opus R-13): `open` of the very canvas whose
+    /// queued Undo its own flush applies must leave that deleted canvas, not
+    /// accept its snapshot and drop the deferred hop.
+    func testBG29OpeningTheCanvasItsOwnFlushDeletedLeavesIt() throws {
+        use(try persistentStore())
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
+        let target = store.create(name: "Target")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T"))]), on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: target.id).isSaved)
+        XCTAssertTrue(store.perform(.restoreCanvas, on: target.id).isSaved)
+        model.open(target.id)
+        model.undoAcknowledged()
+        model.open(target.id)
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt)
+        XCTAssertNotEqual(model.canvasID, target.id, "the board must leave the canvas now in Recently Deleted")
+        XCTAssertEqual(model.canvasID, other.id)
+        XCTAssertFalse(model.externalSyncDeferred)
+        model.setTool(.pen)
+        drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        model.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(other.id).objects.count, 2, "drawing is accepted again")
+    }
+
     // MARK: Quit
 
     func testQuitFinishesTheStrokeInProgress() async {
