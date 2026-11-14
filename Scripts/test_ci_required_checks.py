@@ -92,6 +92,27 @@ class RequiredChecksTests(unittest.TestCase):
                     self.assertIn('ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui', result.stdout)
                     self.assertIn('CODE_SIGNING_ALLOWED=YES', result.stdout)
 
+    def test_hover_scroll_repeats_are_selected_only_in_focused_ci(self):
+        import os
+        import subprocess
+        import textwrap
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        block = workflow.split('          # Hosted identifiers', 1)[1].split('          ATTIC_VISUAL_UAT_DIRECTORY=', 1)[0]
+        script = textwrap.dedent('# Hosted identifiers' + block) + '\nprintf "%s\\n" "$ui_scheme" "${skip_flags[@]}"'
+        diagnostics = [
+            'AtticUITests/ScrollEdgeUITests/testDarkGlassHoverScrollRepeats',
+            'AtticUITests/ScrollEdgeUITests/testLightGlassHoverScrollControl',
+        ]
+        for selection in ['', 'AtticUITests/ScrollEdgeUITests', *diagnostics, ' '.join(diagnostics),
+                          'AtticTests/ScrollEdgeHangTests']:
+            with self.subTest(selection=selection):
+                result = subprocess.run(['bash', '-c', script], env=dict(os.environ, UI_TESTS=selection),
+                                        capture_output=True, text=True, check=True)
+                for diagnostic in diagnostics:
+                    skipped = f'-skip-testing:{diagnostic}' in result.stdout
+                    self.assertEqual(skipped, diagnostic not in selection.split()
+                                     and not selection.startswith('AtticTests/'))
+
     def test_optimized_reference_uses_historical_task_tests_with_current_cost_members(self):
         from prepare_cost_reference import INTEGRATION_MEMBERS
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()

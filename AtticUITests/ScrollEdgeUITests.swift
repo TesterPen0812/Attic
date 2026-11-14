@@ -18,24 +18,79 @@ final class ScrollEdgeUITests: XCTestCase {
 
     func testCapturesRowsPassingUnderTheControls() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
+            let prefix = "scroll-edges-\(surface)-\(mode)"
+            let probe = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-hang-\(UUID().uuidString).txt")
+            let screenshot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
             let app = XCUIApplication()
             app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
             app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
+            app.launchEnvironment["ATTIC_HANG_PROBE_PATH"] = probe.path
             app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
             app.launch()
             let pin = app.buttons["panel-pin-button"]
             XCTAssertTrue(pin.waitForExistence(timeout: 8), "\(surface) \(mode): the panel shows")
             XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 4), "the tabs are there")
+            XCTAssertTrue(waitFor(timeout: 2) {
+                (try? String(contentsOf: probe, encoding: .utf8))?.hasPrefix("ARMED:") == true
+            }, "\(prefix): the app-side hang probe is armed")
+            let pidValue = app.responds(to: NSSelectorFromString("processID"))
+                ? app.value(forKey: "processID") : nil
+            let pid = (pidValue as? NSNumber)?.int32Value ?? (pidValue as? Int32) ?? 0
+            XCTAssertGreaterThan(pid, 0, "\(prefix): launched app PID is available for recovery")
+            // XCTest can abandon the method when the app is killed during an
+            // XCUI scroll/snapshot. Teardown still preserves that pass's dump.
+            addTeardownBlock { [weak self] in
+                guard let self, FileManager.default.fileExists(atPath: probe.path) else { return }
+                let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
+                guard contents.hasPrefix("HANG:") else { return }
+                self.attachProbe(at: probe, name: "\(prefix)-teardown")
+                if FileManager.default.fileExists(atPath: screenshot.path) {
+                    let capture = XCTAttachment(contentsOfFile: screenshot)
+                    capture.name = "\(prefix)-teardown-screen"
+                    capture.lifetime = .keepAlways
+                    self.add(capture)
+                } else {
+                    let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
+                    note.name = "\(prefix)-teardown-screen-unavailable"
+                    note.lifetime = .keepAlways
+                    self.add(note)
+                }
+            }
+            let recovery = pid > 0 ? HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot) : nil
+            recovery?.start()
+            defer {
+                let result = recovery?.finish()
+                if result?.recovered == true {
+                    attachProbe(at: probe, name: prefix)
+                    if FileManager.default.fileExists(atPath: screenshot.path) {
+                        let capture = XCTAttachment(contentsOfFile: screenshot)
+                        capture.name = "\(prefix)-frozen-screen"
+                        capture.lifetime = .keepAlways
+                        add(capture)
+                    } else {
+                        let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
+                        note.name = "\(prefix)-screenshot-unavailable"
+                        note.lifetime = .keepAlways
+                        add(note)
+                    }
+                    XCTFail("\(prefix): \(result?.reason ?? "sustained main-run-loop hang")")
+                } else {
+                    app.terminate()
+                }
+            }
             let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
             middle.hover()
             // Either sign: one of the two leaves rows under the tabs.
             for (index, delta) in [CGFloat(-140), 280].enumerated() {
+                if recovery?.hasRecovered == true { break }
                 middle.scroll(byDeltaX: 0, deltaY: delta)
+                if recovery?.hasRecovered == true { break }
                 RunLoop.current.run(until: Date().addingTimeInterval(1.2))
                 save(panel.screenshot(), name: "scroll-edges-\(surface)-\(mode)-soft-\(index)")
             }
-            app.terminate()
         }
     }
 

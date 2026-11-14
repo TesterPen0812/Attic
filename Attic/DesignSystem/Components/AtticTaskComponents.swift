@@ -1898,7 +1898,10 @@ private struct AtticRowControlAnchorsKey: PreferenceKey {
     static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
         value.append(contentsOf: nextValue())
         #if DEBUG
-        AtticHangProbe.note("row.controlAnchors.reduce", key: "all", value: String(value.count))
+        // Preference reduction accumulates anchors within one pass; its
+        // changing count is not a state oscillation. Track calls separately.
+        AtticHangProbe.note("row.controlAnchors.reduce", key: "all", value: "called",
+                            detail: "anchors-so-far=\(value.count)")
         #endif
     }
 }

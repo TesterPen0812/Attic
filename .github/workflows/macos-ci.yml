@@ -805,6 +805,18 @@ jobs:
                 CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
               ;;
           esac
+          # Keep the 25-launch diagnostic and its light control available for
+          # focused dispatch, but never select them in ordinary full CI.
+          if [ "$ui_scheme" = AtticUI ]; then
+            for diagnostic in \
+              AtticUITests/ScrollEdgeUITests/testDarkGlassHoverScrollRepeats \
+              AtticUITests/ScrollEdgeUITests/testLightGlassHoverScrollControl; do
+              case " $UI_TESTS " in
+                *" $diagnostic "*) ;;
+                *) skip_flags+=("-skip-testing:$diagnostic") ;;
+              esac
+            done
+          fi
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
