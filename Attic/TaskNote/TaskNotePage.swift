@@ -1322,6 +1322,9 @@ struct TaskNotePageContainer: View {
             guard presenter == nil else { return nil }
             switch placement {
             case .panel:
+                // A window may have started while this panel's decode was
+                // suspended. Check again before acquiring or mounting a host.
+                if TaskNoteWindows.shared.bringForward(taskID) { onClose(); return nil }
                 return try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
                                                    design: design, columnInset: inset, prepared: prepared)
             case .window:

@@ -1492,6 +1492,35 @@ final class TaskNoteComposedHostTests: XCTestCase {
         presenters.append(presenter)
     }
 
+    func testPF13AWindowStartedDuringThePanelDecodePreventsADoubleHost() async throws {
+        let id = try seed(.heavy)
+        let hold = OrderedOpenDecodeHold()
+        notes = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+                                    saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+                                    decodeOpenDocument: { bytes in await hold.decode(bytes) })
+        notes.attachUndoRoute(library.undo)
+        let hosting = sectionHosting()
+        var closed = 0
+        hosting.rootView = AnyView(TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes,
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: { closed += 1 }))
+        hosting.view.layoutSubtreeIfNeeded()
+        try await hold.waitUntilHeld(1)
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let windowOpen = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                     design: .default, uiState: PanelUIState())
+        try await hold.waitUntilHeld(2)
+        await hold.release(1)
+        for _ in 0..<30 where closed == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(closed, 1, "the panel yields to the window even if its decode began first")
+        XCTAssertNil(notes.taskNotePresenter, "the window's leased host never mounts in the panel too")
+        await hold.release(2)
+        await windowOpen.value
+        XCTAssertNotNil(TaskNoteWindows.shared.window(for: id))
+        XCTAssertNil(notes.taskNotePresenter, "completing the window does not adopt a panel host")
+        XCTAssertEqual(TaskNoteWindows.shared.windowCount, 1)
+        if let owner = TaskNotePresenter.open(for: id) { presenters.append(owner) }
+    }
+
     func testPF13CancellingAnOpenClearsItsTokenAndTheNextOpenStarts() async throws {
         let taskID = try seed(.heavy)
         let hold = OpenDecodeHold(holdFirst: true)
@@ -2341,4 +2370,24 @@ actor OpenDecodeHold {
     }
 
     func release() { hold?.resume(); hold = nil }
+}
+
+/// Releases panel and window decodes in a chosen order, independent of worker speed.
+private actor OrderedOpenDecodeHold {
+    private var count = 0
+    private var holds: [Int: CheckedContinuation<Void, Never>] = [:]
+    func decode(_ bytes: Data) async -> (content: NoteContent, onMainThread: Bool) {
+        count += 1
+        let index = count
+        await withCheckedContinuation { holds[index] = $0 }
+        return (NoteContentCodec.decode(bytes), false)
+    }
+    func waitUntilHeld(_ index: Int) async throws {
+        for _ in 0..<500 {
+            if holds[index] != nil { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw NSError(domain: "OrderedOpenDecodeHold", code: index)
+    }
+    func release(_ index: Int) { holds.removeValue(forKey: index)?.resume() }
 }
