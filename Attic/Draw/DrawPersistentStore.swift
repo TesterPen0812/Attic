@@ -8,13 +8,20 @@ final class DrawSaveMetrics {
     var metadataRowsRead = 0
     var objectRowsRead = 0
     var payloadBytesRead = 0
+    var payloadFetches = 0
+    #if DEBUG
+    var payloadDecodesOnMain = 0
+    #endif
     var thumbnailBytesRead = 0
     var metadataRowsWritten = 0
     var objectRowsWritten = 0
     var payloadRowsWritten = 0
     var saveAttempts = 0
     func reset() {
-        metadataRowsRead = 0; objectRowsRead = 0; payloadBytesRead = 0; thumbnailBytesRead = 0
+        metadataRowsRead = 0; objectRowsRead = 0; payloadBytesRead = 0; payloadFetches = 0; thumbnailBytesRead = 0
+        #if DEBUG
+        payloadDecodesOnMain = 0
+        #endif
         metadataRowsWritten = 0; objectRowsWritten = 0; payloadRowsWritten = 0; saveAttempts = 0
     }
 }
@@ -179,9 +186,20 @@ final class DrawSwiftDataRepository: DrawRepository {
         let objects = try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate: #Predicate { $0.canvasID == id }))
         IdleLatencyTrace.count("draw_repo_rows_read", objects.count)
         metrics.objectRowsRead += objects.count
-        let values = try Dictionary(grouping: objects, by: \.id).values.compactMap { replicas -> DrawObject? in
-            guard let row = objectWinner(replicas) else { return nil }
-            return try objectValue(row, in: context)
+        let winners = Dictionary(grouping: objects, by: \.id).values.compactMap(objectWinner)
+        // One scoped payload fetch replaces one query per winning ink/image;
+        // shape- and text-only boards do not fetch any binary rows at all.
+        let payloads: [DrawPayloadRecord]
+        if winners.contains(where: { !$0.payloadDigest.isEmpty }) {
+            metrics.payloadFetches += 1
+            payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
+                #Predicate { $0.canvasID == id && $0.role == "object" }))
+        } else {
+            payloads = []
+        }
+        let byID = Dictionary(grouping: payloads, by: \.id)
+        let values = try winners.map { row in
+            return try objectValue(row, payloads: byID[row.id] ?? [])
         }
         return DrawSnapshot(canvas: canvas, objects: values)
     }
@@ -527,16 +545,16 @@ final class DrawSwiftDataRepository: DrawRepository {
         metrics.thumbnailBytesRead += bytes.count
         return bytes
     }
-    private func objectValue(_ row: DrawObjectRecord, in context: ModelContext) throws -> DrawObject {
+    private func objectValue(_ row: DrawObjectRecord, payloads: [DrawPayloadRecord]) throws -> DrawObject {
         guard row.formatVersion == 1 else { throw DrawStoreError.invalidObject }
         var object = try DrawCodec.decode(DrawObject.self, from: row.header)
         guard object.id == row.id, object.zIndex == row.zIndex, object.deletedAt == row.deletedAt,
               object.text == row.textIndex else { throw DrawStoreError.invalidObject }
         guard !row.payloadDigest.isEmpty else { return object }
-        let id = row.id, canvasID = row.canvasID, digest = row.payloadDigest
-        let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
-            #Predicate { $0.id == id && $0.canvasID == canvasID && $0.role == "object" && $0.digest == digest }))
-        guard let payload = payloads.first, payload.formatVersion == 1 else { throw DrawStoreError.invalidObject }
+        let digest = row.payloadDigest
+        guard let payload = payloads.first(where: { $0.digest == digest }), payload.formatVersion == 1 else {
+            throw DrawStoreError.invalidObject
+        }
         let bytes = payload.bytes
         metrics.payloadBytesRead += bytes.count
         guard DrawCodec.digest(bytes) == digest else { throw DrawStoreError.invalidObject }
@@ -548,3 +566,6 @@ final class DrawSwiftDataRepository: DrawRepository {
         return object
     }
 }
+        #if DEBUG
+        if Thread.isMainThread { metrics.payloadDecodesOnMain += 1 }
+        #endif

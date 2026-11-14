@@ -46,6 +46,39 @@ final class Draw3StoreTests: XCTestCase {
         DrawObject(content: .stroke([DrawPoint(x: 1, y: 2), DrawPoint(x: 30, y: 40)]))
     }
 
+    func testPF22ColdOpenFetchesPayloadsInBatchesWithoutChangingObjects() throws {
+        let container = try container()
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        let canvas = DrawCanvas(name: "Payload load")
+        let canvasRecord = DrawCanvasRecord()
+        try canvasRecord.apply(canvas)
+        seeded.insert(canvasRecord)
+        let sample = [DrawPoint(x: 1, y: 3, pressure: 0.4), DrawPoint(x: 2, y: 4, pressure: 1)]
+        let objects = (0..<2_000).map { index in
+            DrawObject(frame: DrawFrame(x: Double(index), y: 2, width: 2, height: 1),
+                       zIndex: Int64(index), content: .stroke(sample))
+        }
+        for object in objects {
+            let row = DrawObjectRecord()
+            try row.apply(object, canvasID: canvas.id)
+            seeded.insert(row)
+            let payload = DrawPayloadRecord()
+            payload.apply(try XCTUnwrap(DrawCodec.payload(object)), id: object.id, canvasID: canvas.id, role: "object")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+
+        let reader = DrawPersistentStore(container: container)
+        reader.metrics.reset()
+        let found = try reader.open(canvas.id)
+        XCTAssertEqual(found.objects, objects)
+        XCTAssertGreaterThan(reader.metrics.payloadBytesRead, 0)
+        XCTAssertLessThanOrEqual(reader.metrics.payloadFetches, 4,
+                                 "opening thousands of binary objects must issue a bounded number of payload queries")
+        print("DRAW_PF22_REMAINING_MAIN_DECODES=\(reader.metrics.payloadDecodesOnMain)")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)
