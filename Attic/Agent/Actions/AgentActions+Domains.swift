@@ -215,6 +215,16 @@ extension AgentActions {
          "time_zone": event.draft.timeZoneID, "notes": event.draft.notes ?? ""]
     }
 
+    private static func requireCalendarReadAccess(_ access: CalendarAccessState) throws {
+        switch access {
+        case .granted: return
+        case .notDetermined:
+            throw AgentActionsError.invalid("Calendar access is required. Open Calendar in Attic to grant permission.")
+        case .denied, .restricted:
+            throw AgentActionsError.invalid("Calendar access is unavailable. Check System Settings > Privacy & Security > Calendars.")
+        }
+    }
+
     func calendarAction(_ name: String, _ args: [String: Any], requestID: UUID,
                         beforeMutation: () throws -> Void) async throws -> (String, AgentStep, CalendarEventDraft?) {
         func result(_ text: String, _ kind: AgentStepKind, _ targets: [AgentTarget],
@@ -228,6 +238,7 @@ extension AgentActions {
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw AgentActionsError.invalid("Calendar search requires a nonempty query and an event source.")
             }
+            try Self.requireCalendarReadAccess(source.accessState)
             let defaultStart = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-7 * 86_400)
             let start = try args["start"].map { try Self.isoDate($0, "start") } ??
                 (args["end"] != nil ? Self.isoDate(args["end"], "end").addingTimeInterval(-30 * 86_400) : defaultStart)
@@ -247,6 +258,7 @@ extension AgentActions {
                   seconds.isFinite else {
                 throw AgentActionsError.invalid("A valid Calendar occurrence_id is required.")
             }
+            try Self.requireCalendarReadAccess(source.accessState)
             let start = Date(timeIntervalSinceReferenceDate: seconds)
             let interval = DateInterval(start: start.addingTimeInterval(-1), end: start.addingTimeInterval(86_400))
             guard let event = source.events(in: interval).first(where: { $0.id == id }) else {

@@ -2000,6 +2000,35 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(try draw.open(secondCanvas.id).objects.count, 1)
     }
 
+    func testBG54CalendarReadsMustDistinguishAccessDenialFromNoEvents() async throws {
+        let f = try fixture()
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let occurrenceID = "fixture@\(date.timeIntervalSinceReferenceDate)"
+        let request = f.actions.beginRequest(title: "Calendar access")
+        for access in [CalendarAccessState.notDetermined, .denied, .restricted] {
+            f.source.accessState = access
+            for (name, arguments) in [
+                ("calendar_search", ["query": "Meeting", "start": iso(date),
+                                     "end": iso(date.addingTimeInterval(7200))]),
+                ("calendar_read", ["occurrence_id": occurrenceID])
+            ] {
+                do {
+                    _ = try await f.actions.call(name: name, arguments: arguments,
+                                                 watching: false, requestID: request)
+                    XCTFail("\(name) must not report a successful empty read without Calendar access: \(access)")
+                } catch {
+                    XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("calendar access"),
+                                  "Access refusal must explain the permission problem: \(error)")
+                }
+            }
+        }
+        f.source.accessState = .granted
+        let authorizedEmpty = try performed(await f.actions.call(name: "calendar_search", arguments: [
+            "query": "Meeting", "start": iso(date), "end": iso(date.addingTimeInterval(7200))
+        ], watching: false, requestID: request))
+        XCTAssertEqual(try payload(authorizedEmpty.text)["count"] as? Int, 0)
+    }
+
     func testRunConvenienceNoteEditsResolveTitleAndRevisionWithoutPreRead() async throws {
         let store = try makeTestStore()
         let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
