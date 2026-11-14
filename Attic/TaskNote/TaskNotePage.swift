@@ -1232,8 +1232,7 @@ struct TaskNotePageContainer: View {
     @State private var presenter: TaskNotePresenter?
     @State private var openFailed = false
     @State private var closing = false
-    @State private var openingTask: Task<Void, Never>?
-    @State private var openingToken: UUID?
+    @State private var opening = TaskNoteOpening()
     /// Each reopen mounts a new page (never a recycled object's identity).
     @State private var pageGeneration = 0
 
@@ -1255,9 +1254,7 @@ struct TaskNotePageContainer: View {
         }
         .onAppear(perform: open)
         .onDisappear {
-            openingTask?.cancel()
-            openingTask = nil
-            openingToken = nil
+            opening.cancel()
             // Back may close through the route owner while SwiftUI still
             // retains this container's state and keyboard action closures.
             // A closed lease must not keep its retired presenter alive.
@@ -1311,7 +1308,7 @@ struct TaskNotePageContainer: View {
     }
 
     private func open() {
-        guard presenter == nil, !openFailed, openingTask == nil else { return }
+        guard presenter == nil, !openFailed, !opening.isOpening else { return }
         #if DEBUG
         AtticGrowTrace.mark("page-build", style: .grow)
         #endif
@@ -1323,40 +1320,40 @@ struct TaskNotePageContainer: View {
         }
         guard let library = tasks.commandLibrary else { openFailed = true; return }
         let inset = layout.chromeInsets.leading + AtticNoteMetrics.columnInset
-        let token = UUID()
-        openingToken = token
-        openingTask = Task { @MainActor in
-            defer {
-                if openingToken == token { openingToken = nil; openingTask = nil }
-                #if DEBUG
-                AtticGrowTrace.mark("page-built", style: .grow)
-                #endif
+        opening.begin(taskID: taskID, controller: controller, install: { prepared in
+            guard presenter == nil else { return nil }
+            switch placement {
+            case .panel:
+                return try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
+                                                   design: design, columnInset: inset, prepared: prepared)
+            case .window:
+                return try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
+                                             design: design, columnInset: inset, prepared: prepared)
             }
-            do {
-                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
-                guard !Task.isCancelled, openingToken == token, presenter == nil else { return }
-                switch placement {
-                case .panel:
-                    presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
-                                                            design: design, columnInset: inset, prepared: prepared)
-                case .window:
-                    presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
-                                                      design: design, columnInset: inset, prepared: prepared)
-                }
-            } catch {
-                if !Task.isCancelled, openingToken == token { openFailed = true }
-            }
+        }, opened: { opened in
+            presenter = opened
             #if DEBUG
-            if let presenter { TaskNoteCaptureScript.runIfRequested(presenter) }
+            TaskNoteCaptureScript.runIfRequested(opened)
             #endif
-        }
+        }, failed: {
+            openFailed = true
+        }, finished: {
+            #if DEBUG
+            AtticGrowTrace.mark("page-built", style: .grow)
+            #endif
+        })
     }
 
     /// Back keeps the page when the session refuses to let go (a
     /// composition, a save not yet durable); it never loses the draft.
     private func back() {
         guard !closing else { return }
-        guard let presenter else { onLeaving?(true); onClose(); return }
+        guard let presenter else {
+            // Still opening: the open ends here, so a decode that finishes
+            // while the route leaves cannot install a leased presenter.
+            opening.cancel()
+            onLeaving?(true); onClose(); return
+        }
         closing = true
         onLeaving?(true)
         let shrinks = onLeaving != nil && !design.reduceMotion
@@ -1394,6 +1391,57 @@ struct TaskNotePageContainer: View {
             pageGeneration &+= 1
             open()
         }
+    }
+}
+
+/// The page container's open sequence, kept out of the view so it can be
+/// driven and cancelled without SwiftUI. A warm task note installs in the same
+/// transaction as the route (no blank opening frame); a cold one decodes off
+/// the main actor first. A stale preparation retries once, then opens
+/// synchronously, so the open never fails where the synchronous one did not.
+@MainActor
+final class TaskNoteOpening {
+    private(set) var task: Task<Void, Never>?
+    private var token: UUID?
+    var isOpening: Bool { task != nil }
+
+    /// Returns the asynchronous open, or nil when it finished (or failed) on
+    /// the spot. `install` returns nil to leave the page as it is.
+    @discardableResult
+    func begin(taskID: UUID, controller: NotesPageController,
+               install: @escaping (TaskNotePreparedOpen?) throws -> TaskNotePresenter?,
+               opened: @escaping (TaskNotePresenter) -> Void,
+               failed: @escaping () -> Void,
+               finished: @escaping () -> Void = {}) -> Task<Void, Never>? {
+        guard task == nil else { return task }
+        let token = UUID()
+        self.token = token
+        let task = Task { @MainActor [weak self] in
+            defer {
+                if self?.token == token { self?.token = nil; self?.task = nil }
+                finished()
+            }
+            @MainActor func current() -> Bool {
+                if Task.isCancelled { return false }
+                return self?.token == token
+            }
+            do {
+                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+                guard current() else { return }
+                if let presenter = try install(prepared) { opened(presenter) }
+            } catch {
+                if current() { failed() }
+            }
+        }
+        self.task = task
+        return task
+    }
+
+    /// Back or leaving the route ends the open and clears its token.
+    func cancel() {
+        task?.cancel()
+        task = nil
+        token = nil
     }
 }
 

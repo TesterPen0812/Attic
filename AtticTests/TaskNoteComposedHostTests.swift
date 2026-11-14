@@ -1389,7 +1389,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let session = try XCTUnwrap(presenter.session)
         XCTAssertTrue(session.isReadOnly)
         XCTAssertEqual(session.readOnlyReason, .unreadable("missing document bytes"))
-        XCTAssertTrue(await presenter.close())
+        let closed1 = await presenter.close()
+        XCTAssertTrue(closed1)
         XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content,
                      "opening the recovery page never writes bytes")
 
@@ -1402,8 +1403,94 @@ final class TaskNoteComposedHostTests: XCTestCase {
                                            design: .default, columnInset: columnInset, defaults: nil, prepared: again)
         presenters.append(second)
         XCTAssertEqual(second.session?.readOnlyReason, .unreadable("missing document bytes"))
-        XCTAssertTrue(await second.close())
+        let closed2 = await second.close()
+        XCTAssertTrue(closed2)
         XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content)
+    }
+
+    // MARK: Review R-3, R-6, panel R-4 and Dot R-8: the page's open sequence
+
+    private func useHeldDecode(_ hold: OpenDecodeHold) {
+        notes = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+                                    saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+                                    decodeOpenDocument: { bytes in await hold.decode(bytes) })
+        notes.attachUndoRoute(library.undo)
+    }
+
+    /// R-3: Back or Esc on the blank opening page of a cold task note ends the
+    /// open. A decode that finishes while the route is still leaving must not
+    /// install a leased presenter that blocks every later task.
+    func testPF13BackDuringAColdOpenCancelsTheOpenAndALaterTaskStillOpens() async throws {
+        // Both tasks exist before the stores load them.
+        let second = try TaskNotePreviewSeed.seed(.boundary, in: container)
+        let first = try seed(.heavy)
+        let hold = OpenDecodeHold(holdFirst: true)
+        useHeldDecode(hold)
+        let hosting = sectionHosting()
+        var closed = 0
+        hosting.rootView = AnyView(TaskNotePageContainer(taskID: first, tasks: tasks, controller: notes,
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: { closed += 1 }))
+        hosting.view.layoutSubtreeIfNeeded()
+        try await hold.waitUntilHeld()
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        var back: AnyObject?
+        for _ in 0..<50 where back == nil {
+            hosting.view.layoutSubtreeIfNeeded()
+            back = elements(hosting.view).first { ($0.accessibilityIdentifier?() ?? "") == "task-note-back" }
+            if back == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(try XCTUnwrap(back).accessibilityPerformPress?() ?? false)
+        XCTAssertEqual(closed, 1)
+        await hold.release()
+        for _ in 0..<20 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNil(notes.taskNotePresenter, "the cancelled open must not install a leased presenter")
+        let hosting2 = sectionHosting()
+        hosting2.rootView = AnyView(TaskNotePageContainer(taskID: second, tasks: tasks, controller: notes,
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {}).id(UUID()))
+        hosting2.view.layoutSubtreeIfNeeded()
+        hosting2.view.displayIfNeeded()
+        var opened: TaskNotePresenter?
+        for _ in 0..<100 where opened == nil {
+            opened = notes.taskNotePresenter
+            if opened == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        let presenter = try XCTUnwrap(opened, "a second task opens afterwards")
+        XCTAssertEqual(presenter.taskID, second)
+        presenters.append(presenter)
+    }
+
+    func testPF13CancellingAnOpenClearsItsTokenAndTheNextOpenStarts() async throws {
+        let taskID = try seed(.heavy)
+        let hold = OpenDecodeHold(holdFirst: true)
+        useHeldDecode(hold)
+        let opening = TaskNoteOpening()
+        var opened = 0, failed = 0
+        let task = opening.begin(taskID: taskID, controller: notes, install: { _ in nil },
+                                 opened: { _ in opened += 1 }, failed: { failed += 1 })
+        XCTAssertNotNil(task)
+        XCTAssertTrue(opening.isOpening)
+        try await hold.waitUntilHeld()
+        opening.cancel()
+        XCTAssertFalse(opening.isOpening, "Back clears the open's token")
+        await hold.release()
+        await task?.value
+        XCTAssertEqual(opened, 0); XCTAssertEqual(failed, 0)
+        let again = opening.begin(taskID: taskID, controller: notes,
+            install: { [self] prepared in
+                let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                                      design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+                presenters.append(presenter)
+                return presenter
+            }, opened: { _ in opened += 1 }, failed: { failed += 1 })
+        await again?.value
+        XCTAssertEqual(opened, 1)
+        XCTAssertEqual(failed, 0)
     }
 
     /// § 9: scrolling the composed view shows no regression against the
@@ -2098,4 +2185,39 @@ extension TaskNoteComposedHostTests {
         XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(purged)), "a purged item's entry goes")
         XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(kept)) as? Bool, true)
     }
+}
+
+/// Holds the first cold decode until released; can run main-actor work during
+/// any decode (a write that races the preparation).
+actor OpenDecodeHold {
+    private(set) var decodes = 0
+    private var waiting = false
+    private var hold: CheckedContinuation<Void, Never>?
+    private let holdFirst: Bool
+    private let onDecode: (@MainActor @Sendable () -> Void)?
+
+    init(holdFirst: Bool, onDecode: (@MainActor @Sendable () -> Void)? = nil) {
+        self.holdFirst = holdFirst
+        self.onDecode = onDecode
+    }
+
+    func decode(_ bytes: Data) async -> (content: NoteContent, onMainThread: Bool) {
+        decodes += 1
+        if holdFirst, decodes == 1 {
+            waiting = true
+            await withCheckedContinuation { hold = $0 }
+        }
+        if let onDecode { await MainActor.run { onDecode() } }
+        return (NoteContentCodec.decode(bytes), false)
+    }
+
+    func waitUntilHeld() async throws {
+        for _ in 0..<500 {
+            if waiting { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw NSError(domain: "OpenDecodeHold", code: 1, userInfo: [NSLocalizedDescriptionKey: "the held decode never started"])
+    }
+
+    func release() { hold?.resume(); hold = nil }
 }
