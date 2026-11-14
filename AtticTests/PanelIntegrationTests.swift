@@ -150,6 +150,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// The hidden page should keep its layout until the drag is released.
     func testLiveResizeUpdatesCurrentPageWithoutRebuildingRetainedNotesOnEachStep() throws {
         #if ATTIC_LOCAL_ONLY
+        // Slides travel only without Reduce Motion, which the hosted CI runners
+        // have on: state the motion this test is about.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         var counts = [0, 0, 0]
         PanelInvalidationProbe.shell = { counts[0] += 1 }
         PanelInvalidationProbe.tasksHost = { counts[1] += 1 }
@@ -224,6 +228,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// changes the native window frame at every intermediate step.
     func testLiveResizeRetainedPagesSurviveRepeatedEdgeAndCornerDragsOnEveryPage() throws {
         #if ATTIC_LOCAL_ONLY
+        // Slides travel only without Reduce Motion, which the hosted CI runners
+        // have on: state the motion this test is about.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         var tasksUpdates = 0
         var notesUpdates = 0
         var calendarUpdates = 0
@@ -382,6 +390,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// until the slide has finished.
     func testLiveResizePageSwitchUsesLiveGeometryDuringTransition() throws {
         #if ATTIC_LOCAL_ONLY
+        // The slide's travel is zero under Reduce Motion, which the hosted CI
+        // runners have on: state the motion this test is about.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         var layouts: [PanelPage: CGSize] = [:]
         var offsets: [PanelPage: CGFloat] = [:]
         PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
@@ -438,6 +450,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// the true native frame. A programmatic resize has no drag snapshot.
     func testLiveResizeCancelHideScreenChangeAndProgrammaticSizeCatchUp() throws {
         #if ATTIC_LOCAL_ONLY
+        // Slides travel only without Reduce Motion, which the hosted CI runners
+        // have on: state the motion this test is about.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         var layouts: [PanelPage: CGSize] = [:]
         PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
         defer { PanelInvalidationProbe.pageLayout = nil }
