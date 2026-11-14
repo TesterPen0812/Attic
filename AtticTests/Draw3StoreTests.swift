@@ -182,21 +182,27 @@ final class Draw3StoreTests: XCTestCase {
         try seeded.save()
 
         let reader = DrawPersistentStore(container: container)
-        func openMenu() throws -> Int {
+        func openMenu() throws -> (batches: Int, bytes: Int) {
             reader.metrics.reset()
             let window = try reader.presentationLibrary().prefix(12).map(\.id)
             for id in window { XCTAssertEqual(try reader.searchThumbnail(id)?.thumbnail, bytes) }
-            return reader.metrics.thumbnailHydrations
+            return (reader.metrics.thumbnailHydrations, reader.metrics.thumbnailBytesRead)
         }
-        XCTAssertLessThanOrEqual(try openMenu(), 2, "a cold first open reads the window in one batch")
+        let cold = try openMenu()
+        XCTAssertEqual(cold.batches, 1, "a cold first open reads the window in one batch")
+        XCTAssertEqual(cold.bytes, 12 * bytes.count)
+        // R-11: an edit drops only its own canvas's cached thumbnail, so the
+        // reopened menu re-reads exactly that one (one batch, one body), not
+        // the whole window.
         let edited = try reader.presentationLibrary()[3].id
         XCTAssertTrue(reader.perform(.put([stroke()]), on: edited).isSaved)
         let afterEdit = try openMenu()
-        XCTAssertLessThanOrEqual(afterEdit, 2,
-                                 "the first menu open after an edit read the thumbnails in \(afterEdit) batches")
+        XCTAssertEqual(afterEdit.batches, 1, "the first menu open after an edit read the thumbnails in \(afterEdit.batches) batches")
+        XCTAssertEqual(afterEdit.bytes, bytes.count, "after an edit only the edited canvas's thumbnail is read again")
         XCTAssertTrue(reader.undo(on: edited).isSaved)
         let afterUndo = try openMenu()
-        XCTAssertLessThanOrEqual(afterUndo, 2, "Undo then reopening read \(afterUndo) batches")
+        XCTAssertEqual(afterUndo.batches, 1, "Undo then reopening read \(afterUndo.batches) batches")
+        XCTAssertEqual(afterUndo.bytes, bytes.count, "after Undo only the edited canvas's thumbnail is read again")
     }
 
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {

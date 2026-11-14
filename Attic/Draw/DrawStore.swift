@@ -21,6 +21,8 @@ class DrawStore: DrawStoreProtocol {
     /// Hydrated thumbnail bodies by canvas. A thumbnail write drops only its
     /// own canvas's entry; any other change drops them all.
     @ObservationIgnored private var searchThumbnails: [UUID: DrawCanvas] = [:]
+    /// How many thumbnails are cached (tests bound it).
+    var searchThumbnailCacheCount: Int { searchThumbnails.count }
     @ObservationIgnored private var histories: [UUID: History] = [:]
     /// The current in-memory head left by our own recovered inverse. A newer
     /// owner edit replaces that head and must still block earlier agent Undo.
