@@ -238,6 +238,15 @@ final class NoteSession: ObservableObject, Identifiable {
     var pendingTags: [String]? { engine.tags == baseTags ? nil : engine.tags }
 }
 
+/// Immutable preparation for a task route. The registry re-resolves the task
+/// and validates both the revision and the bytes before granting a lease.
+struct TaskNotePreparedOpen {
+    let taskID: UUID
+    let noteID: UUID?
+    let bytes: Data?
+    let load: NoteDocumentLoad?
+}
+
 /// The new Notes page's sessions (Phase 2): opening, creating, saving and
 /// preserving notes, independent of views.
 ///
@@ -579,6 +588,36 @@ final class NotesPageController: ObservableObject {
             return open(noteID: noteID, preparedLoad: preparedLoad)
         }) else { return false }
         return true
+    }
+
+    /// Resolve a cold task-owned document before constructing its presenter.
+    /// Only bytes reach the decoder; SwiftData rows, the editor and leases
+    /// remain on the main actor. A route change invalidates this preparation.
+    func prepareTaskNoteOpen(taskID: UUID) async throws -> TaskNotePreparedOpen {
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        let (route, noteID) = try coordinator.sessions.resolve(.task(taskID))
+        guard route == .task(taskID) else { throw WorkspaceFoundationError.conflict }
+        var bytes: Data?
+        var load: NoteDocumentLoad?
+        if let noteID, cache[noteID] == nil, let note = store.note(withID: noteID),
+           note.usesDocumentFormat, let content = note.content {
+            bytes = content
+            let revision = note.revisionID
+            let decoded = await decodeOpenDocument(content)
+            coldDecodeCount += 1
+            if decoded.onMainThread { coldDecodeOnMainCount += 1 }
+            guard !Task.isCancelled, let current = store.note(withID: noteID),
+                  current.revisionID == revision, current.content == content else {
+                throw WorkspaceFoundationError.conflict
+            }
+            load = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: revision)
+        }
+        // The registry re-resolves immediately before installation. A
+        // second discovery here would duplicate its SwiftData reads.
+        guard !Task.isCancelled else {
+            throw WorkspaceFoundationError.conflict
+        }
+        return TaskNotePreparedOpen(taskID: taskID, noteID: noteID, bytes: bytes, load: load)
     }
 
     func openDurably(noteID: UUID) async -> Bool {
@@ -1566,7 +1605,7 @@ final class NotesPageController: ObservableObject {
 
     /// Engine-only entry point: does not present a page, create a note, or
     /// attach a native view. Registry callers share the controller's cache.
-    func workspaceSession(noteID: UUID) -> NoteSession? {
+    func workspaceSession(noteID: UUID, preparedLoad: NoteDocumentLoad? = nil) -> NoteSession? {
         // Cache admission can evict a clean incoming note before activate
         // installs it as active. Reuse that live session rather than split it.
         let existing = cache[noteID] ?? (active?.noteID == noteID ? active : nil)
@@ -1584,7 +1623,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         guard let note = store.note(withID: noteID) else { return nil }
-        guard let session = (existing ?? session(for: note)).flatMap({
+        guard let session = (existing ?? session(for: note, preparedLoad: preparedLoad)).flatMap({
             $0.usesWorkspaceBinding ? $0 : presentSession($0)
         }) else { return nil }
         if let existing, session !== existing {

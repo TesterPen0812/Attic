@@ -1333,6 +1333,44 @@ final class TaskNoteComposedHostTests: XCTestCase {
         print("TASKNOTE-PERF warm long raw composed \(long.warm.0) / plain \(long.warm.1)")
     }
 
+    func testPF13ColdTaskNoteOpenDoesNotDecodeSynchronously() async throws {
+        let taskID = try seed(.heavy)
+        let owned = try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID }))
+        let noteID = try XCTUnwrap(owned.first?.id)
+        let before = notes.store.documentDecodeCountByIDForTesting[noteID, default: 0]
+        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        XCTAssertEqual(prepared.noteID, noteID)
+        let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                              design: .default, columnInset: columnInset,
+                                              defaults: nil, prepared: prepared)
+        presenters.append(presenter)
+        let cold = notes.store.documentDecodeCountByIDForTesting[noteID, default: 0] - before
+        print("PF13 cold_task_note_open=1 synchronous_main_document_decodes=\(cold)")
+        XCTAssertEqual(cold, 0, "a cold task-note route should receive a prepared async document")
+        XCTAssertEqual(notes.coldDecodeCount, 1)
+        XCTAssertEqual(notes.coldDecodeOnMainCount, 0)
+        XCTAssertNotNil(presenter.lease)
+    }
+
+    func testPF13StalePreparedTaskNoteCannotAcquireALease() async throws {
+        let taskID = try seed(.heavy)
+        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+        let noteID = try XCTUnwrap(prepared.noteID)
+        let source = try XCTUnwrap(notes.store.loadDocument(noteID: noteID))
+        var blocks = try XCTUnwrap(source.content.document).blocks
+        blocks.append(.text("Newer writing after the prepared decode"))
+        guard case .success = notes.store.saveDocument(noteID: noteID,
+                    document: NoteDocument(blocks: blocks), baseRevisionID: source.revisionID) else {
+            XCTFail("the revision race fixture must save its newer document")
+            return
+        }
+        XCTAssertThrowsError(try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library,
+                    notes: notes, design: .default, columnInset: columnInset,
+                    defaults: nil, prepared: prepared))
+        XCTAssertNil(TaskNotePresenter.open(for: taskID),
+                     "stale background preparation must not install a page or acquire a writer lease")
+    }
+
     /// § 9: scrolling the composed view shows no regression against the
     /// plain note of the same length (40 pt steps, layout and display).
     func testScrollingTheComposedViewDoesNotRegressAgainstThePlainNote() throws {

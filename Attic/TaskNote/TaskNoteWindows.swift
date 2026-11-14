@@ -23,6 +23,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     /// Stable host IDs, independent of the current task/note alias.
     private var entries: [UUID: Entry] = [:]
     private var closing: Set<UUID> = []
+    private var preparingOpen: Set<UUID> = []
 
     var openTaskIDs: Set<UUID> { Set(entries.values.compactMap { $0.presenter.isOrdinary ? nil : $0.presenter.taskID }) }
     func window(for taskID: UUID) -> NSWindow? { entry(taskID)?.value.window }
@@ -128,11 +129,27 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
     func open(taskID: UUID, tasks: TaskStore, controller: NotesPageController, noteStore: NoteStore,
               design: AtticDesignContext, uiState: PanelUIState) {
         if bringForward(taskID) { return }
+        guard preparingOpen.insert(taskID).inserted else { return }
+        Task { @MainActor [weak self] in
+            defer { self?.preparingOpen.remove(taskID) }
+            do {
+                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+                guard !Task.isCancelled else { return }
+                self?.openPrepared(taskID: taskID, tasks: tasks, controller: controller,
+                                   design: design, uiState: uiState, prepared: prepared)
+            } catch { }
+        }
+    }
+
+    private func openPrepared(taskID: UUID, tasks: TaskStore, controller: NotesPageController,
+                              design: AtticDesignContext, uiState: PanelUIState,
+                              prepared: TaskNotePreparedOpen) {
+        if bringForward(taskID) { return }
         guard let library = tasks.commandLibrary else { return }
         let presenter: TaskNotePresenter
         do {
             presenter = try TaskNotePresenter.open(for: taskID) ?? TaskNotePresenter(taskID: taskID, tasks: tasks,
-                library: library, notes: controller, design: design, columnInset: 28)
+                library: library, notes: controller, design: design, columnInset: 28, prepared: prepared)
             guard presenter.page.controller === controller, let lease = presenter.lease else { return }
             try presenter.page.retainAcrossItemChanges(lease: lease)
         } catch { return }

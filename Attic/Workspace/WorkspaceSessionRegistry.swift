@@ -183,26 +183,45 @@ final class WorkspaceSessionRegistry {
         return true
     }
 
-    func session(for identity: Identity, notes: NotesPageController) throws -> WorkspacePageSession {
+    func session(for identity: Identity, notes: NotesPageController,
+                 prepared: TaskNotePreparedOpen? = nil) throws -> WorkspacePageSession {
         guard let coordinator else { throw WorkspaceFoundationError.protectedOwner }
         guard notes.store.container === coordinator.container else { throw WorkspaceFoundationError.invalidIdentity }
         let (canonical, noteID) = try resolve(identity)
+        if let prepared {
+            guard identity == .task(prepared.taskID), canonical == .task(prepared.taskID),
+                  noteID == prepared.noteID else { throw WorkspaceFoundationError.conflict }
+            if let noteID, let load = prepared.load {
+                guard load.noteID == noteID, let row = notes.store.note(withID: noteID),
+                      row.revisionID == load.revisionID, row.content == prepared.bytes else {
+                    throw WorkspaceFoundationError.conflict
+                }
+            } else if let noteID, notes.workspaceSessionIfCached(noteID) == nil,
+                      notes.store.note(withID: noteID)?.usesDocumentFormat == true {
+                // A document appeared after the route was prepared. Retry the
+                // async route instead of decoding it while mounting the page.
+                throw WorkspaceFoundationError.conflict
+            }
+        }
         if let session = sessions[canonical] {
             guard session.controller === notes else { throw WorkspaceFoundationError.protectedOwner }
             // Lazy note creation may add an alias later, but never replace a
             // live draft or merge a second cursor.
-            if session.note == nil, let noteID { try session.attach(noteID: noteID) }
+            if session.note == nil, let noteID { try session.attach(noteID: noteID, preparedLoad: prepared?.load) }
             if session.note == nil, noteID == nil, case let .task(taskID) = canonical { try session.attachDraft(taskID: taskID) }
             // The task's note appeared elsewhere while this page only held an
             // untouched draft: the page binds the real note instead.
-            if let noteID, session.note?.noteID != noteID { try session.replaceUntouchedDraft(with: noteID) }
+            if let noteID, session.note?.noteID != noteID {
+                try session.replaceUntouchedDraft(with: noteID, preparedLoad: prepared?.load)
+            }
             // The never-saved draft is the task's writing until its first save.
             let draft = session.note.map { !$0.isPersisted && $0.pendingTaskID != nil } ?? false
             guard session.note?.noteID == noteID || (draft && noteID == nil) else { throw WorkspaceFoundationError.conflict }
             return session
         }
         let key = Key(domain: domain, workspace: canonical)
-        let session = try WorkspacePageSession(key: key, controller: notes, coordinator: coordinator, noteID: noteID)
+        let session = try WorkspacePageSession(key: key, controller: notes, coordinator: coordinator,
+                                               noteID: noteID, preparedLoad: prepared?.load)
         // A task whose note is in Recently Deleted still gets a draft:
         // writing in it starts a new, separate own note (§ 2.7.2).
         if noteID == nil, case let .task(taskID) = canonical {
@@ -282,7 +301,8 @@ final class WorkspacePageSession {
     fileprivate var onRelease: ((WorkspacePageSession) -> Void)?
 
     fileprivate init(key: WorkspaceSessionRegistry.Key, controller: NotesPageController,
-                     coordinator: WorkspaceOperationCoordinator, noteID: UUID?) throws {
+                     coordinator: WorkspaceOperationCoordinator, noteID: UUID?,
+                     preparedLoad: NoteDocumentLoad? = nil) throws {
         self.key = key; self.controller = controller; route = controller.undoRoute
         let historyID: UndoHistoryID = switch key.workspace {
         case let .task(id): .taskWorkspace(id)
@@ -290,11 +310,12 @@ final class WorkspacePageSession {
         }
         history = controller.undoRoute.workspace(for: historyID)
         coordinator.registerHistory(controller.undoRoute)
-        if let noteID { try attach(noteID: noteID) }
+        if let noteID { try attach(noteID: noteID, preparedLoad: preparedLoad) }
     }
-    fileprivate func attach(noteID: UUID) throws {
+    fileprivate func attach(noteID: UUID, preparedLoad: NoteDocumentLoad? = nil) throws {
         guard let controller, note == nil,
-              let session = controller.workspaceSession(noteID: noteID) ?? controller.workspaceDeletedItemSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
+              let session = controller.workspaceSession(noteID: noteID, preparedLoad: preparedLoad)
+                  ?? controller.workspaceDeletedItemSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         let adapter = session.engine.history
         guard adapter.workspace === history || (adapter.workspace == nil && adapter.redoOps.isEmpty),
               history.bind(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
@@ -328,7 +349,7 @@ final class WorkspacePageSession {
 
     /// Only a never-saved, untouched draft on a page nobody shows may give
     /// way to the task's real note; anything else is two notes for one task.
-    fileprivate func replaceUntouchedDraft(with noteID: UUID) throws {
+    fileprivate func replaceUntouchedDraft(with noteID: UUID, preparedLoad: NoteDocumentLoad? = nil) throws {
         guard let controller, let draft = note, !draft.isPersisted, draft.pendingTaskID != nil,
               draft.isUntouchedDraft, activeLease == nil else { throw WorkspaceFoundationError.conflict }
         draft.usesWorkspaceBinding = false
@@ -336,7 +357,7 @@ final class WorkspacePageSession {
         draft.engine.history.workspace = nil
         controller.discardUntouchedTaskDraft(draft)
         note = nil
-        try attach(noteID: noteID)
+        try attach(noteID: noteID, preparedLoad: preparedLoad)
     }
 
     func acquire(surfaceID: UUID) throws -> Lease {

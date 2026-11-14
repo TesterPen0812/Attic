@@ -66,13 +66,14 @@ final class TaskNotePresenter: ObservableObject {
     enum OpenError: Error { case unavailable }
 
     init(taskID: UUID, tasks: TaskStore, library: AtticLibrary, notes: NotesPageController,
-         design: AtticDesignContext, columnInset: CGFloat, defaults: UserDefaults? = .standard) throws {
+         design: AtticDesignContext, columnInset: CGFloat, defaults: UserDefaults? = .standard,
+         prepared: TaskNotePreparedOpen? = nil) throws {
         // The Notes page may never have been shown: its engines take the
         // panel's look before this session's engine is made (CU P1, Dark ink).
         notes.update(design: design)
         self.notes = notes
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: tasks.container)
-        let page = try coordinator.sessions.session(for: .task(taskID), notes: notes)
+        let page = try coordinator.sessions.session(for: .task(taskID), notes: notes, prepared: prepared)
         lease = try page.acquire(surfaceID: surfaceID)
         self.page = page
         self.taskID = taskID
@@ -1231,6 +1232,8 @@ struct TaskNotePageContainer: View {
     @State private var presenter: TaskNotePresenter?
     @State private var openFailed = false
     @State private var closing = false
+    @State private var openingTask: Task<Void, Never>?
+    @State private var openingToken: UUID?
     /// Each reopen mounts a new page (never a recycled object's identity).
     @State private var pageGeneration = 0
 
@@ -1252,6 +1255,9 @@ struct TaskNotePageContainer: View {
         }
         .onAppear(perform: open)
         .onDisappear {
+            openingTask?.cancel()
+            openingTask = nil
+            openingToken = nil
             // Back may close through the route owner while SwiftUI still
             // retains this container's state and keyboard action closures.
             // A closed lease must not keep its retired presenter alive.
@@ -1305,10 +1311,9 @@ struct TaskNotePageContainer: View {
     }
 
     private func open() {
-        guard presenter == nil, !openFailed else { return }
+        guard presenter == nil, !openFailed, openingTask == nil else { return }
         #if DEBUG
         AtticGrowTrace.mark("page-build", style: .grow)
-        defer { AtticGrowTrace.mark("page-built", style: .grow) }
         #endif
         // OD-1: one live page per task. Open in a window already, it comes
         // forward there instead of opening a second editor here.
@@ -1318,21 +1323,33 @@ struct TaskNotePageContainer: View {
         }
         guard let library = tasks.commandLibrary else { openFailed = true; return }
         let inset = layout.chromeInsets.leading + AtticNoteMetrics.columnInset
-        do {
-            switch placement {
-            case .panel:
-                presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
-                                                        design: design, columnInset: inset)
-            case .window:
-                presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
-                                                  design: design, columnInset: inset)
+        let token = UUID()
+        openingToken = token
+        openingTask = Task { @MainActor in
+            defer {
+                if openingToken == token { openingToken = nil; openingTask = nil }
+                #if DEBUG
+                AtticGrowTrace.mark("page-built", style: .grow)
+                #endif
             }
-        } catch {
-            openFailed = true
+            do {
+                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+                guard !Task.isCancelled, openingToken == token, presenter == nil else { return }
+                switch placement {
+                case .panel:
+                    presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
+                                                            design: design, columnInset: inset, prepared: prepared)
+                case .window:
+                    presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
+                                                      design: design, columnInset: inset, prepared: prepared)
+                }
+            } catch {
+                if !Task.isCancelled, openingToken == token { openFailed = true }
+            }
+            #if DEBUG
+            if let presenter { TaskNoteCaptureScript.runIfRequested(presenter) }
+            #endif
         }
-        #if DEBUG
-        if let presenter { TaskNoteCaptureScript.runIfRequested(presenter) }
-        #endif
     }
 
     /// Back keeps the page when the session refuses to let go (a
@@ -1429,7 +1446,8 @@ extension NotesPageController {
     /// A different workspace still cannot steal that lease or its draft.
     func openTaskNote(taskID: UUID, tasks: TaskStore, library: AtticLibrary,
                       design: AtticDesignContext, columnInset: CGFloat,
-                      defaults: UserDefaults? = .standard) throws -> TaskNotePresenter {
+                      defaults: UserDefaults? = .standard,
+                      prepared: TaskNotePreparedOpen? = nil) throws -> TaskNotePresenter {
         if let presenter = taskNotePresenter, presenter.lease != nil {
             guard presenter.taskID == taskID, presenter.model.store === tasks,
                   presenter.model.library === library else { throw TaskNotePresenter.OpenError.unavailable }
@@ -1438,7 +1456,7 @@ extension NotesPageController {
             return presenter
         }
         let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: self,
-            design: design, columnInset: columnInset, defaults: defaults)
+            design: design, columnInset: columnInset, defaults: defaults, prepared: prepared)
         taskNotePresenter = presenter
         return presenter
     }
