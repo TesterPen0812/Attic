@@ -94,12 +94,15 @@ extension TasksPageModel {
         return files
     }
 
+    /// Files staged (or still being staged) for the Task draft.
+    var composerFilesWait: Bool { !addBarState.files.isEmpty || addBarState.stagingFiles > 0 }
+
     /// Files staged for a task stay with a task. A Note or an Event made from
     /// the same shared draft neither uses them up nor leaves them behind for a
     /// later, unrelated task: it waits, the files still staged (shown on Task,
     /// removable there), and the person is told why.
     func refuseNonTaskCreationWhileFilesWait() -> Bool {
-        guard !addBarState.files.isEmpty || addBarState.stagingFiles > 0 else { return false }
+        guard composerFilesWait else { return false }
         toasts.show(String(localized: "Files are waiting for a task · remove them or switch to Task"),
                     actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
         return true

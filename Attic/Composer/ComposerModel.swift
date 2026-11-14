@@ -188,7 +188,14 @@ final class ComposerModel: ObservableObject {
     /// when the card closes, after a creation and as the app quits.
     func saveKeptDraft() {
         guard let drafts = services.drafts else { return }
-        drafts.save(hasDraft ? ComposerDraftStore.Draft(title: tasks.addBar.text, writing: writing, kind: kind.rawValue) : nil)
+        if hasDraft {
+            drafts.save(ComposerDraftStore.Draft(title: tasks.addBar.text, writing: writing, kind: kind.rawValue))
+        } else if let aside = asideDraft, aside.owner == .task, !aside.isEmpty {
+            // The Task draft set aside is the one the next launch should keep.
+            drafts.save(ComposerDraftStore.Draft(title: aside.text.text, writing: aside.writing, kind: ComposerKind.task.rawValue))
+        } else {
+            drafts.save(nil)
+        }
     }
 
     var title: TasksAddBarState { tasks.addBarState }
@@ -225,6 +232,7 @@ final class ComposerModel: ObservableObject {
         }
         if !page.kinds.contains(kind) { kind = kind == .event ? .task : page.ownKind }
         if !page.kinds.contains(kind) { kind = .note }
+        settleDraftOwner()
         if kind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
         fillCalendarDay()
@@ -294,6 +302,7 @@ final class ComposerModel: ObservableObject {
         guard page.kinds.contains(newKind), newKind != kind else { return }
         kind = newKind
         openedForQuickNote = false
+        settleDraftOwner()
         draftGeneration += 1
         if newKind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
@@ -542,6 +551,57 @@ final class ComposerModel: ObservableObject {
         if case .tasks = page { tasks.startDraftFromFilter() }
         if openingPage { isOpen = false }
         else { fillCalendarDay(); focusRequest &+= 1 }
+    }
+
+    /// A draft kept aside while the other of Task and Note is being written
+    /// (R-13). Task and Note share one draft (the add bar's), which is right
+    /// until files are staged for a Task: the Task's title belongs with them.
+    /// A Note made where it is not refused (`filesWaitForATask`) starts from
+    /// its own draft, and the Task's waits here, files and all, until the card
+    /// is on Task again.
+    private struct AsideDraft {
+        let owner: ComposerKind
+        var text: TaskAddBarText
+        var writing: String
+        var pinned: Bool
+        var history: TaskDraftHistory
+        var caret: Int?
+        var selection: NSRange?
+        var seededTags: [String]?
+        var isEmpty: Bool { text == TaskAddBarText() && writing.isEmpty && !pinned }
+    }
+    private var asideDraft: AsideDraft?
+
+    /// Once a Note can be submitted independently, the shared words belong
+    /// with the staged Task files, even if a kind switch had already shown
+    /// them on Note (where submission would have been refused).
+    private func settleDraftOwner() {
+        if let aside = asideDraft, kind == aside.owner {
+            let current = draft(owner: aside.owner == .task ? .note : .task)
+            restore(aside)
+            let holdsFiles = current.owner == .task && tasks.composerFilesWait
+            asideDraft = current.isEmpty && !holdsFiles ? nil : current
+        } else if asideDraft == nil, kind == .note, tasks.composerFilesWait,
+                  !page.kinds.contains(.task) || openedForQuickNote {
+            asideDraft = draft(owner: .task)
+            clearDraft()
+        }
+    }
+
+    private func draft(owner: ComposerKind) -> AsideDraft {
+        AsideDraft(owner: owner, text: tasks.addBar, writing: writing, pinned: pinned,
+                   history: title.history, caret: title.caret, selection: title.selection, seededTags: seededTags)
+    }
+
+    private func restore(_ draft: AsideDraft) {
+        tasks.addBarState.clearDraft()
+        tasks.addBar = draft.text
+        title.history = draft.history
+        title.caret = draft.caret
+        title.selection = draft.selection
+        writing = draft.writing
+        pinned = draft.pinned
+        seededTags = draft.seededTags
     }
 
     /// ⇧⌘N asked for a note, not for the Task draft's files (see

@@ -1371,6 +1371,139 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(page.addBarState.fileNames.isEmpty)
     }
 
+    /// Optional 2× captures of the real card for the hunt's HTML proof.
+    private func captureR13NoteDraft(_ route: String) throws {
+        guard let phase = ProcessInfo.processInfo.environment["ATTIC_R13_RENDER"] else { return }
+        let design = AtticDesignContext(mode: .light, reduceTransparency: true)
+        let host = NSHostingView(rootView: ComposerCard(model: model, drawsChrome: false)
+            .atticDesign(design).background(design.tokens.panel.base.color))
+        host.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.orderBack(nil)
+        spin(0.2)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: 640, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = host.bounds.size
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let directory = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+            .appendingPathComponent("R13Renders", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name = (route.hasPrefix("Tasks") ? "quick-note" : "notes")
+            + (route.contains("restored") ? "-restored-task" : "")
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            .write(to: directory.appendingPathComponent("\(phase)-\(name).png"))
+        print("R13_RENDER_DIR \(directory.path)")
+    }
+
+    /// Opus R-13: a note made where Task cannot be reached (Notes, or ⇧⌘N)
+    /// starts from its own draft. It does not take the Task draft's title and
+    /// leave the Task's files on an empty draft; the Task's title and files
+    /// are there when the person is back on Task.
+    func testANoteWhereTaskIsUnreachableStartsFromItsOwnDraftAndTheTaskDraftStaysWithItsFiles() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r13-\(UUID().uuidString).txt")
+        try "staged".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        for (route, requested) in [("Notes, +", nil), ("Tasks, ⇧⌘N", ComposerKind.note)] as [(String, ComposerKind?)] {
+            model.open(on: .tasks(.now))
+            model.choose(.task)
+            type("Invoice for Bob")
+            page.addComposerFiles(urls: [file])
+            XCTAssertEqual(page.addBarState.fileNames.count, 1)
+            model.close()
+            let notesBefore = notes.notes.filter { $0.deletedAt == nil }.count
+            model.open(on: route.hasPrefix("Tasks") ? .tasks(.now) : .notes, as: requested)
+            try captureR13NoteDraft(route)
+            XCTAssertEqual(model.kind, .note, route)
+            XCTAssertEqual(page.addBar.text, "", "\(route): the note starts from its own, empty draft")
+            XCTAssertFalse(model.canCreate, "\(route): the Task's title is not the note's")
+            type("A note, \(route)")
+            let made = await model.create()
+            XCTAssertTrue(made, route)
+            XCTAssertEqual(notes.notes.filter { $0.deletedAt == nil }.count, notesBefore + 1)
+            XCTAssertEqual(page.addBarState.fileNames.count, 1, "\(route): the files stay staged")
+            model.close()
+            // Back on Task: the draft is whole, title and files together.
+            model.open(on: .tasks(.now))
+            try captureR13NoteDraft(route + " restored")
+            XCTAssertEqual(model.kind, .task, route)
+            XCTAssertEqual(page.addBar.text, "Invoice for Bob", "\(route): the Task draft kept its title")
+            XCTAssertEqual(page.addBarState.fileNames.count, 1, "\(route): and its file")
+            XCTAssertFalse(notes.notes.filter { $0.deletedAt == nil }.contains { $0.title == "Invoice for Bob" })
+            // Leave the Task draft for the next route, files and all.
+            page.addBarState.clearDraft()
+            page.addBarState.files = []
+            model.clearDraft()
+            model.close()
+        }
+    }
+
+    /// R-13: the other way round. A note draft being written on Notes is kept
+    /// when the person goes to Tasks, where the card still shows it; Task and
+    /// Note then switch between their own drafts, not each other's words.
+    func testANoteDraftAndTheTaskDraftWithFilesDoNotTradeWords() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r13b-\(UUID().uuidString).txt")
+        try "staged".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        model.open(on: .tasks(.now))
+        type("Invoice for Bob")
+        page.addComposerFiles(urls: [file])
+        model.close()
+        model.open(on: .notes)
+        type("Half a note")
+        model.close()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(model.kind, .note, "a kept note draft is shown first")
+        XCTAssertEqual(page.addBar.text, "Half a note")
+        model.choose(.task)
+        XCTAssertEqual(page.addBar.text, "Invoice for Bob", "Task has its own draft back, not the note's words")
+        XCTAssertEqual(page.addBarState.fileNames.count, 1, "with its file")
+        model.choose(.note)
+        XCTAssertEqual(page.addBar.text, "Half a note", "and the note keeps its own")
+        XCTAssertEqual(page.addBarState.fileNames.count, 1, "the Task's file stayed staged throughout")
+        model.choose(.task)
+        model.clearDraft() // An intentionally empty title still owns the staged file.
+        model.choose(.note)
+        XCTAssertEqual(page.addBar.text, "Half a note")
+        model.choose(.task)
+        XCTAssertEqual(page.addBar.text, "", "the file-only Task draft still has its own words")
+        XCTAssertEqual(page.addBarState.fileNames.count, 1)
+        model.choose(.note)
+        XCTAssertEqual(page.addBar.text, "Half a note")
+    }
+
+    func testANoteAfterARefusedKindSwitchPreservesTheWholeStagingTaskDraft() throws {
+        model.open(on: .tasks(.now))
+        type("Invoice for Bob")
+        page.addBar.picked.tags = ["billing"]
+        model.writing = "Task writing"
+        page.addBarState.history.checkpoint(TaskAddBarText(text: "Invoice"), selection: NSRange(location: 7, length: 0))
+        let draft = page.addBar
+        let history = page.addBarState.history
+        let generation = page.addBarState.filesGeneration
+        page.addBarState.stagingFiles = 1
+        model.choose(.note) // Still the shared draft; this route would refuse submission.
+        model.close()
+        model.open(on: .notes)
+        XCTAssertEqual(page.addBar.text, "")
+        XCTAssertEqual(model.writing, "")
+        XCTAssertTrue(page.addBar.picked.tags.isEmpty)
+        XCTAssertEqual(page.addBarState.stagingFiles, 1)
+        XCTAssertEqual(page.addBarState.filesGeneration, generation)
+        model.close()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar, draft)
+        XCTAssertEqual(model.writing, "Task writing")
+        XCTAssertEqual(page.addBarState.history, history, "Task typing Undo stays with its draft")
+        XCTAssertEqual(page.addBarState.stagingFiles, 1)
+        XCTAssertEqual(page.addBarState.filesGeneration, generation)
+    }
+
     /// Opus R-8, the variant: a file dropped on the add bar zone opens the
     /// card on Task, though a Note draft is kept (it would hide the file
     /// behind a kind that has no chip, and refuse Return).
