@@ -1549,3 +1549,33 @@ extension PanelSharedChromeTests {
         panel?.close()
     }
 }
+
+
+extension PanelSharedChromeTests {
+    func testR3TheNewestTagKeyboardIntentWinsWhenSwiftUICoalescesChanges() throws {
+        for releaseLast in [false, true] {
+            let chrome = PanelSharedChrome()
+            chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+            let window = mountBar(chrome, SharedBarModel(page: .notes))
+            defer { close(window) }
+            PanelKeyStopSeam.holdsHandoffs = true
+            PanelKeyStopSeam.held = []
+            PanelKeyStopSeam.tagKeyAssignments = 0
+            if releaseLast {
+                chrome.tagBar.requestKeyFocus()
+                chrome.tagBar.releaseKeyFocus()
+            } else {
+                chrome.tagBar.releaseKeyFocus()
+                chrome.tagBar.open(cursor: .tag("launch"))
+                chrome.tagBar.requestKeyFocus()
+            }
+            spin(0.3)
+            let held = PanelKeyStopSeam.held
+            PanelKeyStopSeam.held = []
+            held.forEach { $0() }
+            spin(0.2)
+            XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, releaseLast ? 0 : 1, "the last source action wins")
+            if !releaseLast { XCTAssertEqual(chrome.tagBar.cursor, .tag("launch")) }
+        }
+    }
+}
