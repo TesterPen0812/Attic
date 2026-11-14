@@ -39,6 +39,7 @@ struct NotesLibraryView: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     @Environment(\.panelComposer) private var panelComposer
+    @Environment(\.panelSharedChrome) private var sharedChrome
     /// The search field's keyboard, as the top row's field reports it.
     private var fieldFocused: Bool {
         get { searchFocused }
@@ -251,6 +252,10 @@ struct NotesLibraryView: View {
         // The tag bar holds the keys it uses while it has the keyboard, and
         // Esc while it is open (13 Nov).
         if PanelTagBarState.ownsKeys || (event.keyCode == 53 && PanelTagBarState.ownsEscape) { return false }
+        // The shared "+" has the keyboard: Return is its, as Space is (it
+        // would otherwise open the highlighted or first searched note).
+        if sharedChrome?.plusHasKeyboard == true, event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
         let groups = model.navigable(all, layout: model.layout, store: store)

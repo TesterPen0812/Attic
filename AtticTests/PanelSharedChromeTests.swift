@@ -988,3 +988,66 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-6 (Return on a focused plus creates through the plus)
+
+extension PanelSharedChromeTests {
+    private static let downArrow = "\u{F701}"
+
+    private func notesLibraryShell() throws -> (RealShell, NotesLibraryModel) {
+        let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+        shell.go(to: .notes)
+        XCTAssertTrue(shell.draft.pages.showLibrary())
+        shell.spin(0.8)
+        XCTAssertTrue(shell.panel.isKeyWindow, "the hosted shell must own keyboard input")
+        let library = try XCTUnwrap(shell.draft.pages.liveLibraryModel, "All notes shows")
+        return (shell, library)
+    }
+
+    /// Round 2 review N-6 (Dot R-1): in All notes the library's local key
+    /// monitor took Return before the focused "+" saw it and opened the
+    /// highlighted (or first searched) note. The monitor now lets Return go
+    /// while "+" holds the keyboard. The key is sent through
+    /// `NSApp.sendEvent` so the monitor runs. (Full Keyboard Access is off on
+    /// the Air, so "+" holds the keyboard the way its focus callback reports
+    /// it; what the "+" then does is the CI test below.)
+    func testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID, "a row is highlighted")
+        shell.sharedChrome.notePlusKeyboard(true)
+        shell.appKey("\r", keyCode: 36)
+        XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return with the keyboard on + never opens the highlighted note")
+        shell.sharedChrome.notePlusKeyboard(false)
+        shell.appKey("\r", keyCode: 36)
+        XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: with the keyboard elsewhere Return opens it")
+    }
+
+    /// Return and Space on the Notes "+" both open the new-note card, with a
+    /// row highlighted and with a search (Full Keyboard Access, CI).
+    func testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        for key in [("\r", UInt16(36)), (" ", UInt16(49))] {
+            let (shell, library) = try notesLibraryShell()
+            defer { shell.close() }
+            let notesBefore = shell.notes.notes.count
+            shell.appKey(Self.downArrow, keyCode: 125)
+            XCTAssertNotNil(library.highlightedID, "a row is highlighted")
+            var reached = false
+            for _ in 0..<24 where !reached {
+                shell.tab()
+                reached = shell.focusedIdentifiers().contains(PanelBottomBarLook.notesPlus.identifier)
+            }
+            XCTAssertTrue(reached, "Tab reaches the plus")
+            guard reached else { continue }
+            ComposerOverlay.isPresented = false
+            shell.appKey(key.0, keyCode: key.1)
+            XCTAssertTrue(ComposerOverlay.isPresented, "\(key.1): the plus opens the new-note card")
+            XCTAssertEqual(shell.notes.notes.count, notesBefore, "\(key.1): the card makes the note, not the key")
+            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "\(key.1): the highlighted note stays closed")
+        }
+    }
+}
+

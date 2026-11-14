@@ -220,6 +220,9 @@ private struct PanelPlusFocus: ViewModifier {
     /// A reveal never leaves the keyboard on "+".
     let revealCount: UInt64
     let requests: AtticFocusRequests?
+    /// Told whether "+" has the keyboard: the Notes library leaves Return
+    /// to it then (round 2 review N-6).
+    let chrome: PanelSharedChrome?
     let action: () -> Void
     @FocusState private var focused: Bool
     /// Tasks arms the "+" through its own Tab order (`page.managesOwnTabOrder`).
@@ -260,8 +263,10 @@ private struct PanelPlusFocus: ViewModifier {
                 if now {
                     lender = requests
                     requests?.note(PanelPlusFocusID(), focused: true)
+                    chrome?.notePlusKeyboard(true)
                 } else {
                     lender?.note(PanelPlusFocusID(), focused: false)
+                    chrome?.notePlusKeyboard(false)
                     armed = false
                 }
             }
@@ -285,6 +290,7 @@ private struct PanelPlusFocus: ViewModifier {
         armed = false
         if focused { focused = false }
         lender?.note(PanelPlusFocusID(), focused: false)
+        chrome?.notePlusKeyboard(false)
     }
 }
 
@@ -424,7 +430,7 @@ struct PanelSharedBottomBar: View {
                                               action: actions.plus)
                                 .atticDesignCorners()
                                 .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken, revealCount: revealCount,
-                                                         requests: actions.focusRequests, action: actions.plus))
+                                                         requests: actions.focusRequests, chrome: chrome, action: actions.plus))
                         }
                             .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)
