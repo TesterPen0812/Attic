@@ -760,6 +760,9 @@ final class PanelIntegrationTests: XCTestCase {
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = previousDraw }
         let panel = try makePanel()
         let first = try XCTUnwrap(panel.canvasSession.createCanvas(name: "First"))
         let second = try XCTUnwrap(panel.canvasSession.createCanvas(name: "Second"))
