@@ -48,6 +48,7 @@ final class PanelTagBarState: ObservableObject {
     enum KeyIntent: Equatable { case focus(UInt64), release(UInt64) }
     private var keyIntentRevision: UInt64 = 0
     private(set) var keyIntent: KeyIntent = .release(0)
+    private(set) var keyFocusPending = false
 
     private static let live = NSHashTable<PanelTagBarState>.weakObjects()
 
@@ -82,6 +83,7 @@ final class PanelTagBarState: ObservableObject {
         // A requested handoff may still be queued before keyFocused becomes true.
         keyIntentRevision &+= 1
         keyIntent = .release(keyIntentRevision)
+        keyFocusPending = false
         keyReleaseRequest &+= 1
     }
 
@@ -102,10 +104,12 @@ final class PanelTagBarState: ObservableObject {
     func requestKeyFocus() {
         keyIntentRevision &+= 1
         keyIntent = .focus(keyIntentRevision)
+        keyFocusPending = true
         keyFocusRequest &+= 1
     }
 
     func noteKeyFocus(_ focused: Bool, closeWhenLeaving: Bool = true) {
+        if focused { keyFocusPending = false }
         guard keyFocused != focused else { return }
         keyFocused = focused
         // The keyboard left the bar (Tab on, a click on a row): a bar it
@@ -842,7 +846,7 @@ final class PanelTagBarKeys: ObservableObject {
     /// (a library row is no focus target, so nothing else would).
     private func handleClick(_ event: NSEvent) {
         guard let context, let view, let window = view.window, event.window === window else { return }
-        guard context.state.isOpen || context.state.keyFocused else { return }
+        guard context.state.isOpen || context.state.keyFocused || (!context.managed && context.state.keyFocusPending) else { return }
         let point = view.convert(event.locationInWindow, from: nil)
         guard !view.bounds.contains(point) else { return }
         if context.state.isOpen { context.state.close() } else if !context.managed { context.state.releaseKeyFocus() }

@@ -1579,3 +1579,29 @@ extension PanelSharedChromeTests {
         }
     }
 }
+
+
+extension PanelSharedChromeTests {
+    func testR3AnOutsideClickCancelsAClosedHashKeysPendingHandoff() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        PanelKeyStopSeam.holdsHandoffs = true
+        PanelKeyStopSeam.tagKeyAssignments = 0
+        // Toggle twice without releasing the intended keyboard: the real shortcut route.
+        shell.appKey("t", keyCode: 17, modifiers: [.option, .command])
+        shell.appKey("t", keyCode: 17, modifiers: [.option, .command])
+        XCTAssertFalse(shell.sharedChrome.tagBar.isOpen)
+        XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused)
+        XCTAssertFalse(PanelKeyStopSeam.held.isEmpty)
+        shell.appClick(at: CGPoint(x: 170, y: 250))
+        let held = PanelKeyStopSeam.held
+        PanelKeyStopSeam.held = []
+        held.forEach { $0() }
+        shell.spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "outside click cancels focus that has not landed")
+        XCTAssertFalse(shell.sharedChrome.tagBar.hasKeyboard)
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID)
+    }
+}

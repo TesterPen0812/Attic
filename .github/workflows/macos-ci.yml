@@ -181,6 +181,7 @@ jobs:
             testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard
             testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
             testR3AThrowWhileResolvingTheLibraryClosesItsKeyShell
+            testR3AnOutsideClickCancelsAClosedHashKeysPendingHandoff
             testR3RevealAddsNoShellBodyPass
             testR3TheTabDriverUsesTheApplicationsKeyboardPath
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
