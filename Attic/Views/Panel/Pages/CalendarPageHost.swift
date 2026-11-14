@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Tracks drafts in every mounted Calendar page, including pulled-out panels.
@@ -89,17 +90,27 @@ final class CalendarPageState: ObservableObject {
 struct CalendarPageHost: View {
     let store: TaskStore
     @ObservedObject var state: CalendarPageState
-    @ObservedObject var uiState: PanelUIState
+    let uiState: PanelUIState
+    /// Resize changes panelSize dozens of times per second. The calendar
+    /// needs only reveal/hide changes from the panel-level state.
+    @State private var visibilityRevision = 0
     let layout: PanelPageLayout
     /// The footer's "+": the add-a-task flow, for that day.
     let onNewTask: (DueDay) -> Void
     var taskNotes: TaskNoteEntryServices?
 
     var body: some View {
+        let _ = visibilityRevision
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.calendarHost?()
+        let _ = PanelInvalidationProbe.pageLayout?(.calendar, layout.panelSize)
+        #endif
         CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults,
                                         owner: uiState.isFloating ? .floating : .docked),
                      layout: layout, taskActions: taskActions, onNewTask: onNewTask,
                      panelIsVisible: uiState.isPanelOnScreen)
+            .onReceive(uiState.$revealCount.dropFirst()) { _ in visibilityRevision &+= 1 }
+            .onReceive(uiState.$hideCount.dropFirst()) { _ in visibilityRevision &+= 1 }
     }
 
     private var taskActions: CalendarTaskRowActions {

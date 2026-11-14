@@ -19,6 +19,63 @@ enum PerformanceSignposts {
     /// shows it (the TextKit 2 counterpart of the Phase 0 draw callback).
     private static var noteLayout: OSSignpostIntervalState?
     private static var canvasDrag: OSSignpostIntervalState?
+    #if ATTIC_LOCAL_ONLY
+    private static var panelLiveResize: OSSignpostIntervalState?
+    private static var panelLiveResizeActive = false
+    static var isPanelLiveResizeActive: Bool { panelLiveResizeActive }
+
+    /// Capture exactly the user's resize gesture. Instruments can intersect
+    /// Animation Hitches, Hangs and SwiftUI updates with this interval rather
+    /// than averaging the unrelated three-second recording window.
+    static func beginPanelLiveResize() {
+        guard !panelLiveResizeActive else { return }
+        panelLiveResizeActive = true
+        if signposter.isEnabled { panelLiveResize = signposter.beginInterval("PanelLiveResize") }
+        noteInput("panel-resize-down")
+    }
+
+    static func endPanelLiveResize(cancelled: Bool) {
+        guard panelLiveResizeActive else { return }
+        if let panelLiveResize {
+            if cancelled {
+                signposter.endInterval("PanelLiveResize", panelLiveResize, "cancelled")
+            } else {
+                signposter.endInterval("PanelLiveResize", panelLiveResize, "mouseUp")
+            }
+        }
+        panelLiveResize = nil
+        panelLiveResizeActive = false
+        noteInput(cancelled ? "panel-resize-cancel" : "panel-resize-up")
+    }
+
+    /// Main-thread handler work per native resize step; pair with the
+    /// outer PanelLiveResize interval to find expensive gesture samples.
+    static func beginPanelResizeStep() -> OSSignpostIntervalState? {
+        signposter.isEnabled ? signposter.beginInterval("PanelResizeStep") : nil
+    }
+
+    static func endPanelResizeStep(_ state: OSSignpostIntervalState?) {
+        if let state { signposter.endInterval("PanelResizeStep", state) }
+    }
+
+    /// Layout can run after the drag handler returns, so measure it
+    /// separately from PanelResizeStep within the same gesture interval.
+    static func beginPanelHostLayout() -> OSSignpostIntervalState? {
+        panelLiveResizeActive && signposter.isEnabled ? signposter.beginInterval("PanelHostLayout") : nil
+    }
+
+    static func endPanelHostLayout(_ state: OSSignpostIntervalState?) {
+        if let state { signposter.endInterval("PanelHostLayout", state) }
+    }
+
+    static func beginPanelAXHitTest() -> OSSignpostIntervalState? {
+        panelLiveResizeActive && signposter.isEnabled ? signposter.beginInterval("PanelAXHitTest") : nil
+    }
+
+    static func endPanelAXHitTest(_ state: OSSignpostIntervalState?) {
+        if let state { signposter.endInterval("PanelAXHitTest", state) }
+    }
+    #endif
     private static var launchStart: UInt64?
     private static var revealStart: UInt64?
     private static var pageStart: UInt64?

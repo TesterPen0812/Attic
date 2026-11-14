@@ -2110,6 +2110,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// made and dismantled here): overlay hierarchy changes from it wait
     /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
     override func layout() {
+        #if ATTIC_LOCAL_ONLY
+        let layoutSpan = PerformanceSignposts.beginPanelHostLayout()
+        defer { PerformanceSignposts.endPanelHostLayout(layoutSpan) }
+        #endif
         IdleLatencyTrace.span("panel_host_layout") {
             AtticOverlayHierarchy.layoutPass { super.layout() }
         }
@@ -2124,6 +2128,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// answer is the topmost real element under the point: the last in tree
     /// order, as drawing goes.
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        #if ATTIC_LOCAL_ONLY
+        let axSpan = PerformanceSignposts.beginPanelAXHitTest()
+        defer { PerformanceSignposts.endPanelAXHitTest(axSpan) }
+        #endif
         let hit = super.accessibilityHitTest(point)
         return Self.topmostElement(in: self, at: point) ?? hit
     }
@@ -2301,6 +2309,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 initialFrame: (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
                 initialMouseLocation: window.convertPoint(toScreen: event.locationInWindow)
             )
+            #if ATTIC_LOCAL_ONLY
+            PerformanceSignposts.beginPanelLiveResize()
+            #endif
             interactionLifecycle.begin(.windowResize)
             startEscapeMonitoring()
             window.makeKey()
@@ -2342,6 +2353,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
         if let session = resizeSession {
+            #if ATTIC_LOCAL_ONLY
+            let resizeStep = PerformanceSignposts.beginPanelResizeStep()
+            defer { PerformanceSignposts.endPanelResizeStep(resizeStep) }
+            #endif
             let mouseLocation = window.convertPoint(toScreen: event.locationInWindow)
             let delta = CGPoint(
                 x: mouseLocation.x - session.initialMouseLocation.x,
@@ -2441,6 +2456,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         window?.invalidateCursorRects(for: self)
         NSCursor.arrow.set()
         onInteractionCancelled?(cancellation, (window as? AtticPanel)?.visibleContentFrame ?? window?.frame)
+        #if ATTIC_LOCAL_ONLY
+        if cancellation.interaction == .windowResize {
+            PerformanceSignposts.endPanelLiveResize(cancelled: true)
+        }
+        #endif
     }
 
     private func setContentFrame(_ frame: CGRect, in window: NSWindow) {
@@ -2567,6 +2587,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             guard interactionLifecycle.finish(.windowResize) else { return false }
             stopEscapeMonitoring()
             onLiveResizeEnded?(((window as? AtticPanel)?.visibleContentFrame ?? window.frame).size)
+            #if ATTIC_LOCAL_ONLY
+            PerformanceSignposts.endPanelLiveResize(cancelled: false)
+            #endif
             return true
         }
         guard let session = moveSession,
