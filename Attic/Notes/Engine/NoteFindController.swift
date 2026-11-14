@@ -197,7 +197,7 @@ final class NoteFindController: ObservableObject {
     /// cell text counts UTF-8 bytes (O(1) per cell), which never undercounts.
     private func needsBackgroundSearch(in engine: NoteEditorEngine) -> Bool {
         if engine.textStorage.length >= Self.backgroundSearchThreshold { return true }
-        var cells = 0, bytes = 0
+        var cells = 0, bytes = engine.textStorage.length
         func add(_ table: NoteTable) -> Bool {
             cells += table.rowCount * table.columnCount
             for row in table.rows { for cell in row.cells { bytes += cell.text.utf8.count } }

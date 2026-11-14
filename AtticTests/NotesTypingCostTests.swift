@@ -468,6 +468,19 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    func testPF16CombinedBodyAndCellTextChooseTheFindWorker() async {
+        let (engine, _) = editor([.text("Title"), .text(String(repeating: "a", count: 180_000) + " needle"),
+                                 .table(NoteTable(texts: [[String(repeating: "b", count: 180_000) + " needle"]]))])
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        let before = engine.find.searchedUTF16Count
+        engine.find.query = "needle"
+        XCTAssertEqual(engine.find.searchedUTF16Count - before, 0, "the threshold counts body and cell text together")
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 2)
+        XCTAssertEqual(engine.find.backgroundQueryPublicationCount, 1)
+    }
+
     private func longFindEditor() -> (NoteEditorEngine, NoteEditorTextView) {
         let long = String(repeating: "a", count: 300_000)
         return editor([.text("Title"), .text(long + " needle one"), .text("middle"), .text("needle two"),
