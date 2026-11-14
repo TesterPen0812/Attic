@@ -226,16 +226,29 @@ final class PanelIntegrationTests: XCTestCase {
         #if ATTIC_LOCAL_ONLY
         var tasksUpdates = 0
         var notesUpdates = 0
+        var calendarUpdates = 0
+        var canvasUpdates = 0
+        var lastPageSize: [PanelPage: CGSize] = [:]
         PanelInvalidationProbe.tasksHost = { tasksUpdates += 1 }
         PanelInvalidationProbe.notesHost = { notesUpdates += 1 }
+        PanelInvalidationProbe.calendarHost = { calendarUpdates += 1 }
+        PanelInvalidationProbe.canvasHost = { canvasUpdates += 1 }
+        PanelInvalidationProbe.pageLayout = { page, size in lastPageSize[page] = size }
         defer {
             PanelInvalidationProbe.tasksHost = nil
             PanelInvalidationProbe.notesHost = nil
+            PanelInvalidationProbe.calendarHost = nil
+            PanelInvalidationProbe.canvasHost = nil
+            PanelInvalidationProbe.pageLayout = nil
         }
 
-        let panel = try makePanel()
+        // 500 Now, 500 Later, 5,000 Done: exercise the native resize path
+        // with the owner's heavy-data scenario, not just an empty panel.
+        let panel = try makePanel(scaleSeed: true)
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
         panel.uiState.prepareBuiltPage(.notes)
+        panel.uiState.prepareBuiltPage(.calendar)
+        panel.uiState.prepareBuiltPage(.canvas)
         spin(0.6)
         let window = panel.controller.panelForTesting
         let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
@@ -270,7 +283,11 @@ final class PanelIntegrationTests: XCTestCase {
             for isCorner in [false, true] {
                 var hiddenTasksDuringDrag = 0
                 var hiddenNotesDuringDrag = 0
+                var hiddenCalendarDuringDrag = 0
+                var hiddenCanvasDuringDrag = 0
                 var stepTimesMs: [[Double]] = [[], []]
+                var handlerTimesMs: [[Double]] = [[], []]
+                var layoutTimesMs: [[Double]] = [[], []]
                 for repeatIndex in 0..<14 {
                     if repeatIndex == 0 || repeatIndex == 7 {
                         NSApp.accessibilitySetValue(repeatIndex == 7, forAttribute: axAttribute)
@@ -287,8 +304,12 @@ final class PanelIntegrationTests: XCTestCase {
                     host.mouseDown(with: try event(.leftMouseDown, at: start, timestamp: begin))
                     XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize),
                                   "\(page) \(isCorner ? "corner" : "edge") should capture the grip")
+                    // Count every intermediate step, including the first:
+                    // mouseDown's frozen-size handoff is now content-equivalent.
                     let beforeTasks = tasksUpdates
                     let beforeNotes = notesUpdates
+                    let beforeCalendar = calendarUpdates
+                    let beforeCanvas = canvasUpdates
                     for step in 1...3 {
                         let offset = CGFloat(step) * 2 * grow
                         let point = CGPoint(x: start.x + xDirection * offset,
@@ -296,12 +317,19 @@ final class PanelIntegrationTests: XCTestCase {
                         let began = CACurrentMediaTime()
                         host.mouseDragged(with: try event(.leftMouseDragged, at: point,
                                                         timestamp: begin + Double(step) * 0.02))
+                        let handled = CACurrentMediaTime()
                         host.layoutSubtreeIfNeeded()
-                        stepTimesMs[repeatIndex >= 7 ? 1 : 0].append((CACurrentMediaTime() - began) * 1_000)
+                        let laidOut = CACurrentMediaTime()
+                        let axIndex = repeatIndex >= 7 ? 1 : 0
+                        handlerTimesMs[axIndex].append((handled - began) * 1_000)
+                        layoutTimesMs[axIndex].append((laidOut - handled) * 1_000)
+                        stepTimesMs[axIndex].append((laidOut - began) * 1_000)
                         spin(0.01)
                     }
                     if page != .tasks { hiddenTasksDuringDrag += tasksUpdates - beforeTasks }
                     if page != .notes { hiddenNotesDuringDrag += notesUpdates - beforeNotes }
+                    if page != .calendar { hiddenCalendarDuringDrag += calendarUpdates - beforeCalendar }
+                    if page != .canvas { hiddenCanvasDuringDrag += canvasUpdates - beforeCanvas }
                     let width = frame.width + 6 * grow
                     let height = frame.height + (isCorner ? 6 * grow : 0)
                     XCTAssertEqual(window.visibleContentFrame.width, width, accuracy: 1)
@@ -311,25 +339,174 @@ final class PanelIntegrationTests: XCTestCase {
                     host.mouseUp(with: try event(.leftMouseUp, at: end, timestamp: begin + 0.1))
                     XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
                     spin(0.04)
+                    for retained in PanelPage.allCases where panel.uiState.builtPages.contains(retained) {
+                        let actual = try XCTUnwrap(lastPageSize[retained], "Missing retained \(retained) layout")
+                        XCTAssertEqual(actual.width, panel.uiState.panelSize.width, accuracy: 1,
+                                       "A retained \(retained) host must catch up to the final width")
+                        XCTAssertEqual(actual.height, panel.uiState.panelSize.height, accuracy: 1,
+                                       "A retained \(retained) host must catch up to the final height")
+                    }
                     drags += 1
                 }
-                // Tasks' remaining body evaluations are measured above for the
-                // next optimization round. The regression being guarded here
-                // is native Notes remeasurement through retained page layout.
+                // Retained pages must avoid per-step work but receive the
+                // actual clamped final window size at every release.
                 XCTAssertLessThanOrEqual(hiddenNotesDuringDrag, 3,
                     "A retained Notes page must not rebuild on 42 intermediate \(page) resize steps")
+                XCTAssertLessThanOrEqual(hiddenTasksDuringDrag, 3,
+                    "A retained Tasks page must not rebuild on intermediate \(page) resize steps")
+                XCTAssertLessThanOrEqual(hiddenCalendarDuringDrag, 3,
+                    "A retained Calendar page must not rebuild on intermediate \(page) resize steps")
+                XCTAssertLessThanOrEqual(hiddenCanvasDuringDrag, 3,
+                    "A retained Draw page must not rebuild on intermediate \(page) resize steps")
                 for (axIndex, timings) in stepTimesMs.enumerated() {
                     let sorted = timings.sorted()
+                    let handlers = handlerTimesMs[axIndex].sorted()
+                    let layouts = layoutTimesMs[axIndex].sorted()
                     XCTAssertEqual(sorted.count, 21)
                     XCTContext.runActivity(named: String(format:
-                        "RESIZE_STRESS page=%@ grip=%@ enhanced_ax=%d drags=7 steps=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f hidden_tasks=%d hidden_notes=%d",
+                        "RESIZE_STRESS page=%@ grip=%@ enhanced_ax=%d drags=7 steps=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f handler_median_ms=%.3f layout_median_ms=%.3f hidden_tasks=%d hidden_notes=%d hidden_calendar=%d hidden_canvas=%d",
                         page.rawValue, isCorner ? "corner" : "edge", axIndex, sorted.count,
                         sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sorted.last ?? 0,
-                        hiddenTasksDuringDrag, hiddenNotesDuringDrag)) { _ in }
+                        handlers[handlers.count / 2], layouts[layouts.count / 2],
+                        hiddenTasksDuringDrag, hiddenNotesDuringDrag, hiddenCalendarDuringDrag,
+                        hiddenCanvasDuringDrag)) { _ in }
                 }
             }
         }
         XCTAssertEqual(drags, 112)
+        #endif
+    }
+
+    /// A page selected by a shortcut or agent during a held resize must enter
+    /// from the live edge; the departing page must keep its live geometry
+    /// until the slide has finished.
+    func testLiveResizePageSwitchUsesLiveGeometryDuringTransition() throws {
+        #if ATTIC_LOCAL_ONLY
+        var layouts: [PanelPage: CGSize] = [:]
+        var offsets: [PanelPage: CGFloat] = [:]
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        PanelInvalidationProbe.pageRestingOffset = { page, offset in offsets[page] = offset }
+        defer {
+            PanelInvalidationProbe.pageLayout = nil
+            PanelInvalidationProbe.pageRestingOffset = nil
+        }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.5)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        host.suppressCaptureWatchdogForSyntheticTests = true
+        defer { host.suppressCaptureWatchdogForSyntheticTests = false }
+        let initial = window.visibleContentFrame
+        let leftGrip = [.topRight, .bottomRight].contains(panel.controller.currentCorner)
+        let sign: CGFloat = leftGrip ? -1 : 1
+        let point = CGPoint(x: leftGrip ? initial.minX + 2 : initial.maxX - 2, y: initial.midY)
+        func event(_ type: NSEvent.EventType, x: CGFloat, time: TimeInterval) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: window.convertPoint(fromScreen: CGPoint(x: x, y: point.y)),
+                modifierFlags: [], timestamp: time, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+        host.mouseDown(with: try event(.leftMouseDown, x: point.x, time: 1))
+        XCTAssertTrue(PerformanceSignposts.isPanelLiveResizeActive)
+        host.mouseDragged(with: try event(.leftMouseDragged, x: point.x + sign * 24, time: 1.1))
+        host.layoutSubtreeIfNeeded()
+        spin(0.06)
+        let liveWidth = window.visibleContentFrame.width
+        XCTAssertGreaterThan(liveWidth, initial.width + 4)
+        XCTAssertEqual(abs(try XCTUnwrap(offsets[.notes])), liveWidth, accuracy: 1,
+                       "A hidden incoming page must rest outside the live panel width")
+
+        panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: false))
+        host.layoutSubtreeIfNeeded()
+        spin(0.06)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
+                       "The departing Tasks page must use the live width while sliding")
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        host.mouseUp(with: try event(.leftMouseUp, x: point.x + sign * 24, time: 1.2))
+        XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive)
+        spin(0.3)
+        XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, panel.uiState.panelSize.width, accuracy: 1)
+        #endif
+    }
+
+    /// Every exit path must release the retained-page snapshot and catch up to
+    /// the true native frame. A programmatic resize has no drag snapshot.
+    func testLiveResizeCancelHideScreenChangeAndProgrammaticSizeCatchUp() throws {
+        #if ATTIC_LOCAL_ONLY
+        var layouts: [PanelPage: CGSize] = [:]
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        defer { PanelInvalidationProbe.pageLayout = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.5)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        host.suppressCaptureWatchdogForSyntheticTests = true
+        defer { host.suppressCaptureWatchdogForSyntheticTests = false }
+        let leftGrip = [.topRight, .bottomRight].contains(panel.controller.currentCorner)
+        let sign: CGFloat = leftGrip ? -1 : 1
+        func event(_ type: NSEvent.EventType, at point: CGPoint, time: TimeInterval) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: window.convertPoint(fromScreen: point),
+                modifierFlags: [], timestamp: time, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+        for (index, reason) in [PanelInteractionCancellationReason.escape,
+                                .explicitHide, .screenChanged, .lostWindow].enumerated() {
+            let initial = window.visibleContentFrame
+            let grip = CGPoint(x: leftGrip ? initial.minX + 2 : initial.maxX - 2, y: initial.midY)
+            host.mouseDown(with: try event(.leftMouseDown, at: grip, time: Double(index * 10 + 1)))
+            XCTAssertTrue(PerformanceSignposts.isPanelLiveResizeActive)
+            XCTAssertNotNil(panel.uiState.retainedPageSizeDuringLiveResize)
+            let moved = CGPoint(x: grip.x + sign * 6, y: grip.y)
+            host.mouseDragged(with: try event(.leftMouseDragged, at: moved, time: Double(index * 10 + 2)))
+            host.layoutSubtreeIfNeeded()
+            host.cancelActiveInteraction(reason: reason)
+            XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive)
+            spin(0.12)
+            XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize, "Snapshot survived \(reason)")
+            XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
+            XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, panel.uiState.panelSize.width, accuracy: 1)
+        }
+        // Another controller can alter the native window while the grip is
+        // captured (work-area recovery, screen bounds or a size preference).
+        // The release must accept that authoritative final native size.
+        let beforeProgrammaticDuringDrag = window.visibleContentFrame
+        let heldGrip = CGPoint(x: leftGrip ? beforeProgrammaticDuringDrag.minX + 2
+                                                : beforeProgrammaticDuringDrag.maxX - 2,
+                               y: beforeProgrammaticDuringDrag.midY)
+        host.mouseDown(with: try event(.leftMouseDown, at: heldGrip, time: 100))
+        XCTAssertNotNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        let changedDuringDrag = CGRect(origin: beforeProgrammaticDuringDrag.origin,
+                                       size: CGSize(width: beforeProgrammaticDuringDrag.width - 5,
+                                                    height: beforeProgrammaticDuringDrag.height - 3))
+        window.setVisibleContentFrame(changedDuringDrag, display: false)
+        panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        host.mouseUp(with: try event(.leftMouseUp, at: heldGrip, time: 101))
+        spin(0.12)
+        XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, panel.uiState.panelSize.width, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).height, panel.uiState.panelSize.height, accuracy: 1)
+        let current = window.visibleContentFrame
+        let requested = CGRect(origin: current.origin,
+                               size: CGSize(width: current.width - 6, height: current.height - 4))
+        window.setVisibleContentFrame(requested, display: false)
+        panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+        host.layoutSubtreeIfNeeded()
+        spin(0.15)
+        XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, panel.uiState.panelSize.width, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).height, panel.uiState.panelSize.height, accuracy: 1)
         #endif
     }
 
@@ -378,10 +555,11 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.4)
     }
 
-    private func makePanel() throws -> Panel {
+    private func makePanel(scaleSeed: Bool = false) throws -> Panel {
         let suite = "PanelIntegrationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        if scaleSeed { try TasksPagePreview.seedScale(in: container) }
         let gate = PersistenceGate()
         let store = TaskStore(container: container)
         let notes = trackAttachmentReconciliation(of: NoteStore(container: container, persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore()))

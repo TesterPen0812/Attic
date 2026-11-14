@@ -131,6 +131,7 @@ struct TasksPageHost: View {
     var body: some View {
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.tasksHost?()
+        let _ = PanelInvalidationProbe.pageLayout?(.tasks, layout.panelSize)
         #endif
         let model = state.model(for: store, toasts: toasts)
         let _ = installTaskNoteServices(model)

@@ -17,6 +17,7 @@ struct NotesPageHost: View {
         let _ = routeStateRevision
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.notesHost?()
+        let _ = PanelInvalidationProbe.pageLayout?(.notes, layout.panelSize)
         #endif
         content
             .onAppear(perform: installTaskNoteHooks)

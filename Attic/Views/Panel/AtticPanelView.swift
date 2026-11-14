@@ -8,6 +8,10 @@ import SwiftData
     static var shell: (() -> Void)?
     static var tasksHost: (() -> Void)?
     static var notesHost: (() -> Void)?
+    static var calendarHost: (() -> Void)?
+    static var canvasHost: (() -> Void)?
+    static var pageLayout: ((PanelPage, CGSize) -> Void)?
+    static var pageRestingOffset: ((PanelPage, CGFloat) -> Void)?
     static var relevantSettings: (() -> Void)?
 }
 #endif
@@ -195,20 +199,44 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
-                        let frozenSize = page == currentPage ? nil : uiState.retainedPageSizeDuringLiveResize
+                        // A page leaving during a held resize must keep the
+                        // live width for its entire slide. Only pages already
+                        // resting behind the current transition are frozen.
+                        let isTravelling = uiState.pageTransit.sliding && uiState.pageTransit.departingPage == page
+                        let frozenSize = page == currentPage || isTravelling
+                            ? nil : uiState.retainedPageSizeDuringLiveResize
                         let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
                             ?? pageLayout
-                        pageHost(page, layout: layout)
+                        #if ATTIC_LOCAL_ONLY
+                        let _ = PanelInvalidationProbe.pageRestingOffset?(page,
+                            pageMotion.restingOffset(side: page.side(from: currentPage), width: panelSize.width))
+                        #endif
+                        PanelResizeStablePageHost(
+                            page: page,
+                            isCurrent: page == currentPage,
+                            isTravelling: isTravelling,
+                            livePanelSize: panelSize,
+                            frozenSize: frozenSize,
+                            cornerSize: cornerRadius,
+                            hasRestoredNoteSession: hasRestoredNoteSession,
+                            primaryInputFocusRequest: uiState.primaryInputFocusRequest,
+                            noticeHeight: noticeHeight,
+                            headerControlRects: headerControlRects
+                        ) {
+                            pageHost(page, layout: layout)
+                        }
+                            .equatable()
                             // A fully invisible page has no reason to measure
                             // again at each intermediate window size. Its
                             // retained native editors and state stay mounted.
                             .frame(width: frozenSize?.width, height: frozenSize?.height,
                                    alignment: .topLeading)
-                            // A shrinking panel must not inherit the larger
-                            // retained page's ideal size: that would shift
-                            // the current page inside the ZStack.
-                            .frame(width: frozenSize == nil ? nil : panelSize.width,
-                                   height: frozenSize == nil ? nil : panelSize.height,
+                            // The outer frame accepts SwiftUI's actual offered
+                            // size, including the proposal before the next
+                            // AppKit size notification. The hidden content
+                            // stays pinned at the top-leading origin.
+                            .frame(minWidth: 0, maxWidth: .infinity,
+                                   minHeight: 0, maxHeight: .infinity,
                                    alignment: .topLeading)
                             .onAppear {
                                 PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
@@ -222,7 +250,7 @@ struct AtticPanelView: View {
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
                                 restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage),
-                                                                        width: layout.panelSize.width),
+                                                                        width: panelSize.width),
                                 motion: pageMotion,
                                 // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
@@ -856,6 +884,44 @@ struct AtticPanelView: View {
         uiState.setInteractionLock(.taskComposer, isActive: false)
     }
 
+}
+
+/// Native editors and lists on an unseen page retain their state, but their
+/// subtree must not be re-diffed for every intermediate window size. State and
+/// observed-model changes inside the subtree still invalidate it normally.
+/// As soon as a page becomes visible (or starts travelling), normal SwiftUI
+/// comparison resumes for every frame.
+private struct PanelResizeStablePageHost<Content: View>: View, Equatable {
+    let page: PanelPage
+    let isCurrent: Bool
+    let isTravelling: Bool
+    let livePanelSize: CGSize
+    let frozenSize: CGSize?
+    let cornerSize: CGFloat
+    let hasRestoredNoteSession: Bool
+    let primaryInputFocusRequest: UInt64
+    let noticeHeight: CGFloat
+    let headerControlRects: [CGRect]
+    @ViewBuilder let content: () -> Content
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // On mouseDown, a previously hidden page changes from a live-size
+        // proposal to a frozen-size proposal at exactly the same size. Its
+        // content does not need to rebuild even for that first drag step.
+        // A visible or travelling page always receives the live proposal;
+        // release (rhs.frozenSize == nil) always restores normal updates.
+        guard let frozenSize = rhs.frozenSize,
+              !lhs.isCurrent, !lhs.isTravelling,
+              !rhs.isCurrent, !rhs.isTravelling,
+              (lhs.frozenSize ?? lhs.livePanelSize) == frozenSize else { return false }
+        return lhs.page == rhs.page
+            && lhs.cornerSize == rhs.cornerSize
+            && lhs.hasRestoredNoteSession == rhs.hasRestoredNoteSession
+            && lhs.primaryInputFocusRequest == rhs.primaryInputFocusRequest
+            && lhs.noticeHeight == rhs.noticeHeight
+    }
+
+    var body: some View { content() }
 }
 
 /// Store revisions still reconcile task-route IDs, without subscribing the
