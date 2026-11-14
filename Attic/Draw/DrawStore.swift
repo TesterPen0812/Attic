@@ -6,6 +6,9 @@ import Observation
 class DrawStore: DrawStoreProtocol {
     static let maxHistorySteps = 100
     static let maxCachedStates = 8
+    /// What canvases whose bodies were evicted may still hold in Undo/Redo
+    /// steps (image bytes, stroke points, thumbnails), together.
+    static let maxEvictedHistoryBytes = 32 * 1024 * 1024
     private(set) var revision: UInt64 = 0
     private(set) var lastDelta: DrawDelta?
     private(set) var pendingEdits: [UUID: DrawPendingEdit] = [:]
@@ -24,6 +27,7 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private var activeCanvasID: UUID?
     @ObservationIgnored private var stateAccess: [UUID: UInt64] = [:]
     @ObservationIgnored private var accessSequence: UInt64 = 0
+    @ObservationIgnored private var evictedAt: [UUID: UInt64] = [:]
     var cachedCanvasIDs: Set<UUID> { Set(states.keys) }
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
@@ -188,8 +192,55 @@ class DrawStore: DrawStoreProtocol {
         for key in candidates.prefix(states.count - Self.maxCachedStates) {
             states[key] = nil
             // Body snapshots are reconstructible; offered Undo/Redo steps are
-            // not. A grouped restore may still refer to this canvas's head.
+            // not. A grouped restore may still refer to this canvas's head,
+            // so the steps stay, within a byte budget.
             stateAccess[key] = nil
+            accessSequence &+= 1
+            evictedAt[key] = accessSequence
+        }
+        boundEvictedHistories()
+    }
+
+    /// Keeps the Undo/Redo steps of evicted canvases under a budget by
+    /// dropping the heaviest whole histories first (ties: evicted earliest),
+    /// so light steps such as a grouped restore's survive image payloads.
+    private func boundEvictedHistories() {
+        var weights: [UUID: Int] = [:]
+        var total = 0
+        for (key, history) in histories where states[key] == nil {
+            let weight = (history.undo + history.redo).reduce(0) { $0 + Self.weight($1) }
+            weights[key] = weight
+            total += weight
+        }
+        guard total > Self.maxEvictedHistoryBytes else { return }
+        let order = weights.keys.sorted {
+            weights[$0]! != weights[$1]! ? weights[$0]! > weights[$1]! : (evictedAt[$0] ?? 0) < (evictedAt[$1] ?? 0)
+        }
+        for key in order where total > Self.maxEvictedHistoryBytes {
+            total -= weights[key] ?? 0
+            histories[key] = nil
+        }
+    }
+
+    private static func weight(_ step: Step) -> Int {
+        var bytes = weight(step.before) + weight(step.after)
+        if let before = step.change.before { bytes += weight(before) }
+        if let after = step.change.after { bytes += weight(after) }
+        for object in step.change.objectsBefore.values { bytes += weight(object) }
+        for object in step.change.objectsAfter.values { bytes += weight(object) }
+        return bytes
+    }
+
+    private static func weight(_ canvas: DrawCanvas) -> Int {
+        256 + (canvas.thumbnail?.count ?? 0) + canvas.textIndex.utf8.count
+    }
+
+    private static func weight(_ object: DrawObject) -> Int {
+        switch object.content {
+        case .stroke(let points): 256 + points.count * MemoryLayout<DrawPoint>.stride
+        case .text(let text): 256 + text.utf8.count
+        case .image(let image): 256 + image.original.count
+        case .shape: 256
         }
     }
 

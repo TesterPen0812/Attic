@@ -18,6 +18,47 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertTrue(store.canRedo(on: canvas.id))
     }
 
+    /// BG-27 review (Opus R-6, Dot R-4): evicting a canvas's body must not
+    /// leave every visited canvas's Undo payloads (image bytes) resident for
+    /// the whole session. The retained history is bounded.
+    func testEvictedCanvasesDoNotKeepUnboundedUndoPayloads() throws {
+        let store = DrawInMemoryStore()
+        let bytes = Data(repeating: 7, count: 4_000_000)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let canvas = store.create(name: "Image \(index)")
+            let image = DrawObject(content: .image(DrawImage(original: bytes, pixelWidth: 1_000, pixelHeight: 1_000)))
+            XCTAssertTrue(store.perform(.put([image]), on: canvas.id).isSaved)
+            ids.append(canvas.id)
+        }
+        let undoable = ids.filter { store.canUndo(on: $0) }
+        XCTAssertLessThanOrEqual(undoable.count, 20,
+                                 "30 canvases x 4 MB of images must not all stay undoable (\(undoable.count) did)")
+        XCTAssertTrue(store.canUndo(on: ids[29]), "The canvas just edited keeps its Undo")
+        XCTAssertFalse(store.canUndo(on: ids[0]), "The oldest evicted canvas gives up its payload first")
+    }
+
+    /// Dropping retained history frees the heaviest payloads, not the light
+    /// restore steps a grouped Restore Selected offered to Undo (BG-27).
+    func testHistoryBudgetKeepsLightRestoreStepsWhileDroppingImagePayloads() throws {
+        let store = DrawInMemoryStore()
+        var restored: [UUID] = []
+        for index in 0..<10 {
+            let canvas = store.create(name: "Restored \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Saved \(index)"))]), on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.deleteCanvas, on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.restoreCanvas, on: canvas.id).isSaved)
+            restored.append(canvas.id)
+        }
+        let bytes = Data(repeating: 9, count: 4_000_000)
+        for index in 0..<30 {
+            let canvas = store.create(name: "Heavy \(index)")
+            let image = DrawObject(content: .image(DrawImage(original: bytes, pixelWidth: 1_000, pixelHeight: 1_000)))
+            XCTAssertTrue(store.perform(.put([image]), on: canvas.id).isSaved)
+        }
+        for id in restored { XCTAssertTrue(store.canUndo(on: id), "A light restore step must survive the budget") }
+    }
+
     func testCachedCanvasesKeepActiveSessionAndUnsavedDraft() throws {
         let store = DrawInMemoryStore()
         let active = store.create(name: "Active")
