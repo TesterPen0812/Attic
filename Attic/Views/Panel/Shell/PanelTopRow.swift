@@ -254,6 +254,41 @@ final class PanelNativeScrollIndicators {
     }
 }
 
+private struct PanelPageSlideKey: EnvironmentKey {
+    static let defaultValue = PanelPageSlide()
+}
+
+/// A page's sideways move for a page switch, in two parts: `distance` is the
+/// whole way (signed, a panel width), `progress` runs from 0 (away) to 1 (in
+/// place) and is the part a switch animates. The offset is their product, so
+/// a page at rest behind the current one can hold a width that is no longer
+/// the panel's, while a held resize changes it, and the page a switch brings
+/// in still starts from the live width: the width is read when the switch is
+/// applied, not when the page was last at rest.
+struct PanelPageSlide: Equatable {
+    var distance: CGFloat = 0
+    var progress: CGFloat = 1
+
+    /// How far from its place the page is (or is going to be).
+    var offset: CGFloat { distance * (1 - progress) }
+    var isAway: Bool { offset != 0 }
+}
+
+/// Moves a view by a `PanelPageSlide`, or by minus that, animating `progress`.
+struct PanelPageSlideOffset: ViewModifier, Animatable {
+    var slide: PanelPageSlide
+    var cancels = false
+
+    var animatableData: CGFloat {
+        get { slide.progress }
+        set { slide.progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.offset(x: cancels ? -slide.offset : slide.offset)
+    }
+}
+
 private struct PanelPageTransitKey: EnvironmentKey {
     static let defaultValue: PanelPageTransit? = nil
 }
@@ -275,6 +310,13 @@ extension EnvironmentValues {
     var panelPageTravel: CGFloat {
         get { self[PanelPageTravelKey.self] }
         set { self[PanelPageTravelKey.self] = newValue }
+    }
+
+    /// The sideways move of the page a page switch is moving (the shell's
+    /// four pages), which the top row cancels in place.
+    var panelPageSlide: PanelPageSlide {
+        get { self[PanelPageSlideKey.self] }
+        set { self[PanelPageSlideKey.self] = newValue }
     }
 
     /// The last page switch's motion, for what changes in place.
@@ -307,9 +349,12 @@ extension EnvironmentValues {
 /// a switch, as `PanelTopRow` does (an open note's scrolled-away title).
 struct PanelChangesInPlace: ViewModifier {
     @Environment(\.panelPageTravel) private var travel
+    @Environment(\.panelPageSlide) private var slide
 
     func body(content: Content) -> some View {
-        content.offset(x: -travel).modifier(PanelInPlaceFade(away: travel != 0))
+        content.offset(x: -travel)
+            .modifier(PanelPageSlideOffset(slide: slide, cancels: true))
+            .modifier(PanelInPlaceFade(away: travel != 0 || slide.isAway))
     }
 }
 
@@ -391,8 +436,12 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
     @Environment(\.panelTopRowState) private var state
     @Environment(\.panelSharedChrome) private var chrome
     @Environment(\.panelPageTravel) private var travel
+    @Environment(\.panelPageSlide) private var slide
 
     var body: some View {
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.topRow?(page)
+        #endif
         let control = PanelTopRowLayout.control
         let gap = PanelTopRowLayout.gap
         ZStack(alignment: .trailing) {
@@ -433,7 +482,8 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
         // only what differs (the page's switch and leading text) changes:
         // the old fades out, then the new fades in (Accepted 2026-11-04).
         .offset(x: -travel)
-        .modifier(PanelInPlaceFade(away: travel != 0))
+        .modifier(PanelPageSlideOffset(slide: slide, cancels: true))
+        .modifier(PanelInPlaceFade(away: travel != 0 || slide.isAway))
         .onChange(of: searchOpen, initial: true) { _, open in state?.setSearching(open, on: page) }
         .onAppear { chrome?.setTopRowShown(true, for: page) }
         .onDisappear {

@@ -429,8 +429,8 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.06)
         let liveWidth = window.visibleContentFrame.width
         XCTAssertGreaterThan(liveWidth, initial.width + 4)
-        XCTAssertEqual(abs(try XCTUnwrap(offsets[.notes])), liveWidth, accuracy: 1,
-                       "A hidden incoming page must rest outside the live panel width")
+        XCTAssertEqual(abs(try XCTUnwrap(offsets[.notes])), initial.width, accuracy: 1,
+                       "A hidden page rests at the width it was frozen at, not at each live width")
 
         panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: false))
         host.layoutSubtreeIfNeeded()
@@ -438,8 +438,10 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
                        "The departing Tasks page must use the live width while sliding")
         XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        XCTAssertEqual(abs(try XCTUnwrap(offsets[.notes])), liveWidth, accuracy: 1,
+                       "The page a switch brings in starts a live width outside the glass")
         XCTAssertEqual(abs(try XCTUnwrap(offsets[.tasks])), liveWidth, accuracy: 1,
-                       "The departing Tasks page must rest a live width away")
+                       "The departing Tasks page rests a live width away")
         host.mouseUp(with: try event(.leftMouseUp, x: point.x + sign * 24, time: 1.2))
         XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive)
         spin(0.3)
@@ -606,6 +608,30 @@ final class PanelIntegrationTests: XCTestCase {
         try held.release()
         spin(0.3)
         XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, held.panel.uiState.panelSize.width, accuracy: 1)
+        #endif
+    }
+
+    /// R-2: a hidden page does no work for the steps of a drag. Its top row,
+    /// which reads the page's travel, must not re-run while the panel widens.
+    func testLiveResizeHiddenPagesDoNoTopRowWorkDuringADrag() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var rows: [PanelPage: Int] = [:]
+        PanelInvalidationProbe.topRow = { rows[$0, default: 0] += 1 }
+        defer { PanelInvalidationProbe.topRow = nil }
+        let held = try holdResizeGrip(building: [.notes, .calendar, .canvas])
+        defer { held.finish() }
+        spin(0.3)
+        rows = [:]
+        for step in 1...42 { try held.drag(CGFloat(step)) }
+        XCTAssertGreaterThan(held.liveWidth(), held.initialWidth + 30)
+        XCTAssertGreaterThan(rows[.tasks, default: 0], 0, "the visible page's top row follows the drag")
+        for page in [PanelPage.notes, .calendar, .canvas] {
+            XCTAssertEqual(rows[page, default: 0], 0, "the hidden \(page) top row re-ran during the drag")
+        }
+        try held.release()
+        spin(0.3)
         #endif
     }
 

@@ -26,7 +26,10 @@ struct NotesEditorPage: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
-    @ObservedObject var uiState: PanelUIState
+    /// Only commands go to the shell's state (locks and grow origins); the page
+    /// reads nothing from it, so it must not re-run for each of its changes (a
+    /// hidden Notes page did for every step of a held panel resize).
+    let uiState: PanelUIState
     let layout: PanelPageLayout
     private let taskStore: TaskStore?
 

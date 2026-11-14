@@ -12,6 +12,7 @@ import SwiftData
     static var canvasHost: (() -> Void)?
     static var pageLayout: ((PanelPage, CGSize) -> Void)?
     static var pageRestingOffset: ((PanelPage, CGFloat) -> Void)?
+    static var topRow: ((PanelPage) -> Void)?
     static var relevantSettings: (() -> Void)?
 }
 #endif
@@ -206,6 +207,14 @@ struct AtticPanelView: View {
                             ? nil : uiState.liveResize?.heldSize(for: page)
                         let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
                             ?? pageLayout
+                        // A page behind the current one rests at the width it
+                        // was frozen at (a hidden page does no work for each
+                        // step of a drag); a page drawn, or the one a switch
+                        // brings in, slides by the live width.
+                        let slideWidth = frozenSize?.width ?? panelSize.width
+                        let slideSide: CGFloat = page == currentPage
+                            ? (uiState.lastPageSwitch.flatMap { $0.to == page ? $0.restingSide(of: page) : nil } ?? 0)
+                            : page.side(from: currentPage)
                         PanelResizeStablePageHost(
                             page: page,
                             isCurrent: page == currentPage,
@@ -244,8 +253,7 @@ struct AtticPanelView: View {
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
-                                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage),
-                                                                        width: panelSize.width),
+                                restingOffset: pageMotion.restingOffset(side: slideSide, width: slideWidth),
                                 motion: pageMotion,
                                 // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
@@ -1034,7 +1042,8 @@ struct PanelPageVisibility: ViewModifier {
     /// was actually given. Nil for a view that is not one of the four pages.
     var page: PanelPage?
     let isCurrent: Bool
-    /// Where the page rests while hidden (0 when it is current).
+    /// Where the page rests while hidden, and where it came from when it is
+    /// the page a switch brings in (it is in place when it is current).
     let restingOffset: CGFloat
     /// The switch's motion: the pages' visibility and the top row's
     /// in-place fade read it.
@@ -1056,8 +1065,13 @@ struct PanelPageVisibility: ViewModifier {
         return content
             .transformEnvironment(\.atticPanelPageIsCurrent) { $0 = $0 && isCurrent }
             .environment(\.panelPageMotion, motion)
-            .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
-            .offset(x: isCurrent ? 0 : restingOffset)
+            .transformEnvironment(\.panelPageSlide) { slide in
+                // Only a page of the shell moves; a view inside one that
+                // brings no distance of its own leaves its page's move alone.
+                if restingOffset != 0 { slide = PanelPageSlide(distance: restingOffset, progress: isCurrent ? 1 : 0) }
+            }
+            .modifier(PanelPageSlideOffset(slide: PanelPageSlide(distance: restingOffset,
+                                                                  progress: isCurrent ? 1 : 0)))
             // Both pages fully drawn, edge to edge: the new one at once (it
             // starts outside the glass), the old one until it is out.
             .animation(opacityOverride.map(\.animation) ?? motion.pageOpacityAnimation(incoming: isCurrent)) {
