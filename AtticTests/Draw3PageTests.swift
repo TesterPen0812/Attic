@@ -45,7 +45,7 @@ enum Draw3Images {
 /// "2026-10-31 · Draw: the canvas page").
 @MainActor
 final class Draw3PageTests: XCTestCase {
-    func testReviewSameLengthReplacementImageRendersNewPixels() throws {
+    func testReviewSameLengthReplacementImageRendersNewPixels() async throws {
         var red = Draw3Images.encoded(width: 32, height: 32, red: 1, green: 0, blue: 0)
         var blue = Draw3Images.encoded(width: 32, height: 32, red: 0, green: 0, blue: 1)
         // Two valid PNGs may have different compression sizes; trailing bytes
@@ -64,11 +64,49 @@ final class Draw3PageTests: XCTestCase {
         let id = UUID()
         let first = DrawImage(original: red, pixelWidth: 32, pixelHeight: 32)
         let replacement = DrawImage(original: blue, pixelWidth: 32, pixelHeight: 32)
-        let originalPixels = try XCTUnwrap(DrawRaster.decoded(first, id: id, side: 32))
-        let replacedPixels = try XCTUnwrap(DrawRaster.decoded(replacement, id: id, side: 32))
-        XCTAssertNotEqual(Draw3Images.pixel(originalPixels, x: 16, y: 16),
-                          Draw3Images.pixel(replacedPixels, x: 16, y: 16),
+        let capturePath = ProcessInfo.processInfo.environment["DRAW_REVIEW_CAPTURE_DIR"]
+        let (oldPixels, newPixels, captures) = try await Task.detached(priority: .userInitiated) {
+            () throws -> ([Int], [Int], [String: Data]) in
+            guard let originalPixels = DrawRaster.decoded(first, id: id, side: 32),
+                  let replacedPixels = DrawRaster.decoded(replacement, id: id, side: 32) else {
+                throw NSError(domain: "DrawReview", code: 1)
+            }
+            var captures: [String: Data] = [:]
+            if capturePath != nil {
+                for (name, item) in [("before-equivalent", first), ("after-replacement", replacement)] {
+                    let object = DrawObject(id: id, frame: DrawFrame(x: 32, y: 16, width: 96, height: 96),
+                                            content: .image(item))
+                    let request = DrawRasterRequest(key: DrawRasterKey(size: CGSize(width: 160, height: 128), scale: 2),
+                                                    objects: [object])
+                    guard let rendered = DrawRaster.render(request)?.image else {
+                        throw NSError(domain: "DrawReview", code: 2)
+                    }
+                    let data = NSMutableData()
+                    guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+                        throw NSError(domain: "DrawReview", code: 3)
+                    }
+                    CGImageDestinationAddImage(destination, rendered, nil)
+                    guard CGImageDestinationFinalize(destination) else { throw NSError(domain: "DrawReview", code: 4) }
+                    captures[name] = data as Data
+                }
+            }
+            return (Draw3Images.pixel(originalPixels, x: 16, y: 16),
+                    Draw3Images.pixel(replacedPixels, x: 16, y: 16), captures)
+        }.value
+        XCTAssertNotEqual(oldPixels, newPixels,
                           "replacing an image in place must show its current saved bytes")
+
+        // Optional visual evidence: actual Draw rasters at 2×. The old cache
+        // reused the first (red) raster after replacement; the candidate
+        // must display the blue replacement. These are offscreen image regions,
+        // not fabricated full-panel screenshots.
+        if let path = capturePath {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for (name, data) in captures {
+                try data.write(to: directory.appendingPathComponent("draw-\(name).png"))
+            }
+        }
     }
 
     func testR19StrokeThenTypingInSameFrameKeepsBothFramesAndUndoOrder() async throws {
