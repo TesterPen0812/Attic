@@ -110,6 +110,55 @@ final class WorkspaceSessionTests: XCTestCase {
         XCTAssertEqual(session.note?.noteID, lazyID)
     }
 
+    #if DEBUG
+    /// The production close path (registry page close, and a task's note
+    /// appearing under an untouched draft) must leave no draft session and
+    /// no LRU key behind, 100 times over.
+    func testClosingUntouchedTaskDraftPagesThroughTheRegistryLeavesNoSessionOrRecencyKey() async throws {
+        let context = coordinator.freshContext(), id = UUID()
+        context.insert(TaskItem(id: id, title: "No note")); try context.save()
+        let before = notes.cachedSessionCountsForTesting
+        for cycle in 0..<100 {
+            let session = try coordinator.sessions.session(for: .task(id), notes: notes)
+            let draft = try XCTUnwrap(session.note, "cycle \(cycle): a task without a note attaches a draft")
+            XCTAssertFalse(draft.isPersisted)
+            let lease = try session.acquire(surfaceID: UUID())
+            let closed = await session.close(lease)
+            XCTAssertTrue(closed, "cycle \(cycle): an untouched draft page closes")
+            XCTAssertNil(notes.workspaceSessionIfCached(draft.noteID), "cycle \(cycle): the draft editor is discarded")
+        }
+        let counts = notes.cachedSessionCountsForTesting
+        XCTAssertEqual(counts.sessions, before.sessions, "closing untouched task pages must discard their editors")
+        XCTAssertEqual(counts.recency, before.recency, "closing untouched task pages must leave no stale LRU keys")
+
+        // replaceUntouchedDraft: the task's note appears while only an
+        // untouched draft is open (no lease); the draft must go entirely.
+        var replaced: [UUID] = []
+        for cycle in 0..<100 {
+            let taskID = UUID(), lazyID = UUID()
+            let seed = coordinator.freshContext()
+            seed.insert(TaskItem(id: taskID, title: "Replace \(cycle)")); try seed.save()
+            let page = try coordinator.sessions.session(for: .task(taskID), notes: notes)
+            let draftID = try XCTUnwrap(page.note?.noteID)
+            let note = NoteItem(id: lazyID); note.taskID = taskID
+            seed.insert(note); try seed.save()
+            notes.store.refresh()
+            let aliased = try coordinator.sessions.session(for: .note(lazyID), notes: notes)
+            XCTAssertTrue(aliased === page)
+            XCTAssertEqual(page.note?.noteID, lazyID, "cycle \(cycle): the page binds the real note")
+            XCTAssertNil(notes.workspaceSessionIfCached(draftID), "cycle \(cycle): the replaced draft is discarded")
+            replaced.append(lazyID)
+            let lease = try page.acquire(surfaceID: UUID())
+            let closed = await page.close(lease)
+            XCTAssertTrue(closed)
+        }
+        let after = notes.cachedSessionCountsForTesting
+        XCTAssertLessThanOrEqual(after.sessions, 8, "the cache stays within its limit")
+        XCTAssertLessThanOrEqual(after.recency, after.sessions + 1,
+                                 "replaced drafts must not leave stale LRU keys (\(replaced.count) cycles)")
+    }
+    #endif
+
     func testSingleLeaseHandoffKeepsDraftHistoryAndRejectsTheFormerSurface() throws {
         let page = try page(), panel = UUID(), window = UUID()
         let lease = try page.acquire(surfaceID: panel)
