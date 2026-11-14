@@ -234,6 +234,14 @@ final class ComposerModel: ObservableObject {
         self.services = services
         failedEventDrafts = services.drafts?.loadFailedEvents() ?? []
         failedTaskDrafts = services.drafts?.loadFailedTasks() ?? []
+        // The process may have stopped after the physical save but before
+        // dismissing the pending recovery record. A UUID already in the
+        // store is proof that submission succeeded; never submit it twice.
+        let pendingCount = failedTaskDrafts.count
+        failedTaskDrafts.removeAll { tasks.store.task(withID: $0.id) != nil }
+        if failedTaskDrafts.count != pendingCount {
+            services.drafts?.saveFailedTasks(failedTaskDrafts)
+        }
         restoreKeptDraft()
         _ = restoreFailedTaskIfAvailable()
     }
@@ -615,7 +623,7 @@ final class ComposerModel: ObservableObject {
         // to the next draft, even if the first save finishes afterwards.
         let submittedFiles = tasks.takeComposerFiles()
         isCreating = true
-        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
+        tasks.createAcknowledged(draft, id: failedSubmission.id, save: { [library = tasks.library] id in
             library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
         }, settled: { [weak self] created in
             guard let self else { return }
@@ -634,7 +642,7 @@ final class ComposerModel: ObservableObject {
                 return
             }
             self.failed = false
-            self.retireFailedTask(recovering?.id)
+            self.retireFailedTask(failedSubmission.id)
             // Only retire a kept draft after the task's family write commits.
             // Until then an earlier backup remains available after a crash.
             if !self.isOpen || !self.restoreFailedTaskIfAvailable() { self.saveKeptDraft() }
@@ -653,6 +661,10 @@ final class ComposerModel: ObservableObject {
                 }
             }
         })
+        // From this point the card's words have moved to an asynchronous
+        // save. Persist them before clearing the editor: quitting in that
+        // interval must still leave a recoverable task.
+        rememberFailedTask(failedSubmission, title: finished, files: submittedFiles)
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
         if !openingPage, case .tasks = page { tasks.startDraftFromFilter() }

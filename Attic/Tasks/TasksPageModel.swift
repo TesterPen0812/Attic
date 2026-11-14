@@ -2143,10 +2143,9 @@ final class TasksPageModel: ObservableObject {
     /// frame and its eventual all-or-nothing task+writing save. The preview
     /// never enters the physical store or Undo history.
     @discardableResult
-    func createAcknowledged(_ draft: TaskDraft, save: @escaping (UUID) -> TaskItem?,
+    func createAcknowledged(_ draft: TaskDraft, id: UUID = UUID(), save: @escaping (UUID) -> TaskItem?,
                             settled: @escaping (TaskItem?) -> Void) -> UUID {
         settlePendingCompletionAcknowledgements()
-        let id = UUID()
         let copy = TaskItem(id: id, title: draft.title, status: draft.status, priority: draft.priority)
         copy.tags = draft.tags
         copy.dueDay = draft.dueDay

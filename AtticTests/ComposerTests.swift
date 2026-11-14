@@ -225,6 +225,59 @@ final class ComposerTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: drafts.key + ".failedTasks"), "saved retries must clear the durable failure queue")
     }
 
+    func testPendingTaskSubmissionSurvivesQuitBeforeAcknowledgedSave() throws {
+        let suite = "ComposerPendingTasks.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        page.services.acknowledgementDelay = .seconds(3600)
+
+        model.open(on: .tasks(.now))
+        type("Important unsaved task #keep")
+        model.writing = "Pending task writing"
+        model.submit()
+
+        XCTAssertTrue(liveTasks().isEmpty, "the acknowledged preview is not yet durable")
+        XCTAssertEqual(page.addBar.text, "")
+        XCTAssertEqual(drafts.loadFailedTasks().map(\.title), ["Important unsaved task #keep"],
+            "quitting before the delayed save must not lose the submitted words")
+
+        let fixed = now
+        let restartedStore = TaskStore(container: container, now: { fixed }, taskImageFiles: tasks.taskImageFiles)
+        let restartedLibrary = AtticLibrary(tasks: restartedStore, notes: notes)
+        let restartedPage = TasksPageModel(library: restartedLibrary, services: TasksPageServices(now: { fixed }))
+        let restarted = ComposerModel(tasks: restartedPage, services: ComposerServices(drafts: drafts))
+        restarted.open(on: .tasks(.now))
+        XCTAssertEqual(restartedPage.addBar.text, "Important unsaved task #keep")
+        XCTAssertEqual(restarted.writing, "Pending task writing")
+        XCTAssertEqual(restartedPage.addBar.parts(parser: restartedPage.parser).tags, ["keep"])
+
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(liveTasks().map(\.title), ["Important unsaved task"])
+        XCTAssertTrue(drafts.loadFailedTasks().isEmpty, "committed submissions must clear their recovery record")
+    }
+
+    func testRelaunchDiscardsPendingRecoveryWhenTaskAlreadyCommitted() throws {
+        let suite = "ComposerCommittedPending.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        let id = UUID()
+        drafts.saveFailedTasks([ComposerDraftStore.FailedTask(id: id,
+            title: TaskAddBarText(text: "Committed before crash"), writing: "Existing writing",
+            status: .todo, page: .tasks(.now))])
+        XCTAssertNotNil(library.createTask(TaskDraft(title: "Committed before crash"),
+            writing: "Existing writing", in: .tasks, id: id))
+
+        let restarted = ComposerModel(tasks: page, services: ComposerServices(drafts: drafts))
+        restarted.open(on: .tasks(.now))
+        XCTAssertTrue(drafts.loadFailedTasks().isEmpty,
+            "a saved UUID must not remain queued for a duplicate retry")
+        XCTAssertTrue(page.addBar.text.isEmpty, "a committed task must not reappear as an unsaved draft")
+        XCTAssertEqual(liveTasks().map(\.title), ["Committed before crash"])
+    }
+
     func testDelayedTaskToastUndoesCreationInItsOriginalHistoryAfterPageSwitch() throws {
         page.services.acknowledgementDelay = .seconds(3600)
         model.open(on: .tasks(.done))
