@@ -98,6 +98,20 @@ final class ScrollEdgeUITests: XCTestCase {
                 continue
             }
 
+            // An XCUI call on a killed app ends the test at once, so the
+            // evidence for this attempt is attached in teardown as well.
+            addTeardownBlock { [weak self] in
+                guard let self, FileManager.default.fileExists(atPath: probe.path) else { return }
+                let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
+                guard contents.hasPrefix("HANG:") else { return }
+                self.attachProbe(at: probe, name: "\(prefix)-teardown")
+                if FileManager.default.fileExists(atPath: screenshot.path) {
+                    let capture = XCTAttachment(contentsOfFile: screenshot)
+                    capture.name = "\(prefix)-teardown-screen"
+                    capture.lifetime = .keepAlways
+                    self.add(capture)
+                }
+            }
             let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot)
             recovery.start()
             let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
@@ -111,8 +125,12 @@ final class ScrollEdgeUITests: XCTestCase {
             }
             let result = recovery.finish()
             let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-            let hangDumped = contents.hasPrefix("HANG:")
-            if result.recovered || hangDumped {
+            if !result.recovered, contents.hasPrefix("HANG:") {
+                // A busy stretch that ended by itself: keep it as evidence,
+                // but it is not the freeze (that never idles again).
+                attachProbe(at: probe, name: "\(prefix)-transient")
+            }
+            if result.recovered {
                 failures.append("\(prefix): \(result.reason ?? "probe reported a run-loop hang")")
                 attachProbe(at: probe, name: prefix)
                 if FileManager.default.fileExists(atPath: screenshot.path) {
@@ -446,12 +464,30 @@ private final class HoverScrollHangRecovery {
         return lock.withLock { (reason != nil, reason) }
     }
 
+    /// A slow CI runner can go 3 s without a genuine wait and then recover
+    /// (CI 43566210697 killed both the Dark and the Light run that way). The
+    /// app refreshes its dump every 2 s only while the run loop stays busy,
+    /// so a hang is confirmed once dumps have kept coming for 20 s.
+    private var firstHangNanos: UInt64?
+
     private func check() {
-        let elapsed = DispatchTime.now().uptimeNanoseconds - startNanos
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsed = now - startNanos
         let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-        guard contents.hasPrefix("HANG:") || elapsed > 18_000_000_000 else { return }
+        var sustained = false
+        if contents.hasPrefix("HANG:") {
+            let modified = (try? FileManager.default.attributesOfItem(atPath: probe.path)[.modificationDate] as? Date) ?? nil
+            let fresh = modified.map { Date().timeIntervalSince($0) < 4.5 } ?? false
+            if fresh {
+                if firstHangNanos == nil { firstHangNanos = now }
+                sustained = now - (firstHangNanos ?? now) >= 20_000_000_000
+            } else {
+                firstHangNanos = nil
+            }
+        }
+        guard sustained || elapsed > 60_000_000_000 else { return }
         lock.withLock {
-            reason = contents.hasPrefix("HANG:") ? "app's background watchdog saw a non-idling run loop" : "scroll/AX did not return within 18 seconds"
+            reason = sustained ? "app's background watchdog saw a run loop that stayed busy for 20 s" : "scroll/AX did not return within 60 seconds"
         }
 
         // A window-specific AX screenshot can itself block on a hung app.
