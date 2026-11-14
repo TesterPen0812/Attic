@@ -25,14 +25,26 @@ class DrawStore: DrawStoreProtocol {
         var ids: [UUID]
         var positions: [UUID: Int]
     }
+    /// What a list row needs from a hydrated canvas: the stored thumbnail and
+    /// its appearance. The rest of the row comes from the metadata snapshot.
+    private struct CachedThumbnail {
+        var thumbnail: Data?
+        var thumbnailDark: Bool?
+        var used: UInt64
+    }
     /// Rows hydrated per batched thumbnail read: the initial viewport plus a
     /// prefetch margin. One constant for the menu's window and search's.
     static let thumbnailWindow = 12
+    /// Thumbnails kept in memory; the least recently used goes first. An
+    /// evicted row simply reads its thumbnail again. (`DrawThumbnailCache`
+    /// holds 128 decoded images.)
+    static let maxCachedThumbnails = 128
     @ObservationIgnored private var searchSnapshot: SearchSnapshot?
-    /// Hydrated canvases by id. A change to one canvas (a thumbnail write, an
-    /// edit, Undo or Redo) drops only its own entry; any other change drops
-    /// them all.
-    @ObservationIgnored private var searchThumbnails: [UUID: DrawCanvas] = [:]
+    /// Hydrated thumbnails by canvas, at most `maxCachedThumbnails`. A change
+    /// to one canvas (a thumbnail write, an edit, Undo or Redo) drops only
+    /// its own entry; any other change drops them all.
+    @ObservationIgnored private var searchThumbnails: [UUID: CachedThumbnail] = [:]
+    @ObservationIgnored private var thumbnailUse: UInt64 = 0
     /// The last search result's order, which batches follow while its rows
     /// are on screen; otherwise batches follow the library order.
     @ObservationIgnored private var searchOrder: [UUID] = []
@@ -205,7 +217,8 @@ class DrawStore: DrawStoreProtocol {
         let window = canvases.prefix(Self.thumbnailWindow).filter { needsThumbnailRead($0.id) }
         try loadThumbnails(Array(window))
         return canvases.map { canvas in
-            recoveredCanvasIDs.contains(canvas.id) ? canvas : searchThumbnails[canvas.id] ?? canvas
+            guard !recoveredCanvasIDs.contains(canvas.id), let entry = cachedThumbnail(canvas.id) else { return canvas }
+            return merged(canvas, entry)
         }
     }
 
@@ -216,7 +229,7 @@ class DrawStore: DrawStoreProtocol {
         let snapshot = try searchSnapshot ?? currentSearchSnapshot()
         guard let position = snapshot.positions[id] else { return nil }
         let metadata = snapshot.canvases[position]
-        if let cached = searchThumbnails[id] { return cached }
+        if let entry = cachedThumbnail(id) { return merged(metadata, entry) }
         // A miss reads the uncached rows from this one to the end of its
         // window (a page of `thumbnailWindow` rows in the order the caller
         // lists them) in one batch: one context, two fetches.
@@ -235,12 +248,41 @@ class DrawStore: DrawStoreProtocol {
         searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id)
     }
 
+    private func merged(_ canvas: DrawCanvas, _ entry: CachedThumbnail) -> DrawCanvas {
+        var canvas = canvas
+        canvas.thumbnail = entry.thumbnail
+        canvas.thumbnailDark = entry.thumbnailDark
+        return canvas
+    }
+
+    private func cachedThumbnail(_ id: UUID) -> CachedThumbnail? {
+        guard searchThumbnails[id] != nil else { return nil }
+        thumbnailUse &+= 1
+        searchThumbnails[id]?.used = thumbnailUse
+        return searchThumbnails[id]
+    }
+
     /// Reads the batch into the cache and returns the row for `requested`.
     @discardableResult
     private func loadThumbnails(_ batch: [DrawCanvas], requested: UUID? = nil) throws -> DrawCanvas? {
         guard !batch.isEmpty else { return nil }
-        for row in try repository.hydrateSearchThumbnails(batch) { searchThumbnails[row.id] = row }
-        return requested.flatMap { searchThumbnails[$0] }
+        var found: DrawCanvas?
+        for row in try repository.hydrateSearchThumbnails(batch) {
+            thumbnailUse &+= 1
+            searchThumbnails[row.id] = CachedThumbnail(thumbnail: row.thumbnail, thumbnailDark: row.thumbnailDark,
+                                                       used: thumbnailUse)
+            if row.id == requested { found = row }
+        }
+        evictThumbnails()
+        return found
+    }
+
+    private func evictThumbnails() {
+        let excess = searchThumbnails.count - Self.maxCachedThumbnails
+        guard excess > 0 else { return }
+        for (id, _) in searchThumbnails.sorted(by: { $0.value.used < $1.value.used }).prefix(excess) {
+            searchThumbnails[id] = nil
+        }
     }
 
     private func searchMetadata() throws -> [DrawCanvas] { try currentSearchSnapshot().canvases }

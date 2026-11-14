@@ -284,6 +284,30 @@ final class Draw3StoreTests: XCTestCase {
         }
     }
 
+    /// R-13: the thumbnail cache holds a bounded number of entries however
+    /// many canvases were scrolled past, and an evicted row reloads its own
+    /// thumbnail.
+    func testR13ThumbnailCacheStaysBoundedAndAnEvictedRowReloads() throws {
+        let container = try container()
+        func bytes(_ index: Int) -> Data { Data(repeating: UInt8(index % 251), count: 64 + index % 7) }
+        try seedBoards(container, count: 500, bytesOf: bytes)
+        let reader = DrawPersistentStore(container: container)
+        let menu = try reader.presentationLibrary()
+        func expected(_ canvas: DrawCanvas) -> Data { bytes(Int(canvas.name.dropFirst("Board ".count))!) }
+        for row in menu { XCTAssertEqual(try reader.searchThumbnail(row.id)?.thumbnail, expected(row)) }
+        XCTAssertLessThanOrEqual(reader.searchThumbnailCacheCount, 128, "500 hydrated canvases stay within the limit")
+        for step in 0..<10 {
+            XCTAssertTrue(reader.perform(.put([stroke()]), on: menu[step * 7].id).isSaved)
+            XCTAssertLessThanOrEqual(reader.searchThumbnailCacheCount, 128, "after edit \(step + 1)")
+        }
+        let evicted = menu[1]
+        reader.metrics.reset()
+        XCTAssertEqual(try reader.searchThumbnail(evicted.id)?.thumbnail, expected(evicted),
+                       "an evicted row reloads its own thumbnail")
+        XCTAssertEqual(reader.metrics.thumbnailHydrations, 1)
+        XCTAssertLessThanOrEqual(reader.searchThumbnailCacheCount, 128)
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)
