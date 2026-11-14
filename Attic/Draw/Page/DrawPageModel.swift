@@ -251,7 +251,12 @@ final class DrawPageModel: ObservableObject {
     var thumbnailSettleDelay: TimeInterval = 1.5
     /// Renders a thumbnail away from the main thread (tests hold one back).
     var thumbnailRenderer: @Sendable (_ objects: [DrawObject], _ dark: Bool) async -> Data? = { objects, dark in
-        await Task.detached(priority: .utility) { DrawThumbnail.render(objects, dark: dark) }.value
+        let worker = Task.detached(priority: .utility) { DrawThumbnail.render(objects, dark: dark) }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     private var viewports: [UUID: DrawViewport] = [:]
@@ -270,12 +275,15 @@ final class DrawPageModel: ObservableObject {
     /// until their quiet thumbnail write succeeds (no drawing-store schema change).
     private var unrenderedThumbnails: Set<UUID> = []
     private var thumbnailTimer: DispatchWorkItem?
-    private var thumbnailRenders: [UUID: (generation: Int, dark: Bool, task: Task<Void, Never>)] = [:]
+    private var thumbnailRenders: [UUID: (generation: Int, dark: Bool, task: Task<Void, Never>, fromAppearance: Bool)] = [:]
     private var thumbnailGeneration = 0
     /// Shown canvases whose thumbnail was rendered for the other
     /// appearance, waiting for the next turn of the main loop.
     private var appearanceQueue: Set<UUID> = []
+    private var appearanceVisibleIDs: Set<UUID> = []
     private var appearanceDrainScheduled = false
+    /// Two stale-appearance renders at most, including their snapshot opens.
+    private let maxConcurrentAppearanceRenders = 2
     private var appearanceObservation: NSKeyValueObservation?
     /// The save notice's ✕ hides it until the next problem.
     @Published private var dismissedSaveProblem: String?
@@ -328,7 +336,12 @@ final class DrawPageModel: ObservableObject {
                            export: { [weak self] in self?.images.exportCanvas($0) },
                            copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
                            hasContent: { [weak self] in self?.hasContent($0) ?? false },
-                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) })
+                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) },
+                           thumbnailsHidden: { [weak self] in self?.thumbnailsHidden($0) },
+                           searchThumbnail: { [weak self] in
+                               guard let self else { return nil }
+                               return try? self.store.searchThumbnail($0)
+                           })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -483,16 +496,19 @@ final class DrawPageModel: ObservableObject {
     /// `.thumbnail` command (no Undo, no date, no new order), recording the
     /// appearance it was rendered for. With `keepOnFailure`, a render that
     /// fails leaves the shown thumbnail alone.
-    private func renderThumbnail(_ id: UUID, objects snapshot: [DrawObject], keepOnFailure: Bool = false) {
+    private func renderThumbnail(_ id: UUID, objects snapshot: [DrawObject], keepOnFailure: Bool = false,
+                                 fromAppearance: Bool = false) {
         thumbnailDirty.remove(id)
         thumbnailGeneration += 1
         let generation = thumbnailGeneration
+        thumbnailRenders[id]?.task.cancel()
         guard !snapshot.isEmpty else {
             // Nothing drawn: any render still under way is out of date and
             // must never land after the empty card.
             thumbnailRenders[id]?.task.cancel()
             thumbnailRenders[id] = nil
             writeThumbnail(nil, dark: DrawImageActions.isDark, on: id)
+            scheduleAppearanceDrain()
             return
         }
         let dark = DrawImageActions.isDark
@@ -501,10 +517,10 @@ final class DrawPageModel: ObservableObject {
             let data = await render(snapshot, dark)
             guard let self, self.thumbnailRenders[id]?.generation == generation else { return }
             self.thumbnailRenders[id] = nil
-            if data == nil, keepOnFailure { return }
-            self.writeThumbnail(data, dark: dark, on: id)
+            if data != nil || !keepOnFailure { self.writeThumbnail(data, dark: dark, on: id) }
+            self.scheduleAppearanceDrain()
         }
-        thumbnailRenders[id] = (generation, dark, task)
+        thumbnailRenders[id] = (generation, dark, task, fromAppearance)
     }
 
     /// These canvases' thumbnails are about to show (the canvas menu,
@@ -515,10 +531,27 @@ final class DrawPageModel: ObservableObject {
     /// place. Canvases that never show are left alone.
     func thumbnailsShown(_ canvases: [DrawCanvas]) {
         let dark = DrawImageActions.isDark
+        appearanceVisibleIDs.formUnion(canvases.map(\.id))
         for canvas in canvases where canvas.deletedAt == nil &&
-            (unrenderedThumbnails.contains(canvas.id) || (canvas.thumbnail != nil && canvas.thumbnailDark != dark)) {
+            (unrenderedThumbnails.contains(canvas.id) ||
+             ((canvas.thumbnail != nil || canvas.thumbnailDark != nil) && canvas.thumbnailDark != dark)) {
             appearanceQueue.insert(canvas.id)
         }
+        scheduleAppearanceDrain()
+    }
+
+    /// Stale cards are regenerable; closing or scrolling the list removes
+    /// its pending work while leaving its stored last thumbnail intact.
+    func thumbnailsHidden(_ ids: [UUID]) {
+        appearanceVisibleIDs.subtract(ids)
+        appearanceQueue.subtract(ids)
+        for id in ids where thumbnailRenders[id]?.fromAppearance == true {
+            thumbnailRenders.removeValue(forKey: id)?.task.cancel()
+        }
+        scheduleAppearanceDrain()
+    }
+
+    private func scheduleAppearanceDrain() {
         guard !appearanceQueue.isEmpty, !appearanceDrainScheduled else { return }
         appearanceDrainScheduled = true
         DispatchQueue.main.async { [weak self] in
@@ -542,10 +575,12 @@ final class DrawPageModel: ObservableObject {
 
     private func renderQueuedAppearances() {
         appearanceDrainScheduled = false
-        let ids = appearanceQueue
-        appearanceQueue = []
         let dark = DrawImageActions.isDark
-        for id in ids where thumbnailRenders[id]?.dark != dark {
+        for id in appearanceQueue.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard appearanceVisibleIDs.contains(id) else { appearanceQueue.remove(id); continue }
+            if thumbnailRenders[id]?.dark == dark { appearanceQueue.remove(id); continue }
+            guard thumbnailRenders.count < maxConcurrentAppearanceRenders else { break }
+            appearanceQueue.remove(id)
             if id == canvasID {
                 if thumbnailDirty.contains(id), thumbnailTimer == nil, live == nil {
                     renderThumbnail(id, objects: objects, keepOnFailure: true)
@@ -557,7 +592,7 @@ final class DrawPageModel: ObservableObject {
             guard store.pendingEdits[id] == nil, let snapshot = try? store.open(id), snapshot.canvas.deletedAt == nil else { continue }
             let stale = unrenderedThumbnails.contains(id)
             guard stale || (snapshot.canvas.thumbnail != nil && snapshot.canvas.thumbnailDark != dark) else { continue }
-            renderThumbnail(id, objects: snapshot.objects, keepOnFailure: true)
+            renderThumbnail(id, objects: snapshot.objects, keepOnFailure: true, fromAppearance: true)
         }
     }
 
@@ -585,6 +620,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     var selectedObjects: [DrawObject] {
+        guard !selection.isEmpty else { return [] }
         let ids = Set(selection)
         return objects.filter { ids.contains($0.id) }
     }
@@ -620,7 +656,6 @@ final class DrawPageModel: ObservableObject {
            (try? store.open(id)) != nil { open(id) }
         else if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
     }
-        guard !selection.isEmpty else { return [] }
 
     func open(_ id: UUID) {
         if id != canvasID, library.isRenaming {
@@ -642,6 +677,7 @@ final class DrawPageModel: ObservableObject {
         canvasName = confirmedName(in: snapshot)
         library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
+        strokeExtents.removeAll(keepingCapacity: true)
         // A prior session may have quit while its thumbnail renderer was
         // still running. Its persisted dirty marker forces regeneration here.
         if thumbnailDirty.contains(id), thumbnailRenders[id] == nil {
@@ -677,7 +713,6 @@ final class DrawPageModel: ObservableObject {
         let canvas = store.create(name: name)
         viewports[canvas.id] = DrawViewport()
         open(canvas.id)
-        strokeExtents.removeAll(keepingCapacity: true)
         setTool(.pen)
         return canvasID == canvas.id
     }
@@ -1083,6 +1118,7 @@ final class DrawPageModel: ObservableObject {
         let now = DispatchTime.now().uptimeNanoseconds
         if typingCommands.isEmpty { typingStartedAt = now; typingCanvasID = canvasID }
         typingCommands.append(command)
+        strokeExtents[id] = nil
         if let changed {
             if let index = objects.firstIndex(where: { $0.id == id }) { objects[index] = changed }
             else { objects.append(changed); objects.sort(by: Self.order) }
@@ -1118,7 +1154,6 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
-        strokeExtents[id] = nil
         syncExternalChanges()
         guard var edit = editing else { return }
         change(&edit.style)
@@ -1283,6 +1318,7 @@ final class DrawPageModel: ObservableObject {
         case .put(let changed):
             guard !changed.isEmpty else { return }
             touched = Set(changed.map(\.id))
+            for id in touched { strokeExtents[id] = nil }
             afterValues = Dictionary(uniqueKeysWithValues: changed.map { ($0.id, $0) })
             var byID = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
             for object in changed { byID[object.id] = object }
@@ -1291,6 +1327,7 @@ final class DrawPageModel: ObservableObject {
             guard !removed.isEmpty else { return }
             let ids = Set(removed)
             touched = ids
+            for id in ids { strokeExtents[id] = nil }
             afterValues = [:]
             objects.removeAll { ids.contains($0.id) }
         default:
@@ -1318,7 +1355,6 @@ final class DrawPageModel: ObservableObject {
 
     private func acknowledgeHistory(redo: Bool) {
         guard let canvasID, live == nil else { return }
-            for id in touched { strokeExtents[id] = nil }
         guard store is DrawPersistentStore else {
             if redo { self.redo() } else { self.undo() }
             return
@@ -1327,7 +1363,6 @@ final class DrawPageModel: ObservableObject {
         // Its flush is still the required boundary for Undo/Redo.
         if !typingCommands.isEmpty { if redo { self.redo() } else { self.undo() }; return }
         if acknowledgedDraw.isEmpty { syncExternalChanges() }
-            for id in ids { strokeExtents[id] = nil }
         prepareAcknowledgedHistory(on: canvasID)
         let before = objects
         let change: DrawChange
@@ -1343,6 +1378,7 @@ final class DrawPageModel: ObservableObject {
         var projected = Dictionary(uniqueKeysWithValues: objects.map { ($0.id, $0) })
         let target = redo ? change.objectsAfter : change.objectsBefore
         for id in change.objectIDs {
+            strokeExtents[id] = nil
             if let object = target[id], object.deletedAt == nil { projected[id] = object }
             else { projected[id] = nil }
         }
@@ -1378,7 +1414,6 @@ final class DrawPageModel: ObservableObject {
     /// Failed edits keep the store's recoverable after-draft and Retry UI.
     func flushAcknowledgedDraw() {
         acknowledgedDrawTimer?.cancel()
-            strokeExtents[id] = nil
         acknowledgedDrawTimer = nil
         acknowledgedUndoChanges = nil
         acknowledgedRedoChanges = []
@@ -1461,6 +1496,8 @@ final class DrawPageModel: ObservableObject {
                 return
             }
             canvasName = delta.canvas.name
+            for object in delta.upserted { strokeExtents[object.id] = nil }
+            for id in delta.removedIDs { strokeExtents[id] = nil }
             if delta.removedIDs.isEmpty, delta.upserted.count == 1,
                let changed = delta.upserted.first,
                let index = objects.firstIndex(where: { $0.id == changed.id }),
@@ -1477,6 +1514,7 @@ final class DrawPageModel: ObservableObject {
             lastError = nil
         case .retry(let message), .held(let message):
             // The store keeps the visible after-draft.
+            strokeExtents.removeAll(keepingCapacity: true)
             if let canvasID, let pending = store.pendingEdits[canvasID] {
                 objects = pending.objects.filter { $0.deletedAt == nil }.sorted(by: Self.order)
             }
@@ -1496,8 +1534,6 @@ final class DrawPageModel: ObservableObject {
             if let object = object(edit.id), case .text(let text) = object.content {
                 edit.text = text
                 edit.style = object.style
-            for object in delta.upserted { strokeExtents[object.id] = nil }
-            for id in delta.removedIDs { strokeExtents[id] = nil }
                 edit.origin = CGPoint(x: object.frame.x, y: object.frame.y)
                 edit.width = object.textWidth.map { CGFloat($0) }
                 edit.scale = CGFloat(object.textScale ?? 1)
@@ -1514,7 +1550,6 @@ final class DrawPageModel: ObservableObject {
         selectionRevision += 1
         thumbnailNeeded()
         updateLost()
-            strokeExtents.removeAll(keepingCapacity: true)
         board?.drawContentChanged()
         board?.drawSelectionChanged()
     }
@@ -1583,6 +1618,7 @@ final class DrawPageModel: ObservableObject {
             return text != edit.text
         } ?? false
         guard fresh != objects else { refreshHistory(); return }
+        strokeExtents.removeAll(keepingCapacity: true)
         objects = fresh
         if editorConflicts { endEditing() }
         afterContentChange(replacingEditorText: editing != nil)
@@ -1596,4 +1632,3 @@ final class DrawPageModel: ObservableObject {
             ?? snapshot.canvas.name // An unpublished canvas's chosen draft name has no saved row yet.
     }
 }
-        strokeExtents.removeAll(keepingCapacity: true)

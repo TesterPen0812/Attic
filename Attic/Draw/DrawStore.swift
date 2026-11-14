@@ -17,6 +17,8 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private let recovery: DrawRecoveryJournal?
     @ObservationIgnored private var recoveredCanvasIDs = Set<UUID>()
     @ObservationIgnored private var states: [UUID: State] = [:]
+    @ObservationIgnored private var searchMetadataCache: (revision: UInt64, canvases: [DrawCanvas])?
+    @ObservationIgnored private var searchThumbnails: (revision: UInt64, canvases: [UUID: DrawCanvas])?
     @ObservationIgnored private var histories: [UUID: History] = [:]
     /// The current in-memory head left by our own recovered inverse. A newer
     /// owner edit replaces that head and must still block earlier agent Undo.
@@ -133,19 +135,64 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
+    func presentationLibrary() throws -> [DrawCanvas] {
+        try hydratedPresentation(try searchMetadata())
+    }
+
     func search(_ query: String) throws -> [DrawSearchMatch] {
         let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
         let rawTags = tokens.filter { $0.hasPrefix("#") }
         let tags = rawTags.compactMap(AtticTag.normalize)
         guard tags.count == rawTags.count else { return [] }
         let words = tokens.filter { !$0.hasPrefix("#") }
-        return try library().compactMap { canvas in
+        let candidates: [DrawSearchMatch] = try searchMetadata().compactMap { canvas in
             guard tags.allSatisfy({ tag in canvas.tags.contains { $0.lowercased() == tag } }),
                   words.allSatisfy({ canvas.name.localizedStandardContains($0) || canvas.textIndex.localizedStandardContains($0) }) else { return nil }
             let textWords = words.filter { canvas.textIndex.localizedStandardContains($0) }
             let ids = textWords.isEmpty ? [] : try repository.textMatches(textWords, in: canvas.id)
             return DrawSearchMatch(canvas: canvas, matchingTextBoxIDs: ids)
         }
+        guard !candidates.isEmpty else { return [] }
+        let hydrated = try hydratedPresentation(candidates.map(\.canvas))
+        let byID = Dictionary(uniqueKeysWithValues: hydrated.map { ($0.id, $0) })
+        return candidates.map { match in
+            DrawSearchMatch(canvas: byID[match.canvas.id] ?? match.canvas,
+                            matchingTextBoxIDs: match.matchingTextBoxIDs)
+        }
+    }
+
+    private func hydratedPresentation(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
+        // Initial viewport plus prefetch margin. The remaining metadata stays
+        // present for navigation, and each realized row hydrates its own body.
+        let hydrated = try repository.hydrateSearchThumbnails(Array(canvases.prefix(12)))
+        let byID = Dictionary(uniqueKeysWithValues: hydrated.map { ($0.id, $0) })
+        return canvases.map { canvas in
+            recoveredCanvasIDs.contains(canvas.id) ? canvas : byID[canvas.id] ?? canvas
+        }
+    }
+
+    func searchThumbnail(_ id: UUID) throws -> DrawCanvas? {
+        if recoveredCanvasIDs.contains(id) { return states[id]?.canvas }
+        if searchThumbnails?.revision != revision { searchThumbnails = (revision, [:]) }
+        if let canvas = searchThumbnails?.canvases[id] { return canvas }
+        guard let metadata = try searchMetadata().first(where: { $0.id == id }) else { return nil }
+        let loaded = try repository.hydrateSearchThumbnails([metadata]).first
+        if let loaded { searchThumbnails?.canvases[id] = loaded }
+        return loaded
+    }
+
+    private func searchMetadata() throws -> [DrawCanvas] {
+        if let searchMetadataCache, searchMetadataCache.revision == revision { return searchMetadataCache.canvases }
+        var byID = Dictionary(uniqueKeysWithValues: try repository.searchMetadata().map { ($0.id, $0) })
+        for id in recoveredCanvasIDs {
+            if let draft = states[id]?.canvas { byID[id] = draft }
+        }
+        let canvases = byID.values.filter { $0.deletedAt == nil }.sorted {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        searchMetadataCache = (revision, canvases)
+        return canvases
     }
 
     func create(name: String? = nil) -> DrawCanvas {

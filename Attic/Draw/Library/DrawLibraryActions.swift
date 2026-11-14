@@ -19,6 +19,8 @@ struct DrawLibraryActions {
     /// These canvases' thumbnails are about to show (the menu, Search): the
     /// page re-renders any drawn for the other appearance.
     let thumbnailsShown: @MainActor (_ canvases: [DrawCanvas]) -> Void
+    let thumbnailsHidden: @MainActor (_ ids: [UUID]) -> Void
+    let searchThumbnail: @MainActor (_ id: UUID) -> DrawCanvas?
 
     init(open: @escaping @MainActor (_ canvasID: UUID) -> Void,
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
@@ -28,7 +30,9 @@ struct DrawLibraryActions {
          export: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true },
-         thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in }) {
+         thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in },
+         thumbnailsHidden: @escaping @MainActor (_ ids: [UUID]) -> Void = { _ in },
+         searchThumbnail: @escaping @MainActor (_ id: UUID) -> DrawCanvas? = { _ in nil }) {
         openCanvas = open
         makeCanvas = newCanvas
         revealObject = reveal
@@ -38,6 +42,8 @@ struct DrawLibraryActions {
         self.copyAsImage = copyAsImage
         self.hasContent = hasContent
         self.thumbnailsShown = thumbnailsShown
+        self.thumbnailsHidden = thumbnailsHidden
+        self.searchThumbnail = searchThumbnail
     }
 
     /// Shows this canvas on the board.

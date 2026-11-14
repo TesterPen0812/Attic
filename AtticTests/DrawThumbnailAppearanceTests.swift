@@ -86,6 +86,83 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
 
     // MARK: Cases
 
+    func testPF21CancelledDefaultThumbnailWorkerDoesNotReturnAPartialImage() async {
+        let stopped = await Task.detached(priority: .utility) {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return DrawThumbnail.render([DrawObject(content: .shape(.rectangle))], dark: false)
+        }.value
+        XCTAssertNil(stopped, "a superseded or hidden thumbnail should stop painting before encoding")
+    }
+
+    func testPF21LargeLazyMenuAdmitsOnlyRealizedThumbnailRows() {
+        let rows = (0..<500).map { index in
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnail: Data([3, 4, 5]))
+            return DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)
+        }
+        var admitted: [UUID] = []
+        let host = NSHostingView(rootView: DrawLibraryRows(
+            rows: rows, litID: nil, maxHeight: 320,
+            hover: { _, _ in }, choose: { _ in },
+            thumbnailsShown: { admitted.append(contentsOf: $0.map(\.id)) }
+        ).frame(width: 224, height: 320).atticDesign(AtticDesignContext()))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        host.layout()
+        XCTAssertTrue(wait { !admitted.isEmpty }, "the first visible row must request its thumbnail")
+        XCTAssertLessThanOrEqual(Set(admitted).count, 30,
+                                 "scrolling lazily must not open all 500 matching canvases")
+        window.contentView = nil
+    }
+
+    func testPF21BlockedAppearanceRendersHaveBoundedActiveWorkers() throws {
+        var canvases: [DrawCanvas] = []
+        for index in 0..<24 {
+            let canvas = store.create(name: "Appearance \(index)")
+            let object = DrawObject(frame: DrawFrame(x: 4, y: 4, width: 24, height: 18),
+                                    content: .shape(.rectangle))
+            XCTAssertTrue(store.perform(.put([object]), on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.thumbnail(Data([1, 2, 3]), dark: true), on: canvas.id).isSaved)
+            canvases.append(try XCTUnwrap(store.library().first { $0.id == canvas.id }))
+        }
+        let gate = Draw3Gate()
+        renders.gate = gate
+        defer { gate.open() }
+        DrawImageActions.darkOverride = false
+        model.thumbnailsShown(canvases)
+        XCTAssertTrue(wait { self.renders.startedCount > 0 })
+        spin(0.15)
+        XCTAssertLessThanOrEqual(renders.startedCount, 2,
+                                 "blocked thumbnail workers must not start one render per shown row")
+        gate.open()
+        XCTAssertTrue(wait(10) { self.renders.startedCount == canvases.count },
+                      "queued visible thumbnails eventually render after workers complete")
+    }
+
+    func testPF21HiddenAppearanceRowsCancelQueuedAndObsoleteWrites() throws {
+        var canvases: [DrawCanvas] = []
+        for index in 0..<16 {
+            let canvas = store.create(name: "Hidden \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .shape(.rectangle))]), on: canvas.id).isSaved)
+            XCTAssertTrue(store.perform(.thumbnail(Data([7, 8, 9]), dark: true), on: canvas.id).isSaved)
+            canvases.append(try XCTUnwrap(store.library().first { $0.id == canvas.id }))
+        }
+        let gate = Draw3Gate()
+        renders.gate = gate
+        defer { gate.open() }
+        DrawImageActions.darkOverride = false
+        model.thumbnailsShown(canvases)
+        XCTAssertTrue(wait { self.renders.startedCount > 0 })
+        model.thumbnailsHidden(canvases.map(\.id))
+        gate.open()
+        spin(0.3)
+        XCTAssertLessThanOrEqual(renders.startedCount, 2, "hidden queued work must never start")
+        for canvas in canvases {
+            XCTAssertEqual(try store.open(canvas.id).canvas.thumbnail, Data([7, 8, 9]),
+                           "an obsolete render must not overwrite the stored old thumbnail")
+        }
+    }
+
     func testADarkThumbnailShownInTheMenuAfterSwitchingToLightRerendersOnceQuietly() throws {
         let alpha = try drawnCanvas("Alpha")
         XCTAssertEqual(board(alpha.id), Self.darkBoard)
@@ -309,6 +386,7 @@ final class DrawRenderLog: @unchecked Sendable {
     }
 
     func started(of object: UUID) -> Int { lock.lock(); defer { lock.unlock() }; return begun.filter { $0 == object }.count }
+    var startedCount: Int { lock.withLock { begun.count } }
     func count(of object: UUID) -> Int { lock.lock(); defer { lock.unlock() }; return finished.filter { $0.object == object }.count }
     func last(of object: UUID) -> (object: UUID?, dark: Bool)? {
         lock.lock(); defer { lock.unlock() }; return finished.last { $0.object == object }

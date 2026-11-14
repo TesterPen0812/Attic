@@ -152,7 +152,11 @@ final class DrawSwiftDataRepository: DrawRepository {
         return context
     }
 
-    func library() throws -> [DrawCanvas] {
+    func library() throws -> [DrawCanvas] { try library(hydrateThumbnails: true) }
+
+    func searchMetadata() throws -> [DrawCanvas] { try library(hydrateThumbnails: false) }
+
+    private func library(hydrateThumbnails: Bool) throws -> [DrawCanvas] {
         let context = context()
         let rows = try context.fetch(FetchDescriptor<DrawCanvasRecord>())
         metrics.metadataRowsRead += rows.count
@@ -160,7 +164,38 @@ final class DrawSwiftDataRepository: DrawRepository {
         // requested thumbnail rows are materialised during library presentation.
         return try Dictionary(grouping: rows, by: \.id).values.map { replicas in
             let row = try canvasWinner(replicas)
-            return try row.value(thumbnail: thumbnail(for: row, in: context))
+            return try row.value(thumbnail: hydrateThumbnails ? thumbnail(for: row, in: context) : nil)
+        }
+    }
+
+    func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
+        guard !canvases.isEmpty else { return [] }
+        let context = context()
+        let ids = canvases.map(\.id)
+        var winners: [UUID: DrawCanvasRecord] = [:]
+        var byCanvas: [UUID: [DrawPayloadRecord]] = [:]
+        // Keep SQLite predicate variable counts bounded for broad searches.
+        for start in stride(from: 0, to: ids.count, by: 128) {
+            let page = Array(ids[start..<min(start + 128, ids.count)])
+            let rows = try context.fetch(FetchDescriptor<DrawCanvasRecord>(predicate:
+                #Predicate { page.contains($0.id) }))
+            metrics.metadataRowsRead += rows.count
+            for (id, replicas) in Dictionary(grouping: rows, by: \.id) {
+                winners[id] = try canvasWinner(replicas)
+            }
+            let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
+                #Predicate { page.contains($0.canvasID) && $0.role == "thumbnail" }))
+            for (id, replicas) in Dictionary(grouping: payloads, by: \.canvasID) {
+                byCanvas[id] = replicas
+            }
+        }
+        return try canvases.map { canvas in
+            guard let row = winners[canvas.id] else { return canvas }
+            let payload = byCanvas[canvas.id]?.filter { $0.id == row.thumbnailID }
+                .max(by: { $0.digest < $1.digest })
+            let bytes = payload?.bytes
+            if let bytes { metrics.thumbnailBytesRead += bytes.count }
+            return try row.value(thumbnail: bytes)
         }
     }
 
@@ -558,6 +593,9 @@ final class DrawSwiftDataRepository: DrawRepository {
         let bytes = payload.bytes
         metrics.payloadBytesRead += bytes.count
         guard DrawCodec.digest(bytes) == digest else { throw DrawStoreError.invalidObject }
+        #if DEBUG
+        if Thread.isMainThread { metrics.payloadDecodesOnMain += 1 }
+        #endif
         switch object.content {
         case .stroke: object.content = .stroke(try JSONDecoder().decode([DrawPoint].self, from: bytes))
         case .image(var image): image.original = bytes; object.content = .image(image)
@@ -566,6 +604,3 @@ final class DrawSwiftDataRepository: DrawRepository {
         return object
     }
 }
-        #if DEBUG
-        if Thread.isMainThread { metrics.payloadDecodesOnMain += 1 }
-        #endif

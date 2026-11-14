@@ -194,7 +194,10 @@ struct DrawSearchResults: View {
                                     guard let result = results.first(where: { $0.canvas.id == row.canvas?.id }) else { return }
                                     if model.open(result) { topRow?.endSearch(on: .canvas) }
                                 },
-                                thumbnailsShown: { [actions = model.actions] in actions.thumbnailsShown($0) })
+                                thumbnailsShown: { [actions = model.actions] in actions.thumbnailsShown($0) },
+                                thumbnailsHidden: { [actions = model.actions] in actions.thumbnailsHidden($0) },
+                                searchThumbnail: { [actions = model.actions] in actions.searchThumbnail($0) },
+                                thumbnailRevision: model.store.revision)
             }
             .accessibilityLabel(String(localized: "Canvases found"))
             .accessibilityIdentifier("draw-search-results")

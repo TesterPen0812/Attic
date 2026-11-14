@@ -141,16 +141,22 @@ struct DrawLibraryRows: View {
     var maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight
     let hover: (DrawLibraryMenuModel.Row, Bool) -> Void
     let choose: (DrawLibraryMenuModel.Row) -> Void
-    /// The rows' canvases once they show (and again when they or the
-    /// appearance change): the page re-renders thumbnails drawn for the
-    /// other appearance. Runs after the list appears, never during layout.
+    /// Realized rows request stale-appearance thumbnails as they enter the
+    /// lazy stack. Offscreen matches must not open boards or start renders.
     var thumbnailsShown: (([DrawCanvas]) -> Void)?
+    var thumbnailsHidden: (([UUID]) -> Void)?
+    var searchThumbnail: ((UUID) -> DrawCanvas?)?
+    var thumbnailRevision: UInt64 = 0
+    @State private var hydratedRows: [UUID: DrawCanvas] = [:]
     @Environment(\.colorScheme) private var colorScheme
 
     init(rows: [DrawLibraryMenuModel.Row], litID: String?, scrollTarget: String? = nil,
          maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight,
          hover: @escaping (DrawLibraryMenuModel.Row, Bool) -> Void, choose: @escaping (DrawLibraryMenuModel.Row) -> Void,
-         thumbnailsShown: (([DrawCanvas]) -> Void)? = nil) {
+         thumbnailsShown: (([DrawCanvas]) -> Void)? = nil,
+         thumbnailsHidden: (([UUID]) -> Void)? = nil,
+         searchThumbnail: ((UUID) -> DrawCanvas?)? = nil,
+         thumbnailRevision: UInt64 = 0) {
         self.rows = rows
         self.litID = litID
         self.scrollTarget = scrollTarget
@@ -158,21 +164,19 @@ struct DrawLibraryRows: View {
         self.hover = hover
         self.choose = choose
         self.thumbnailsShown = thumbnailsShown
+        self.thumbnailsHidden = thumbnailsHidden
+        self.searchThumbnail = searchThumbnail
+        self.thumbnailRevision = thumbnailRevision
     }
 
     init(model: DrawLibraryMenuModel, rows: [DrawLibraryMenuModel.Row], maxHeight: CGFloat) {
         let actions = model.actions
         self.init(rows: rows, litID: model.litRowID(in: rows), scrollTarget: model.highlightedID, maxHeight: maxHeight,
                   hover: { model.hover($0, inside: $1) }, choose: { model.choose($0) },
-                  thumbnailsShown: { actions.thumbnailsShown($0) })
-    }
-
-    /// What the shown thumbnails are: each canvas, its thumbnail and the
-    /// appearance it was rendered for, and the current appearance.
-    private var shownThumbnails: [String] {
-        rows.compactMap { row in
-            row.canvas.map { "\($0.id.uuidString) \($0.thumbnail?.hashValue ?? 0) \(String(describing: $0.thumbnailDark))" }
-        } + [colorScheme == .dark ? "dark" : "light"]
+                  thumbnailsShown: { actions.thumbnailsShown($0) },
+                  thumbnailsHidden: { actions.thumbnailsHidden($0) },
+                  searchThumbnail: { actions.searchThumbnail($0) },
+                  thumbnailRevision: model.store.revision)
     }
 
     var body: some View {
@@ -183,21 +187,45 @@ struct DrawLibraryRows: View {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if row.startsSection { AtticDropdownRule() }
                         DrawLibraryRowView(row: row, isLit: row.id == litID,
+                                           thumbnailOverride: row.canvas.flatMap { hydratedRows[$0.id] },
                                            onHover: { inside in hover(row, inside) }) {
                             choose(row)
                         }
                         .id(row.id)
                         .modifier(AtticMenuRowEntrance(index: index))
+                        .task(id: row.canvas.map {
+                            "\($0.id.uuidString) \($0.thumbnail?.hashValue ?? 0) \(String(describing: $0.thumbnailDark)) \(colorScheme) \(thumbnailRevision)"
+                        }) {
+                            guard let canvas = row.canvas else { return }
+                            let shown: DrawCanvas
+                            // Older stored thumbnails can have no appearance
+                            // marker. An absent body is not proof of an empty card.
+                            if canvas.thumbnail == nil {
+                                shown = searchThumbnail?(canvas.id) ?? canvas
+                                if shown.thumbnail != nil { hydratedRows[canvas.id] = shown }
+                            } else {
+                                hydratedRows[canvas.id] = nil
+                                shown = canvas
+                            }
+                            thumbnailsShown?([shown])
+                        }
+                        .onDisappear {
+                            if let id = row.canvas?.id {
+                                hydratedRows[id] = nil
+                                thumbnailsHidden?([id])
+                            }
+                        }
                     }
                 }
             }
             .scrollDisabled(height <= maxHeight)
             .frame(height: min(height, maxHeight))
-            .task(id: shownThumbnails) {
-                thumbnailsShown?(rows.compactMap(\.canvas))
-            }
             .onChange(of: scrollTarget) { _, id in
                 if let id { proxy.scrollTo(id) }
+            }
+            .onDisappear {
+                hydratedRows.removeAll()
+                thumbnailsHidden?(rows.compactMap { $0.canvas?.id })
             }
         }
     }
@@ -209,6 +237,7 @@ struct DrawLibraryRows: View {
 struct DrawLibraryRowView: View {
     let row: DrawLibraryMenuModel.Row
     let isLit: Bool
+    var thumbnailOverride: DrawCanvas?
     var onHover: ((Bool) -> Void)?
     let action: () -> Void
     @Environment(\.atticDesign) private var design
@@ -273,7 +302,7 @@ struct DrawLibraryRowView: View {
         let m = AtticDropdownMetrics.self
         switch row.kind {
         case let .canvas(canvas):
-            DrawCanvasThumbnail(canvas: canvas)
+            DrawCanvasThumbnail(canvas: canvas.thumbnail == nil ? (thumbnailOverride ?? canvas) : canvas)
         case .newCanvas:
             Image(systemName: "plus")
                 .font(.system(size: m.iconSize))

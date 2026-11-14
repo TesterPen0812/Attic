@@ -152,7 +152,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         guard AtticDraw.isEnabled else { return [] }
         let query = query
         if !query.isEmpty { return ((try? store.search(query)) ?? []).map(\.canvas) }
-        var list = (try? store.library()) ?? []
+        var list = (try? store.presentationLibrary()) ?? []
         if let current = currentCanvas(in: list), !list.contains(where: { $0.id == current.id }) {
             list.insert(current, at: 0)
         }

@@ -37,6 +37,9 @@ enum DrawWriteOutcome {
 @MainActor
 protocol DrawRepository: AnyObject {
     func library() throws -> [DrawCanvas]
+    /// Search filters canvas metadata before requesting matching thumbnail bodies.
+    func searchMetadata() throws -> [DrawCanvas]
+    func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas]
     func load(_ id: UUID) throws -> DrawSnapshot?
     func textMatches(_ words: [String], in id: UUID) throws -> [UUID]
     func write(_ change: DrawChange) -> DrawWriteOutcome
@@ -57,6 +60,8 @@ protocol DrawRepository: AnyObject {
 }
 
 extension DrawRepository {
+    func searchMetadata() throws -> [DrawCanvas] { try library() }
+    func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] { canvases }
     func recoveryProof(for id: UUID) -> Data? { nil }
     func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool { true }
 }

@@ -211,7 +211,12 @@ protocol DrawStoreProtocol: AnyObject {
     var hasUnsettledEdits: Bool { get }
     var recoveryIssue: String? { get }
     func library(deleted: Bool) throws -> [DrawCanvas]
+    /// The live library list needs only initial-row thumbnails; row tasks
+    /// hydrate the remaining bodies when they enter the viewport.
+    func presentationLibrary() throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
+    /// Hydrate one realized search result without opening its drawing.
+    func searchThumbnail(_ id: UUID) throws -> DrawCanvas?
     func create(name: String?) -> DrawCanvas
     func open(_ id: UUID) throws -> DrawSnapshot
     /// The canvas presently owned by the Draw page; never evict its session.
@@ -258,6 +263,8 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    func presentationLibrary() throws -> [DrawCanvas] { try library() }
+    func searchThumbnail(_ id: UUID) throws -> DrawCanvas? { try library().first { $0.id == id } }
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         var result: DrawSaveResult = .unchanged
         for command in commands { result = perform(command, on: id) }

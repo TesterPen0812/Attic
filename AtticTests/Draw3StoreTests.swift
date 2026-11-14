@@ -79,6 +79,51 @@ final class Draw3StoreTests: XCTestCase {
         print("DRAW_PF22_REMAINING_MAIN_DECODES=\(reader.metrics.payloadDecodesOnMain)")
     }
 
+    func testPF23SearchFiltersMetadataBeforeReadingThumbnailsAndReusesItAcrossQueries() throws {
+        let container = try container()
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        let bytes = Data(repeating: 37, count: 256)
+        for index in 0..<500 {
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnail: bytes)
+            let record = DrawCanvasRecord()
+            try record.apply(canvas)
+            seeded.insert(record)
+            let payload = DrawPayloadRecord()
+            payload.apply(bytes, id: canvas.id, canvasID: canvas.id, role: "thumbnail")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+
+        let reader = DrawPersistentStore(container: container)
+        reader.metrics.reset()
+        for query in ["Missing A", "Missing B", "Missing C", "Missing D"] {
+            XCTAssertTrue(try reader.search(query).isEmpty)
+        }
+        XCTAssertEqual(reader.metrics.thumbnailBytesRead, 0, "nonmatches must never hydrate thumbnail bytes")
+        XCTAssertEqual(reader.metrics.metadataRowsRead, 500,
+                       "typing at one metadata revision must reuse the canvas summaries")
+        let found = try reader.search("Board 499")
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.canvas.thumbnail, bytes, "a visible match retains its original thumbnail")
+        XCTAssertEqual(reader.metrics.thumbnailBytesRead, bytes.count,
+                       "hydrate only the matched canvas")
+        let broad = try reader.search("Board")
+        XCTAssertEqual(broad.count, 500)
+        XCTAssertLessThanOrEqual(reader.metrics.thumbnailBytesRead - bytes.count, 12 * bytes.count,
+                                 "a broad search must defer offscreen thumbnail bodies until those rows appear")
+        let offscreen = try XCTUnwrap(broad.last)
+        XCTAssertNil(offscreen.canvas.thumbnail)
+        XCTAssertEqual(try reader.searchThumbnail(offscreen.canvas.id)?.thumbnail, bytes,
+                       "scrolling a matching row into view can fetch its existing thumbnail")
+        XCTAssertLessThanOrEqual(reader.metrics.thumbnailBytesRead - bytes.count, 13 * bytes.count)
+        reader.metrics.thumbnailBytesRead = 0
+        let menu = try reader.presentationLibrary()
+        XCTAssertEqual(menu.count, 500)
+        XCTAssertLessThanOrEqual(reader.metrics.thumbnailBytesRead, 12 * bytes.count,
+                                 "the unfiltered menu must avoid reading hundreds of offscreen thumbnails")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)

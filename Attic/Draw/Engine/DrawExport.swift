@@ -67,7 +67,9 @@ enum DrawThumbnail {
     /// The content fitted into the card with a small margin; nil while the
     /// canvas is empty (the empty card shows).
     static func render(_ objects: [DrawObject], dark: Bool) -> Data? {
+        guard !Task<Never, Never>.isCancelled else { return nil }
         guard let content = DrawGeometry.union(objects) else { return nil }
+        guard !Task<Never, Never>.isCancelled else { return nil }
         let inset: CGFloat = 4
         let room = CGSize(width: pixelSize.width - inset * 2, height: pixelSize.height - inset * 2)
         let scale = min(room.width / max(content.width, 1), room.height / max(content.height, 1), 2)
@@ -75,7 +77,8 @@ enum DrawThumbnail {
             context.translateBy(x: (pixelSize.width - content.width * scale) / 2, y: (pixelSize.height - content.height * scale) / 2)
             context.scaleBy(x: scale, y: scale)
             context.translateBy(x: -content.minX, y: -content.minY)
-        }) else { return nil }
+        }, cancelled: { Task<Never, Never>.isCancelled }) else { return nil }
+        guard !Task<Never, Never>.isCancelled else { return nil }
         return DrawBitmap.png(image)
     }
 }
@@ -83,7 +86,8 @@ enum DrawThumbnail {
 /// An opaque bitmap of objects on the board colour (exports, copies and
 /// thumbnails), y down like the world.
 enum DrawBitmap {
-    static func render(_ objects: [DrawObject], pixels: CGSize, dark: Bool, place: (CGContext) -> Void) -> CGImage? {
+    static func render(_ objects: [DrawObject], pixels: CGSize, dark: Bool, place: (CGContext) -> Void,
+                       cancelled: () -> Bool = { false }) -> CGImage? {
         let width = Int(pixels.width), height = Int(pixels.height)
         guard width > 0, height > 0,
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -94,11 +98,13 @@ enum DrawBitmap {
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
         place(context)
-        paint(objects, in: context, background: nil, dark: dark, fullResolution: false)
+        paint(objects, in: context, background: nil, dark: dark, fullResolution: false, cancelled: cancelled)
+        guard !cancelled() else { return nil }
         return context.makeImage()
     }
 
-    static func paint(_ objects: [DrawObject], in context: CGContext, background: CGRect?, dark: Bool, fullResolution: Bool) {
+    static func paint(_ objects: [DrawObject], in context: CGContext, background: CGRect?, dark: Bool, fullResolution: Bool,
+                      cancelled: () -> Bool = { false }) {
         let palette = DrawPalette(dark: dark)
         if let background {
             context.setFillColor(palette.board)
@@ -106,7 +112,8 @@ enum DrawBitmap {
         }
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        for object in objects where object.deletedAt == nil {
+        for (index, object) in objects.enumerated() where object.deletedAt == nil {
+            if index.isMultiple(of: 32), cancelled() { return }
             DrawRaster.draw(object, in: context, palette: palette, fullResolution: fullResolution)
         }
     }
