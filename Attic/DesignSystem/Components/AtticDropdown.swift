@@ -2446,10 +2446,16 @@ final class AtticHighlightOrigin {
     /// The row the pointer is on and lit (its scroll id), until the pointer
     /// leaves it or the highlight goes elsewhere.
     private(set) var pointerRow: String?
+    /// Whether the list has reported the pointer row's highlight yet: a
+    /// pointer that leaves first (a flick across the edge) still made it.
+    private var reported = false
 
-    func pointerEntered(_ id: String) { pointerRow = id }
+    func pointerEntered(_ id: String) {
+        pointerRow = id
+        reported = false
+    }
 
-    func pointerLeft(_ id: String) { if pointerRow == id { pointerRow = nil } }
+    func pointerLeft(_ id: String) { if pointerRow == id, reported { pointerRow = nil } }
 
     /// The highlight is now `id`: whether to scroll it into view.
     func shouldScroll(toHighlight id: String?) -> Bool {
@@ -2457,7 +2463,10 @@ final class AtticHighlightOrigin {
             pointerRow = nil
             return false
         }
-        if pointerRow == id { return false }
+        if pointerRow == id {
+            reported = true
+            return false
+        }
         pointerRow = nil
         return true
     }

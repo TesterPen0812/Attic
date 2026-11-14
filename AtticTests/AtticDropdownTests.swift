@@ -417,6 +417,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(origin.shouldScroll(toHighlight: "c"), "the keyboard moved on")
         XCTAssertTrue(origin.shouldScroll(toHighlight: "b"), "and back to a row the pointer once lit")
         origin.pointerEntered("d")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: "d"), "the pointer lit it")
         origin.pointerLeft("d")
         XCTAssertTrue(origin.shouldScroll(toHighlight: "d"), "the pointer left it")
         origin.pointerEntered("e")
@@ -775,6 +776,34 @@ final class AtticDropdownTests: XCTestCase {
         host.rootView = Suggestions(origin: origin, highlighted: row)
         wait(for: host) { list.contentView.bounds.origin.y > 20 }
         XCTAssertGreaterThan(list.contentView.bounds.origin.y, 20, "the keyboard's row is brought wholly into view")
+    }
+
+    // MARK: A hover that ends before the list reports its highlight (R-4)
+
+    /// The pointer lights a row and is off it again before SwiftUI reports
+    /// the highlight (a fast flick across the cut-off edge, in a list that
+    /// keeps its highlight): the report is still the pointer's.
+    func testPF43AHoverThatEndedBeforeTheHighlightWasReportedStillDoesNotScroll() throws {
+        for viaParameter in [false, true] {
+            let window = makeWindow()
+            defer { window.close() }
+            let box = OriginBox()
+            let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
+            host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            spin(0.2)
+            let origin = try XCTUnwrap(box.origin)
+            let start = try XCTUnwrap(scrollOffset(in: host))
+
+            origin.pointerEntered("row-30")
+            host.rootView = ViewportRows(highlighted: 30, viaParameter: viaParameter, box: box)
+            origin.pointerLeft("row-30")
+            host.layoutSubtreeIfNeeded()
+            spin(0.5)
+            XCTAssertEqual(scrollOffset(in: host) ?? -1, start, accuracy: 0.5,
+                           "a highlight the pointer made does not scroll, off the row already (parameter: \(viaParameter))")
+        }
     }
 
     // MARK: Where it opens
