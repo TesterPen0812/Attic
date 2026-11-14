@@ -888,6 +888,18 @@ final class HangRecoverySupportTests: XCTestCase {
         XCTAssertEqual(location.candidates(bundleIdentifier: nil, homeDirectory: "/Users/me", temporaryDirectory: temporary).count, 1)
     }
 
+    func testALaunchTimeHangFileStillArmsThePass() throws {
+        let temporary = FileManager.default.temporaryDirectory
+        let location = HangProbeLocation()
+        let url = temporary.appendingPathComponent(location.leaf)
+        try Data("HANG: no-genuine-wait, elapsed=4250ms\n".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let armed = location.armedURL(bundleIdentifier: nil, temporaryDirectory: temporary)
+        var scrolls = 0
+        XCTAssertNil(HangPassGuard.run(pid: 42, armedProbe: armed) { _, _ in scrolls += 1 })
+        XCTAssertEqual(scrolls, 1, "the app wrote this file; launch-time slowness is evidence, not an arming failure")
+    }
+
     // MARK: Dot R-7: evidence survives teardown
 
     func testEvidenceFollowsTheRecoveryStatusNotTheLatestDumpPrefix() {
