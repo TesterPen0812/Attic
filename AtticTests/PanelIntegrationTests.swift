@@ -919,7 +919,11 @@ final class PanelIntegrationTests: XCTestCase {
             AtticDraw.enabledOverride = switchSetting
         }
         AtticDraw.enabledOverride = true
-        let store = DrawInMemoryStore()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawShow-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        let store = DrawPersistentStore(container: try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none)))
         let draw = DrawPageModel(store: store)
         draw.setBoard(size: CGSize(width: 320, height: 460),
                       clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
@@ -977,11 +981,49 @@ final class PanelIntegrationTests: XCTestCase {
         floating.makeFirstResponder(nil)
         let acceptedWhileHidden = floating.makeFirstResponder(editable) && floating.firstResponder === editable
         print("BG60_R19 resignedOnHide=\(resignedOnHide) acceptedWhileHidden=\(acceptedWhileHidden)")
-        guard acceptedWhileHidden else { return }
+        XCTAssertTrue(acceptedWhileHidden, "exercise the hidden first responder, rather than passing without it")
         XCTAssertTrue(editable.isHiddenOrHasHiddenAncestor)
+        // Native focus callbacks may update the real docked panel. This
+        // provider represents the detached key window instead.
+        panel.uiState.setPanelKey(false)
         XCTAssertFalse(panel.presenter.isUserTypingInPanel, "a hidden page keeping first responder is not typing")
         guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
             return XCTFail("a hidden editable text view must not block show")
+        }
+    }
+
+    func testBG60HiddenOrReadOnlyLegacyCanvasEditorDoesNotCountAsTyping() throws {
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        let window = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 240, height: 120),
+                                styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let page = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 120))
+        let editor = CanvasSemanticTextEditor(frame: CGRect(x: 10, y: 10, width: 200, height: 40))
+        editor.isEditable = true
+        page.addSubview(editor)
+        window.contentView = page
+        window.orderFrontRegardless()
+        defer { window.makeFirstResponder(nil); window.orderOut(nil); window.close() }
+        // This injected key window stands for the docked Canvas panel, so
+        // the presenter's production legacy-editor fallback runs as well.
+        panel.presenter.keyWindow = { window }
+        panel.uiState.setPanelKey(true)
+        XCTAssertTrue(panel.uiState.interactionLockReasons.isEmpty)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel)
+        editor.isEditable = false
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel, "the fallback must honor read-only editors too")
+        editor.isEditable = true
+        page.isHidden = true
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+        panel.uiState.setPanelKey(true)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel, "the legacy fallback must honor hidden ancestors")
+        guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
+            return XCTFail("a hidden legacy canvas editor must not block show")
         }
     }
 

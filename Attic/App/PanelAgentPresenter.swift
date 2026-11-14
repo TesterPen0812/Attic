@@ -15,8 +15,12 @@ final class PanelAgentPresenter: AgentPanelPresenting {
     /// Whether a canvas text editor holds the keyboard in the visible panel.
     /// It sets no interaction lock, so it is asked directly. Tests replace it.
     var canvasTextEditorIsActive: () -> Bool = {
-        DrawTextEditorView.focusedInVisibleWindow != nil ||
-            CanvasSemanticTextEditor.focusedInVisibleWindow != nil
+        func canTakeTyping(_ editor: NSTextView?) -> Bool {
+            guard let editor else { return false }
+            return editor.isEditable && !editor.isHiddenOrHasHiddenAncestor
+        }
+        return canTakeTyping(DrawTextEditorView.focusedInVisibleWindow) ||
+            canTakeTyping(CanvasSemanticTextEditor.focusedInVisibleWindow)
     }
 
     /// The window that owns the keyboard. Tests replace it.
@@ -51,7 +55,7 @@ final class PanelAgentPresenter: AgentPanelPresenting {
         // text view inside its visible field).
         if let window = keyWindow(), window is AtticPanel, window.isVisible,
            let text = window.firstResponder as? NSTextView, text.isEditable,
-           !text.isHiddenOrHasHiddenAncestor { return true }
+           text.window === window, !text.isHiddenOrHasHiddenAncestor { return true }
         guard uiState.isPanelKey else { return false }
         let typing: Set<PanelInteractionLockReason> = [
             .quickEntryFocus, .taskComposer, .agentComposer, .taskEditing, .notesEditorFocus, .notesDirty
