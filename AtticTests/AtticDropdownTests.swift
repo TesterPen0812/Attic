@@ -801,6 +801,41 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
+    // MARK: A flick that left no highlight behind (N-1)
+
+    /// The pointer crosses a row that is cut off at the top and is gone again
+    /// before any highlight was reported (a list that clears its highlight on
+    /// exit: nil, the row, nil within one update). It must not leave itself
+    /// as the origin of the next highlight of that row: the keyboard's ↓,
+    /// or typing its exact name, scrolls the row into view.
+    func testPF43AFlickAcrossACutOffRowLeavesNoPointerOriginBehind() throws {
+        for viaParameter in [false, true] {
+            let window = makeWindow()
+            defer { window.close() }
+            let box = OriginBox()
+            let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
+            host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            spin(0.2)
+            let origin = try XCTUnwrap(box.origin)
+            let scrollView = try XCTUnwrap(scrollViews(in: host).first)
+            scroll(scrollView, to: AtticDropdownMetrics.rowHeight / 2)
+            spin(0.3)
+            let start = scrollView.contentView.bounds.origin.y
+            XCTAssertEqual(start, AtticDropdownMetrics.rowHeight / 2, accuracy: 0.5, "the first row is half scrolled out")
+
+            origin.pointerEntered("row-0")
+            origin.pointerLeft("row-0")
+            spin(0.6)
+            host.rootView = ViewportRows(highlighted: 0, viaParameter: viaParameter, box: box)
+            host.layoutSubtreeIfNeeded()
+            wait(for: host) { scrollView.contentView.bounds.origin.y < start - 4 }
+            XCTAssertLessThan(scrollView.contentView.bounds.origin.y, start - 4,
+                              "the keyboard's highlight on the cut-off row scrolls to it (parameter: \(viaParameter))")
+        }
+    }
+
     // MARK: One id per row (R-6)
 
     /// A row's `.id`, the id it publishes and the id the pointer reports

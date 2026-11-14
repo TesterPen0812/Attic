@@ -694,8 +694,9 @@ struct AtticDropdownRow: View {
                 guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
                 // Only a hover that moves the highlight is the pointer's: a
                 // row with no `onHover` (the tag suggestions) leaves the
-                // keyboard's highlight to scroll its row into view.
-                if onHover != nil { highlightOrigin?.pointerEntered(scrollID ?? title) }
+                // keyboard's highlight to scroll its row into view. A row that is
+                // lit already has no new highlight to report.
+                if onHover != nil, !isHighlighted { highlightOrigin?.pointerEntered(scrollID ?? title) }
                 if !hovered { hovered = true }
                 onHover?(true)
             case .ended:
@@ -2449,13 +2450,37 @@ final class AtticHighlightOrigin {
     /// Whether the list has reported the pointer row's highlight yet: a
     /// pointer that leaves first (a flick across the edge) still made it.
     private var reported = false
+    /// How long a pointer that left a row before the list reported it stays
+    /// that row's origin. The report of a highlight the pointer made comes
+    /// with the same update; a flick that moved no highlight at all
+    /// (nil, the row, nil within one update) never reports, and must not
+    /// leave the row as the origin of the keyboard's next visit to it.
+    private static let unreportedLeaveGrace: Duration = .milliseconds(300)
+    private var pendingLeave: Task<Void, Never>?
 
     func pointerEntered(_ id: String) {
+        // Every move inside a row says so again: only a different row is a
+        // new pointer highlight still to be reported.
+        if pointerRow != id { reported = false }
         pointerRow = id
-        reported = false
+        pendingLeave?.cancel()
+        pendingLeave = nil
     }
 
-    func pointerLeft(_ id: String) { if pointerRow == id, reported { pointerRow = nil } }
+    func pointerLeft(_ id: String) {
+        guard pointerRow == id else { return }
+        if reported {
+            pointerRow = nil
+            return
+        }
+        pendingLeave?.cancel()
+        pendingLeave = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.unreportedLeaveGrace)
+            guard !Task.isCancelled, let self, self.pointerRow == id else { return }
+            self.pointerRow = nil
+            self.pendingLeave = nil
+        }
+    }
 
     /// The highlight is now `id`: whether to scroll it into view.
     func shouldScroll(toHighlight id: String?) -> Bool {
