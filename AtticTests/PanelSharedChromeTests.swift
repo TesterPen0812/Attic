@@ -634,6 +634,36 @@ extension PanelSharedChromeTests {
         XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "Tasks' plus is no stop after its bar goes")
     }
 
+    /// Round 1 review R-6: BG-67's class (not focused on insertion, but
+    /// reachable by navigation) holds for the "#" key too. On Notes it is a
+    /// plain stop while the tag bar shows; hidden, it is none; on Tasks
+    /// the page's own Tab order arms it.
+    func testTheTagKeyIsAKeyboardStopOnNotesWhileTheBarShows() throws {
+        func look(_ page: PanelPage, shown: Bool, prefix: String) -> PanelBottomBarLook {
+            PanelBottomBarLook(middle: .tags(tags: ["launch"], picks: .none, idPrefix: prefix, shown: shown),
+                               plus: page == .tasks ? PanelBottomBarLook.tasksPlus : PanelBottomBarLook.notesPlus, shown: shown)
+        }
+        let chrome = PanelSharedChrome()
+        chrome.setBar(look(.notes, shown: true, prefix: "notes-tag-bar"), actions: PanelBottomBarActions(), for: .notes)
+        let window = mountBar(chrome, SharedBarModel(page: .notes))
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], true, "Notes: the # key is a keyboard stop with the bar showing")
+        chrome.setBar(look(.notes, shown: false, prefix: "notes-tag-bar"), actions: PanelBottomBarActions(), for: .notes)
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], false, "Notes: no stop while an open note hides the bar")
+        chrome.setBar(look(.notes, shown: true, prefix: "notes-tag-bar"), actions: PanelBottomBarActions(), for: .notes)
+        chrome.plusHandedOver = true
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], false, "Notes: no stop under the plus card")
+        chrome.plusHandedOver = false
+        let tasks = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        tasks.setBar(look(.tasks, shown: true, prefix: "tasks-tag-bar"), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        let tasksWindow = mountBar(tasks, SharedBarModel(page: .tasks))
+        defer { close(tasksWindow) }
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["tasks-tag-bar"], false, "Tasks: the # key waits for the page's own Tab order")
+    }
+
     /// Tasks arms its "+" through its own Tab order, then keeps it armed
     /// until the keyboard leaves it. The "+" is one view on every page, so
     /// the state must not outlive what armed it. (Without Full Keyboard

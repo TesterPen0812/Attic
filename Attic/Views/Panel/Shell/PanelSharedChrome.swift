@@ -447,7 +447,7 @@ struct PanelSharedBottomBar: View {
             Spacer(minLength: 0)
         case let .tags(tags, picks, idPrefix, shown):
             PanelTagBar(tags: tags, picks: picks, idPrefix: idPrefix, state: chrome.tagBar, shown: shown && !hidden,
-                        focusRequests: actions.focusRequests, onSelect: actions.selectTag, onMatch: actions.setTagMatch)
+                        managesOwnTabOrder: page.managesOwnTabOrder, focusRequests: actions.focusRequests, onSelect: actions.selectTag, onMatch: actions.setTagMatch)
                 .opacity(shown ? 1 : 0)
                 .allowsHitTesting(shown)
                 .accessibilityHidden(!shown || hidden)

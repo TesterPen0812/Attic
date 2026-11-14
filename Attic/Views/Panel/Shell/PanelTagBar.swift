@@ -115,6 +115,9 @@ struct NotesTagBar: View {
     /// Whether the bar is on screen: the selection bar (T2) or the "+"
     /// card can take its place, and it comes back closed.
     var shown = true
+    /// The page orders Tab itself, reaching "#" before "+" through its
+    /// focus requests (Tasks); on the other pages AppKit's key loop does.
+    var managesOwnTabOrder = false
     /// The page's Tab order, which reaches "#" before "+".
     var focusRequests: AtticFocusRequests? = nil
     let onSelect: (String?) -> Void
@@ -216,7 +219,7 @@ struct NotesTagBar: View {
         }
         .buttonStyle(AtticPressButtonStyle())
         .focusEffectDisabled()
-        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests))
+        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown))
         .atticFocusRing(state.keyFocused && state.cursor == nil, cornerRadius: m.pillRadius)
         .help(String(localized: "Tags (⌥⌘T)"))
         .accessibilityLabel(String(localized: "Tags"))
@@ -264,7 +267,7 @@ struct NotesTagBar: View {
         .background(AtticSelectionMarker(cornerRadius: m.pillRadius))
         .clipShape(shape)
         .atticFocusRing(state.keyFocused && !state.isOpen, cornerRadius: m.pillRadius)
-        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests))
+        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown))
     }
 
     // MARK: Open: All and the tags
@@ -582,18 +585,33 @@ private struct NotesTagBarGrow: ViewModifier {
     }
 }
 
-/// "#" (or the collapsed bar's picked tags) as a keyboard stop: focusable
-/// once the page's Tab or ⌥⌘T asks, so the panel's own key loop never
-/// lands on it by itself.
+/// "#" (or the collapsed bar's picked tags) as a keyboard stop. On Tasks,
+/// which orders Tab itself, it is focusable once the page's Tab or ⌥⌘T asks;
+/// on the other pages it is a plain stop in AppKit's key loop while the bar
+/// shows. A hidden bar is no stop.
 private struct PanelTagKeyFocus: ViewModifier {
     @ObservedObject var state: PanelTagBarState
     let requests: AtticFocusRequests?
+    /// The bar's accessibility stem, for the test seam.
+    let seam: String
+    /// Tasks orders Tab itself and arms "#" by request; on the other pages
+    /// it is a plain stop in AppKit's key loop (round 1 review R-6: BG-67's
+    /// class), while the bar shows.
+    let managed: Bool
+    let reachable: Bool
     @FocusState private var focused: Bool
     @State private var armed = false
 
     func body(content: Content) -> some View {
+        // Tasks keeps its own Tab order exactly as before (the page asks for
+        // "#" itself, whatever the bar shows); the other pages' key loop
+        // walks it only while the bar shows.
+        let focusable = managed ? armed : reachable
+        #if DEBUG
+        let _ = PanelKeyStopSeam.tagKey[seam] = focusable
+        #endif
         content
-            .focusable(armed, interactions: .activate)
+            .focusable(focusable, interactions: .activate)
             .focused($focused)
             .onChange(of: state.keyFocusRequest) { _, _ in arm() }
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
@@ -605,6 +623,9 @@ private struct PanelTagKeyFocus: ViewModifier {
                 requests?.note(PanelTagKeyFocusID(), focused: now)
                 if !now { armed = false }
             }
+            // Hidden, or on another kind of page, "#" gives the keyboard up.
+            .onChange(of: reachable) { _, now in if !now, !managed { release() } }
+            .onChange(of: managed) { _, _ in release() }
             .onDisappear {
                 // The key and summary replace one another. Release native
                 // ownership, preserving a cursor deliberately opening the bar.
@@ -613,7 +634,13 @@ private struct PanelTagKeyFocus: ViewModifier {
             }
     }
 
+    private func release() {
+        armed = false
+        if focused { focused = false }
+    }
+
     private func arm() {
+        guard reachable || managed else { return }
         armed = true
         DispatchQueue.main.async { focused = true }
     }

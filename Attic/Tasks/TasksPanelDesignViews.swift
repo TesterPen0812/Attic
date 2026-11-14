@@ -404,7 +404,7 @@ struct TasksBottomBar<AddBar: View>: View {
                     // The page switch is the Tall island (Accepted
                     // 2026-10-31): the tag bar sits on the left.
                     PanelTagBar(tags: tags, picks: tagPicks, idPrefix: "tasks-tag-bar", state: ownTagBar, shown: tagsShown && !folded,
-                                focusRequests: focusRequests, onSelect: onSelectTag, onMatch: onTagMatch)
+                                managesOwnTabOrder: true, focusRequests: focusRequests, onSelect: onSelectTag, onMatch: onTagMatch)
                         .opacity(tagsShown ? 1 : 0)
                         .allowsHitTesting(tagsShown)
                         .accessibilityHidden(!tagsShown)
