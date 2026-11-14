@@ -146,8 +146,11 @@ struct DrawLibraryRows: View {
     var thumbnailsShown: (([DrawCanvas]) -> Void)?
     var thumbnailsHidden: (([UUID]) -> Void)?
     var searchThumbnail: ((UUID) -> DrawCanvas?)?
+    /// A row without a thumbnail body in its metadata reads its own from the
+    /// store (cached there, per canvas) while it is built, so its first frame
+    /// already shows the stored image. `thumbnailRevision` only makes the
+    /// list rebuild when the store changes; rows do not re-run their task.
     var thumbnailRevision: UInt64 = 0
-    @State private var hydratedRows: [UUID: DrawCanvas] = [:]
     @Environment(\.colorScheme) private var colorScheme
 
     init(rows: [DrawLibraryMenuModel.Row], litID: String?, scrollTarget: String? = nil,
@@ -179,6 +182,12 @@ struct DrawLibraryRows: View {
                   thumbnailRevision: model.store.revision)
     }
 
+    private func hydrated(_ canvas: DrawCanvas?) -> DrawCanvas? {
+        guard let canvas, canvas.thumbnail == nil,
+              let found = searchThumbnail?(canvas.id), found.thumbnail != nil else { return nil }
+        return found
+    }
+
     var body: some View {
         let height = DrawLibraryMetrics.listHeight(rows)
         ScrollViewReader { proxy in
@@ -187,33 +196,22 @@ struct DrawLibraryRows: View {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if row.startsSection { AtticDropdownRule() }
                         DrawLibraryRowView(row: row, isLit: row.id == litID,
-                                           thumbnailOverride: row.canvas.flatMap { hydratedRows[$0.id] },
+                                           thumbnailOverride: hydrated(row.canvas),
                                            onHover: { inside in hover(row, inside) }) {
                             choose(row)
                         }
                         .id(row.id)
                         .modifier(AtticMenuRowEntrance(index: index))
                         .task(id: row.canvas.map {
-                            "\($0.id.uuidString) \($0.thumbnail?.hashValue ?? 0) \(String(describing: $0.thumbnailDark)) \(colorScheme) \(thumbnailRevision)"
+                            "\($0.id.uuidString) \($0.thumbnail?.hashValue ?? 0) \(String(describing: $0.thumbnailDark)) \(colorScheme)"
                         }) {
                             guard let canvas = row.canvas else { return }
-                            let shown: DrawCanvas
                             // Older stored thumbnails can have no appearance
                             // marker. An absent body is not proof of an empty card.
-                            if canvas.thumbnail == nil {
-                                shown = searchThumbnail?(canvas.id) ?? canvas
-                                if shown.thumbnail != nil { hydratedRows[canvas.id] = shown }
-                            } else {
-                                hydratedRows[canvas.id] = nil
-                                shown = canvas
-                            }
-                            thumbnailsShown?([shown])
+                            thumbnailsShown?([hydrated(canvas) ?? canvas])
                         }
                         .onDisappear {
-                            if let id = row.canvas?.id {
-                                hydratedRows[id] = nil
-                                thumbnailsHidden?([id])
-                            }
+                            if let id = row.canvas?.id { thumbnailsHidden?([id]) }
                         }
                     }
                 }
@@ -224,7 +222,6 @@ struct DrawLibraryRows: View {
                 if let id { proxy.scrollTo(id) }
             }
             .onDisappear {
-                hydratedRows.removeAll()
                 thumbnailsHidden?(rows.compactMap { $0.canvas?.id })
             }
         }
@@ -351,7 +348,15 @@ struct DrawCanvasThumbnail: View {
 enum DrawThumbnailCache {
     private static var images: [String: NSImage] = [:]
 
+    #if DEBUG
+    /// Tests watch which canvas value each thumbnail view is first built with.
+    static var onLookup: ((DrawCanvas) -> Void)?
+    #endif
+
     static func image(for canvas: DrawCanvas) -> NSImage? {
+        #if DEBUG
+        onLookup?(canvas)
+        #endif
         guard let data = canvas.thumbnail, !data.isEmpty else { return nil }
         // A thumbnail write leaves the canvas's date alone, so the bytes key it.
         let key = "\(canvas.id.uuidString)-\(data.count)-\(data.hashValue)"

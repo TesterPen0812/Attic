@@ -405,6 +405,90 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
         XCTAssertTrue(wait { (try? relaunchedStore.open(x).canvas.thumbnail) != Data([10]) },
                       "X's thumbnail still renders after its appearance render was cancelled")
     }
+
+    // The thumbnail the stored canvas has, as a solid red card.
+    private static let redThumbnail = Draw3Images.encoded(width: 56, height: 40, red: 1, green: 0, blue: 0)
+
+    private func redPixels(in host: NSView) -> (red: Int, drawn: Int) {
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return (0, 0) }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        var red = 0, drawn = 0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: min(rep.pixelsWide, 120), by: 2) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.05 else { continue }
+                drawn += 1
+                if color.redComponent > 0.7, color.greenComponent < 0.3, color.blueComponent < 0.3 { red += 1 }
+            }
+        }
+        return (red, drawn)
+    }
+
+    private func hostedRows(_ rows: [DrawLibraryMenuModel.Row], revision: UInt64,
+                            searchThumbnail: @escaping (UUID) -> DrawCanvas?) -> some View {
+        DrawLibraryRows(rows: rows, litID: nil, maxHeight: 320,
+                        hover: { _, _ in }, choose: { _ in },
+                        thumbnailsShown: { _ in }, thumbnailsHidden: { _ in },
+                        searchThumbnail: searchThumbnail, thumbnailRevision: revision)
+            .frame(width: 224, height: 320)
+            .atticDesign(AtticDesignContext())
+    }
+
+    /// R-3: a row past the pre-hydrated ones has no thumbnail body in its
+    /// metadata; the first thumbnail view built for it must already carry the
+    /// stored image, never the empty card that a later hydration replaces.
+    func testR3ARowWithoutAHydratedBodyNeverDrawsTheEmptyCardFirst() {
+        let stored = Self.redThumbnail
+        let rows = (0..<30).map { index in
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnailDark: true)
+            return DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)
+        }
+        let first = rows[0].canvas!
+        var built: [(id: UUID, hasThumbnail: Bool)] = []
+        DrawThumbnailCache.onLookup = { built.append(($0.id, $0.thumbnail != nil)) }
+        defer { DrawThumbnailCache.onLookup = nil }
+        let host = NSHostingView(rootView: hostedRows(rows, revision: 0) { id in
+            var canvas = rows.compactMap(\.canvas).first { $0.id == id }
+            canvas?.thumbnail = stored
+            return canvas
+        })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        host.layout()
+        XCTAssertTrue(wait { built.contains { $0.id == first.id } }, "the first row is built")
+        spin(0.3) // let every row task settle, then compare against the first builds
+        XCTAssertEqual(built.first { $0.id == first.id }?.hasThumbnail, true,
+                       "the first thumbnail view built for a row shows its stored image, not the empty card")
+        let wrongFirst = Set(rows.compactMap(\.canvas).map(\.id)).filter { id in built.first { $0.id == id }?.hasThumbnail == false }
+        XCTAssertTrue(wrongFirst.isEmpty, "\(wrongFirst.count) realized rows were first built with the empty card")
+        window.contentView = nil
+    }
+
+    /// R-2: a stored thumbnail that is cleared while the menu is open must
+    /// not keep showing from an older hydration.
+    func testR2AClearedThumbnailLeavesNoStaleImageOnItsRow() {
+        let stored = Self.redThumbnail
+        let canvas = DrawCanvas(name: "Cleared", thumbnailDark: true)
+        let rows = [DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)]
+        var cleared = false
+        let lookup: (UUID) -> DrawCanvas? = { _ in
+            var found = canvas
+            if !cleared { found.thumbnail = stored }
+            return found
+        }
+        let host = NSHostingView(rootView: hostedRows(rows, revision: 0, searchThumbnail: lookup))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 224, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        host.layout()
+        XCTAssertTrue(wait { self.redPixels(in: host).red > 20 }, "the stored thumbnail shows")
+        cleared = true
+        host.rootView = hostedRows(rows, revision: 1, searchThumbnail: lookup)
+        host.layout()
+        spin(0.4)
+        XCTAssertEqual(redPixels(in: host).red, 0, "a cleared canvas shows the empty card, not its old drawing")
+        window.contentView = nil
+    }
 }
 
 /// Counts thumbnail renders by the first object drawn (one per canvas in
