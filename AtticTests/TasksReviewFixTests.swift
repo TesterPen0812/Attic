@@ -337,6 +337,114 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertTrue(model.folded(on: .done).contains(recent.key))
     }
 
+    // MARK: 4b. The Done paging sentinel (pro-bugs-tasks-r1 fix 1)
+
+    /// The real Done list in a key panel, off screen, with `days` of
+    /// `(daysAgo, count)` done tasks (one completion a second from noon).
+    private struct DoneHost {
+        let model: TasksPageModel
+        let window: NSPanel
+        let size: CGSize
+        func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+        func close() { window.orderOut(nil); window.contentView = nil; window.close() }
+        /// The drawn Done list's scroll view.
+        func list() -> NSScrollView? {
+            func find(_ view: NSView) -> NSScrollView? {
+                if let keeper = view as? TasksScrollKeeper.KeeperView, let scroll = keeper.enclosingScrollView {
+                    let frame = scroll.convert(scroll.bounds, to: window.contentView)
+                    if frame.width > size.width / 2, frame.height > size.height / 3,
+                       frame.minX >= -1, frame.minX < size.width / 2 { return scroll }
+                }
+                return view.subviews.lazy.compactMap { find($0) }.first
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+            return window.contentView.flatMap { find($0) }
+        }
+        func scrollToBottom() {
+            guard let scroll = list(), let document = scroll.documentView else { return }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+
+    private func mountDone(days: [(ago: Int, count: Int)]) throws -> DoneHost {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: base)
+        let now = today.addingTimeInterval(16 * 3_600)
+        let store = try makeTestStore(now: { now })
+        let context = ModelContext(store.container)
+        for day in days {
+            let start = calendar.date(byAdding: .day, value: -day.ago, to: today)!
+            for i in 0..<day.count {
+                let completed = start.addingTimeInterval(12 * 3_600 + Double(i))
+                let item = TaskItem(id: UUID(), title: "Day \(day.ago) task \(i)", status: .done,
+                                    createdAt: start, updatedAt: completed, completedAt: completed)
+                item.doneLoggedAt = completed
+                item.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(item)
+            }
+        }
+        try context.save()
+        store.refresh()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store),
+                                   services: TasksPageServices(now: { now }, calendar: { calendar }))
+        let size = CGSize(width: 360, height: 520)
+        let page = TasksPage(model: model, store: store,
+            layout: PanelPageLayout(cornerSize: 24, panelSize: size), addBarFocused: .constant(false))
+        final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+        let window = KeyPanel(contentRect: CGRect(x: -8_000, y: -8_000, width: 360, height: 520),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
+            .frame(width: 360, height: 520))
+        window.orderFront(nil)
+        window.makeKey()
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let host = DoneHost(model: model, window: window, size: size)
+        model.select(tab: .done)
+        host.spin(1.2)
+        XCTAssertEqual(model.tab, .done)
+        model.loadDoneLogIfNeeded()
+        return host
+    }
+
+    /// Dot R-1 (P1): a page that ends with one row of an open day leaves the
+    /// sentinel on screen. It must still read the next page, with no scroll.
+    /// (119 folded rows, one row of an open day, then more: a page ends there,
+    /// and the open day's single row leaves the sentinel in view.)
+    func testDoneSentinelStillOnScreenAfterAPageEndingInAnOpenDayReadsOneMore() throws {
+        let host = try mountDone(days: [(0, 119), (2, 1), (4, 50)])
+        defer { host.close() }
+        let model = host.model
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        // Fold the first day: its rows leave and the sentinel comes up in view.
+        let first = try XCTUnwrap(model.doneDays().first)
+        model.toggleGroup(first.key, on: .done)
+        for _ in 0..<150 where model.doneLogTasks.count < 160 { host.spin(0.03) }
+        // 119 folded + 1 open row = 120 loaded: the sentinel is still in view and
+        // reads on. The next page brings 40 open rows, which push it off screen:
+        // the last 10 wait for a scroll.
+        XCTAssertEqual(model.doneLogTasks.count, 160, "a visible sentinel keeps paging until it is pushed off screen")
+        host.spin(0.5)
+        XCTAssertEqual(model.doneLogTasks.count, 160, "and stops there")
+        XCTAssertTrue(model.doneLogHasMore)
+    }
+
+    /// Opus R-3: one reach of the end is one page, though the sentinel
+    /// announces itself twice (appearing, and scroll visibility).
+    func testDoneSentinelReadsOnePagePerReachOfTheEnd() throws {
+        let host = try mountDone(days: [(0, 130)])
+        defer { host.close() }
+        let model = host.model
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        host.spin(0.5)
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize, "the sentinel is far below: nothing paged yet")
+        host.scrollToBottom()
+        host.spin(1.0)
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize, "one reach of the end reads one page")
+    }
+
     func testDoneLogPagesReachEveryTaskAcrossDuplicatesAndSupersededCopies() throws {
         let store = try makeTestStore()
         let context = ModelContext(store.container)

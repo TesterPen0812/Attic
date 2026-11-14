@@ -175,47 +175,47 @@ struct TasksDonePage<Cell: View>: View {
     }
 }
 
-/// A folded completion day can hide multiple pages behind one heading. The
-/// sentinel must request each successive page *while it stays visible*, and
-/// stop as soon as later rows push it beyond the scroll viewport.
+/// The Done log's next page is read while its loading rows are on screen, and
+/// only then: when they come into view, and again after each page settles if
+/// they are still in view (a folded day can hide several pages behind one
+/// heading, and a page can end with one row of an open day). Rows that push
+/// them out of the viewport end it; a row built just below the viewport is not
+/// "on screen", so `visible` is the scroll view's own report and nothing else.
 private struct TasksDonePagingSentinel: View {
     let model: TasksPageModel
     @ObservedObject var results: TasksDoneResults
     let drawn: Bool
     @State private var visible = false
+    /// A read is queued for the next turn of the run loop. Triggers that
+    /// arrive meanwhile (the sentinel's reports, a page that landed) share
+    /// it: one reach of the end is one page.
+    @State private var queued = false
 
     var body: some View {
         AtticLoadingRows(count: 2)
-            .onAppear {
-                // LazyVStack appearance works even in hosts that do not
-                // publish scroll-visibility notifications.
-                visible = true
-                requestPage()
-            }
-            .onDisappear { visible = false }
             .onScrollVisibilityChange { now in
                 visible = now
                 if now { requestPage() }
             }
-            .onChange(of: model.doneLogTasks.count) { _, _ in
-                // Expanded rows displace the sentinel. A folded tail can
-                // need another page without changing its visible slots.
-                if visible, model.doneDays().last?.folded == true { requestPage() }
-            }
-            .onChange(of: drawn) { _, now in
-                if now && visible { requestPage() }
-            }
+            .onDisappear { visible = false }
+            // A page settled: still on screen after it, read one more.
+            .onChange(of: model.doneLogTasks.count) { _, _ in requestPage() }
+            .onChange(of: drawn) { _, _ in requestPage() }
     }
 
     private func requestPage() {
-        guard drawn, visible, model.doneLogHasMore, model.doneLogFailure == nil else { return }
+        guard ready, !queued else { return }
+        queued = true
         // Let the lazy stack settle its next layout before deciding whether
         // another read is necessary. No loop runs during layout.
         DispatchQueue.main.async {
-            guard drawn, visible, model.doneLogHasMore, model.doneLogFailure == nil else { return }
+            queued = false
+            guard ready else { return }
             model.loadMoreDoneLog()
         }
     }
+
+    private var ready: Bool { drawn && visible && model.doneLogHasMore && model.doneLogFailure == nil }
 }
 
 /// A line of the Done log: a day's heading or a task's row.
