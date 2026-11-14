@@ -386,8 +386,13 @@ extension NoteEditorEngine {
     func tableHighlightColour() -> NoteHighlightColour? {
         guard let view = focusedTable, let attachment = view.attachment else { return nil }
         if let range = view.cellSelection {
+            if let cached = attachment.selectionHighlightCache, cached.range == range { return cached.colour }
+            // Early exits below mean mixed/no highlight, which is cached too.
+            attachment.selectionHighlightCache = (range, nil)
+            attachment.highlightScanCount += 1
             var found: NoteHighlightColour?
             for position in range.positions where attachment.table.contains(position) {
+                attachment.highlightCellVisitCount += 1
                 let cell = attachment.table[position]
                 let units = (cell.text as NSString).length
                 guard units > 0 else { continue }
@@ -405,6 +410,7 @@ extension NoteEditorEngine {
                 }
                 if coveredEnd < units { return nil }
             }
+            attachment.selectionHighlightCache = (range, found)
             return found
         }
         guard view.isEditingCell || view.hasEditor, let storage = view.editor.textStorage else { return nil }

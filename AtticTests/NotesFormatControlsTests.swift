@@ -688,6 +688,46 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(opened, "⌃Tab no longer opens Aa")
     }
 
+    func testR3PaletteMovesReuseTheLargeCellSelectionHighlightScan() throws {
+        var table = NoteTable(texts: Array(repeating: Array(repeating: "cell", count: 30), count: 500))
+        for row in 0..<500 {
+            for column in 0..<30 {
+                let p = NoteTable.Position(row: row, column: column)
+                table[p] = NoteEditorEngine.cell(table[p], settingMark: .highlight, on: true, url: "blue")
+            }
+        }
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title"), .table(table)]))
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let grid = try XCTUnwrap(attachment.hostedView)
+        grid.selectCells(NoteTableCellRange(anchor: .init(row: 0, column: 0), head: .init(row: 499, column: 29)))
+        controls.refresh(); controls.enterBarKeyboard()
+        controls.formatModel.barKeyboardIndex = try XCTUnwrap(NoteFormatBarItem.cells.firstIndex(of: .command(.mark(.highlight))))
+        let window = try XCTUnwrap(textView.window)
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{f701}", "\u{f701}", keyCode: 125, [], window: window)))
+        XCTAssertEqual(controls.formatModel.currentHighlight, .blue)
+        let visits = attachment.highlightCellVisitCount, scans = attachment.highlightScanCount
+        for _ in 0..<12 {
+            XCTAssertTrue(controls.handleKey(keyEvent("\u{f703}", "\u{f703}", keyCode: 124, [], window: window)))
+            XCTAssertEqual(controls.formatModel.currentHighlight, .blue)
+        }
+        let movedVisits = attachment.highlightCellVisitCount
+        XCTAssertEqual(movedVisits, visits, "palette navigation cannot rescan 15,000 unchanged cells")
+        XCTAssertEqual(attachment.highlightScanCount, scans)
+        let last = NoteTable.Position(row: 499, column: 29)
+        XCTAssertTrue(engine.changeTable(attachment, name: "Change one mark") { changed in
+            changed[last] = NoteEditorEngine.cell(changed[last], settingMark: .highlight, on: true, url: "yellow")
+        })
+        XCTAssertNil(controls.formatModel.currentHighlight, "the changed mark invalidates blue")
+        XCTAssertEqual(attachment.highlightScanCount, scans + 1, "exactly one fresh scan for a changed table revision")
+        let changedVisits = attachment.highlightCellVisitCount
+        for _ in 0..<5 { XCTAssertNil(controls.formatModel.currentHighlight) }
+        XCTAssertEqual(attachment.highlightCellVisitCount, changedVisits, "mixed (nil) is cached too")
+        print("R3_TABLE_VISITS initial=\(visits) afterMoves=\(movedVisits) afterMark=\(changedVisits) scans=\(attachment.highlightScanCount)")
+        grid.selectCells(NoteTableCellRange(anchor: .init(row: 0, column: 0), head: .init(row: 0, column: 0)))
+        XCTAssertEqual(controls.formatModel.currentHighlight, .blue, "a new selection invalidates the cache")
+        XCTAssertEqual(attachment.highlightScanCount, scans + 2)
+    }
+
     /// BG-65 (P2): the keyboard colour picker must be equivalent to
     /// clicking Highlight's chevron when the active selection is whole cells.
     func testBG65WholeCellHighlightDownArrowOpensKeyboardPalette() throws {

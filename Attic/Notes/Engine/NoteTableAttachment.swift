@@ -20,11 +20,18 @@ final class NoteTableAttachment: NoteObjectAttachment {
         didSet {
             guard table != oldValue else { return }
             MainActor.assumeIsolated {
+                selectionHighlightCache = nil
                 updateLayout(from: oldValue)
                 hostedView?.modelDidChange(previousTable: oldValue)
             }
         }
     }
+    /// Whole-cell colour is stable until this grid or the selected range changes.
+    /// The outer optional also caches mixed/no-highlight (an inner nil).
+    @MainActor var selectionHighlightCache: (range: NoteTableCellRange, colour: NoteHighlightColour?)?
+    /// Work counters for selection-colour regression guards.
+    @MainActor var highlightCellVisitCount = 0
+    @MainActor var highlightScanCount = 0
     let extras: [String: NoteJSON]
     /// The editor this table lives in (set by the engine when it renders
     /// the note's objects); nil in print and in copies on the pasteboard.
