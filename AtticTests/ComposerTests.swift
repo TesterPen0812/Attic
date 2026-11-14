@@ -225,6 +225,43 @@ final class ComposerTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: drafts.key + ".failedTasks"), "saved retries must clear the durable failure queue")
     }
 
+    func testDelayedTaskToastUndoesCreationInItsOriginalHistoryAfterPageSwitch() throws {
+        page.services.acknowledgementDelay = .seconds(3600)
+        model.open(on: .tasks(.done))
+        type("Follow up from Done")
+        model.submit()
+        model.open(on: .notes)
+        page.settlePendingCompletionAcknowledgements()
+
+        XCTAssertEqual(toasts, ["Added to Now"])
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 1)
+        XCTAssertTrue(toastUndos[0]().isApplied, "the toast must undo the Tasks step even after navigating to Notes")
+        XCTAssertTrue(liveTasks().isEmpty)
+    }
+
+    func testSupersededComposerToastNeverUndoesTheNextTask() throws {
+        page.services.acknowledgementDelay = .seconds(3600)
+        model.open(on: .tasks(.done))
+        type("First from Done")
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(liveTasks().map(\.title), ["First from Done"])
+        XCTAssertEqual(toastUndos.count, 1)
+
+        type("Second from Done")
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["First from Done", "Second from Done"])
+        XCTAssertEqual(toastUndos.count, 2)
+
+        XCTAssertEqual(toastUndos[0](), .applied, "an old toast is stale once a newer Undo step exists")
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["First from Done", "Second from Done"])
+        XCTAssertEqual(toastUndos[1](), .applied)
+        XCTAssertEqual(liveTasks().map(\.title), ["First from Done"])
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["First from Done", "Second from Done"])
+    }
+
     private var container: ModelContainer!
     private var tasks: TaskStore!
     private var notes: NoteStore!
