@@ -649,6 +649,16 @@ struct TasksFoldBody: ViewModifier, Animatable {
     /// DEBUG hang probe only: names the row in the probe's ring.
     let probeKey: String
 
+    /// Diagnostic keys are created only when the DEBUG hang probe is armed.
+    /// Release builds never format row IDs while constructing fold bodies.
+    static func probeKey(for rowID: UUID) -> String {
+        #if DEBUG
+        AtticHangProbe.key(rowID.uuidString)
+        #else
+        ""
+        #endif
+    }
+
     init(progress: CGFloat, place: TasksFoldPlace?, probeKey: String = "") {
         self.progress = progress
         self.place = place

@@ -10,6 +10,25 @@ import XCTest
 /// have it (on) and off; each step must return within 2 s.
 @MainActor
 final class ScrollEdgeHangTests: XCTestCase {
+    func testHangProbeDoesNotFormatKeysOrEventValuesWhenDisabled() {
+        #if DEBUG
+        XCTAssertFalse(AtticHangProbe.isEnabled, "the ordinary unit host must not arm the CI probe")
+        var formatted = 0
+        func format() -> String {
+            formatted += 1
+            return UUID().uuidString
+        }
+        var unexpectedKeys = 0
+        for _ in 0..<1_000 {
+            if !AtticHangProbe.key(format()).isEmpty { unexpectedKeys += 1 }
+            AtticHangProbe.note("fold.size", key: format(), value: format(), detail: format())
+            if !TasksFoldBody.probeKey(for: UUID()).isEmpty { unexpectedKeys += 1 }
+        }
+        XCTAssertEqual(unexpectedKeys, 0, "an unarmed probe leaves every diagnostic row key empty")
+        XCTAssertEqual(formatted, 0, "unarmed probe must perform zero string formatting evaluations")
+        #endif
+    }
+
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { true }
         override var backingScaleFactor: CGFloat { 1 }

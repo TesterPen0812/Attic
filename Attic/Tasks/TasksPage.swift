@@ -1696,7 +1696,7 @@ struct TasksPage: View {
                                 .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                                 // A turning group's body closes or opens over
                                 // its rows (fix round 2).
-                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: "\(row.id)"))
+                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: TasksFoldBody.probeKey(for: row.id)))
                                 // A row added drops into its place (round 9);
                                 // a row leaving fades and shrinks on the exit.
                                 .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))

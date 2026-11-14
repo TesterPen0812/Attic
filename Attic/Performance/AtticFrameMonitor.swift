@@ -54,6 +54,13 @@ final class AtticHangProbe: @unchecked Sendable {
 
     static func startIfRequested() { shared?.start() }
 
+    /// Fold rows pass this key even in production view construction. Defer
+    /// UUID formatting until an opted-in CI probe actually needs it.
+    static func key(_ value: @autoclosure () -> String) -> String {
+        guard shared != nil else { return "" }
+        return value()
+    }
+
     /// Value and detail are evaluated only if a test opted in. Every distinct
     /// value is retained with its predecessor; identical hot-path calls are
     /// counted and sampled, preventing a measurement storm from burying flips.
