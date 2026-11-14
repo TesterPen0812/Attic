@@ -105,6 +105,23 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(status(hosted, focused), .done, "Space still completes the focused row")
     }
 
+    /// R-6: Space, ⇧Space and ⌘B are answered from the focused row before
+    /// the page builds its list of every visible row (O(n) per key press,
+    /// and per key repeat); arrows still need that list.
+    func testR6RowCommandsBuildNoVisibleRowListPerKey() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let start = TasksPage.keyVisibleBuilds
+        hosted.press("\u{F701}", keyCode: 125)
+        let afterArrow = TasksPage.keyVisibleBuilds
+        XCTAssertGreaterThan(afterArrow, start, "an arrow key still builds the list")
+        hosted.press(" ", keyCode: 49, modifiers: .shift)
+        hosted.press(" ", keyCode: 49, modifiers: .shift)
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(TasksPage.keyVisibleBuilds, afterArrow, "row commands on the focused row build no list")
+    }
+
     func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")

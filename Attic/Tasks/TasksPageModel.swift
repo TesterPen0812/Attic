@@ -393,12 +393,25 @@ final class TasksPageModel: ObservableObject {
         keyboardFocusSelectionRevision = focus?.page == tab.rawValue && keyboardDriving ? selectionRevision : nil
     }
 
+    /// Whether the keyboard focus was received after the selection last
+    /// changed (the selection has not since moved away from it).
+    private func focusIsLater(than focused: UUID?) -> Bool {
+        keyboardFocus?.id == focused && keyboardFocus?.page == tab.rawValue
+            && keyboardFocusSelectionRevision == selectionRevision
+    }
+
+    /// The cheap half of `keyboardRow`, with no list of visible rows: true
+    /// when the focused row is the row the keyboard resolves to, because
+    /// the focus is the later of the two or the selection is empty or holds
+    /// it. False is not "disagrees": the full `keyboardRow` decides then.
+    func focusAgreesWithSelection(_ focused: UUID) -> Bool {
+        focusIsLater(than: focused) || selection.isEmpty || selection.contains(focused)
+    }
+
     func keyboardRow(focused: UUID?, visible: [UUID]) -> UUID? {
         let live = Set(visible)
         let selected = selection.intersection(live)
-        let focusIsLater = keyboardFocus?.id == focused && keyboardFocus?.page == tab.rawValue
-            && keyboardFocusSelectionRevision == selectionRevision
-        if let focused, live.contains(focused), focusIsLater || selected.isEmpty || selected.contains(focused) { return focused }
+        if let focused, live.contains(focused), focusIsLater(than: focused) || selected.isEmpty || selected.contains(focused) { return focused }
         return selected.count == 1 ? selected.first : nil
     }
     /// Finished rows held where they were for about a second, with the

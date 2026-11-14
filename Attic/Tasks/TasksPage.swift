@@ -154,6 +154,9 @@ struct TasksPage: View {
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
+    /// How many times a key built the page's visible-row list (the O(n)
+    /// setup `pageKey` needs for arrows, selection and focus repair).
+    static var keyVisibleBuilds = 0
     #endif
 
     /// The row that has the keyboard on the page shown, if any. The focus
@@ -2977,6 +2980,19 @@ struct TasksPage: View {
             beginSearch()
             return .handled
         }
+        // A row command (Space, ⇧Space, ⌘B, Delete, ⌘Return, ⌘C, ⌘D) on the
+        // row that has native focus is answered before the O(n) list setup
+        // below: every key press and every key repeat would otherwise build
+        // the list of all visible rows (5,000 on Done). Only the cheap
+        // cases are decided here; a subtask that may hold the keyboard, or a
+        // focus the selection has moved away from, goes on to the full path.
+        if model.isPageShown, model.focusedSubtaskID == nil, let focusedID,
+           model.focusAgreesWithSelection(focusedID), performRowCommand(press, on: focusedID) {
+            return .handled
+        }
+        #if DEBUG
+        Self.keyVisibleBuilds += 1
+        #endif
         let visible = visibleIDs()
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
@@ -2993,7 +3009,7 @@ struct TasksPage: View {
                                                   modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
             current = owner.parent
         }
-        // The row commands: native
+        // The same row commands when the fast path did not apply: native
         // focus is on a row but the selection has since moved elsewhere (⌘D
         // selects the duplicate), so they act on the row the keyboard
         // resolves to, as Return does. Only a validated subtask owner holds
