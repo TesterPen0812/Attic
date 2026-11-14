@@ -163,15 +163,17 @@ struct NotesTagBar: View {
             }
         }
         .frame(height: m.control)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(motion, value: tags)
-        .animation(motion, value: picks)
-        .animation(motion, value: open)
+        // Measure the card before its outer frame fills the row: a click
+        // in the empty gap beside it is outside the bar too.
         .background {
             PanelTagBarAnchor(keys: keys, context: PanelTagBarKeys.Context(
                 tags: tags, picks: picks, enabled: shown && !hidden, state: state,
                 managed: managesOwnTabOrder, select: onSelect, match: onMatch))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(motion, value: tags)
+        .animation(motion, value: picks)
+        .animation(motion, value: open)
         .onChange(of: shown) { _, now in if !now { state.close() } }
         .onChange(of: hidden) { _, now in if now { state.close() } }
     }

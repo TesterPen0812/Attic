@@ -1179,13 +1179,14 @@ extension PanelSharedChromeTests {
     func testTabbingToTheHashKeyThenClickingTheLibraryNeverLeavesItsKeysDeadWithFullKeyboardAccess() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
-        for how in ["a click in the library", "a row click", "a hide and a reveal", "the bar closing"] {
+        for how in ["a click in the library", "beside the collapsed bar", "a row click", "a hide and a reveal", "the bar closing"] {
             let (shell, library) = try notesLibraryShell()
             defer { shell.close() }
             shell.tabTo("notes-tag-bar-key")
             XCTAssertTrue(PanelTagBarState.ownsKeys, "\(how): # holds the keyboard")
             switch how {
             case "a click in the library": shell.appClick(at: CGPoint(x: 170, y: 250))
+            case "beside the collapsed bar": try clickBesideTheCollapsedTagBar(shell)
             case "a row click":
                 let row = try XCTUnwrap(shell.elements(shell.host).first { $0.accessibilityIdentifier?() == "notes-library-row" })
                 let frame = try XCTUnwrap(row.accessibilityFrame?())
@@ -1337,5 +1338,39 @@ extension PanelSharedChromeTests {
         spin(0.2)
         XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "close wins over the queued request")
         XCTAssertFalse(chrome.tagBar.keyFocused)
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    private func clickBesideTheCollapsedTagBar(_ shell: RealShell) throws {
+        XCTAssertFalse(shell.sharedChrome.tagBar.isOpen, "the bar is collapsed to its # key")
+        let key = try XCTUnwrap(shell.elements(shell.host).first { $0.accessibilityIdentifier?() == "notes-tag-bar-key" })
+        let frame = try XCTUnwrap(key.accessibilityFrame?())
+        XCTAssertGreaterThan(frame.width, 0)
+        let point = CGPoint(x: frame.maxX + 20, y: frame.midY)
+        XCTAssertFalse(frame.contains(point), "the click is outside the visible bar")
+        let plus = try XCTUnwrap(shell.elements(shell.host).first { $0.accessibilityIdentifier?() == "notes-new-note" })
+        let plusFrame = try XCTUnwrap(plus.accessibilityFrame?())
+        XCTAssertLessThan(point.x, plusFrame.minX, "the gap click must not activate +")
+        XCTAssertTrue(shell.panel.frame.contains(point), "the gap is inside the panel")
+        shell.appClick(at: shell.panel.convertPoint(fromScreen: point))
+    }
+
+    /// The bar expands its outer frame to fill the row, but the empty gap
+    /// beside its collapsed card is panel space. Its local click monitor
+    /// must measure the card, or this click leaves the library keys dead.
+    func testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        shell.sharedChrome.tagBar.noteKeyFocus(true)
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNil(library.highlightedID, "control: # owns the library keys")
+        try clickBesideTheCollapsedTagBar(shell)
+        shell.wait { !shell.sharedChrome.tagBar.keyFocused }
+        XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "a click beside the visible bar releases #")
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID, "the library's arrows work after clicking the empty gap")
     }
 }
