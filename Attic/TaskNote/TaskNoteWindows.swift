@@ -150,19 +150,30 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
         return task
     }
 
+    /// A preparation that went stale (the note changed during the decode)
+    /// retries once; if it is stale again the synchronous open takes over, so
+    /// Open in Window never ends with neither a panel page nor a window.
     private func prepareAndOpen(taskID: UUID, tasks: TaskStore, controller: NotesPageController,
                                 design: AtticDesignContext, uiState: PanelUIState) async {
-        do {
-            let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
-            guard !Task.isCancelled else { return }
-            openPrepared(taskID: taskID, tasks: tasks, controller: controller,
-                         design: design, uiState: uiState, prepared: prepared)
-        } catch { }
+        for _ in 0..<2 {
+            do {
+                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+                guard !Task.isCancelled else { return }
+                try openPrepared(taskID: taskID, tasks: tasks, controller: controller,
+                                 design: design, uiState: uiState, prepared: prepared)
+                return
+            } catch WorkspaceFoundationError.conflict {
+                guard !Task.isCancelled else { return }
+                continue
+            } catch { return }
+        }
+        try? openPrepared(taskID: taskID, tasks: tasks, controller: controller,
+                          design: design, uiState: uiState, prepared: nil)
     }
 
     private func openPrepared(taskID: UUID, tasks: TaskStore, controller: NotesPageController,
                               design: AtticDesignContext, uiState: PanelUIState,
-                              prepared: TaskNotePreparedOpen) {
+                              prepared: TaskNotePreparedOpen?) throws {
         if bringForward(taskID) { return }
         guard let library = tasks.commandLibrary else { return }
         let presenter: TaskNotePresenter
@@ -171,7 +182,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
                 library: library, notes: controller, design: design, columnInset: 28, prepared: prepared)
             guard presenter.page.controller === controller, let lease = presenter.lease else { return }
             try presenter.page.retainAcrossItemChanges(lease: lease)
-        } catch { return }
+        } catch WorkspaceFoundationError.conflict { throw WorkspaceFoundationError.conflict } catch { return }
         let size = CGSize(width: 380, height: 600)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

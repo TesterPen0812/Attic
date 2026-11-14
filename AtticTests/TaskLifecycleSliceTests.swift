@@ -1086,6 +1086,24 @@ final class TaskLifecycleSliceTests: XCTestCase {
         return id
     }
 
+    private func useGatedNotes(_ gate: WindowDecodeGate) {
+        notes = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+                                    saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+                                    decodeOpenDocument: { bytes in await gate.decode(bytes) })
+        notes.attachUndoRoute(library.undo)
+    }
+
+    private func bumpRevision(_ noteID: UUID, _ text: String) {
+        guard let source = notes.store.loadDocument(noteID: noteID), var blocks = source.content.document?.blocks else {
+            return XCTFail("the revision race fixture needs a readable note")
+        }
+        blocks.append(.text(text))
+        guard case .success = notes.store.saveDocument(noteID: noteID, document: NoteDocument(blocks: blocks),
+                                                       baseRevisionID: source.revisionID) else {
+            return XCTFail("the revision race fixture must save")
+        }
+    }
+
     private func makeStores() {
         let files = FileManager.default.temporaryDirectory.appendingPathComponent("TaskLifecycle-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: files) }
@@ -2435,6 +2453,42 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(TaskNoteWindows.shared.windowCount, 0, "no window leaks into TaskNoteWindows.shared")
     }
 
+    // Review R-4: a note that changes during the cold decode retries once;
+    // a second change falls back to the synchronous open. Open in Window has
+    // already closed the panel, so it must never end with no page and no window.
+    func testWindowOpenRetriesOnceWhenTheNoteChangesDuringTheDecode() async throws {
+        let id = try seed(.heavy)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let gate = WindowDecodeGate(holdFirst: true)
+        useGatedNotes(gate)
+        let opening = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                  design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        try await gate.waitUntilHeld()
+        bumpRevision(noteID, "written by an agent during the decode")
+        await gate.release()
+        await opening.value
+        XCTAssertNotNil(TaskNoteWindows.shared.window(for: id), "the stale preparation is retried, not dropped")
+        let decodes = await gate.decodes
+        XCTAssertEqual(decodes, 2)
+        XCTAssertTrue(try storedDocument(noteID).blocks.contains { $0.text.contains("written by an agent") })
+    }
+
+    func testWindowOpenFallsBackToTheSynchronousOpenWhenEveryPreparationIsStale() async throws {
+        let id = try seed(.heavy)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let gate = WindowDecodeGate(holdFirst: false) { [unowned self] in
+            bumpRevision(noteID, "racing write \(UUID().uuidString)")
+        }
+        useGatedNotes(gate)
+        let opening = TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                                  design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        await opening.value
+        XCTAssertNotNil(TaskNoteWindows.shared.window(for: id), "never no panel page and no window")
+        XCTAssertTrue(TaskNoteWindows.shared.preparingTaskIDs.isEmpty)
+    }
+
     func testC2RetainedRetirementKeepsQueuedAndNewerWriting() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
@@ -3238,4 +3292,40 @@ private final class ReservedDrag: NSObject, NSDraggingInfo {
     func enumerateDraggingItems(options: NSDraggingItemEnumerationOptions, for view: NSView?, classes: [AnyClass],
                                 searchOptions: [NSPasteboard.ReadingOptionKey: Any],
                                 using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+
+/// Holds the first cold decode until released, and can run work on the main
+/// actor while any decode is in flight (a write that races the preparation).
+actor WindowDecodeGate {
+    private(set) var decodes = 0
+    private var waiting = false
+    private var hold: CheckedContinuation<Void, Never>?
+    private let holdFirst: Bool
+    private let onDecode: (@MainActor @Sendable () -> Void)?
+
+    init(holdFirst: Bool, onDecode: (@MainActor @Sendable () -> Void)? = nil) {
+        self.holdFirst = holdFirst
+        self.onDecode = onDecode
+    }
+
+    func decode(_ bytes: Data) async -> (content: NoteContent, onMainThread: Bool) {
+        decodes += 1
+        if holdFirst, decodes == 1 {
+            waiting = true
+            await withCheckedContinuation { hold = $0 }
+        }
+        if let onDecode { await MainActor.run { onDecode() } }
+        return (NoteContentCodec.decode(bytes), false)
+    }
+
+    func waitUntilHeld() async throws {
+        for _ in 0..<500 {
+            if waiting { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw NSError(domain: "WindowDecodeGate", code: 1, userInfo: [NSLocalizedDescriptionKey: "the held decode never started"])
+    }
+
+    func release() { hold?.resume(); hold = nil }
 }
