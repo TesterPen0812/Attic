@@ -19,6 +19,9 @@ final class PanelAgentPresenter: AgentPanelPresenting {
             CanvasSemanticTextEditor.focusedInVisibleWindow != nil
     }
 
+    /// The window that owns the keyboard. Tests replace it.
+    var keyWindow: () -> NSWindow? = { NSApp.keyWindow }
+
     init(
         uiState: PanelUIState,
         store: TaskStore,
@@ -38,6 +41,11 @@ final class PanelAgentPresenter: AgentPanelPresenting {
     /// The person is typing in the panel: the add bar, a title, a note, or
     /// canvas text. An agent's `show` then moves nothing.
     var isUserTypingInPanel: Bool {
+        // Whichever Attic panel owns the keyboard (the docked one or a
+        // detached page) with a text field or editor focused: the Draw
+        // library's rename, search and tag fields set no lock, and a
+        // floating panel has a key state of its own.
+        if let window = keyWindow(), window is AtticPanel, window.firstResponder is NSText { return true }
         guard uiState.isPanelKey else { return false }
         let typing: Set<PanelInteractionLockReason> = [
             .quickEntryFocus, .taskComposer, .agentComposer, .taskEditing, .notesEditorFocus, .notesDirty

@@ -757,6 +757,55 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    /// BG-60 review (Opus R-4, Dot R-2): the Draw library's rename, search and
+    /// tag fields set no lock, and a detached Draw panel has its own key
+    /// state. Whatever Attic panel owns the keyboard with a text field or
+    /// editor focused counts as typing, docked or not.
+    func testBG60AgentShowWaitsForAnyAtticPanelTextFieldThatOwnsTheKeyboard() throws {
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+
+        let floating = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 240, height: 120),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+        floating.isReleasedWhenClosed = false
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 120))
+        let field = NSTextField(frame: CGRect(x: 10, y: 10, width: 200, height: 24))
+        content.addSubview(field)
+        floating.contentView = content
+        floating.orderFrontRegardless()
+        defer {
+            floating.makeFirstResponder(nil)
+            floating.orderOut(nil)
+            floating.close()
+        }
+        panel.presenter.keyWindow = { floating }
+
+        // The docked panel is not key (its own state), a floating Draw panel is.
+        panel.uiState.setPanelKey(false)
+        XCTAssertTrue(floating.makeFirstResponder(field))
+        XCTAssertTrue(floating.firstResponder is NSText, "a focused field edits through its field editor")
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "a detached panel's focused field is typing")
+        XCTAssertEqual(panel.presenter.presentForAgent(.page(.tasks)), .userIsTyping)
+        XCTAssertEqual(panel.uiState.selectedSection, .canvas)
+
+        // The docked panel's own rename or search field holds no interaction lock.
+        panel.uiState.setPanelKey(true)
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "a library field with no lock is typing")
+
+        // Releasing the field, or another window being key, lets `show` through.
+        floating.makeFirstResponder(nil)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel)
+        XCTAssertTrue(floating.makeFirstResponder(field))
+        panel.presenter.keyWindow = { nil }
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel, "keyboard ownership follows the focused window")
+        panel.presenter.keyWindow = { floating }
+        floating.makeFirstResponder(nil)
+        guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
+            return XCTFail("Agent may show Tasks once nothing holds the keyboard")
+        }
+    }
+
     /// BG-59 review (Opus R-3, Dot R-5): the agent is handed the Draw canvas
     /// id through This page; `show` of that id must open it in Draw, while a
     /// legacy canvas id still resolves in the legacy session.
