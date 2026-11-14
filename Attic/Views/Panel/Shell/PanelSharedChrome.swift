@@ -185,17 +185,23 @@ enum PanelKeyStopSeam {
 
 private struct PanelPlusFocus: ViewModifier {
     let page: PanelPage
+    /// There is a "+" to press: the page shows its bar and neither a task
+    /// page nor the "+" card has taken it. Opacity, hit testing and
+    /// accessibility hide a "+" but leave a focus stop, so a hidden "+" is
+    /// no stop and takes no key.
+    let reachable: Bool
     let requests: AtticFocusRequests?
     let action: () -> Void
     @FocusState private var focused: Bool
-    /// Tasks arms the plus through its own Tab order. Pages without that
-    /// manager keep ordinary keyboard traversal without requesting focus.
+    /// Tasks arms the "+" through its own Tab order (`page.managesOwnTabOrder`).
+    /// The other pages leave it to AppKit's key loop: a plain stop while it
+    /// shows, never asked for.
     @State private var armed = false
 
-    /// One structure on every page (only Tasks lends its Tab order): a
-    /// branch here would rebuild the "+" on each page switch.
+    /// One structure on every page: a branch here would rebuild the "+" on
+    /// each page switch.
     func body(content: Content) -> some View {
-        let focusable = requests == nil || armed
+        let focusable = reachable && (!page.managesOwnTabOrder || armed)
         #if DEBUG
         let _ = PanelKeyStopSeam.plus[page] = focusable
         #endif
@@ -203,12 +209,12 @@ private struct PanelPlusFocus: ViewModifier {
             .focusable(focusable, interactions: .activate)
             .focused($focused)
             .onKeyPress(keys: [.space, .return]) { _ in
-                guard focused else { return .ignored }
+                guard focused, reachable else { return .ignored }
                 action()
                 return .handled
             }
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
-                guard asked == AnyHashable(PanelPlusFocusID()) else { return }
+                guard reachable, asked == AnyHashable(PanelPlusFocusID()) else { return }
                 armed = true
                 DispatchQueue.main.async { focused = true }
             }
@@ -351,7 +357,8 @@ struct PanelSharedBottomBar: View {
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
                                               action: actions.plus)
                                 .atticDesignCorners()
-                                .modifier(PanelPlusFocus(page: page, requests: actions.focusRequests, action: actions.plus))
+                                .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken,
+                                                         requests: actions.focusRequests, action: actions.plus))
                         }
                             .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)

@@ -521,6 +521,98 @@ private final class RealShell {
     }
 }
 
+@MainActor
+private final class SharedBarModel: ObservableObject {
+    @Published var page: PanelPage
+    init(page: PanelPage) { self.page = page }
+}
+
+/// The shared bottom bar on its own, with the page and the reveal count the
+/// shell would give it.
+private struct SharedBarHarness: View {
+    let chrome: PanelSharedChrome
+    @ObservedObject var model: SharedBarModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            PanelSharedBottomBar(chrome: chrome, page: model.page,
+                                 layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560)))
+        }
+        .frame(width: 340, height: 560)
+        .atticDesign(.default)
+    }
+}
+
+extension PanelSharedChromeTests {
+    private func mountBar(_ chrome: PanelSharedChrome, _ model: SharedBarModel) -> NSWindow {
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SharedBarHarness(chrome: chrome, model: model))
+        window.orderFront(nil)
+        spin(0.4)
+        return window
+    }
+
+    private func close(_ window: NSWindow) {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+
+    /// BG-67's "reachable by keyboard when visible" and its limits (round 1
+    /// review R-1, R-5): the shared "+" is a plain keyboard stop on a page
+    /// AppKit's key loop walks, only while there is a "+" to press. Hidden
+    /// by an open note, under the "+" card or under a task page it is no
+    /// stop (opacity and hit testing never remove one), and Tasks' own Tab
+    /// order owns its "+" before its bar registers and after it goes.
+    func testTheSharedPlusIsAKeyboardStopOnlyWhileThereIsAPlusToPress() throws {
+        for (page, plus) in [(PanelPage.calendar, PanelBottomBarLook.calendarPlus),
+                             (PanelPage.notes, PanelBottomBarLook.notesPlus),
+                             (PanelPage.canvas, PanelBottomBarLook.drawPlus)] {
+            let chrome = PanelSharedChrome()
+            let actions = PanelBottomBarActions(plus: {})
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: plus), actions: actions, for: page)
+            let window = mountBar(chrome, SharedBarModel(page: page))
+            defer { close(window) }
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): a visible shared plus is a plain keyboard stop")
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: plus, shown: false), actions: actions, for: page)
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], false, "\(page): the page draws its own plus (an open note)")
+            chrome.setBar(PanelBottomBarLook(middle: .none, plus: plus), actions: actions, for: page)
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): back to a stop with the bar")
+            chrome.plusHandedOver = true
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], false, "\(page): the plus card has the bar's row")
+            chrome.plusHandedOver = false
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): the card folded away")
+            chrome.setCovered(true, page: page)
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], false, "\(page): a task page covers the bar")
+            chrome.setCovered(false, page: page)
+            spin(0.3)
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): the task page closed")
+        }
+        // Tasks orders Tab itself: no stop before its bar registers, none
+        // once registered until its own Tab order asks, none after it goes.
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        let window = mountBar(chrome, SharedBarModel(page: .tasks))
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "Tasks' plus is no stop before its bar registers")
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                      actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "Tasks' plus waits for its own Tab order")
+        chrome.removeBar(for: .tasks)
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "Tasks' plus is no stop after its bar goes")
+    }
+}
+
 extension PanelSharedChromeTests {
     /// BG-67 on the production host (round 1 review R-4): the real panel in
     /// an `AtticPanelHostingView` (AppKit's own key loop), the real Calendar,

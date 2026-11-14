@@ -11,6 +11,11 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Whether the page orders Tab itself, handing the keyboard to the
+    /// shared "+" and "#" by request (Tasks' own Tab manager). On the other
+    /// pages AppKit's key loop does, and the shared controls are plain stops.
+    var managesOwnTabOrder: Bool { self == .tasks }
+
     init(_ section: PanelSection) {
         switch section {
         case .tasks, .backlog: self = .tasks
