@@ -178,15 +178,15 @@ private struct PanelPlusFocus: ViewModifier {
     let requests: AtticFocusRequests?
     let action: () -> Void
     @FocusState private var focused: Bool
-    /// Focusable only once the page's Tab asks for it, so the panel's own
-    /// key loop (a reveal, a page switch) never lands on "+" by itself.
+    /// Tasks arms the plus through its own Tab order. Pages without that
+    /// manager keep ordinary keyboard traversal without requesting focus.
     @State private var armed = false
 
     /// One structure on every page (only Tasks lends its Tab order): a
     /// branch here would rebuild the "+" on each page switch.
     func body(content: Content) -> some View {
         content
-            .focusable(armed && requests != nil, interactions: .activate)
+            .focusable(requests == nil || armed, interactions: .activate)
             .focused($focused)
             .onKeyPress(keys: [.space, .return]) { _ in
                 guard focused else { return .ignored }
