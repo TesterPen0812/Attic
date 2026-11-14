@@ -267,6 +267,47 @@ extension XCTestCase {
     }
 }
 
+/// A reveal (a vetoed quit, `revealProgrammatically`) makes AtticPanel key and
+/// the application active; that is the product's behaviour. A test that builds
+/// the coordinator or the panel must not leave the visible panel windows, the
+/// key window or the active application behind for every later test in the
+/// process (CI 43558047333: the Notes link menu test read the native menu
+/// through a stray key AtticPanel). Call it when the test ends.
+@MainActor
+func retireRevealedPanels() {
+    for window in NSApp.windows where window is AtticPanel || window is PanelIslandWindow {
+        window.orderOut(nil)
+    }
+    if NSApp.isActive { NSApp.deactivate() }
+}
+
+/// Per suite, the panel windows and the key window it started with, so a
+/// last-in-suite test can say whether the suite left a panel behind without
+/// blaming an earlier suite's leak.
+@MainActor
+enum PanelLeakGuard {
+    private static var baselines: [String: (windows: Set<ObjectIdentifier>, keyWasPanel: Bool)] = [:]
+
+    private static func visiblePanels() -> [NSWindow] {
+        NSApp.windows.filter { ($0 is AtticPanel || $0 is PanelIslandWindow) && $0.isVisible }
+    }
+
+    /// Call from `setUp`; only the first call of a suite records.
+    static func begin(_ suite: String) {
+        guard baselines[suite] == nil else { return }
+        baselines[suite] = (Set(visiblePanels().map(ObjectIdentifier.init)), NSApp.keyWindow is AtticPanel)
+    }
+
+    /// Panel windows still ordered in (and a key panel) that the suite added.
+    static func leaked(since suite: String) -> [String] {
+        guard let baseline = baselines[suite] else { return ["no baseline: begin() was not called"] }
+        var result = visiblePanels().filter { !baseline.windows.contains(ObjectIdentifier($0)) }
+            .map { "\(type(of: $0)) #\($0.windowNumber)" }
+        if NSApp.keyWindow is AtticPanel, !baseline.keyWasPanel { result.append("key AtticPanel") }
+        return result
+    }
+}
+
 // Completion waits observe work, never the state a test is about to assert.
 @MainActor
 func waitForTestOperation(_ name: String, timeout: TimeInterval = 3,
