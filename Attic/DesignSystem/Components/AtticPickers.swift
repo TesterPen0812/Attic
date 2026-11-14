@@ -490,6 +490,7 @@ struct AtticDateCard: View {
     @State private var hoveredDay: Date?
     @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticHighlightOrigin) private var highlightOrigin
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
 
     private var current: AtticDateCardState { state ?? AtticDateCardState(start: calendar.startOfDay(for: selected ?? today)) }
@@ -542,11 +543,15 @@ struct AtticDateCard: View {
                     switch phase {
                     case let .active(point):
                         guard AtticListHighlight.isPointerMove(NSApp.currentEvent), let day = Self.day(at: point, in: month) else { return }
+                        highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: day)))
                         if let hovered = hoveredDay, hovered != day { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
                         hoveredDay = day
                         if !current.isLit(day, calendar: calendar) { update { $0.hoverDay(day, inside: true, calendar: calendar) } }
                     case .ended:
-                        if let hovered = hoveredDay { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        if let hovered = hoveredDay {
+                            highlightOrigin?.pointerLeft(Self.dayID(calendar.startOfDay(for: hovered)))
+                            update { $0.hoverDay(hovered, inside: false, calendar: calendar) }
+                        }
                         hoveredDay = nil
                     }
                 }
@@ -980,10 +985,10 @@ struct AtticTagPicker: View {
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: colouring.hue(for: tag.name).ink, detail: tag.detail,
                                  detailInk: AtticDropdownSmallText.ink,
                                  isHighlighted: highlighted == index,
-                                 onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
+                                 onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create),
+                                 scrollID: tag.name) {
                     onToggle(tag.name)
                 }
-                .id(tag.name)
                 .onAppear { onRowAppear?(tag.name) }
             }
             if tags.isEmpty {

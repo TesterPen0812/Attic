@@ -362,6 +362,141 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertLessThan(realized.count, 70, "scroll-to-last cannot mount the full tag inventory")
     }
 
+    /// Makes a mouse-moved event the app's current event, as a hosted test
+    /// process is left with it by an earlier test (or the owner's pointer
+    /// by a stray move between a key press and SwiftUI's update).
+    private func leaveAMouseMoveAsTheCurrentEvent(in window: NSWindow) {
+        guard let moved = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else {
+            return XCTFail("could not make a mouse-moved event")
+        }
+        NSApp.postEvent(moved, atStart: true)
+        if let next = NSApp.nextEvent(matching: .mouseMoved, until: Date().addingTimeInterval(1), inMode: .default, dequeue: true) {
+            NSApp.sendEvent(next)
+        }
+    }
+
+    /// PF-43 (CI 43540675479): the keyboard's highlight scrolls to its row
+    /// whatever the last event was. The viewport used to tell a pointer
+    /// hover from the keyboard by `NSApp.currentEvent`, so a stale mouse
+    /// event left the highlight unscrolled-to.
+    func testPF43KeyboardHighlightScrollsEvenWhenTheLastEventWasAMouseMove() {
+        let window = makeWindow()
+        defer { window.close() }
+        let tags = (0..<2_000).map { AtticTagPicker.Tag(name: String(format: "tag-%04d", $0), state: .off) }
+        var realized = Set<String>()
+        let host = NSHostingView(rootView: TagList(tags: tags, highlighted: nil, onRowAppear: { realized.insert($0) })
+            .atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        realized.removeAll()
+        leaveAMouseMoveAsTheCurrentEvent(in: window)
+        XCTAssertEqual(NSApp.currentEvent?.type, .mouseMoved, "the stale pointer event is in place")
+        host.rootView = TagList(tags: tags, highlighted: tags.count - 1, onRowAppear: { realized.insert($0) })
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        host.layoutSubtreeIfNeeded()
+        let deadline = Date().addingTimeInterval(3)
+        while !realized.contains("tag-1999"), Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            spin(0.02)
+        }
+        XCTAssertTrue(realized.contains("tag-1999"), "a key press's highlight scrolls to its row after a stale mouse move")
+    }
+
+    // MARK: Where a highlight came from
+
+    func testTheHighlightOriginScrollsEverythingButARowThePointerLit() {
+        let origin = AtticHighlightOrigin()
+        XCTAssertTrue(origin.shouldScroll(toHighlight: "a"), "a highlight no pointer made is the keyboard's")
+        origin.pointerEntered("b")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: "b"), "the pointer lit it: it is under the pointer already")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: "b"), "and the list's second report of the same change agrees")
+        XCTAssertTrue(origin.shouldScroll(toHighlight: "c"), "the keyboard moved on")
+        XCTAssertTrue(origin.shouldScroll(toHighlight: "b"), "and back to a row the pointer once lit")
+        origin.pointerEntered("d")
+        origin.pointerLeft("d")
+        XCTAssertTrue(origin.shouldScroll(toHighlight: "d"), "the pointer left it")
+        origin.pointerEntered("e")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: nil), "nothing to scroll to")
+        XCTAssertTrue(origin.shouldScroll(toHighlight: "e"), "with the highlight cleared in between, the keyboard's")
+        origin.pointerEntered("f")
+        origin.pointerLeft("g")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: "f"), "another row's exit leaves the pointer's row alone")
+    }
+
+    final class OriginBox { var origin: AtticHighlightOrigin? }
+
+    /// Hands the viewport's highlight origin to the test, as a row would use it.
+    struct OriginProbe: View {
+        @Environment(\.atticHighlightOrigin) private var origin
+        let box: OriginBox
+        var body: some View { Color.clear.frame(width: 1, height: 0).onAppear { box.origin = origin } }
+    }
+
+    /// Forty rows in a six-row viewport, the highlight on one of them, told
+    /// to the viewport by the rows' preference or by its `highlighted`.
+    struct ViewportRows: View {
+        let highlighted: Int?
+        let viaParameter: Bool
+        let box: OriginBox
+        var body: some View {
+            AtticDropdownViewport(height: 6 * AtticDropdownMetrics.rowHeight,
+                                  highlighted: viaParameter ? highlighted.map { "row-\($0)" } : nil) {
+                VStack(alignment: .leading, spacing: 0) {
+                    OriginProbe(box: box)
+                    ForEach(0..<40, id: \.self) { AtticDropdownRow(title: "row-\($0)", isHighlighted: highlighted == $0) {} }
+                }
+            }
+            .frame(width: 200)
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        }
+    }
+
+    private func scrollOffset(in view: NSView) -> CGFloat? {
+        if let scroll = view as? NSScrollView { return scroll.contentView.bounds.origin.y }
+        for sub in view.subviews { if let found = scrollOffset(in: sub) { return found } }
+        return nil
+    }
+
+    /// Both directions, by the rows' preference and by the `highlighted`
+    /// parameter: a hover highlight never scrolls the list under the pointer;
+    /// the keyboard's always brings its row into view, after a stale mouse
+    /// move too.
+    func testAPointerLitRowDoesNotScrollTheListAndAKeyboardHighlightDoes() throws {
+        for viaParameter in [false, true] {
+            let window = makeWindow()
+            defer { window.close() }
+            let box = OriginBox()
+            let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
+            host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            spin(0.2)
+            let origin = try XCTUnwrap(box.origin, "the rows see the viewport's origin")
+            let start = try XCTUnwrap(scrollOffset(in: host), "the viewport scrolls")
+
+            origin.pointerEntered("row-30")
+            host.rootView = ViewportRows(highlighted: 30, viaParameter: viaParameter, box: box)
+            host.layoutSubtreeIfNeeded()
+            spin(0.5)
+            XCTAssertEqual(scrollOffset(in: host) ?? -1, start, accuracy: 0.5, "a hover highlight never scrolls the list (parameter: \(viaParameter))")
+
+            leaveAMouseMoveAsTheCurrentEvent(in: window)
+            host.rootView = ViewportRows(highlighted: 35, viaParameter: viaParameter, box: box)
+            host.layoutSubtreeIfNeeded()
+            let deadline = Date().addingTimeInterval(3)
+            while (scrollOffset(in: host) ?? start) - start < 20, Date() < deadline {
+                host.layoutSubtreeIfNeeded()
+                spin(0.02)
+            }
+            XCTAssertGreaterThan((scrollOffset(in: host) ?? start) - start, 20,
+                                 "an arrow key's highlight is brought into view (parameter: \(viaParameter))")
+        }
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {
