@@ -672,6 +672,68 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertGreaterThan(inner.contentView.bounds.origin.y, start.inner + 20, "an arrow key's highlight is brought into view")
     }
 
+    // MARK: A click on ‹ › in a cut-short date card (R-2)
+
+    private func labelled(_ label: String, in root: AnyObject) -> AnyObject? {
+        if (root.accessibilityLabel?() ?? "") == label { return root }
+        for child in (root.accessibilityChildren?() ?? nil) ?? [] {
+            if let found = labelled(label, in: child as AnyObject) { return found }
+        }
+        return nil
+    }
+
+    /// In a date card cut short to fit the panel, ›/‹ turns the month under
+    /// the pointer. The lit day moves with it, but that is not the keyboard:
+    /// the card stays, or the arrow slides out from under the pointer.
+    func testPF43AClickOnTheMonthArrowDoesNotScrollACutShortDateCard() throws {
+        final class Keys { var handler: ((NSEvent) -> Bool)? }
+        let keys = Keys()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_GB")
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 10))!
+        let selected = calendar.date(from: DateComponents(year: 2026, month: 10, day: 28))!
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousAX = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previousAX, forAttribute: enhanced) }
+        let window = makeWindow()
+        defer { window.close() }
+        let card = AtticDropdownCard(width: AtticDropdownMetrics.dateCardWidth) {
+            AtticDateCard(today: today, selected: selected, calendar: calendar, typed: .constant(""), onPick: { _ in })
+        }
+        .environment(\.atticDropdownHeight, 200)
+        .environment(\.atticDropdownContentHeightChanged, { _ in })
+        .environment(\.atticDropdownRegisterKeys, { keys.handler = $0 })
+        .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
+        let host = NSHostingView(rootView: card)
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 320)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.3)
+        let card0 = try XCTUnwrap(scrollViews(in: host).first, "the card scrolls")
+        XCTAssertGreaterThan((card0.documentView?.frame.height ?? 0) - card0.contentView.bounds.height, 20, "the card is cut short")
+
+        // The keyboard lights the day (and the card scrolls to it, as it should).
+        let right = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                   context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 124))
+        XCTAssertTrue(try XCTUnwrap(keys.handler)(right))
+        wait(for: host) { card0.contentView.bounds.origin.y > 20 }
+        XCTAssertGreaterThan(card0.contentView.bounds.origin.y, 20, "a key's highlight on a day cut off scrolls to it")
+        scroll(card0, to: 0)
+        spin(0.3)
+
+        func dump(_ root: AnyObject) -> [String] {
+            [root.accessibilityLabel?() ?? "-"] + (((root.accessibilityChildren?() ?? nil) ?? []).flatMap { dump($0 as AnyObject) })
+        }
+        guard let next = labelled("Next month", in: host) else { return XCTFail("no › button among \(dump(host))") }
+        XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
+        wait(for: host) { self.labelled("November 2026", in: host) != nil }
+        XCTAssertNotNil(labelled("November 2026", in: host), "the month turned")
+        spin(0.3)
+        XCTAssertEqual(card0.contentView.bounds.origin.y, 0, accuracy: 0.5, "a click on › does not scroll the card")
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {

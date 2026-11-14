@@ -731,7 +731,14 @@ struct AtticDateCard: View {
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
-        return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
+        return Button {
+            update { state in
+                _ = state.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+                // The click turned the month; the lit day that goes with it is
+                // not the keyboard's, and the card stays under the pointer.
+                if state.lit == .day { highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: state.cursor))) }
+            }
+        } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .medium, ink: .icon)
                 .frame(width: d.monthNavWidth - 2, height: d.monthNavWidth - 2)
                 .background { if lit { navMark } }
