@@ -314,8 +314,9 @@ final class NotesTypingCostTests: XCTestCase {
                 })
             }
             print("P1_FIND_TABLE size=\(count) scanned_utf16=\(engine.find.searchedUTF16Count - tableScanned) invalidated_utf16=\(engine.find.invalidatedUTF16Count - tableInvalidated) typing_ms=\(tableMS)")
-            let gridCharacters = table.table.rows.flatMap { $0.cells }.reduce(0) { $0 + $1.text.utf16.count }
-            XCTAssertEqual(engine.find.searchedUTF16Count - tableScanned, gridCharacters)
+            let changedCellCharacters = table.table[.init(row: 0, column: 0)].text.utf16.count
+            XCTAssertEqual(engine.find.searchedUTF16Count - tableScanned, changedCellCharacters,
+                           "Find must search the changed cell and keep all other matches")
             XCTAssertEqual(engine.find.invalidatedUTF16Count, tableInvalidated)
             XCTAssertEqual(engine.find.matches.count, count + 1)
             XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.find.matches.count, count + 2)
@@ -323,6 +324,7 @@ final class NotesTypingCostTests: XCTestCase {
             engine.find.close(); engine.detachView()
         }
     }
+
     func testPF12PlainTypingDoesNotRestyleUnchangedRichNeighbor() {
         for length in [1_000, 100_000] {
             var rich = NoteBlock.text(String(repeating: "a", count: length))
@@ -349,6 +351,52 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    func testPF16SingleTableCellFindEditDoesNotScanUnrelatedCells() throws {
+        for rows in [10, 250] {
+            let table = NoteTable(texts: (0..<rows).map { row in
+                (0..<15).map { column in "cell \(row)-\(column) needle" }
+            })
+            let (engine, _) = editor([.text("Title"), .table(table)])
+            defer { engine.find.close(); engine.detachView() }
+            engine.find.show(); engine.find.query = "needle"
+            let object = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+            let before = engine.find.searchedUTF16Count
+            for step in 0..<100 {
+                XCTAssertTrue(engine.changeTable(object, name: "Cell", coalescing: .init(row: 0, column: 0)) {
+                    $0[.init(row: 0, column: 0)].text = "changed \(step) needle"
+                })
+            }
+            let searched = engine.find.searchedUTF16Count - before
+            print("PF16 table_rows=\(rows) edits=100 searched_utf16=\(searched)")
+            XCTAssertLessThan(searched, 10_000, "Find cell updates must not scan unrelated table cells")
+            XCTAssertEqual(engine.find.matches.count, rows * 15)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.find.matches.count, rows * 15)
+        }
+    }
+
+    func testPF16RapidQueryKeysDoNotSynchronouslyScanLongNote() async {
+        let longBody = String(repeating: "a", count: 350_000) + " needleTarget"
+        let (engine, _) = editor([.text("Title"), .text(longBody)])
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        let before = engine.find.searchedUTF16Count
+        let snapshots = engine.find.backgroundSnapshotBuildCount
+        let publications = engine.find.backgroundQueryPublicationCount
+        for count in 1...12 {
+            engine.find.query = String("needleTarget".prefix(count))
+        }
+        let inlineWork = engine.find.searchedUTF16Count - before
+        print("PF16 query_keys=12 body_utf16=350012 inline_scanned_utf16=\(inlineWork)")
+        XCTAssertLessThan(inlineWork, 50_000, "Find query updates must move full-text scans off the input callback")
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.backgroundSnapshotBuildCount - snapshots, 1,
+                       "repeated query keys reuse one immutable document snapshot")
+        XCTAssertEqual(engine.find.backgroundQueryPublicationCount - publications, 1,
+                       "superseded query generations must not publish old matches")
+        XCTAssertEqual(engine.find.matches.count, 1, "the latest query must publish its one matching range")
+        XCTAssertEqual(engine.find.matches[0].noteRange.length, 12)
+    }
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
         let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
             .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])

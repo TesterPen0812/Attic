@@ -1,6 +1,78 @@
 import AppKit
 import SwiftUI
 
+/// Only immutable strings and positions cross into the Find worker. The
+/// TextKit storage, table attachments and editor stay on the main actor.
+private struct NoteFindSnapshot: Sendable {
+    struct Table: Sendable {
+        let noteLocation: Int
+        let tableID: UUID
+        let content: NoteTable
+    }
+    let text: String
+    let bodyStart: Int
+    let tables: [Table]
+}
+
+private enum NoteFindWorker {
+    struct Hit: Sendable {
+        let location: Int
+        let length: Int
+        let tableID: UUID?
+        let row: Int?
+        let column: Int?
+        let cellLocation: Int?
+        let cellLength: Int?
+    }
+    struct Result: Sendable {
+        let hits: [Hit]
+        let searchedUTF16: Int
+    }
+
+    nonisolated static func scan(_ snapshot: NoteFindSnapshot, for query: String) -> Result {
+        guard !query.isEmpty else { return Result(hits: [], searchedUTF16: 0) }
+        var hits: [Hit] = []
+        var scanned = 0
+        func ranges(_ text: String, start: Int, noteLocation: Int, tableID: UUID? = nil,
+                    row: Int? = nil, column: Int? = nil) {
+            guard !Task<Never, Never>.isCancelled else { return }
+            let value = text as NSString
+            scanned += value.length - start
+            var next = start
+            while next < value.length, !Task<Never, Never>.isCancelled {
+                let range = value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
+                                        range: NSRange(location: next, length: value.length - next))
+                guard range.location != NSNotFound, range.length > 0 else { break }
+                hits.append(Hit(location: tableID == nil ? range.location : noteLocation,
+                                length: tableID == nil ? range.length : 1,
+                                tableID: tableID, row: row, column: column,
+                                cellLocation: tableID == nil ? nil : range.location,
+                                cellLength: tableID == nil ? nil : range.length))
+                next = NSMaxRange(range)
+            }
+        }
+        ranges(snapshot.text, start: snapshot.bodyStart, noteLocation: 0)
+        for table in snapshot.tables {
+            guard !Task<Never, Never>.isCancelled else { break }
+            for row in table.content.rows.indices {
+                for column in table.content.columns.indices {
+                    guard !Task<Never, Never>.isCancelled else { break }
+                    ranges(table.content[.init(row: row, column: column)].text, start: 0,
+                           noteLocation: table.noteLocation, tableID: table.tableID,
+                           row: row, column: column)
+                }
+            }
+        }
+        hits.sort {
+            if $0.location != $1.location { return $0.location < $1.location }
+            if $0.row != $1.row { return ($0.row ?? -1) < ($1.row ?? -1) }
+            if $0.column != $1.column { return ($0.column ?? -1) < ($1.column ?? -1) }
+            return ($0.cellLocation ?? 0) < ($1.cellLocation ?? 0)
+        }
+        return Result(hits: hits, searchedUTF16: scanned)
+    }
+}
+
 /// One Find session for the shared note engine, including table-cell text.
 /// Highlights are rendering attributes only: searching never changes the
 /// document, its save state or its Undo history.
@@ -36,6 +108,13 @@ final class NoteFindController: ObservableObject {
     private var pendingMatches: [Match]?
     private var pendingOldMatch: Match?
     private var pendingFullSearch = false
+    private var searchGeneration: UInt64 = 0
+    private var searchTask: Task<Void, Never>?
+    private var immutableSnapshot: NoteFindSnapshot?
+    /// Only notes large enough to stall the query callback use the worker.
+    /// Short notes retain immediate Find results and navigation.
+    private static let backgroundSearchThreshold = 262_144
+    private static let backgroundTableCellsThreshold = 4_096
     private var monitor: Any?
     private var host: NSHostingView<AnyView>?
     private let keyboardFocus = AtticKeyboardFocusTracker()
@@ -62,12 +141,99 @@ final class NoteFindController: ObservableObject {
     private(set) var invalidatedUTF16Count = 0
     private(set) var objectSearchPassCount = 0
     private(set) var highlightLayoutPassCount = 0
+    private(set) var backgroundSnapshotBuildCount = 0
+    private(set) var backgroundQueryPublicationCount = 0
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
     /// The room the card takes above the note: none in the top row.
     var clearance: CGFloat { isShown && !shownInTopRow ? Self.height : 0 }
     let highlight = NSColor.systemYellow.withAlphaComponent(0.4)
 
     init(engine: NoteEditorEngine) { self.engine = engine }
+
+    /// Waits for the current query generation, including its main-actor publish.
+    func waitForSearch() async { await searchTask?.value }
+
+    private func invalidateSearch() {
+        searchGeneration &+= 1
+        searchTask?.cancel()
+        searchTask = nil
+    }
+
+    private func snapshot(in engine: NoteEditorEngine) -> NoteFindSnapshot {
+        if let immutableSnapshot { return immutableSnapshot }
+        let content = engine.textStorage.string
+        let text = content as NSString
+        let bodyStart = engine.isBodyOnly || text.length == 0 ? 0
+            : NSMaxRange(text.paragraphRange(for: NSRange(location: 0, length: 0)))
+        var tables: [NoteFindSnapshot.Table] = []
+        let body = NSRange(location: bodyStart, length: text.length - bodyStart)
+        if body.length > 0 {
+            engine.textStorage.enumerateAttribute(.attachment, in: body) { value, range, _ in
+                guard let table = value as? NoteTableAttachment else { return }
+                tables.append(.init(noteLocation: range.location, tableID: table.objectID,
+                                    content: table.table))
+            }
+        }
+        let snapshot = NoteFindSnapshot(text: content, bodyStart: bodyStart, tables: tables)
+        backgroundSnapshotBuildCount += 1
+        immutableSnapshot = snapshot
+        return snapshot
+    }
+
+    private func needsBackgroundSearch(in engine: NoteEditorEngine) -> Bool {
+        if engine.textStorage.length >= Self.backgroundSearchThreshold { return true }
+        if let immutableSnapshot {
+            return immutableSnapshot.tables.reduce(0) { $0 + $1.content.rowCount * $1.content.columnCount }
+                >= Self.backgroundTableCellsThreshold
+        }
+        var count = 0
+        let range = NSRange(location: 0, length: engine.textStorage.length)
+        guard range.length > 0 else { return false }
+        engine.textStorage.enumerateAttribute(.attachment, in: range) { value, _, stop in
+            guard let table = value as? NoteTableAttachment else { return }
+            count += table.table.rowCount * table.table.columnCount
+            if count >= Self.backgroundTableCellsThreshold { stop.pointee = true }
+        }
+        return count >= Self.backgroundTableCellsThreshold
+    }
+
+    private func scheduleBackgroundSearch(in engine: NoteEditorEngine, selectFirst: Bool) {
+        let current = searchGeneration
+        let needle = query
+        let input = snapshot(in: engine)
+        let previous = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        matches = []
+        index = nil
+        updateHighlights(clear: true)
+        let worker = Task.detached(priority: .userInitiated) {
+            NoteFindWorker.scan(input, for: needle)
+        }
+        searchTask = Task { [weak self] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled, let self, self.searchGeneration == current,
+                  self.isShown, self.query == needle, self.engine === engine else { return }
+            self.searchedUTF16Count += result.searchedUTF16
+            self.objectSearchPassCount += 1
+            self.backgroundQueryPublicationCount += 1
+            let found = result.hits.map { hit in
+                Match(noteRange: NSRange(location: hit.location, length: hit.length),
+                      tableID: hit.tableID,
+                      cell: hit.row.flatMap { row in hit.column.map { NoteTable.Position(row: row, column: $0) } },
+                      cellRange: hit.cellLocation.flatMap { offset in
+                          hit.cellLength.map { NSRange(location: offset, length: $0) }
+                      })
+            }
+            self.matches = found
+            self.index = selectFirst ? found.indices.first : previous.flatMap { found.firstIndex(of: $0) }
+            self.updateHighlights()
+            if selectFirst { self.reveal(activateCell: false) }
+            self.searchTask = nil
+        }
+    }
 
     func attach() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -230,6 +396,8 @@ final class NoteFindController: ObservableObject {
 
     func close(returnFocus: Bool = true) {
         guard isShown else { return }
+        invalidateSearch()
+        immutableSnapshot = nil
         let selected = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
         isShown = false
         fieldFocused = false
@@ -331,7 +499,12 @@ final class NoteFindController: ObservableObject {
     /// spans in the same coordinates, then repaint the edited paragraphs too
     /// so a removed match cannot leave stale fragment-layer pixels behind.
     func charactersChanged(in edited: NSRange, delta: Int) {
-        guard isShown, !query.isEmpty, let engine else { return }
+        guard isShown, let engine else { return }
+        let wasSearching = searchTask != nil
+        invalidateSearch()
+        immutableSnapshot = nil
+        guard !query.isEmpty else { return }
+        if wasSearching { pendingFullSearch = true }
         let oldEnd = NSMaxRange(edited) - delta
         func rebased(_ range: NSRange) -> NSRange {
             if NSMaxRange(range) <= edited.location { return range }
@@ -361,18 +534,32 @@ final class NoteFindController: ObservableObject {
         pendingSearchRange = affected
     }
 
-    func refresh(selectFirst: Bool = false, changedTable: NoteTableAttachment? = nil) {
+    func refresh(selectFirst: Bool = false, changedTable: NoteTableAttachment? = nil,
+                 changedCell: NoteTable.Position? = nil) {
         guard isShown, let engine else { return }
+        let wasSearching = searchTask != nil
+        invalidateSearch()
+        if changedTable != nil { immutableSnapshot = nil }
         defer {
             pendingSearchRange = nil; pendingMatches = nil; pendingOldMatch = nil; pendingFullSearch = false
         }
         // An empty bar has nothing to search or highlight. Clear a previous
         // search once; subsequent edits need no document-wide layout pass.
         if query.isEmpty {
+            immutableSnapshot = nil
             guard !matches.isEmpty || index != nil else { return }
             matches = []
             index = nil
             updateHighlights(clear: true)
+            return
+        }
+        // A new query on a very long note must never scan live TextKit text
+        // in the field's key callback. While that worker runs, a later edit
+        // cancels its generation and produces a fresh snapshot.
+        let needsFullScan = selectFirst || wasSearching || pendingFullSearch
+            || (changedTable == nil && pendingSearchRange == nil)
+        if needsFullScan, needsBackgroundSearch(in: engine) {
+            scheduleBackgroundSearch(in: engine, selectFirst: selectFirst || wasSearching)
             return
         }
         let old = pendingMatches != nil ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
@@ -385,23 +572,34 @@ final class NoteFindController: ObservableObject {
         let text = engine.textStorage.string as NSString
         let bodyStart = engine.isBodyOnly || text.length == 0 ? 0 : NSMaxRange(text.paragraphRange(for: NSRange(location: 0, length: 0)))
         let scope = NSIntersectionRange(requested, NSRange(location: bodyStart, length: max(0, text.length - bodyStart)))
-        var found = tableScope != nil ? matches.filter { $0.tableID != changedTable?.objectID || $0.noteRange != tableScope! }
+        let cellScope = tableScope != nil && changedCell.flatMap { changedTable?.table.contains($0) } == true
+            ? changedCell : nil
+        var found = tableScope != nil ? matches.filter { match in
+            guard match.tableID == changedTable?.objectID && match.noteRange == tableScope! else { return true }
+            return cellScope.map { $0 != match.cell } ?? false
+        }
             : (incremental ? (pendingMatches ?? []) : [])
         if tableScope == nil {
             found += ranges(in: engine.textStorage.string, within: scope).map { Match(noteRange: $0) }
         }
-        objectSearchPassCount += 1
-        var objects: [(NoteObjectAttachment, NSRange)] = []
-        engine.textStorage.enumerateAttribute(.attachment, in: scope) { value, range, _ in
-            if let object = value as? NoteObjectAttachment { objects.append((object, range)) }
-        }
-        for (object, range) in objects {
-            guard let table = object as? NoteTableAttachment else { continue }
-            for row in table.table.rows.indices {
-                for column in table.table.columns.indices {
-                    let cell = NoteTable.Position(row: row, column: column)
-                    found += ranges(in: table.table[cell].text).map {
-                        Match(noteRange: range, tableID: table.objectID, cell: cell, cellRange: $0)
+        if let table = changedTable, let cell = cellScope, let range = tableScope {
+            found += ranges(in: table.table[cell].text).map {
+                Match(noteRange: range, tableID: table.objectID, cell: cell, cellRange: $0)
+            }
+        } else {
+            objectSearchPassCount += 1
+            var objects: [(NoteObjectAttachment, NSRange)] = []
+            engine.textStorage.enumerateAttribute(.attachment, in: scope) { value, range, _ in
+                if let object = value as? NoteObjectAttachment { objects.append((object, range)) }
+            }
+            for (object, range) in objects {
+                guard let table = object as? NoteTableAttachment else { continue }
+                for row in table.table.rows.indices {
+                    for column in table.table.columns.indices {
+                        let cell = NoteTable.Position(row: row, column: column)
+                        found += ranges(in: table.table[cell].text).map {
+                            Match(noteRange: range, tableID: table.objectID, cell: cell, cellRange: $0)
+                        }
                     }
                 }
             }

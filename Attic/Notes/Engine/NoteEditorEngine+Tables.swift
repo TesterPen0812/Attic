@@ -159,7 +159,7 @@ extension NoteEditorEngine {
                                   focusBefore: before ?? currentTableFocus(attachment),
                                   focusAfter: after, cell: cell)
         attachment.table = new
-        tableContentDidChange(attachment)
+        tableContentDidChange(attachment, changedCell: cell)
         return true
     }
 
@@ -171,8 +171,8 @@ extension NoteEditorEngine {
 
     /// The grid changed without a character edit: the saved document, the
     /// table's line and the page's chrome follow.
-    func tableContentDidChange(_ attachment: NoteTableAttachment) {
-        find.refresh(changedTable: attachment)
+    func tableContentDidChange(_ attachment: NoteTableAttachment, changedCell: NoteTable.Position? = nil) {
+        find.refresh(changedTable: attachment, changedCell: changedCell)
         invalidateDocumentCache()
         onTextChange?()
         onTableChromeChange?()
