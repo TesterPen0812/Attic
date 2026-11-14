@@ -524,6 +524,7 @@ private final class RealShell {
 @MainActor
 private final class SharedBarModel: ObservableObject {
     @Published var page: PanelPage
+    @Published var revealCount: UInt64 = 0
     init(page: PanelPage) { self.page = page }
 }
 
@@ -537,7 +538,8 @@ private struct SharedBarHarness: View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             PanelSharedBottomBar(chrome: chrome, page: model.page,
-                                 layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560)))
+                                 layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560)),
+                                 revealCount: model.revealCount)
         }
         .frame(width: 340, height: 560)
         .atticDesign(.default)
@@ -555,10 +557,30 @@ extension PanelSharedChromeTests {
         return window
     }
 
+    private func mountKeyBar(_ chrome: PanelSharedChrome, _ model: SharedBarModel) -> AtticPanel {
+        let panel = AtticPanel(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = NSHostingView(rootView: SharedBarHarness(chrome: chrome, model: model))
+        panel.orderFront(nil)
+        panel.makeKey()
+        spin(0.4)
+        return panel
+    }
+
     private func close(_ window: NSWindow) {
         window.orderOut(nil)
         window.contentView = nil
         window.close()
+    }
+
+    private func pressSpace(in window: NSWindow) throws {
+        let space = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+        window.sendEvent(space)
+        spin(0.2)
     }
 
     /// BG-67's "reachable by keyboard when visible" and its limits (round 1
@@ -610,6 +632,120 @@ extension PanelSharedChromeTests {
         chrome.removeBar(for: .tasks)
         spin(0.3)
         XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "Tasks' plus is no stop after its bar goes")
+    }
+
+    /// Tasks arms its "+" through its own Tab order, then keeps it armed
+    /// until the keyboard leaves it. The "+" is one view on every page, so
+    /// the state must not outlive what armed it. (Without Full Keyboard
+    /// Access a programmatic focus on this control cannot take, so the
+    /// armed state itself, which the Tab order's request sets, is what
+    /// these tests read.)
+    private func armedTasksBar() -> (PanelSharedChrome, AtticFocusRequests, SharedBarModel, NSWindow) {
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                      actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
+                      actions: PanelBottomBarActions(), for: .calendar)
+        let model = SharedBarModel(page: .tasks)
+        let window = mountBar(chrome, model)
+        PanelKeyStopSeam.plus[.tasks] = nil
+        requests.focus(PanelPlusFocusID())
+        spin(0.3)
+        return (chrome, requests, model, window)
+    }
+
+    /// Round 1 review R-2: a page switch drops the "+"'s arming, so back on
+    /// Tasks it waits for the Tab order again, and on the other pages it is
+    /// never carried over to press the new page's action.
+    func testAPageSwitchDropsTheSharedPlusArming() throws {
+        let (_, _, model, window) = armedTasksBar()
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], true, "Tasks' own Tab order armed its plus")
+        model.page = .calendar
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.calendar], true, "Calendar's plus is a plain stop")
+        model.page = .tasks
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "back on Tasks the plus waits for its Tab order again")
+    }
+
+    /// Round 1 review R-2: a reveal never finds the "+" armed (never the
+    /// initial key view).
+    func testARevealDropsTheSharedPlusArming() throws {
+        let (_, _, model, window) = armedTasksBar()
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], true, "Tasks' own Tab order armed its plus")
+        model.revealCount += 1
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "a reveal leaves the plus unarmed")
+    }
+
+    /// Round 1 review R-1: the "+" going out of reach (the "+" card has the
+    /// row) drops its arming and takes no stop while it is gone.
+    func testTheSharedPlusLosesItsArmingWhileTheCardHasTheRow() throws {
+        let (chrome, _, _, window) = armedTasksBar()
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], true, "Tasks' own Tab order armed its plus")
+        chrome.plusHandedOver = true
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "no stop under the card")
+        chrome.plusHandedOver = false
+        spin(0.3)
+        XCTAssertEqual(PanelKeyStopSeam.plus[.tasks], false, "the plus comes back unarmed")
+    }
+
+    /// Round 1 review R-2 with Full Keyboard Access (CI; the Air keeps the
+    /// Mac's setting): the keyboard really on Tasks' "+", then a page
+    /// switch. Space must not press Calendar's, and Tasks' Tab order must
+    /// not still think it has the keyboard.
+    func testAPageSwitchNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        var taps: [PanelPage: Int] = [:]
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                      actions: PanelBottomBarActions(plus: { taps[.tasks, default: 0] += 1 }, focusRequests: requests), for: .tasks)
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
+                      actions: PanelBottomBarActions(plus: { taps[.calendar, default: 0] += 1 }), for: .calendar)
+        let model = SharedBarModel(page: .tasks)
+        let panel = mountKeyBar(chrome, model)
+        defer { close(panel) }
+        XCTAssertTrue(panel.isKeyWindow, "the hosted shell must own keyboard input")
+        requests.focus(PanelPlusFocusID())
+        spin(0.4)
+        XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "Tasks' own Tab order reached the plus")
+        model.page = .calendar
+        spin(0.4)
+        XCTAssertNil(requests.current, "Tasks' page no longer has the keyboard on the plus")
+        try pressSpace(in: panel)
+        XCTAssertEqual(taps[.calendar] ?? 0, 0, "Space after the switch must not create an event")
+        XCTAssertEqual(taps[.tasks] ?? 0, 0, "nor press Tasks' plus")
+    }
+
+    /// Round 1 review R-2 with Full Keyboard Access (CI): a reveal never
+    /// leaves the keyboard on "+".
+    func testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let chrome = PanelSharedChrome()
+        let requests = AtticFocusRequests()
+        var taps = 0
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
+                      actions: PanelBottomBarActions(plus: { taps += 1 }, focusRequests: requests), for: .tasks)
+        let model = SharedBarModel(page: .tasks)
+        let panel = mountKeyBar(chrome, model)
+        defer { close(panel) }
+        XCTAssertTrue(panel.isKeyWindow, "the hosted shell must own keyboard input")
+        requests.focus(PanelPlusFocusID())
+        spin(0.4)
+        XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()), "Tasks' own Tab order reached the plus")
+        model.revealCount += 1
+        spin(0.4)
+        XCTAssertNil(requests.current, "a reveal leaves no keyboard on the plus")
+        try pressSpace(in: panel)
+        XCTAssertEqual(taps, 0, "Space after a reveal must not press the plus")
     }
 }
 

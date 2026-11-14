@@ -230,7 +230,8 @@ struct AtticPanelView: View {
             // The bottom bar every page shares (owner, 2026-10-31): drawn
             // once, so a page switch never moves, fades or rebuilds it.
             if uiState.isPageContentLoaded || (PanelUIState.retainsLightweightHostsWhenHidden && uiState.hasEverLoadedPageContent) {
-                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout, agentChat: uiState.agentChat)
+                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout, agentChat: uiState.agentChat,
+                                     revealCount: uiState.revealCount)
             }
         }
         .overlay {

@@ -190,6 +190,8 @@ private struct PanelPlusFocus: ViewModifier {
     /// accessibility hide a "+" but leave a focus stop, so a hidden "+" is
     /// no stop and takes no key.
     let reachable: Bool
+    /// A reveal never leaves the keyboard on "+".
+    let revealCount: UInt64
     let requests: AtticFocusRequests?
     let action: () -> Void
     @FocusState private var focused: Bool
@@ -197,6 +199,9 @@ private struct PanelPlusFocus: ViewModifier {
     /// The other pages leave it to AppKit's key loop: a plain stop while it
     /// shows, never asked for.
     @State private var armed = false
+    /// Whose Tab order was told the "+" has the keyboard, so it is told when
+    /// the keyboard leaves even after a page switch.
+    @State private var noted: AtticFocusRequests?
 
     /// One structure on every page: a branch here would rebuild the "+" on
     /// each page switch.
@@ -219,9 +224,30 @@ private struct PanelPlusFocus: ViewModifier {
                 DispatchQueue.main.async { focused = true }
             }
             .onChange(of: focused) { _, now in
-                requests?.note(PanelPlusFocusID(), focused: now)
-                if !now { armed = false }
+                if now {
+                    noted = requests
+                    requests?.note(PanelPlusFocusID(), focused: true)
+                } else {
+                    noted?.note(PanelPlusFocusID(), focused: false)
+                    noted = nil
+                    armed = false
+                }
             }
+            // The one "+" keeps its identity on every page, so its focus
+            // would otherwise carry over: it never does (it would press the
+            // new page's action), nor when it goes away or the panel reveals.
+            .onChange(of: reachable) { _, now in if !now { release() } }
+            .onChange(of: page) { _, _ in release() }
+            .onChange(of: revealCount) { _, _ in release() }
+    }
+
+    private func release() {
+        armed = false
+        if focused { focused = false }
+        if let noted {
+            noted.note(PanelPlusFocusID(), focused: false)
+            self.noted = nil
+        }
     }
 }
 
@@ -292,6 +318,9 @@ struct PanelSharedBottomBar: View {
     let layout: PanelPageLayout
     /// The floating agent chat, where one is connected: its ✦ sits beside "+".
     var agentChat: AgentChatModel? = nil
+    /// How many times the panel has been revealed: the keyboard never stays
+    /// on "+" across one.
+    var revealCount: UInt64 = 0
 
     @Environment(\.atticDesign) private var design
 
@@ -357,7 +386,7 @@ struct PanelSharedBottomBar: View {
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
                                               action: actions.plus)
                                 .atticDesignCorners()
-                                .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken,
+                                .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken, revealCount: revealCount,
                                                          requests: actions.focusRequests, action: actions.plus))
                         }
                             .allowsHitTesting(!taken)
