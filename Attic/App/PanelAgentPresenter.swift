@@ -84,8 +84,16 @@ final class PanelAgentPresenter: AgentPanelPresenting {
                 // nothing the person sees. Draw off keeps the legacy session.
                 if AtticDraw.isEnabled {
                     let draw = DrawPageModel.shared
-                    let listed = ((try? draw.store.library(deleted: false)) ?? []).contains { $0.id == ref.id }
-                    guard listed || draw.canvasID == ref.id else { return .notFound("canvas") }
+                    // One targeted read of the canvas wanted, never the library.
+                    if draw.canvasID != ref.id {
+                        do {
+                            guard try draw.store.open(ref.id).canvas.deletedAt == nil else { return .notFound("canvas") }
+                        } catch DrawStoreError.missingCanvas {
+                            return .notFound("canvas")
+                        } catch {
+                            return .failed("that canvas could not be read (\(error.localizedDescription)).")
+                        }
+                    }
                     if case let .refused(refusal) = reveal(.canvas) { return .failed(refusal.explanation) }
                     if draw.canvasID != ref.id { draw.open(ref.id) }
                     guard draw.canvasID == ref.id else {

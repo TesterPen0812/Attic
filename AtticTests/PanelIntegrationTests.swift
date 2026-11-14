@@ -849,6 +849,64 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.canvasSession.selectedCanvasID, legacy.id)
     }
 
+    /// BG-59 round 2 (Dot R-5, R-6): a canvas `show` reads the one canvas it
+    /// needs. It never loads the library (work that grew with every canvas and
+    /// its thumbnail), and a read that fails is a failure, not "not found".
+    func testBG59AgentShowOfACanvasReadsOnlyThatCanvasAndReportsReadFailures() throws {
+        let previous = DrawPageModel.shared
+        let switchSetting = AtticDraw.enabledOverride
+        defer {
+            DrawPageModel.replaceShared(previous)
+            AtticDraw.enabledOverride = switchSetting
+        }
+        AtticDraw.enabledOverride = true
+        var work: [Int: (libraryReads: Int, loads: Int)] = [:]
+        for total in [10, 20] {
+            let repository = DrawCountingRepository()
+            let store = DrawStore(repository: repository)
+            let draw = DrawPageModel(store: store)
+            var ids: [UUID] = []
+            for index in 0..<total {
+                let canvas = store.create(name: "Canvas \(index)")
+                XCTAssertTrue(store.perform(.put([DrawObject(content: .text("T\(index)"))]), on: canvas.id).isSaved)
+                ids.append(canvas.id)
+            }
+            draw.start()
+            draw.open(ids[0])
+            DrawPageModel.replaceShared(draw)
+            let panel = try makePanel()
+            panel.uiState.selectSection(.canvas)
+            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+            XCTAssertFalse(store.cachedCanvasIDs.contains(ids[1]), "the target is not resident, so a read is needed")
+            repository.libraryReads = 0
+            repository.loads = 0
+            XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, ids[0]))), .shown("the canvas"))
+            XCTAssertEqual(repository.libraryReads, 0, "the current canvas needs no read at all")
+            XCTAssertEqual(repository.loads, 0)
+            XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, ids[1]))), .shown("the canvas"))
+            XCTAssertEqual(draw.canvasID, ids[1])
+            work[total] = (repository.libraryReads, repository.loads)
+
+            // A library that cannot be read does not matter to a targeted show.
+            repository.libraryFails = true
+            XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, ids[0]))), .shown("the canvas"))
+            repository.libraryFails = false
+            // A canvas whose read fails is a failure, never "not found".
+            XCTAssertFalse(store.cachedCanvasIDs.contains(ids[2]))
+            repository.failingLoad = ids[2]
+            guard case .failed = panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, ids[2]))) else {
+                return XCTFail("a failed read must be reported as a failure")
+            }
+            XCTAssertEqual(draw.canvasID, ids[0], "a failed read moves nothing")
+            repository.failingLoad = nil
+            XCTAssertEqual(panel.presenter.presentForAgent(.item(AtticItemRef(.canvas, UUID()))), .notFound("canvas"))
+        }
+        let small = try XCTUnwrap(work[10]), large = try XCTUnwrap(work[20])
+        XCTAssertEqual(small.libraryReads, 0, "no library read")
+        XCTAssertEqual(large.libraryReads, 0, "no library read, however many canvases")
+        XCTAssertEqual(small.loads, large.loads, "the work does not grow with the number of canvases")
+    }
+
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {
@@ -1406,3 +1464,31 @@ final class PanelIntegrationTests: XCTestCase {
     }
 }
 
+/// A Draw repository that counts what a lookup reads and can fail on demand.
+@MainActor
+private final class DrawCountingRepository: DrawRepository {
+    private let memory = DrawMemoryRepository()
+    var libraryReads = 0
+    var loads = 0
+    var libraryFails = false
+    var failingLoad: UUID?
+
+    func library() throws -> [DrawCanvas] {
+        libraryReads += 1
+        if libraryFails { throw CocoaError(.fileReadUnknown) }
+        return memory.library()
+    }
+    func load(_ id: UUID) throws -> DrawSnapshot? {
+        loads += 1
+        if failingLoad == id { throw CocoaError(.fileReadUnknown) }
+        return memory.load(id)
+    }
+    func textMatches(_ words: [String], in id: UUID) throws -> [UUID] { memory.textMatches(words, in: id) }
+    func write(_ change: DrawChange) -> DrawWriteOutcome { memory.write(change) }
+    func reconcile(_ change: DrawChange) -> DrawWriteOutcome { memory.reconcile(change) }
+    func discardAttempt(for id: UUID) {}
+    func deletedImageHeaders() throws -> [DrawDeletedImage] { memory.deletedImageHeaders() }
+    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        memory.purge(canvases: canvases, images: images)
+    }
+}
