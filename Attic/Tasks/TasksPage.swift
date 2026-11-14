@@ -969,7 +969,7 @@ struct TasksPage: View {
     private func toggleGroup(_ key: String, on tab: TasksTab, animation: Animation?) {
         foldGeneration += 1
         TasksFold.turn(key, on: tab, folded: model.folded(on: tab).contains(key), animation: animation,
-                       generation: foldGeneration, state: Binding(get: { [model] in model.foldTurn }, set: { [model] in model.foldTurn = $0 })) { [model] key in model.toggleGroup(key, on: tab) }
+                       generation: foldGeneration, state: Binding(get: { [model] in model.foldTurn }, set: { [model] in model.foldTurn = $0 })) { [model] target, key in model.toggleGroup(key, on: target) }
     }
 
     /// A header's folded look: the turn's while its group turns.

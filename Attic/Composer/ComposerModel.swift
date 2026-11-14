@@ -521,7 +521,9 @@ final class ComposerModel: ObservableObject {
             self.tasks.attachComposerFiles(submittedFiles, to: created.id)
             // A task "+" made while filtered stays in view (13 Nov), as
             // its first frame showed it.
-            if let tab = submittedPage.tasksTab { self.tasks.keepInView(created.id, on: tab) }
+            let destination: TasksTab = created.listedStatus == .backlog ? .backlog : .now
+            self.tasks.keepInView(created.id, on: destination)
+            self.tasks.unfoldAddedTask(created.id, on: destination)
             if openingPage {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
@@ -581,7 +583,9 @@ final class ComposerModel: ObservableObject {
         guard let draft = finished.draft(parser: tasks.parser, status: status),
               let task = tasks.library.createTask(draft, writing: writing, in: page.history) else { return false }
         tasks.attachComposerFiles(to: task.id)
-        if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
+        let destination: TasksTab = task.listedStatus == .backlog ? .backlog : .now
+        tasks.keepInView(task.id, on: destination)
+        tasks.unfoldAddedTask(task.id, on: destination)
         if openingPage {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {

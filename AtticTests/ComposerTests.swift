@@ -586,6 +586,46 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(toasts, ["Added to Now"])
     }
 
+    func testBG2SharedComposerOpensTheFoldedDayForItsNewTask() async throws {
+        let anchor = try XCTUnwrap(tasks.create(title: "Due today"))
+        XCTAssertTrue(page.setDueDay(today, for: [anchor.id]).isApplied)
+        let key = try XCTUnwrap(page.groupKey(of: anchor.id, on: .now))
+        page.toggleGroup(key, on: .now)
+        XCTAssertTrue(page.folded(on: .now).contains(key))
+        model.open(on: .tasks(.now))
+        type("Call the team")
+        page.addBar.picked.day = today
+        model.submit(openingPage: false)
+        for _ in 0..<100 where liveTasks().count < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let created = try XCTUnwrap(liveTasks().first { $0.title == "Call the team" })
+        XCTAssertEqual(created.dueDay, today)
+        XCTAssertFalse(page.folded(on: .now).contains(key), "BG-2: creating a task opens its folded destination")
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == created.id })
+        XCTAssertEqual(page.addedRequest?.id, created.id)
+    }
+
+    func testBG2DatedTaskFromBacklogOpensItsFoldedNowDestination() async throws {
+        let anchor = try XCTUnwrap(tasks.create(title: "Already in Now"))
+        XCTAssertTrue(page.setDueDay(today, for: [anchor.id]).isApplied)
+        let key = try XCTUnwrap(page.groupKey(of: anchor.id, on: .now))
+        page.toggleGroup(key, on: .now)
+        page.select(tab: .backlog)
+        model.open(on: .tasks(.backlog))
+        type("Due on the active list")
+        page.addBar.picked.day = today
+        model.submit(openingPage: false)
+        for _ in 0..<100 where liveTasks().count < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let created = try XCTUnwrap(liveTasks().first { $0.title == "Due on the active list" })
+        XCTAssertEqual(created.listedStatus, .todo)
+        XCTAssertFalse(page.folded(on: .now).contains(key),
+                       "BG-2: the destination is Now even while the composer originated on Backlog")
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == created.id })
+    }
+
     /// Review B-4: once closing starts, nothing creates.
     func testAClosedCardCreatesNothing() async {
         model.open(on: .tasks(.now))

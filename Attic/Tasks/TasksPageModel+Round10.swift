@@ -68,6 +68,7 @@ extension TasksPageModel {
             let target: TasksTab = first.listedStatus == .backlog ? .backlog : .now
             if tab != target { select(tab: target) }
             selectCopies(copyIDs)
+            unfoldAddedTask(first.id, on: target)
             addedRequest = ScrollRequest(id: first.id)
         }
         let message = copies.count == 1 ? String(localized: "Duplicated") : String(localized: "Duplicated \(copies.count) tasks")

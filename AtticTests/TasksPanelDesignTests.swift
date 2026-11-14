@@ -146,6 +146,42 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(titles(.now), ["Late", "Plain"])
     }
 
+    func testBG2DuplicatingACompletedTaskReopensItsFoldedDestinationDay() throws {
+        let original = try add("Booked today", due: 0)
+        let anchor = try add("Already today", due: 0)
+        XCTAssertTrue(library.completeTask(original).isApplied)
+        XCTAssertGreaterThan(store.moveCompletedToDoneLog(before: clock.value.addingTimeInterval(60)), 0)
+        let todayKey = try XCTUnwrap(model.groupKey(of: anchor, on: .now))
+        model.toggleGroup(todayKey, on: .now)
+        XCTAssertTrue(model.folded(on: .now).contains(todayKey))
+        model.select(tab: .done)
+        XCTAssertTrue(model.duplicate([original]).isApplied)
+        let copied = try XCTUnwrap(model.selection.first)
+        XCTAssertEqual(model.tab, .now)
+        XCTAssertFalse(model.folded(on: .now).contains(todayKey), "BG-2: the destination day opens for a new copy")
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == copied })
+        XCTAssertEqual(model.addedRequest?.id, copied)
+    }
+
+    func testBG6InterruptedFoldCompletesOnItsOriginalTab() throws {
+        let now = try add("Now without date", due: nil)
+        let later = try add("Backlog without date", due: nil, tab: .backlog)
+        let nowKey = try XCTUnwrap(model.groupKey(of: now, on: .now))
+        let laterKey = try XCTUnwrap(model.groupKey(of: later, on: .backlog))
+        XCTAssertNotEqual(nowKey, laterKey, "Now and Backlog use their own date-group identities")
+        // The first close is halfway through its animation when another
+        // tab's group gets clicked; settle both against their own model tab.
+        model.foldTurn = TasksFoldTurn(tab: .now, key: nowKey, closing: true,
+                                       headerFolded: true, progress: 0.5, generation: 1)
+        TasksFold.turn(laterKey, on: .backlog, folded: false, animation: nil, generation: 2,
+                       state: Binding(get: { self.model.foldTurn }, set: { self.model.foldTurn = $0 })) { tab, key in
+            self.model.toggleGroup(key, on: tab)
+        }
+        XCTAssertTrue(model.folded(on: .now).contains(nowKey), "interrupted Now close must finish on Now")
+        XCTAssertTrue(model.folded(on: .backlog).contains(laterKey), "Backlog click must fold Backlog once")
+        XCTAssertNil(model.foldTurn)
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])

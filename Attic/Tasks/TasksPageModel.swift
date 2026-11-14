@@ -478,6 +478,13 @@ final class TasksPageModel: ObservableObject {
         if set.contains(key) { pruneInvisibleSelection(on: tab) }
     }
 
+    /// A new task can land in a folded date group. Open that destination
+    /// before publishing its scroll request, without selecting the new row.
+    func unfoldAddedTask(_ id: UUID, on tab: TasksTab) {
+        guard tab != .done, let key = groupKey(of: id, on: tab), folded(on: tab).contains(key) else { return }
+        toggleGroup(key, on: tab)
+    }
+
     /// A fold, filter, completion, or edit can remove a row from the current
     /// page. Don't leave a hidden row selected or holding keyboard shortcuts.
     func pruneInvisibleSelection(on tab: TasksTab) {
@@ -2634,7 +2641,9 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
-        keepInView(task.id, on: tab)
+        let destination: TasksTab = task.listedStatus == .backlog ? .backlog : .now
+        keepInView(task.id, on: destination)
+        unfoldAddedTask(task.id, on: destination)
         startDraftFromFilter()
         AtticSounds.play(.created)
         // Files added while it was written go onto it (O17-06).
@@ -2688,7 +2697,11 @@ final class TasksPageModel: ObservableObject {
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.
-        if let first = created.first { addedRequest = ScrollRequest(id: first.id) }
+        if let first = created.first {
+            let destination: TasksTab = first.listedStatus == .backlog ? .backlog : .now
+            unfoldAddedTask(first.id, on: destination)
+            addedRequest = ScrollRequest(id: first.id)
+        }
         let message = created.count == 1
             ? (tab == .done ? String(localized: "Added to Now") : String(localized: "Added 1 task"))
             : (tab == .done ? String(localized: "Added \(created.count) tasks to Now") : String(localized: "Added \(created.count) tasks"))

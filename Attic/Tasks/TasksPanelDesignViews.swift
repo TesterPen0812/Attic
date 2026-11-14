@@ -567,12 +567,12 @@ enum TasksFold {
     /// another group ends where it was going first. Under Reduce Motion
     /// (no animation) the group flips at once.
     static func turn(_ key: String, on tab: TasksTab, folded: Bool, animation: Animation?, generation: Int,
-                     state: Binding<TasksFoldTurn?>, toggle: @escaping @MainActor @Sendable (String) -> Void) {
+                     state: Binding<TasksFoldTurn?>, toggle: @escaping @MainActor @Sendable (TasksTab, String) -> Void) {
         var quiet = Transaction()
         quiet.disablesAnimations = true
         if let old = state.wrappedValue, !old.matches(tab, key) {
             withTransaction(quiet) {
-                if old.closing { toggle(old.key) }
+                if old.closing { toggle(old.tab, old.key) }
                 state.wrappedValue = nil
             }
         }
@@ -580,7 +580,7 @@ enum TasksFold {
         guard let animation else {
             withTransaction(quiet) {
                 // A closing turn has not folded the model yet.
-                if current?.closing == true { state.wrappedValue = nil } else { state.wrappedValue = nil; toggle(key) }
+                if current?.closing == true { state.wrappedValue = nil } else { state.wrappedValue = nil; toggle(tab, key) }
             }
             return
         }
@@ -592,7 +592,7 @@ enum TasksFold {
             } completion: {
                 guard state.wrappedValue?.generation == generation else { return }
                 withTransaction(quiet) {
-                    toggle(key)
+                    toggle(tab, key)
                     state.wrappedValue = nil
                 }
             }
@@ -600,7 +600,7 @@ enum TasksFold {
             // The rows come in closed, then open on the next turn of the
             // run loop (they must be drawn closed first).
             withTransaction(quiet) {
-                toggle(key)
+                toggle(tab, key)
                 state.wrappedValue = TasksFoldTurn(tab: tab, key: key, closing: false, headerFolded: true, progress: 0,
                                                    generation: generation)
             }
