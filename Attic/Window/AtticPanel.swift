@@ -2042,6 +2042,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private var localMouseUpMonitor: Any?
     private var globalMouseUpMonitor: Any?
     private var captureWatchdog: DispatchSourceTimer?
+    #if ATTIC_LOCAL_ONLY
+    /// A unit test can deliver AppKit mouse events directly, without a held
+    /// hardware button. Keep that synthetic drag alive past the HID watchdog.
+    var suppressCaptureWatchdogForSyntheticTests = false
+    #endif
 
     init(
         rootView: AtticPanelView,
@@ -2484,6 +2489,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 self?.finishCapturedMouseUp(event)
             }
         }
+
+        #if ATTIC_LOCAL_ONLY
+        if suppressCaptureWatchdogForSyntheticTests { return }
+        #endif
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(
