@@ -1297,12 +1297,10 @@ struct TaskNotePageContainer: View {
             .padding(.bottom, layout.chromeInsets.bottom)
         }
         .background(alignment: .topLeading) {
-            if openFailed {
-                TaskNoteFailedOpeningEscapeReceiver(onEscape: back)
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+            TaskNoteOpeningEscapeReceiver(onEscape: back)
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .onKeyPress(.escape) { back(); return .handled }
     }
@@ -1467,9 +1465,9 @@ final class TaskNoteOpening {
     }
 }
 
-/// The failed-open page has no text editor to own Escape. Give it a native
-/// responder only for that state; the normal editor retains its own key path.
-private struct TaskNoteFailedOpeningEscapeReceiver: NSViewRepresentable {
+/// An opening or failed-open page has no text editor to own Escape. The native
+/// receiver leaves with that page when the prepared editor mounts.
+private struct TaskNoteOpeningEscapeReceiver: NSViewRepresentable {
     let onEscape: () -> Void
 
     final class EscapeView: NSView {

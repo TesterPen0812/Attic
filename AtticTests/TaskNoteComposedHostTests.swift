@@ -1432,6 +1432,14 @@ final class TaskNoteComposedHostTests: XCTestCase {
     /// open. A decode that finishes while the route is still leaving must not
     /// install a leased presenter that blocks every later task.
     func testPF13BackDuringAColdOpenCancelsTheOpenAndALaterTaskStillOpens() async throws {
+        try await cancelColdOpen(useEscape: false)
+    }
+
+    func testPF13EscapeDuringAColdOpenCancelsTheOpenAndALaterTaskStillOpens() async throws {
+        try await cancelColdOpen(useEscape: true)
+    }
+
+    private func cancelColdOpen(useEscape: Bool) async throws {
         // Both tasks exist before the stores load them.
         let second = try TaskNotePreviewSeed.seed(.boundary, in: container)
         let first = try seed(.heavy)
@@ -1456,7 +1464,15 @@ final class TaskNoteComposedHostTests: XCTestCase {
             back = elements(hosting.view).first { ($0.accessibilityIdentifier?() ?? "") == "task-note-back" }
             if back == nil { try await Task.sleep(for: .milliseconds(20)) }
         }
-        XCTAssertTrue(try XCTUnwrap(back).accessibilityPerformPress?() ?? false)
+        if useEscape {
+            let window = try XCTUnwrap(hosting.view.window)
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            window.sendEvent(escape)
+        } else {
+            XCTAssertTrue(try XCTUnwrap(back).accessibilityPerformPress?() ?? false)
+        }
         XCTAssertEqual(closed, 1)
         await hold.release()
         for _ in 0..<20 { try await Task.sleep(for: .milliseconds(20)) }
