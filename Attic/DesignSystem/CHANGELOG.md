@@ -1,3 +1,22 @@
+## 2026-11-14 · Native search composition and outside replacements (BG-72, round 3)
+
+`AtticNativeSearchInput`, shared by Find, header searches (including Done)
+and dropdown filters, keeps marked text in its native TextKit 1 cell editor
+until it commits. Updates with the same committed binding preserve the
+candidate. A newer outside replacement, including Clear, retires the old
+composition; a late native callback cannot restore it over that replacement.
+The native editor factory and debug update counter let hosted tests exercise
+composition and verify that the representable actually updated.
+
+## 2026-11-14 · Status clicks preserve the writing caret (BG-66, round 3)
+
+Status Details, Retry and Cancel use activation focus interactions, matching
+notice actions, with explicit Space and Return handling. A mouse press
+activates the control without taking the editor's first responder or showing
+a keyboard outline. `AtticSmallButton`'s opt-in status action uses the same
+policy. With Full Keyboard Access off, a mouse-inert keyboard target supplies
+Tab/Space/Return and the existing house ring in the same control order.
+
 ## 2026-11-14 · Status actions: keyboard reach without Full Keyboard Access (BG-66)
 
 The Notes status pill's Details button, its Retry and its Cancel ✕ now use
