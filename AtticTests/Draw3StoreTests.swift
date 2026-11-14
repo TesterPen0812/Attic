@@ -205,6 +205,85 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertEqual(afterUndo.bytes, bytes.count, "after Undo only the edited canvas's thumbnail is read again")
     }
 
+    /// Persistent canvases "Board 0", "Board 1", … each with a thumbnail.
+    private func seedBoards(_ container: ModelContainer, count: Int,
+                            bytesOf: (Int) -> Data = { _ in Data(repeating: 37, count: 256) }) throws {
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        for index in 0..<count {
+            let bytes = bytesOf(index)
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnail: bytes)
+            let record = DrawCanvasRecord()
+            try record.apply(canvas)
+            seeded.insert(record)
+            let payload = DrawPayloadRecord()
+            payload.apply(bytes, id: canvas.id, canvasID: canvas.id, role: "thumbnail")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+    }
+
+    /// R-12 (and Dot R-3): a row outside the first window of the library,
+    /// whether a menu scrolled past row 12 or a menu opened at a later window,
+    /// still reads its uncached neighbours in the
+    /// caller's order in one batch, not one context and two fetches per row.
+    func testR12RowsBeyondTheFirstWindowReadInOneBatchPerWindowAfterAnEdit() throws {
+        let container = try container()
+        let bytes = Data(repeating: 37, count: 256)
+        try seedBoards(container, count: 120)
+        let reader = DrawPersistentStore(container: container)
+        for row in try reader.presentationLibrary().prefix(12) { _ = try reader.searchThumbnail(row.id) }
+        let edited = try reader.presentationLibrary()[3].id
+        XCTAssertTrue(reader.perform(.put([stroke()]), on: edited).isSaved)
+
+        for window in [12..<24, 60..<72] {
+            reader.metrics.reset()
+            let menu = try reader.presentationLibrary()
+            for row in menu[window] { XCTAssertEqual(try reader.searchThumbnail(row.id)?.thumbnail, bytes) }
+            XCTAssertLessThanOrEqual(reader.metrics.thumbnailHydrations, 1,
+                                     "menu rows \(window) read their thumbnails in \(reader.metrics.thumbnailHydrations) batches")
+        }
+    }
+
+    /// R-12 (and Dot R-3), search ranks: a rank past the first window reads its
+    /// uncached neighbours, in the search's order, in one batch after an edit.
+    func testR12SearchRanksPastTheFirstWindowReadInOneBatchAfterAnEdit() throws {
+        let container = try container()
+        let bytes = Data(repeating: 37, count: 256)
+        try seedBoards(container, count: 120)
+        let reader = DrawPersistentStore(container: container)
+        for row in try reader.presentationLibrary().prefix(12) { _ = try reader.searchThumbnail(row.id) }
+        let edited = try reader.presentationLibrary()[3].id
+        XCTAssertTrue(reader.perform(.put([stroke()]), on: edited).isSaved)
+        let found = try reader.search("Board 1")
+        XCTAssertGreaterThan(found.count, 21)
+        reader.metrics.reset()
+        for match in found[12..<21] { XCTAssertEqual(try reader.searchThumbnail(match.canvas.id)?.thumbnail, bytes) }
+        XCTAssertLessThanOrEqual(reader.metrics.thumbnailHydrations, 1,
+                                 "search ranks 12 to 20 read their thumbnails in \(reader.metrics.thumbnailHydrations) batches")
+    }
+
+    /// Dot R-4: a search that stays open while its matches are edited reads
+    /// only the edited match's thumbnail again, not the first 12 results'.
+    func testR4EditingOneMatchRereadsOnlyThatMatchOnTheNextSearch() throws {
+        let container = try container()
+        let bytes = Data(repeating: 37, count: 256)
+        try seedBoards(container, count: 120)
+        let reader = DrawPersistentStore(container: container)
+        var found = try reader.search("Board 1")
+        XCTAssertEqual(found.prefix(12).filter { $0.canvas.thumbnail == bytes }.count, 12)
+        for round in 0..<3 {
+            XCTAssertTrue(reader.perform(.put([stroke()]), on: found[5].canvas.id).isSaved)
+            reader.metrics.reset()
+            found = try reader.search("Board 1")
+            XCTAssertEqual(reader.metrics.thumbnailBytesRead, bytes.count,
+                           "round \(round): an edit to one match read \(reader.metrics.thumbnailBytesRead) thumbnail bytes")
+            XCTAssertLessThanOrEqual(reader.metrics.thumbnailHydrations, 1)
+            XCTAssertEqual(found.prefix(12).filter { $0.canvas.thumbnail == bytes }.count, 12,
+                           "the first 12 results still carry their thumbnails")
+        }
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)

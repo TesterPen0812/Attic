@@ -17,11 +17,27 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private let recovery: DrawRecoveryJournal?
     @ObservationIgnored private var recoveredCanvasIDs = Set<UUID>()
     @ObservationIgnored private var states: [UUID: State] = [:]
-    @ObservationIgnored private var searchMetadataCache: (revision: UInt64, canvases: [DrawCanvas])?
-    /// Hydrated thumbnail bodies by canvas. A thumbnail write drops only its
-    /// own canvas's entry; any other change drops them all.
+    /// The canvases the menu and search list, newest first, with each one's
+    /// position, so a lookup by id is not a scan.
+    private struct SearchSnapshot {
+        var revision: UInt64
+        var canvases: [DrawCanvas]
+        var ids: [UUID]
+        var positions: [UUID: Int]
+    }
+    /// Rows hydrated per batched thumbnail read: the initial viewport plus a
+    /// prefetch margin. One constant for the menu's window and search's.
+    static let thumbnailWindow = 12
+    @ObservationIgnored private var searchSnapshot: SearchSnapshot?
+    /// Hydrated canvases by id. A change to one canvas (a thumbnail write, an
+    /// edit, Undo or Redo) drops only its own entry; any other change drops
+    /// them all.
     @ObservationIgnored private var searchThumbnails: [UUID: DrawCanvas] = [:]
-    /// How many thumbnails are cached (tests bound it).
+    /// The last search result's order, which batches follow while its rows
+    /// are on screen; otherwise batches follow the library order.
+    @ObservationIgnored private var searchOrder: [UUID] = []
+    @ObservationIgnored private var searchOrderPositions: [UUID: Int] = [:]
+    @ObservationIgnored private var searchOrderIsCurrent = false
     var searchThumbnailCacheCount: Int { searchThumbnails.count }
     @ObservationIgnored private var histories: [UUID: History] = [:]
     /// The current in-memory head left by our own recovered inverse. A newer
@@ -127,10 +143,14 @@ class DrawStore: DrawStoreProtocol {
 
     /// Every change publishes a new revision. A change that names its canvas
     /// (a thumbnail write, an edit, Undo or Redo) drops only that canvas's
-    /// cached thumbnail body; the others stay valid. Anything else drops all.
+    /// cached thumbnail; the others stay valid. Anything else drops all.
     private func bumpRevision(changed id: UUID? = nil) {
         revision &+= 1
-        if let id { searchThumbnails[id] = nil } else { searchThumbnails.removeAll() }
+        if let id {
+            searchThumbnails[id] = nil
+        } else {
+            searchThumbnails.removeAll()
+        }
     }
 
     func library(deleted: Bool = false) throws -> [DrawCanvas] {
@@ -151,7 +171,8 @@ class DrawStore: DrawStoreProtocol {
     /// revision, however often the list asks. Rows read their own thumbnail
     /// (`searchThumbnail`) when they are built, so nothing is hydrated here.
     func presentationLibrary() throws -> [DrawCanvas] {
-        try searchMetadata()
+        searchOrderIsCurrent = false
+        return try searchMetadata()
     }
 
     func search(_ query: String) throws -> [DrawSearchMatch] {
@@ -167,42 +188,65 @@ class DrawStore: DrawStoreProtocol {
             let ids = textWords.isEmpty ? [] : try repository.textMatches(textWords, in: canvas.id)
             return DrawSearchMatch(canvas: canvas, matchingTextBoxIDs: ids)
         }
+        searchOrder = candidates.map(\.canvas.id)
+        searchOrderPositions = Dictionary(uniqueKeysWithValues: searchOrder.enumerated().map { ($1, $0) })
+        searchOrderIsCurrent = true
         guard !candidates.isEmpty else { return [] }
         let hydrated = try hydratedPresentation(candidates.map(\.canvas))
-        let byID = Dictionary(uniqueKeysWithValues: hydrated.map { ($0.id, $0) })
-        return candidates.map { match in
-            DrawSearchMatch(canvas: byID[match.canvas.id] ?? match.canvas,
-                            matchingTextBoxIDs: match.matchingTextBoxIDs)
+        return zip(candidates, hydrated).map { match, canvas in
+            DrawSearchMatch(canvas: canvas, matchingTextBoxIDs: match.matchingTextBoxIDs)
         }
     }
 
+    /// The results with the stored thumbnails of the rows the search shows
+    /// first. They come through the per-canvas cache, so an edit to one match
+    /// re-reads only that match; the remaining rows hydrate as they are built.
     private func hydratedPresentation(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
-        // Initial viewport plus prefetch margin. The remaining metadata stays
-        // present for navigation, and each realized row hydrates its own body.
-        let hydrated = try repository.hydrateSearchThumbnails(Array(canvases.prefix(12)))
-        let byID = Dictionary(uniqueKeysWithValues: hydrated.map { ($0.id, $0) })
+        let window = canvases.prefix(Self.thumbnailWindow).filter { needsThumbnailRead($0.id) }
+        try loadThumbnails(Array(window))
         return canvases.map { canvas in
-            recoveredCanvasIDs.contains(canvas.id) ? canvas : byID[canvas.id] ?? canvas
+            recoveredCanvasIDs.contains(canvas.id) ? canvas : searchThumbnails[canvas.id] ?? canvas
         }
     }
 
     func searchThumbnail(_ id: UUID) throws -> DrawCanvas? {
         if recoveredCanvasIDs.contains(id) { return states[id]?.canvas }
-        if let canvas = searchThumbnails[id] { return canvas }
-        // The summary only names the canvas; the hydrated row is read fresh.
-        // A stale cached summary is enough, so no metadata refetch per write.
-        let canvases = try searchMetadataCache?.canvases ?? searchMetadata()
-        guard let metadata = canvases.first(where: { $0.id == id }) else { return nil }
-        // A miss reads the initial window's uncached rows in one batch (one
-        // context, two fetches), not one batch per realized row.
-        var batch = canvases.prefix(12).filter { searchThumbnails[$0.id] == nil && !recoveredCanvasIDs.contains($0.id) }
-        if !batch.contains(where: { $0.id == id }) { batch = [metadata] }
-        for loaded in try repository.hydrateSearchThumbnails(batch) { searchThumbnails[loaded.id] = loaded }
-        return searchThumbnails[id]
+        // The summary only names the canvas, so a stale snapshot is enough
+        // and a write on another canvas costs no metadata read.
+        let snapshot = try searchSnapshot ?? currentSearchSnapshot()
+        guard let position = snapshot.positions[id] else { return nil }
+        let metadata = snapshot.canvases[position]
+        if let cached = searchThumbnails[id] { return cached }
+        // A miss reads the uncached rows from this one to the end of its
+        // window (a page of `thumbnailWindow` rows in the order the caller
+        // lists them) in one batch: one context, two fetches.
+        let inSearch = searchOrderIsCurrent ? searchOrderPositions[id] : nil
+        let order = inSearch == nil ? snapshot.ids : searchOrder
+        let start = inSearch ?? snapshot.positions[id]!
+        let end = min((start / Self.thumbnailWindow + 1) * Self.thumbnailWindow, order.count)
+        let batch: [DrawCanvas] = order[start..<end].compactMap { rowID in
+            guard rowID == id || needsThumbnailRead(rowID), let at = snapshot.positions[rowID] else { return nil }
+            return snapshot.canvases[at]
+        }
+        return try loadThumbnails(batch, requested: id) ?? metadata
     }
 
-    private func searchMetadata() throws -> [DrawCanvas] {
-        if let searchMetadataCache, searchMetadataCache.revision == revision { return searchMetadataCache.canvases }
+    private func needsThumbnailRead(_ id: UUID) -> Bool {
+        searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id)
+    }
+
+    /// Reads the batch into the cache and returns the row for `requested`.
+    @discardableResult
+    private func loadThumbnails(_ batch: [DrawCanvas], requested: UUID? = nil) throws -> DrawCanvas? {
+        guard !batch.isEmpty else { return nil }
+        for row in try repository.hydrateSearchThumbnails(batch) { searchThumbnails[row.id] = row }
+        return requested.flatMap { searchThumbnails[$0] }
+    }
+
+    private func searchMetadata() throws -> [DrawCanvas] { try currentSearchSnapshot().canvases }
+
+    private func currentSearchSnapshot() throws -> SearchSnapshot {
+        if let searchSnapshot, searchSnapshot.revision == revision { return searchSnapshot }
         var byID = Dictionary(uniqueKeysWithValues: try repository.searchMetadata().map { ($0.id, $0) })
         for id in recoveredCanvasIDs {
             if let draft = states[id]?.canvas { byID[id] = draft }
@@ -211,8 +255,10 @@ class DrawStore: DrawStoreProtocol {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         }
-        searchMetadataCache = (revision, canvases)
-        return canvases
+        let snapshot = SearchSnapshot(revision: revision, canvases: canvases, ids: canvases.map(\.id),
+                                      positions: Dictionary(uniqueKeysWithValues: canvases.enumerated().map { ($1.id, $0) }))
+        searchSnapshot = snapshot
+        return snapshot
     }
 
     func create(name: String? = nil) -> DrawCanvas {
