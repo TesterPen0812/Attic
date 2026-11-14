@@ -1558,6 +1558,83 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(try store.open(other.id).objects.count, 2, "drawing is accepted again")
     }
 
+    // MARK: Opening a canvas that is already in Recently Deleted (BG-29 round 3)
+
+    /// Dot R-11, Opus R-18: the Draw page was hidden when the agent deleted
+    /// the canvas it last showed, and the app quit. On the next launch the
+    /// resume id names a deleted canvas: the board must open a live one.
+    func testBG29LaunchAfterTheLastCanvasWasDeletedOpensALiveBoard() throws {
+        let durable = try persistentStore()
+        use(durable)
+        let live = store.create(name: "Live")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("L"))]), on: live.id).isSaved)
+        let stale = store.create(name: "Stale")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("S"))]), on: stale.id).isSaved)
+        let suite = "attic-draw3-resume-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(stale.id.uuidString, forKey: "AtticDraw.lastCanvas")
+        XCTAssertTrue(store.perform(.deleteCanvas, on: stale.id).isSaved, "deleted while the page was hidden")
+        let relaunched = DrawPageModel(store: DrawPersistentStore(container: durable.container), resumeDefaults: defaults)
+        relaunched.setBoard(size: CGSize(width: 320, height: 460),
+                            clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
+        relaunched.start()
+        XCTAssertEqual(relaunched.canvasID, live.id, "the board is on a live canvas")
+        XCTAssertNil(try relaunched.store.open(try XCTUnwrap(relaunched.canvasID)).canvas.deletedAt)
+        relaunched.setTool(.pen)
+        relaunched.pointerDown(at: CGPoint(x: 60, y: 100))
+        relaunched.pointerDragged(to: CGPoint(x: 130, y: 140))
+        relaunched.pointerUp()
+        relaunched.flushAcknowledgedDraw()
+        XCTAssertEqual(try relaunched.store.open(live.id).objects.count, 2, "drawing is accepted")
+        XCTAssertNotEqual(defaults.string(forKey: "AtticDraw.lastCanvas"), stale.id.uuidString)
+    }
+
+    /// With nothing live left, launch opens an editable draft, not the deleted board.
+    func testBG29LaunchWithOnlyADeletedCanvasOpensAnEditableDraft() throws {
+        let durable = try persistentStore()
+        use(durable)
+        let only = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("S"))]), on: only).isSaved)
+        let suite = "attic-draw3-resume-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(only.uuidString, forKey: "AtticDraw.lastCanvas")
+        XCTAssertTrue(store.perform(.deleteCanvas, on: only).isSaved)
+        let relaunched = DrawPageModel(store: DrawPersistentStore(container: durable.container), resumeDefaults: defaults)
+        relaunched.setBoard(size: CGSize(width: 320, height: 460),
+                            clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
+        relaunched.start()
+        let opened = try XCTUnwrap(relaunched.canvasID)
+        XCTAssertNotEqual(opened, only)
+        XCTAssertNil(try relaunched.store.open(opened).canvas.deletedAt)
+        relaunched.setTool(.pen)
+        relaunched.pointerDown(at: CGPoint(x: 60, y: 100))
+        relaunched.pointerDragged(to: CGPoint(x: 130, y: 140))
+        relaunched.pointerUp()
+        relaunched.flushAcknowledgedDraw()
+        XCTAssertEqual(try relaunched.store.open(opened).objects.count, 1, "the draft is editable")
+    }
+
+    /// Dot R-11: a search result clicked after an agent deleted that canvas.
+    func testBG29AStaleSearchResultForADeletedCanvasDoesNotOpenIt() throws {
+        use(try persistentStore())
+        let here = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("here"))]), on: here).isSaved)
+        let hit = store.create(name: "Hit")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("needle"))]), on: hit.id).isSaved)
+        XCTAssertEqual(try store.search("needle").map(\.canvas.id), [hit.id])
+        XCTAssertTrue(store.perform(.deleteCanvas, on: hit.id).isSaved, "an agent deletes it before the click")
+        model.open(hit.id)
+        XCTAssertNotEqual(model.canvasID, hit.id)
+        XCTAssertEqual(model.canvasID, here)
+        XCTAssertFalse(model.externalSyncDeferred)
+        model.setTool(.pen)
+        drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        model.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(here).objects.count, 2, "drawing is accepted on the board that stayed")
+    }
+
     // MARK: Quit
 
     func testQuitFinishesTheStrokeInProgress() async {
