@@ -978,9 +978,9 @@ struct TasksPage: View {
     }
 
     /// A group row's fold modifier: open and unclipped unless its group turns.
-    static func foldBody(_ turn: TasksFoldTurn?, place: TasksFoldPlace?) -> TasksFoldBody {
-        guard let turn else { return TasksFoldBody(progress: 1, place: nil) }
-        return TasksFoldBody(progress: turn.progress, place: place)
+    static func foldBody(_ turn: TasksFoldTurn?, place: TasksFoldPlace?, probeKey: String = "") -> TasksFoldBody {
+        guard let turn else { return TasksFoldBody(progress: 1, place: nil, probeKey: probeKey) }
+        return TasksFoldBody(progress: turn.progress, place: place, probeKey: probeKey)
     }
 
     /// Each drawn row's place in its turning group (heights as measured,
@@ -1696,7 +1696,7 @@ struct TasksPage: View {
                                 .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                                 // A turning group's body closes or opens over
                                 // its rows (fix round 2).
-                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id]))
+                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: "\(row.id)"))
                                 // A row added drops into its place (round 9);
                                 // a row leaving fades and shrinks on the exit.
                                 .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))

@@ -646,10 +646,13 @@ enum TasksFold {
 struct TasksFoldBody: ViewModifier, Animatable {
     var progress: CGFloat
     let place: TasksFoldPlace?
+    /// DEBUG hang probe only: names the row in the probe's ring.
+    let probeKey: String
 
-    init(progress: CGFloat, place: TasksFoldPlace?) {
+    init(progress: CGFloat, place: TasksFoldPlace?, probeKey: String = "") {
         self.progress = progress
         self.place = place
+        self.probeKey = probeKey
     }
 
     var animatableData: CGFloat {
@@ -665,7 +668,7 @@ struct TasksFoldBody: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
-        TasksFoldLayout(visible: visible) { content }
+        TasksFoldLayout(visible: visible, probeKey: probeKey) { content }
             .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
             .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
     }
@@ -675,13 +678,15 @@ struct TasksFoldBody: ViewModifier, Animatable {
 /// points of height (the list moves what follows by that).
 struct TasksFoldLayout: Layout {
     var visible: CGFloat?
+    /// DEBUG hang probe only: names the row in the probe's ring.
+    var probeKey: String = ""
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         #if DEBUG
         TasksFoldLayoutProbe.shared.measure(size.height)
-        AtticHangProbe.note("fold.size", key: String(describing: row.id),
+        AtticHangProbe.note("fold.size", key: probeKey,
                             value: "proposal=\(proposal) child=\(size) visible=\(String(describing: visible))",
                             detail: "result-height=\(visible.map { min(size.height, max(0, $0)) } ?? size.height)")
         #endif
@@ -696,7 +701,7 @@ struct TasksFoldLayout: Layout {
         #endif
         let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
         #if DEBUG
-        AtticHangProbe.note("fold.place", key: String(describing: row.id),
+        AtticHangProbe.note("fold.place", key: probeKey,
                             value: "bounds=\(bounds) proposal=\(proposal) child=\(size)")
         #endif
         row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))

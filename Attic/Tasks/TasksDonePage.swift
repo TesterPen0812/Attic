@@ -118,8 +118,8 @@ struct TasksDonePage<Cell: View>: View {
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.
                         cell(row, runs[row.id] ?? .single)
-                            .modifier(turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0) } }
-                                ?? TasksFoldBody(progress: 1, place: nil))
+                            .modifier(turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0, probeKey: "\(row.id)") } }
+                                ?? TasksFoldBody(progress: 1, place: nil, probeKey: "\(row.id)"))
                     }
                 }
                 if model.doneLogFailure != nil {
