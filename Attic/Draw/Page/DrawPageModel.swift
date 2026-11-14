@@ -547,6 +547,12 @@ final class DrawPageModel: ObservableObject {
         appearanceQueue.subtract(ids)
         for id in ids where thumbnailRenders[id]?.fromAppearance == true {
             thumbnailRenders.removeValue(forKey: id)?.task.cancel()
+            // The render took the in-memory dirty marker with it, but the
+            // persisted one says this thumbnail is still behind its content.
+            if unrenderedThumbnails.contains(id) {
+                thumbnailDirty.insert(id)
+                if id == canvasID { thumbnailNeeded() }
+            }
         }
         scheduleAppearanceDrain()
     }

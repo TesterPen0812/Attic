@@ -354,6 +354,57 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
                       "Opening a stale canvas regenerates its thumbnail after relaunch")
         XCTAssertTrue(defaults.stringArray(forKey: "AtticDraw.unrenderedThumbnails")?.isEmpty == true)
     }
+
+    // MARK: Review fixes, round 1
+
+    /// R-1: an appearance render for an unrendered canvas that the menu
+    /// cancels (the user picked it first) must not lose the dirty marker.
+    func testR1CancelledAppearanceRenderOfTheOpenedCanvasStillRendersItsThumbnail() throws {
+        let suite = "attic.draw.thumbnail.r1.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let seed = DrawPersistentStore(container: container)
+        let objectX = DrawObject(frame: DrawFrame(x: 20, y: 30, width: 100, height: 50), content: .shape(.rectangle))
+        let objectY = DrawObject(frame: DrawFrame(x: 10, y: 10, width: 40, height: 40), content: .shape(.ellipse))
+        let x = seed.create(name: "X").id
+        XCTAssertTrue(seed.perform(.put([objectX]), on: x).isSaved)
+        XCTAssertTrue(seed.perform(.thumbnail(Data([10]), dark: true), on: x).isSaved)
+        let y = seed.create(name: "Y").id
+        XCTAssertTrue(seed.perform(.put([objectY]), on: y).isSaved)
+        XCTAssertTrue(seed.perform(.thumbnail(Data([11]), dark: true), on: y).isSaved)
+
+        // The last session quit with X's thumbnail behind its content.
+        defaults.set(x.uuidString, forKey: "AtticDraw.lastCanvas")
+        var last: DrawPageModel? = DrawPageModel(store: seed, resumeDefaults: defaults)
+        last?.thumbnailSettleDelay = 600
+        last?.start()
+        var moved = objectX
+        moved.frame.x = 120
+        XCTAssertTrue(try XCTUnwrap(last).perform(.put([moved])).isSaved)
+        XCTAssertTrue(defaults.stringArray(forKey: "AtticDraw.unrenderedThumbnails")?.contains(x.uuidString) == true)
+        last = nil
+        defaults.set(y.uuidString, forKey: "AtticDraw.lastCanvas")
+
+        let relaunchedStore = DrawPersistentStore(container: container)
+        let relaunched = DrawPageModel(store: relaunchedStore, resumeDefaults: defaults)
+        relaunched.thumbnailSettleDelay = 0.05
+        let log = renders!
+        relaunched.thumbnailRenderer = { objects, dark in await log.render(objects, dark: dark) }
+        relaunched.start()
+        XCTAssertEqual(relaunched.canvasID, y)
+
+        let gate = Draw3Gate()
+        renders.gate = gate
+        defer { gate.open() }
+        relaunched.thumbnailsShown([try XCTUnwrap(relaunchedStore.library().first { $0.id == x })])
+        XCTAssertTrue(wait { self.renders.started(of: objectX.id) == 1 }, "the menu row queues X's render")
+        renders.gate = nil
+        relaunched.open(x) // picked before its render landed
+        relaunched.thumbnailsHidden([x]) // the menu closes and cancels the render
+        gate.open()
+        XCTAssertTrue(wait { (try? relaunchedStore.open(x).canvas.thumbnail) != Data([10]) },
+                      "X's thumbnail still renders after its appearance render was cancelled")
+    }
 }
 
 /// Counts thumbnail renders by the first object drawn (one per canvas in
