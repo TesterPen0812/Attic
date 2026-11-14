@@ -63,7 +63,7 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
         Publishers.MergeMany([
             changed(uiState.$selectedSection),
             changed(uiState.$panelSize),
-            changed(uiState.$retainedPageSizeDuringLiveResize),
+            changed(uiState.$liveResize),
             changed(uiState.$isPageContentLoaded),
             changed(uiState.$builtPages),
             changed(uiState.$pagesElsewhere),
@@ -199,18 +199,16 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
-                        // A page leaving during a held resize must keep the
-                        // live width for its entire slide. Only pages already
-                        // resting behind the current transition are frozen.
-                        let isTravelling = uiState.pageTransit.sliding && uiState.pageTransit.departingPage == page
-                        let frozenSize = page == currentPage || isTravelling
-                            ? nil : uiState.retainedPageSizeDuringLiveResize
+                        // A page still drawn during a held resize (the current
+                        // one, or one leaving while a switch finishes) keeps
+                        // the live width. Pages behind them are frozen.
+                        let frozenSize = page == currentPage
+                            ? nil : uiState.liveResize?.heldSize(for: page)
                         let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
                             ?? pageLayout
                         PanelResizeStablePageHost(
                             page: page,
                             isCurrent: page == currentPage,
-                            isTravelling: isTravelling,
                             livePanelSize: panelSize,
                             frozenSize: frozenSize,
                             cornerSize: cornerRadius,
@@ -891,7 +889,6 @@ struct AtticPanelView: View {
 private struct PanelResizeStablePageHost<Content: View>: View, Equatable {
     let page: PanelPage
     let isCurrent: Bool
-    let isTravelling: Bool
     let livePanelSize: CGSize
     let frozenSize: CGSize?
     let cornerSize: CGFloat
@@ -905,11 +902,9 @@ private struct PanelResizeStablePageHost<Content: View>: View, Equatable {
         // On mouseDown, a previously hidden page changes from a live-size
         // proposal to a frozen-size proposal at exactly the same size. Its
         // content does not need to rebuild even for that first drag step.
-        // A visible or travelling page always receives the live proposal;
-        // release (rhs.frozenSize == nil) always restores normal updates.
-        guard let frozenSize = rhs.frozenSize,
-              !lhs.isCurrent, !lhs.isTravelling,
-              !rhs.isCurrent, !rhs.isTravelling,
+        // A visible page, or one still leaving, always receives the live
+        // proposal; release (rhs.frozenSize == nil) restores normal updates.
+        guard let frozenSize = rhs.frozenSize, !lhs.isCurrent,
               (lhs.frozenSize ?? lhs.livePanelSize) == frozenSize else { return false }
         return lhs.page == rhs.page
             && lhs.cornerSize == rhs.cornerSize

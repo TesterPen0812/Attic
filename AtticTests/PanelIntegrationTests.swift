@@ -448,6 +448,126 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    #if ATTIC_LOCAL_ONLY
+    /// A real AppKit edge grip held on the panel, with `pages` built behind the
+    /// current Tasks page. `drag(_:)` moves the grip to `delta` points from where
+    /// it was taken and lays out; nothing is released until `release()`.
+    private struct HeldResize {
+        let panel: Panel
+        let initialWidth: CGFloat
+        let liveWidth: () -> CGFloat
+        let drag: (CGFloat) throws -> Void
+        let release: () throws -> Void
+        let finish: () -> Void
+    }
+
+    private func holdResizeGrip(building pages: [PanelPage]) throws -> HeldResize {
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        for page in pages { panel.uiState.prepareBuiltPage(page) }
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        host.suppressCaptureWatchdogForSyntheticTests = true
+        let initial = window.visibleContentFrame
+        let leftGrip = [.topRight, .bottomRight].contains(panel.controller.currentCorner)
+        let sign: CGFloat = leftGrip ? -1 : 1
+        let point = CGPoint(x: leftGrip ? initial.minX + 2 : initial.maxX - 2, y: initial.midY)
+        var clock: TimeInterval = 1
+        func event(_ type: NSEvent.EventType, delta: CGFloat) throws -> NSEvent {
+            clock += 0.02
+            return try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: window.convertPoint(fromScreen: CGPoint(x: point.x + sign * delta, y: point.y)),
+                modifierFlags: [], timestamp: clock, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+        host.mouseDown(with: try event(.leftMouseDown, delta: 0))
+        XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize))
+        var last: CGFloat = 0
+        return HeldResize(
+            panel: panel,
+            initialWidth: initial.width,
+            liveWidth: { window.visibleContentFrame.width },
+            drag: { delta in
+                last = delta
+                host.mouseDragged(with: try event(.leftMouseDragged, delta: delta))
+                host.layoutSubtreeIfNeeded()
+                self.spin(0.02)
+            },
+            release: {
+                host.mouseUp(with: try event(.leftMouseUp, delta: last))
+            },
+            finish: {
+                host.suppressCaptureWatchdogForSyntheticTests = false
+            }
+        )
+    }
+    #endif
+
+    /// R-4: every page still drawn during a page switch keeps the live width,
+    /// not only a sliding departure. Under Reduce Motion's Fade nothing slides,
+    /// but the old page is still drawn while it fades.
+    func testLiveResizeFadingOutgoingPageKeepsLiveGeometry() throws {
+        #if ATTIC_LOCAL_ONLY
+        let previousStyle = AtticReducedMotionStyle.current
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticReducedMotionStyle.current = .fade
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticReducedMotionStyle.current = previousStyle
+        }
+        var layouts: [PanelPage: CGSize] = [:]
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        defer { PanelInvalidationProbe.pageLayout = nil }
+        let held = try holdResizeGrip(building: [.notes])
+        defer { held.finish() }
+        try held.drag(24)
+        spin(0.06)
+        let liveWidth = held.liveWidth()
+        XCTAssertGreaterThan(liveWidth, held.initialWidth + 4)
+        held.panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: true))
+        XCTAssertFalse(held.panel.uiState.isPageSwitchSliding, "the Fade style does not travel")
+        spin(0.04)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
+                       "the outgoing page is still drawn while it fades, at the live width")
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        try held.release()
+        spin(0.3)
+        #endif
+    }
+
+    /// R-4: a slide interrupted by a second switch leaves the first page's
+    /// departure still on screen; it keeps the live width too.
+    func testLiveResizeInterruptedSlideKeepsEveryDrawnPageAtLiveGeometry() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var layouts: [PanelPage: CGSize] = [:]
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        defer { PanelInvalidationProbe.pageLayout = nil }
+        let held = try holdResizeGrip(building: [.notes, .calendar])
+        defer { held.finish() }
+        try held.drag(24)
+        spin(0.06)
+        let liveWidth = held.liveWidth()
+        XCTAssertGreaterThan(liveWidth, held.initialWidth + 4)
+        let motion = PanelPageMotion.current(reduceMotion: false)
+        held.panel.uiState.switchPage(to: .notes, motion: motion)
+        spin(0.03)
+        held.panel.uiState.switchPage(to: .calendar, motion: motion)
+        spin(0.03)
+        XCTAssertTrue(held.panel.uiState.isPageSwitchSliding)
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
+                       "Tasks may still be on screen after the first, interrupted slide")
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(layouts[.calendar]).width, liveWidth, accuracy: 1)
+        try held.release()
+        spin(0.4)
+        #endif
+    }
+
     /// Every exit path must release the retained-page snapshot and catch up to
     /// the true native frame. A programmatic resize has no drag snapshot.
     func testLiveResizeCancelHideScreenChangeAndProgrammaticSizeCatchUp() throws {

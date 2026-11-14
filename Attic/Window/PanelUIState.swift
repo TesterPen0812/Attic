@@ -199,9 +199,11 @@ final class PanelUIState: ObservableObject {
     @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
     /// During a live resize, invisible retained pages can keep their last
-    /// proposal. Only the page the user is resizing needs each intermediate
-    /// size; the retained pages catch up on release.
-    @Published private(set) var retainedPageSizeDuringLiveResize: CGSize?
+    /// proposal. Only the pages still drawn need each intermediate size; the
+    /// retained pages catch up on release.
+    @Published private(set) var liveResize: PanelLiveResizeHold?
+    /// The panel size when the grip was taken, nil when none is held.
+    var retainedPageSizeDuringLiveResize: CGSize? { liveResize?.base }
     @Published private(set) var selectedSection: PanelSection = .tasks {
         didSet { resumeDefaults?.set(selectedSection.rawValue, forKey: "AtticPanel.lastPage") }
     }
@@ -242,7 +244,7 @@ final class PanelUIState: ObservableObject {
             managedInteractionLocks.remove(reason)
         }
         if reason == .windowResize {
-            retainedPageSizeDuringLiveResize = isActive ? panelSize : nil
+            liveResize = isActive ? PanelLiveResizeHold(base: panelSize, drawn: [PanelPage(selectedSection)]) : nil
         }
     }
 
@@ -388,6 +390,11 @@ final class PanelUIState: ObservableObject {
         pageSlideGeneration &+= 1
         let generation = pageSlideGeneration
         let sliding = motion.travels
+        // Both pages stay drawn while the switch runs (a slide, or the fade
+        // Reduce Motion gives), so both keep following a held resize.
+        if motion.travels || motion.fades {
+            liveResize?.keepDrawn(PanelPage(selectedSection), PanelPage(section))
+        }
         pageTransit.departingPage = sliding ? PanelPage(selectedSection) : nil
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
         withAnimation(motion.animation, completionCriteria: .removed) {
@@ -396,9 +403,12 @@ final class PanelUIState: ObservableObject {
         } completion: { [weak self] in
             // The page's actual animation has finished. An interrupted
             // switch owns a newer generation and must keep its transit state.
-            guard sliding, let self, self.pageSlideGeneration == generation else { return }
-            self.pageTransit.sliding = false
-            self.pageTransit.departingPage = nil
+            guard let self, self.pageSlideGeneration == generation else { return }
+            if sliding {
+                self.pageTransit.sliding = false
+                self.pageTransit.departingPage = nil
+            }
+            self.liveResize?.settle(current: PanelPage(self.selectedSection))
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }
@@ -537,5 +547,36 @@ final class PanelEditHold {
         guard isHeld else { return }
         isHeld = false
         apply(false)
+    }
+}
+
+
+/// What a held panel resize hands each page. Pages still drawn (the current
+/// one, and one leaving while a page switch finishes) follow every size; a
+/// page nobody sees keeps the size it was last laid out at and catches up on
+/// release.
+struct PanelLiveResizeHold: Equatable {
+    /// The panel size when the grip was taken.
+    let base: CGSize
+    /// The pages still drawn.
+    private(set) var drawn: Set<PanelPage>
+
+    init(base: CGSize, drawn: Set<PanelPage>) {
+        self.base = base
+        self.drawn = drawn
+    }
+
+    /// The size a page nobody sees keeps, nil for a page still drawn.
+    func heldSize(for page: PanelPage) -> CGSize? {
+        drawn.contains(page) ? nil : base
+    }
+
+    mutating func keepDrawn(_ pages: PanelPage...) {
+        drawn.formUnion(pages)
+    }
+
+    /// A page switch has finished: only the current page is still drawn.
+    mutating func settle(current: PanelPage) {
+        drawn = [current]
     }
 }
