@@ -40,6 +40,26 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(counts.sessions, 0, "closing an unwritten task page must discard its editor")
         XCTAssertEqual(counts.recency, 0, "discarded note sessions must leave no stale LRU keys")
     }
+
+    /// Paths that drop `cache[x]` without touching `recency` (here an external
+    /// change reloading a clean, non-active note) must not grow the LRU list:
+    /// `touch()` sweeps keys that no longer have a cached session.
+    func testExternalReloadsOfCleanNotesLeaveRecencyBoundedByTheCache() throws {
+        let controller = makeController()
+        let keeper = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Keeper")])).get().0
+        for index in 0..<40 {
+            let dropped = try store.createDocumentNote(
+                id: UUID(), document: NoteDocument(blocks: [.text("Dropped \(index)")])).get().0
+            XCTAssertTrue(controller.open(noteID: dropped))
+            XCTAssertTrue(controller.open(noteID: keeper), "touching another note runs the sweep")
+            XCTAssertNotNil(controller.workspaceSessionIfCached(dropped))
+            controller.reloadAfterExternalChange(dropped)
+            XCTAssertNil(controller.workspaceSessionIfCached(dropped), "the reload drops the clean session")
+        }
+        let counts = controller.cachedSessionCountsForTesting
+        XCTAssertLessThanOrEqual(counts.recency, counts.sessions + 1,
+                                 "keys of sessions dropped without a touch must be swept, not accumulated")
+    }
         #endif
     #endif
 
