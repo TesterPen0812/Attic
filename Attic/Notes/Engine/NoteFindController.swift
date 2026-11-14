@@ -111,6 +111,16 @@ final class NoteFindController: ObservableObject {
     private var searchGeneration: UInt64 = 0
     private var searchTask: Task<Void, Never>?
     private var immutableSnapshot: NoteFindSnapshot?
+    /// Where the person's attention was when a select-first search began. The
+    /// intent survives a cancelled search (an edit, a cell edit), but a late
+    /// publication only moves the selection while this is still true.
+    private struct Interaction: Equatable {
+        var selection: NSRange?
+        var responder: ObjectIdentifier?
+        var table: ObjectIdentifier?
+        var cell: NoteTable.Position?
+    }
+    private var searchOrigin: Interaction?
     /// Only notes large enough to stall the query callback use the worker.
     /// Short notes retain immediate Find results and navigation.
     private static let backgroundSearchThreshold = 262_144
@@ -204,7 +214,16 @@ final class NoteFindController: ObservableObject {
         return large
     }
 
-    private func scheduleBackgroundSearch(in engine: NoteEditorEngine, selectFirst: Bool) {
+    private func interaction(in engine: NoteEditorEngine) -> Interaction {
+        Interaction(selection: engine.textView?.selectedRange(),
+                    responder: engine.textView?.window?.firstResponder.map { ObjectIdentifier($0) },
+                    table: engine.activeTableView.map { ObjectIdentifier($0) },
+                    cell: engine.activeTableView?.activeCell)
+    }
+
+    private func scheduleBackgroundSearch(in engine: NoteEditorEngine, origin: Interaction?) {
+        let selectFirst = origin != nil
+        searchOrigin = origin
         let current = searchGeneration
         let needle = query
         let input = snapshot(in: engine)
@@ -237,7 +256,11 @@ final class NoteFindController: ObservableObject {
             self.matches = found
             self.index = selectFirst ? found.indices.first : previous.flatMap { found.firstIndex(of: $0) }
             self.updateHighlights()
-            if selectFirst { self.reveal(activateCell: false) }
+            // The first match is revealed only while the person is still where
+            // the query was typed: not after a click into the body, a focused
+            // table cell or an edit made while the scan ran.
+            if selectFirst, origin == self.interaction(in: engine) { self.reveal(activateCell: false) }
+            self.searchOrigin = nil
             self.searchTask = nil
         }
     }
@@ -404,6 +427,7 @@ final class NoteFindController: ObservableObject {
     func close(returnFocus: Bool = true) {
         guard isShown else { return }
         invalidateSearch()
+        searchOrigin = nil
         immutableSnapshot = nil
         let selected = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
         isShown = false
@@ -546,6 +570,10 @@ final class NoteFindController: ObservableObject {
         guard isShown, let engine else { return }
         let wasSearching = searchTask != nil
         invalidateSearch()
+        // A select-first search that was cancelled keeps its intent (and where
+        // it began); an interruption never turns a plain refresh into one.
+        let origin = selectFirst ? interaction(in: engine) : searchOrigin
+        searchOrigin = nil
         if changedTable != nil { immutableSnapshot = nil }
         defer {
             pendingSearchRange = nil; pendingMatches = nil; pendingOldMatch = nil; pendingFullSearch = false
@@ -566,7 +594,7 @@ final class NoteFindController: ObservableObject {
         let needsFullScan = selectFirst || wasSearching || pendingFullSearch
             || (changedTable == nil && pendingSearchRange == nil)
         if needsFullScan, needsBackgroundSearch(in: engine) {
-            scheduleBackgroundSearch(in: engine, selectFirst: selectFirst || wasSearching)
+            scheduleBackgroundSearch(in: engine, origin: origin)
             return
         }
         let old = pendingMatches != nil ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }

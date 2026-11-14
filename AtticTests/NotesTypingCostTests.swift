@@ -468,6 +468,71 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    private func longFindEditor() -> (NoteEditorEngine, NoteEditorTextView) {
+        let long = String(repeating: "a", count: 300_000)
+        return editor([.text("Title"), .text(long + " needle one"), .text("middle"), .text("needle two"),
+                       .table(NoteTable(texts: [["cell needle", "plain"], ["x", "y"]]))])
+    }
+
+    /// Review R-7 (b) and Dot R-2: a select-first scan that finishes after the
+    /// person clicked elsewhere (the body, a table cell) publishes its matches
+    /// but must not move the selection.
+    func testPF16LateFindPublicationDoesNotOverrideASelectionMadeDuringTheScan() async {
+        let (engine, view) = longFindEditor()
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        engine.find.query = "needle"
+        let clicked = (view.string as NSString).range(of: "middle")
+        view.setSelectedRange(NSRange(location: clicked.location + 2, length: 0))
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 3)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: clicked.location + 2, length: 0),
+                       "a click made while the scan ran is not overridden by its first match")
+        // Undisturbed, the same query still selects its first match.
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        engine.find.query = "needl"
+        await engine.find.waitForSearch()
+        XCTAssertEqual(view.selectedRange(), engine.find.matches[0].noteRange)
+    }
+
+    /// Review R-7 (a): a cell edit that interrupts a scan in flight is a plain
+    /// refresh, never a select-first one that drags the caret out of the cell.
+    func testPF16ATableCellEditDuringTheScanDoesNotBecomeSelectFirst() async throws {
+        let (engine, view) = longFindEditor()
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        let object = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        engine.find.query = "needle"
+        await engine.find.waitForSearch()      // a settled search: current match = first
+        let place = (view.string as NSString).range(of: "middle").location + 1
+        engine.find.query = "needle "          // starts a scan ...
+        view.setSelectedRange(NSRange(location: place, length: 0))   // ... the person moves on ...
+        XCTAssertTrue(engine.changeTable(object, name: "Cell", coalescing: .init(row: 0, column: 0)) {   // ... and edits a cell
+            $0[.init(row: 0, column: 0)].text = "cell needle "
+        })
+        await engine.find.waitForSearch()
+        XCTAssertEqual(view.selectedRange(), NSRange(location: place, length: 0),
+                       "the interrupted scan must not select its first match over the person's selection")
+    }
+
+    /// Dot R-4: an edit made while the select-first scan runs cancels it and
+    /// schedules a replacement; the replacement keeps the intent, so the result
+    /// has a current match (without taking the caret from the body).
+    func testPF16AnEditDuringTheScanStillEndsWithACurrentMatch() async {
+        let (engine, view) = longFindEditor()
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        let typedAt = (view.string as NSString).range(of: "middle").location + 6
+        view.setSelectedRange(NSRange(location: typedAt, length: 0))
+        view.insertText("z", replacementRange: view.selectedRange())
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 3)
+        XCTAssertEqual(engine.find.index, 0, "the carried select-first intent gives the result a current match")
+        XCTAssertEqual(view.selectedRange(), NSRange(location: typedAt + 1, length: 0), "and the caret stays in the body")
+    }
+
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
         let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
             .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])
