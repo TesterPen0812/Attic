@@ -98,7 +98,8 @@ class RequiredChecksTests(unittest.TestCase):
         import textwrap
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
         block = workflow.split('          # Hosted identifiers', 1)[1].split('          ATTIC_VISUAL_UAT_DIRECTORY=', 1)[0]
-        script = textwrap.dedent('# Hosted identifiers' + block) + '\nprintf "%s\\n" "$ui_scheme" "${skip_flags[@]}"'
+        script = textwrap.dedent('# Hosted identifiers' + block) + '\nprintf "%s\\n" "$ui_scheme" "${skip_flags[@]}"' \
+            + '\nprintf "RUNNER_DIAGNOSTICS=%s\\n" "${TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS:-}"'
         diagnostics = [
             'AtticUITests/ScrollEdgeUITests/testDarkGlassHoverScrollRepeats',
             'AtticUITests/ScrollEdgeUITests/testLightGlassHoverScrollControl',
@@ -112,6 +113,11 @@ class RequiredChecksTests(unittest.TestCase):
                     skipped = f'-skip-testing:{diagnostic}' in result.stdout
                     self.assertEqual(skipped, diagnostic not in selection.split()
                                      and not selection.startswith('AtticTests/'))
+                # Asking for a diagnostic by name opts the UI runner in to it;
+                # nothing else (a full lane, the whole class) does.
+                asked = any(diagnostic in selection.split() for diagnostic in diagnostics)
+                self.assertIn(f'RUNNER_DIAGNOSTICS={"1" if asked and not selection.startswith("AtticTests/") else ""}',
+                              result.stdout.splitlines())
 
     def test_optimized_reference_uses_historical_task_tests_with_current_cost_members(self):
         from prepare_cost_reference import INTEGRATION_MEMBERS

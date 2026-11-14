@@ -806,13 +806,17 @@ jobs:
               ;;
           esac
           # Keep the 25-launch diagnostic and its light control available for
-          # focused dispatch, but never select them in ordinary full CI.
+          # focused dispatch, but never select them in ordinary full CI. The
+          # tests also skip themselves unless TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1
+          # (xcodebuild forwards only TEST_RUNNER_-prefixed variables to the
+          # UI runner); a focused dispatch naming one of them asks for it.
+          # TEST_RUNNER_ATTIC_HANG_REPETITIONS=<1...25> sets the launch count.
           if [ "$ui_scheme" = AtticUI ]; then
             for diagnostic in \
               AtticUITests/ScrollEdgeUITests/testDarkGlassHoverScrollRepeats \
               AtticUITests/ScrollEdgeUITests/testLightGlassHoverScrollControl; do
               case " $UI_TESTS " in
-                *" $diagnostic "*) ;;
+                *" $diagnostic "*) export TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1 ;;
                 *) skip_flags+=("-skip-testing:$diagnostic") ;;
               esac
             done

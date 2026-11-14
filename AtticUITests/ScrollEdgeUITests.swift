@@ -18,200 +18,201 @@ final class ScrollEdgeUITests: XCTestCase {
 
     func testCapturesRowsPassingUnderTheControls() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
-            let prefix = "scroll-edges-\(surface)-\(mode)"
-            let probe = FileManager.default.temporaryDirectory
-                .appendingPathComponent("attic-hang-\(UUID().uuidString).txt")
-            let screenshot = FileManager.default.temporaryDirectory
-                .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
-            let app = XCUIApplication()
-            app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
-            app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
-            app.launchEnvironment["ATTIC_HANG_PROBE_PATH"] = probe.path
-            app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
-            app.launch()
-            let pin = app.buttons["panel-pin-button"]
-            XCTAssertTrue(pin.waitForExistence(timeout: 8), "\(surface) \(mode): the panel shows")
-            XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 4), "the tabs are there")
-            XCTAssertTrue(waitFor(timeout: 2) {
-                (try? String(contentsOf: probe, encoding: .utf8))?.hasPrefix("ARMED:") == true
-            }, "\(prefix): the app-side hang probe is armed")
-            let pidValue = app.responds(to: NSSelectorFromString("processID"))
-                ? app.value(forKey: "processID") : nil
-            let pid = (pidValue as? NSNumber)?.int32Value ?? (pidValue as? Int32) ?? 0
-            XCTAssertGreaterThan(pid, 0, "\(prefix): launched app PID is available for recovery")
-            // XCTest can abandon the method when the app is killed during an
-            // XCUI scroll/snapshot. Teardown still preserves that pass's dump.
-            addTeardownBlock { [weak self] in
-                guard let self, FileManager.default.fileExists(atPath: probe.path) else { return }
-                let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-                guard contents.hasPrefix("HANG:") else { return }
-                self.attachProbe(at: probe, name: "\(prefix)-teardown")
-                if FileManager.default.fileExists(atPath: screenshot.path) {
-                    let capture = XCTAttachment(contentsOfFile: screenshot)
-                    capture.name = "\(prefix)-teardown-screen"
-                    capture.lifetime = .keepAlways
-                    self.add(capture)
-                } else {
-                    let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
-                    note.name = "\(prefix)-teardown-screen-unavailable"
-                    note.lifetime = .keepAlways
-                    self.add(note)
-                }
-            }
-            let recovery = pid > 0 ? HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot) : nil
-            recovery?.start()
-            defer {
-                let result = recovery?.finish()
-                if result?.recovered == true {
-                    attachProbe(at: probe, name: prefix)
-                    if FileManager.default.fileExists(atPath: screenshot.path) {
-                        let capture = XCTAttachment(contentsOfFile: screenshot)
-                        capture.name = "\(prefix)-frozen-screen"
-                        capture.lifetime = .keepAlways
-                        add(capture)
-                    } else {
-                        let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
-                        note.name = "\(prefix)-screenshot-unavailable"
-                        note.lifetime = .keepAlways
-                        add(note)
-                    }
-                    XCTFail("\(prefix): \(result?.reason ?? "sustained main-run-loop hang")")
-                } else {
-                    app.terminate()
-                }
-            }
+            capturePass(surface: surface, mode: mode)
+        }
+    }
+
+    private func capturePass(surface: String, mode: String) {
+        let prefix = "scroll-edges-\(surface)-\(mode)"
+        let pass = HangPass(prefix: prefix)
+        let app = launchHangPass(pass, surface: surface, mode: mode)
+        let pin = app.buttons["panel-pin-button"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 8), "\(surface) \(mode): the panel shows")
+        XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 4), "the tabs are there")
+        let pid = launchedPID(of: app)
+        // Evidence is attached in teardown too: XCTest can abandon the method
+        // when the app is killed during an XCUI scroll or snapshot.
+        addTeardownBlock { [weak self] in self?.attachEvidence(of: pass) }
+        // Without a PID and an armed probe there is no recovery: leave the pass
+        // before any hover or scroll rather than risk the minutes-long freeze.
+        let skipped = HangPassGuard.run(pid: pid, armedProbe: waitForProbe(of: pass, pid: pid)) { pid, probe in
+            let recovery = pass.arm(pid: pid, probe: probe)
             let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
             middle.hover()
+            recovery.noteProgress()
             // Either sign: one of the two leaves rows under the tabs.
             for (index, delta) in [CGFloat(-140), 280].enumerated() {
-                if recovery?.hasRecovered == true { break }
+                if recovery.hasRecovered { break }
                 middle.scroll(byDeltaX: 0, deltaY: delta)
-                if recovery?.hasRecovered == true { break }
+                recovery.noteProgress()
+                if recovery.hasRecovered { break }
                 RunLoop.current.run(until: Date().addingTimeInterval(1.2))
                 save(panel.screenshot(), name: "scroll-edges-\(surface)-\(mode)-soft-\(index)")
+                recovery.noteProgress()
             }
+            let result = recovery.finish()
+            if result.recovered { XCTFail("\(prefix): \(result.reason ?? "sustained main-run-loop hang")") }
         }
+        if let skipped { XCTFail("\(prefix): \(skipped)") }
+        if pass.recovery?.hasRecovered != true { app.terminate() }
     }
 
     /// Diagnostic-only CI experiment. The long fixture and these events are
     /// deliberately identical to the Dark Glass pass of the capture test.
     /// Each run has a fresh app process, so a hang cannot contaminate the
     /// next sample. The recovery thread uses the launched PID only.
-    func testDarkGlassHoverScrollRepeats() {
+    ///
+    /// Not run unless asked: set `TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1` (CI's
+    /// focused dispatch does), so a local run of this class stays at the
+    /// required capture test. `TEST_RUNNER_ATTIC_HANG_REPETITIONS=<1...25>`
+    /// sets the number of launches (default 25); xcodebuild forwards only
+    /// `TEST_RUNNER_`-prefixed variables to this runner.
+    func testDarkGlassHoverScrollRepeats() throws {
+        try XCTSkipUnless(Self.diagnosticsRequested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
         let requested = Int(ProcessInfo.processInfo.environment["ATTIC_HANG_REPETITIONS"] ?? "25") ?? 25
         repeatHoveredScroll(surface: "glass", mode: "dark", count: min(max(1, requested), 25))
     }
 
     /// Controlled appearance comparison: same hover and wheel sequence,
     /// independent process, probe and fixture.
-    func testLightGlassHoverScrollControl() {
+    func testLightGlassHoverScrollControl() throws {
+        try XCTSkipUnless(Self.diagnosticsRequested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
         repeatHoveredScroll(surface: "glass", mode: "light", count: 1)
+    }
+
+    private static var diagnosticsRequested: Bool {
+        ProcessInfo.processInfo.environment["ATTIC_HANG_DIAGNOSTICS"] == "1"
     }
 
     private func repeatHoveredScroll(surface: String, mode: String, count: Int) {
         var failures: [String] = []
         for number in 1...count {
             let prefix = "hover-scroll-\(mode)-\(number)"
-            let probe = FileManager.default.temporaryDirectory
-                .appendingPathComponent("attic-hang-\(UUID().uuidString).txt")
-            let screenshot = FileManager.default.temporaryDirectory
-                .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
-            let app = XCUIApplication()
-            app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
-            app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
-            app.launchEnvironment["ATTIC_HANG_PROBE_PATH"] = probe.path
-            app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
-            app.launch()
-
+            let pass = HangPass(prefix: prefix)
+            let app = launchHangPass(pass, surface: surface, mode: mode)
+            addTeardownBlock { [weak self] in self?.attachEvidence(of: pass) }
             let pin = app.buttons["panel-pin-button"]
             let tabs = app.buttons["tasks-page-now"]
             guard pin.waitForExistence(timeout: 8), tabs.waitForExistence(timeout: 4) else {
                 failures.append("\(prefix): panel or tabs did not appear")
-                attachProbe(at: probe, name: prefix)
                 app.terminate()
                 continue
             }
-
-            // This test is selected by CI's unsigned AtticUI lane, where
-            // the app and UI runner share the user's temporary directory.
-            let armed = waitFor(timeout: 2) {
-                (try? String(contentsOf: probe, encoding: .utf8))?.hasPrefix("ARMED:") == true
-            }
-            guard armed else {
-                failures.append("\(prefix): probe file is not accessible to the UI runner")
-                app.terminate()
-                continue
-            }
-
-            let pidValue = app.responds(to: NSSelectorFromString("processID"))
-                ? app.value(forKey: "processID") : nil
-            let pid = (pidValue as? NSNumber)?.int32Value ?? (pidValue as? Int32) ?? 0
-            guard pid > 0 else {
-                failures.append("\(prefix): launched app PID unavailable for recovery")
-                app.terminate()
-                continue
-            }
-
-            // An XCUI call on a killed app ends the test at once, so the
-            // evidence for this attempt is attached in teardown as well.
-            addTeardownBlock { [weak self] in
-                guard let self, FileManager.default.fileExists(atPath: probe.path) else { return }
-                let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-                guard contents.hasPrefix("HANG:") else { return }
-                self.attachProbe(at: probe, name: "\(prefix)-teardown")
-                if FileManager.default.fileExists(atPath: screenshot.path) {
-                    let capture = XCTAttachment(contentsOfFile: screenshot)
-                    capture.name = "\(prefix)-teardown-screen"
-                    capture.lifetime = .keepAlways
-                    self.add(capture)
+            let pid = launchedPID(of: app)
+            let skipped = HangPassGuard.run(pid: pid, armedProbe: waitForProbe(of: pass, pid: pid)) { pid, probe in
+                let recovery = pass.arm(pid: pid, probe: probe)
+                let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+                let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+                middle.hover()
+                recovery.noteProgress()
+                for delta in [CGFloat(-140), 280] {
+                    if recovery.hasRecovered { break }
+                    middle.scroll(byDeltaX: 0, deltaY: delta)
+                    recovery.noteProgress()
+                    if recovery.hasRecovered { break }
+                    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+                    recovery.noteProgress()
+                }
+                let result = recovery.finish()
+                if result.recovered {
+                    failures.append("\(prefix): \(result.reason ?? "probe reported a run-loop hang")")
                 }
             }
-            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot)
-            recovery.start()
-            let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
-            let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
-            middle.hover()
-            for delta in [CGFloat(-140), 280] {
-                if recovery.hasRecovered { break }
-                middle.scroll(byDeltaX: 0, deltaY: delta)
-                if recovery.hasRecovered { break }
-                RunLoop.current.run(until: Date().addingTimeInterval(1.2))
-            }
-            let result = recovery.finish()
-            let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-            if !result.recovered, contents.hasPrefix("HANG:") {
-                // A busy stretch that ended by itself: keep it as evidence,
-                // but it is not the freeze (that never idles again).
-                attachProbe(at: probe, name: "\(prefix)-transient")
-            }
-            if result.recovered {
-                failures.append("\(prefix): \(result.reason ?? "probe reported a run-loop hang")")
-                attachProbe(at: probe, name: prefix)
-                if FileManager.default.fileExists(atPath: screenshot.path) {
-                    let capture = XCTAttachment(contentsOfFile: screenshot)
-                    capture.name = "\(prefix)-frozen-screen"
-                    capture.lifetime = .keepAlways
-                    add(capture)
-                } else {
-                    let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
-                    note.name = "\(prefix)-screenshot-unavailable"
-                    note.lifetime = .keepAlways
-                    add(note)
-                }
-            }
-            if !result.recovered { app.terminate() }
+            if let skipped { failures.append("\(prefix): \(skipped)") }
+            if pass.recovery?.hasRecovered != true { app.terminate() }
         }
         XCTAssertTrue(failures.isEmpty, "\(mode) \(count) independent attempts: \(failures.joined(separator: "; "))")
     }
 
-    private func attachProbe(at path: URL, name: String) {
-        for (url, suffix) in [(path, "latest"), (URL(fileURLWithPath: path.path + ".first"), "first")] {
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+    /// One launched pass of the original hover-and-scroll sequence: its probe
+    /// file, recovery and the files the recovery leaves as evidence.
+    private final class HangPass {
+        let prefix: String
+        let location = HangProbeLocation()
+        let screenshot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
+        let sample = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attic-hang-sample-\(UUID().uuidString).txt")
+        private(set) var probe: URL?
+        private(set) var recovery: HoverScrollHangRecovery?
+
+        init(prefix: String) { self.prefix = prefix }
+
+        func arm(pid: Int32, probe: URL) -> HoverScrollHangRecovery {
+            self.probe = probe
+            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot, sample: sample)
+            self.recovery = recovery
+            recovery.start()
+            return recovery
+        }
+
+        /// Remembered even when the guard refuses the pass, so evidence of
+        /// the launch-time dump is attached too.
+        func remember(probe: URL?) { if self.probe == nil { self.probe = probe } }
+    }
+
+    private func launchHangPass(_ pass: HangPass, surface: String, mode: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
+        // A leaf in the app's own temporary folder: a signed app is sandboxed.
+        app.launchEnvironment["ATTIC_HANG_PROBE_FILE"] = pass.location.leaf
+        app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
+        app.launch()
+        return app
+    }
+
+    private func launchedPID(of app: XCUIApplication) -> Int32 {
+        let pidValue = app.responds(to: NSSelectorFromString("processID")) ? app.value(forKey: "processID") : nil
+        return (pidValue as? NSNumber)?.int32Value ?? (pidValue as? Int32) ?? 0
+    }
+
+    /// "Armed" is the app having written the probe file, whatever it says: a
+    /// slow first layout may already have replaced the ARMED line with a HANG
+    /// dump, which is evidence but not a reason to doubt the probe.
+    private func waitForProbe(of pass: HangPass, pid: Int32) -> URL? {
+        let bundle = pid > 0 ? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier : nil
+        var found: URL?
+        _ = waitFor(timeout: 5) {
+            found = pass.location.armedURL(bundleIdentifier: bundle)
+            return found != nil
+        }
+        pass.remember(probe: found)
+        return found
+    }
+
+    /// Attaches what a pass left behind, by recovery status and by which files
+    /// exist. A launch-time HANG dump is kept as evidence but never counts as
+    /// the target hang; only the recovery's verdict fails a pass.
+    private func attachEvidence(of pass: HangPass) {
+        let fileManager = FileManager.default
+        let latest = pass.probe
+        let first = latest.map { URL(fileURLWithPath: $0.path + ".first") }
+        let items = HangEvidencePlan.items(
+            recovered: pass.recovery?.hasRecovered == true,
+            probeText: latest.flatMap { try? String(contentsOf: $0, encoding: .utf8) },
+            probeFirstExists: first.map { fileManager.fileExists(atPath: $0.path) } ?? false,
+            screenshotExists: fileManager.fileExists(atPath: pass.screenshot.path),
+            sampleExists: fileManager.fileExists(atPath: pass.sample.path))
+        func attach(_ url: URL, _ name: String) {
             let attachment = XCTAttachment(contentsOfFile: url)
-            attachment.name = "\(name)-probe-\(suffix)"
+            attachment.name = "\(pass.prefix)-\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
+        }
+        for item in items {
+            switch item {
+            case .probeLatest: if let latest { attach(latest, "probe-latest") }
+            case .probeFirst: if let first { attach(first, "probe-first") }
+            case .screenshot: attach(pass.screenshot, "frozen-window")
+            case .sample: attach(pass.sample, "sample")
+            case .screenshotUnavailableNote:
+                let note = XCTAttachment(string: "No window of the launched app was on screen for \(pass.prefix); no picture was taken.")
+                note.name = "\(pass.prefix)-frozen-window-unavailable"
+                note.lifetime = .keepAlways
+                add(note)
+            }
         }
     }
 
@@ -484,25 +485,35 @@ final class ScrollEdgeUITests: XCTestCase {
 
 /// XCUITest can wait indefinitely for AX to become idle while the app's main
 /// thread is spinning. A separate watchdog reads the app's background dump,
-/// captures the frozen screen with screencapture (no AX request), and sends
-/// SIGTERM only to the PID captured from this particular launched instance.
+/// captures the frozen app's own window (by PID, no AX request), samples its
+/// stack, and sends SIGTERM only to the PID captured from this particular
+/// launched instance.
 private final class HoverScrollHangRecovery {
     private let pid: Int32
     private let probe: URL
     private let screenshot: URL
+    private let sample: URL
     private let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "attic.ci.hover-scroll.recovery"))
     private let finished = DispatchGroup()
     private let lock = NSLock()
-    private let startNanos = DispatchTime.now().uptimeNanoseconds
+    private var policy: HangRecoveryPolicy
     private var reason: String?
 
-    init(pid: Int32, probe: URL, screenshot: URL) {
+    init(pid: Int32, probe: URL, screenshot: URL, sample: URL) {
         self.pid = pid
         self.probe = probe
         self.screenshot = screenshot
+        self.sample = sample
+        policy = HangRecoveryPolicy(startedAt: DispatchTime.now().uptimeNanoseconds)
     }
 
     var hasRecovered: Bool { lock.withLock { reason != nil } }
+
+    /// The test advanced (an XCUI step returned): the no-progress deadline restarts.
+    func noteProgress() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        lock.withLock { policy.noteProgress(at: now) }
+    }
 
     func start() {
         finished.enter()
@@ -515,48 +526,33 @@ private final class HoverScrollHangRecovery {
 
     func finish() -> (recovered: Bool, reason: String?) {
         timer.cancel()
-        _ = finished.wait(timeout: .now() + .seconds(6))
+        _ = finished.wait(timeout: .now() + .seconds(20))
         return lock.withLock { (reason != nil, reason) }
     }
 
-    /// A slow CI runner can go 3 s without a genuine wait and then recover
-    /// (CI 43566210697 killed both the Dark and the Light run that way). The
-    /// app refreshes its dump every 2 s only while the run loop stays busy,
-    /// so a hang is confirmed once dumps have kept coming for 20 s.
-    private var firstHangNanos: UInt64?
+    private func reading() -> HangProbeReading? {
+        guard let contents = try? String(contentsOf: probe, encoding: .utf8) else { return nil }
+        let modified = (try? FileManager.default.attributesOfItem(atPath: probe.path)[.modificationDate] as? Date) ?? nil
+        return HangProbeReading(contents: contents, ageSeconds: modified.map { Date().timeIntervalSince($0) } ?? .infinity)
+    }
 
     private func check() {
         let now = DispatchTime.now().uptimeNanoseconds
-        let elapsed = now - startNanos
-        let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
-        var sustained = false
-        if contents.hasPrefix("HANG:") {
-            let modified = (try? FileManager.default.attributesOfItem(atPath: probe.path)[.modificationDate] as? Date) ?? nil
-            let fresh = modified.map { Date().timeIntervalSince($0) < 4.5 } ?? false
-            if fresh {
-                if firstHangNanos == nil { firstHangNanos = now }
-                sustained = now - (firstHangNanos ?? now) >= 20_000_000_000
-            } else {
-                firstHangNanos = nil
-            }
-        }
-        guard sustained || elapsed > 60_000_000_000 else { return }
+        let reading = reading()
+        let decision = lock.withLock { policy.evaluate(now: now, reading: reading) }
+        guard let decision else { return }
         lock.withLock {
-            reason = sustained ? "app's background watchdog saw a run loop that stayed busy for 20 s" : "scroll/AX did not return within 60 seconds"
+            reason = decision == .sustainedHang
+                ? "app's background watchdog saw a run loop that stayed busy continuously for 20 s"
+                : "scroll/AX made no progress for 60 seconds"
         }
-
-        // A window-specific AX screenshot can itself block on a hung app.
-        // Capture the display without asking the app's main run loop.
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-x", "-t", "png", screenshot.path]
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        if (try? process.run()) != nil {
-            if exited.wait(timeout: .now() + .seconds(3)) == .timedOut {
-                process.terminate()
-            }
+        // Only the app's own window, found without asking the (hung) app. No window: no picture.
+        let windowID = HangWindowCapture.windowID(forPID: pid, in: HangWindowCapture.currentWindows())
+        if let arguments = HangWindowCapture.arguments(windowID: windowID, path: screenshot.path) {
+            runHangTool("/usr/sbin/screencapture", arguments, timeout: 3)
         }
+        // The stack the freeze is in, before the process is killed.
+        runHangTool("/usr/bin/sample", [String(pid), "3", "-file", sample.path], timeout: 10)
         if pid > 0 { _ = Darwin.kill(pid, SIGTERM) }
         timer.cancel()
     }
