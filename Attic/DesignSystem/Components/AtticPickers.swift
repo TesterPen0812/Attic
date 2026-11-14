@@ -115,6 +115,15 @@ enum AtticListHighlight {
         return current == index ? nil : current
     }
 
+    /// A click the pointer just made, told at the moment of a button's
+    /// action: the left mouse-up the action runs on, in a window, and made
+    /// now (a stale one left in `NSApp.currentEvent` is old). An
+    /// accessibility press or a key press is never one.
+    static func isPointerClick(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseUp, event.window != nil else { return false }
+        return ProcessInfo.processInfo.systemUptime - event.timestamp < 1
+    }
+
     /// A hover the pointer made: a row sliding under a resting pointer as
     /// the keyboard scrolls the list (a key event, or none) is not one.
     static func isPointerMove(_ event: NSEvent?) -> Bool {
@@ -732,11 +741,16 @@ struct AtticDateCard: View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
         return Button {
+            // Told now, from the event the action runs on: only a pointer's
+            // click leaves the card under the pointer. An accessibility press
+            // (or a key) has no mouse-up of its own, and the lit day it moves
+            // is brought into view.
+            let clicked = AtticListHighlight.isPointerClick(NSApp.currentEvent)
             update { state in
                 _ = state.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
                 // The click turned the month; the lit day that goes with it is
                 // not the keyboard's, and the card stays under the pointer.
-                if state.lit == .day { highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: state.cursor))) }
+                if clicked, state.lit == .day { highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: state.cursor))) }
             }
         } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .medium, ink: .icon)

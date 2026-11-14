@@ -668,7 +668,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertGreaterThan(inner.contentView.bounds.origin.y, start.inner + 20, "an arrow key's highlight is brought into view")
     }
 
-    // MARK: A click on ‹ › in a cut-short date card (R-2)
+    // MARK: A click on ‹ › in a cut-short date card (R-2, N-2)
 
     private func labelled(_ label: String, in root: AnyObject) -> AnyObject? {
         if (root.accessibilityLabel?() ?? "") == label { return root }
@@ -678,10 +678,10 @@ final class AtticDropdownTests: XCTestCase {
         return nil
     }
 
-    /// In a date card cut short to fit the panel, ›/‹ turns the month under
-    /// the pointer. The lit day moves with it, but that is not the keyboard:
-    /// the card stays, or the arrow slides out from under the pointer.
-    func testPF43AClickOnTheMonthArrowDoesNotScrollACutShortDateCard() throws {
+    /// A date card cut short to fit the panel, a key having lit a day and
+    /// the card scrolled back to the top; `press` then presses › on the
+    /// button. Returns the card's scroll offset once the month has turned.
+    private func offsetAfterTurningTheMonth(waitForScroll: Bool, press: (NSView, NSWindow, AnyObject) throws -> Void) throws -> CGFloat {
         final class Keys { var handler: ((NSEvent) -> Bool)? }
         let keys = Keys()
         var calendar = Calendar(identifier: .gregorian)
@@ -695,6 +695,7 @@ final class AtticDropdownTests: XCTestCase {
         defer { NSApp.accessibilitySetValue(previousAX, forAttribute: enhanced) }
         let window = makeWindow()
         defer { window.close() }
+        defer { restoreNeutralCurrentEvent() }
         let card = AtticDropdownCard(width: AtticDropdownMetrics.dateCardWidth) {
             AtticDateCard(today: today, selected: selected, calendar: calendar, typed: .constant(""), onPick: { _ in })
         }
@@ -722,12 +723,54 @@ final class AtticDropdownTests: XCTestCase {
         func dump(_ root: AnyObject) -> [String] {
             [root.accessibilityLabel?() ?? "-"] + (((root.accessibilityChildren?() ?? nil) ?? []).flatMap { dump($0 as AnyObject) })
         }
-        guard let next = labelled("Next month", in: host) else { return XCTFail("no › button among \(dump(host))") }
-        XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
+        guard let next = labelled("Next month", in: host) else {
+            XCTFail("no › button among \(dump(host))")
+            return -1
+        }
+        try press(host, window, next)
         wait(for: host) { self.labelled("November 2026", in: host) != nil }
         XCTAssertNotNil(labelled("November 2026", in: host), "the month turned")
+        // A scroll that should happen is waited for; one that should not gets a settle.
+        if waitForScroll { wait(for: host) { card0.contentView.bounds.origin.y > 20 } }
         spin(0.3)
-        XCTAssertEqual(card0.contentView.bounds.origin.y, 0, accuracy: 0.5, "a click on › does not scroll the card")
+        return card0.contentView.bounds.origin.y
+    }
+
+    /// A real mouse down and up through the window, as the app's event loop
+    /// delivers them: the app's current event is the mouse-up while the
+    /// button acts.
+    private func click(atWindowPoint point: CGPoint, in window: NSWindow) throws {
+        for (type, mask, pressure) in [(NSEvent.EventType.leftMouseDown, NSEvent.EventTypeMask.leftMouseDown, Float(1)),
+                                       (.leftMouseUp, .leftMouseUp, 0)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                         context: nil, eventNumber: 0, clickCount: 1, pressure: pressure))
+            NSApp.postEvent(event, atStart: true)
+            let next = try XCTUnwrap(NSApp.nextEvent(matching: mask, until: Date().addingTimeInterval(1), inMode: .default, dequeue: true))
+            NSApp.sendEvent(next)
+            spin(0.1)
+        }
+    }
+
+    /// In a date card cut short to fit the panel, a pointer click on ›/‹
+    /// turns the month under the pointer. The lit day moves with it, but that
+    /// is not the keyboard: the card stays, or the arrow slides out from under
+    /// the pointer.
+    func testPF43AMouseClickOnTheMonthArrowDoesNotScrollACutShortDateCard() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { _, window, next in
+            let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) }, "the button has a frame")
+            try self.click(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY), in: window)
+        }
+        XCTAssertEqual(offset, 0, accuracy: 0.5, "a click on › does not scroll the card")
+    }
+
+    /// A VoiceOver or other accessibility press on ›/‹ has no pointer under
+    /// it: the lit day it moves into a cut-off week is brought into view.
+    func testPF43AAccessibilityPressOnTheMonthArrowScrollsTheLitDayIntoView() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, _, next in
+            XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
+        }
+        XCTAssertGreaterThan(offset, 20, "the lit day is scrolled into view after an accessibility press on ›")
     }
 
     // MARK: A hover that does not move the highlight (R-3)
