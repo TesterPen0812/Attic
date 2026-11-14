@@ -306,6 +306,60 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(model.keyboardFocus?.id, last, "Tab continued from ↑'s row, not from the stale queued control")
     }
 
+    /// Opus R-17a: when the heading's last task goes, both arrows return to
+    /// ordinary row navigation from the retained selection.
+    func testAHeldHeadingThatWentAwayNoLongerSwallowsTheArrows() throws {
+        try requireKeyWindowTests()
+        for down in [true, false] {
+            let hosted = try Hosted(height: 520)
+            defer { hosted.close() }
+            let model = hosted.model
+            let groups = try nowGroups(model)
+            model.foldAllGroups([groups[1].key], folded: true, on: .now)
+            hosted.spin(0.2)
+            hosted.press("\t", keyCode: 48)
+            hosted.press("\t", keyCode: 48)
+            XCTAssertNil(model.keyboardFocus, "Tab is on the folded second heading")
+            let selected = groups[0].rows[0]
+            model.selectOnly(selected)
+            XCTAssertTrue(model.delete(groups[1].rows).isApplied)
+            hosted.spin(0.3)
+            XCTAssertFalse(model.sections(for: .now).groups.contains { $0.key == groups[1].key }, "the group is gone")
+            let rows = model.rows(for: .now).map(\.id)
+            let start = try XCTUnwrap(rows.firstIndex(of: selected))
+            let expected = rows[min(max(start + (down ? 1 : -1), 0), rows.count - 1)]
+            hosted.press(down ? "\u{F701}" : "\u{F700}", keyCode: down ? 125 : 126)
+            XCTAssertEqual(model.keyboardFocus?.id, expected, "the vanished heading owns neither arrow")
+            XCTAssertEqual(model.selection, [expected])
+        }
+    }
+
+    /// Opus R-17b: ⌘↓ while a heading holds the keyboard reorders nothing: the
+    /// stale selected row is not where the keyboard is.
+    func testCommandArrowWhileAHeadingHoldsTheKeyboardMovesNoRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let groups = try nowGroups(model)
+        let many = try XCTUnwrap(groups.indices.first { $0 != 1 && groups[$0].rows.count >= 2 }, "a group of two or more rows")
+        model.foldAllGroups([groups[1].key], folded: true, on: .now)
+        hosted.spin(0.2)
+        model.selectOnly(groups[many].rows[0])
+        for _ in 0..<30 {
+            hosted.press("\t", keyCode: 48)
+            if model.keyboardFocus == nil { break }
+        }
+        XCTAssertNil(model.keyboardFocus, "Tab is on the folded heading")
+        model.selectOnly(groups[many].rows[0])
+        let order = model.rows(for: .now).map(\.id)
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .command)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), order, "⌘↓ moved a row the keyboard is not on")
+        model.selectOnly(try XCTUnwrap(groups[many].rows.last))
+        hosted.press("\u{F700}", keyCode: 126, modifiers: .command)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), order, "⌘↑ moved a row the keyboard is not on")
+    }
+
     /// A scroll event with the fields the page reads, in the page's window.
     private final class ScrollStub: NSEvent {
         var inWindow: NSWindow?

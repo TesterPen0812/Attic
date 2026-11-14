@@ -1270,10 +1270,16 @@ struct TasksPage: View {
     }
 
     /// The heading Tab chose and the keyboard is still on, if any.
+    /// A heading that has gone (its last task left) holds nothing.
     private var heldGroupKey: String? {
-        if case let .group(key) = tabTarget.stop { return key }
-        if let group = focusRequests.current?.base as? TasksGroupFocusID, group.tab == model.tab { return group.key }
-        return nil
+        var held: String?
+        if case let .group(key) = tabTarget.stop { held = key }
+        else if let group = focusRequests.current?.base as? TasksGroupFocusID, group.tab == model.tab { held = group.key }
+        guard let key = held else { return nil }
+        let shown = model.tab == .done
+            ? model.doneDays().contains { $0.key == key }
+            : model.sections(for: model.tab).groups.contains { $0.key == key && $0.showsHeader }
+        return shown ? key : nil
     }
 
     /// The row an arrow key reaches from a heading: the first row at or after
@@ -3181,13 +3187,18 @@ struct TasksPage: View {
             // at a stale selection or the list's ends: ↓ is its group's first
             // row (the next group's, while it is folded), ↑ the previous
             // group's last. Nowhere to go: the heading keeps the keyboard.
-            if let key = heldGroupKey, modifiers.isEmpty || modifiers == .shift {
-                if let next = rowBeside(group: key, step: step, in: visible) {
-                    setFocus(next)
-                    model.selectOnly(next)
-                    focusTracker.noteKeyboardNavigation()
+            if let key = heldGroupKey {
+                // ⌘↑ ⌘↓ reorder the keyboard's row, and the keyboard is on the
+                // heading: nothing moves.
+                if modifiers == .command { return .handled }
+                if modifiers.isEmpty || modifiers == .shift {
+                    if let next = rowBeside(group: key, step: step, in: visible) {
+                        setFocus(next)
+                        model.selectOnly(next)
+                        focusTracker.noteKeyboardNavigation()
+                    }
+                    return .handled
                 }
-                return .handled
             }
             // The arrows end any other Tab target still settling (a row being
             // scrolled into view, a queued control): it must not take the
