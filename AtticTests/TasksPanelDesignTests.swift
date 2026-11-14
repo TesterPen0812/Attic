@@ -243,6 +243,107 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(model.selection.isSubset(of: shown), "no selected copy is hidden in a folded group")
     }
 
+    // MARK: - pro-bugs-tasks-r1 fix 2
+
+    /// Opus R-11: a `show` that targets a task in a group still closing opens
+    /// it, as an add does: the turn goes back, the model never folds, and the
+    /// selection `show` made is not pruned by the pending fold.
+    func testShowOpensAGroupThatIsStillClosing() throws {
+        _ = try add("Today anchor", due: 0)
+        let target = try add("Today target", due: 0)
+        let key = try XCTUnwrap(model.groupKey(of: target, on: .now))
+        model.foldTurn = TasksFoldTurn(tab: .now, key: key, closing: true, headerFolded: true, progress: 0.4, generation: 7)
+        XCTAssertEqual(model.show(target), .shown)
+        // The closing turn's completion (TasksFold.turn) folds only its own turn.
+        if let turn = model.foldTurn, turn.generation == 7, turn.closing { model.toggleGroup(turn.key, on: turn.tab) }
+        XCTAssertFalse(model.folded(on: .now).contains(key), "R-11: show must not leave the group folded over the task")
+        XCTAssertEqual(model.selection, [target], "the selection show made survives")
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == target })
+    }
+
+    /// The same for a Done day (`unfoldDoneDay`).
+    func testShowOpensADoneDayThatIsStillClosing() throws {
+        let id = try add("Finished today", due: nil)
+        XCTAssertTrue(model.toggleDone(id).isApplied)
+        model.releaseHold(id)
+        let key = try XCTUnwrap(model.doneDays().first?.key)
+        model.foldTurn = TasksFoldTurn(tab: .done, key: key, closing: true, headerFolded: true, progress: 0.4, generation: 7)
+        XCTAssertEqual(model.show(id), .shown)
+        if let turn = model.foldTurn, turn.generation == 7, turn.closing { model.toggleGroup(turn.key, on: turn.tab) }
+        XCTAssertFalse(model.folded(on: .done).contains(key), "R-11: show must not leave the day folded over the task")
+        XCTAssertEqual(model.selection, [id])
+    }
+
+    /// Dot R-4: adding into a group that is closing turns the fold back from
+    /// where it is (the reversal a second click runs), not a snap open: the
+    /// turn is handed an opening state of its own generation (the closing
+    /// turn's completion no longer matches it) before it ends, and the model
+    /// never folds. (Off screen no view animates the turn, so it also ends at
+    /// once; what it was handed is what the publisher saw.)
+    func testAddingIntoAClosingGroupTurnsTheFoldBackInsteadOfSnappingOpen() throws {
+        let anchor = try add("Today anchor", due: 0)
+        let key = try XCTUnwrap(model.groupKey(of: anchor, on: .now))
+        model.foldTurn = TasksFoldTurn(tab: .now, key: key, closing: true, headerFolded: true, progress: 0.5, generation: 7)
+        var seen: [TasksFoldTurn?] = []
+        let watch = model.$foldTurn.sink { seen.append($0) }
+        defer { watch.cancel() }
+        model.addBar.text = "Added while Today closes"
+        model.addBar.picked.day = day(0)
+        _ = try XCTUnwrap(model.submitAddBar())
+        let reversed = try XCTUnwrap(seen.compactMap { $0 }.first { !$0.closing }, "R-4: an opening turn was handed over; the closing one was not just dropped")
+        XCTAssertEqual(reversed.progress, 1, "it opens, from wherever the closing turn was")
+        XCTAssertNotEqual(reversed.generation, 7, "the closing turn's completion no longer matches it")
+        XCTAssertFalse(model.folded(on: .now).contains(key))
+    }
+
+    /// Dot R-3: a batch finds and opens its groups with work that grows with
+    /// the batch: member ids looked at, and row lists built, for N and 2N
+    /// tasks in N and 2N folded days.
+    func testOpeningTheGroupsOfABatchGrowsLinearlyWithTheBatch() throws {
+        func measure(_ count: Int) throws -> (visits: Int, builds: Int) {
+            let store = try makeTestStore(now: { [clock] in clock.value })
+            let library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
+            let calendar = self.calendar
+            let model = TasksPageModel(library: library, services: TasksPageServices(
+                now: { [clock] in clock.value }, calendar: { calendar }, locale: locale, doneHold: .seconds(3_600)))
+            let drafts = (0..<count).map { TaskDraft(title: "Batch \($0)", dueDay: day(2 + $0)) }
+            let created = try XCTUnwrap(library.createTasks(drafts))
+            let keys = created.map { TasksPanelDesign.GroupKind.day($0.dueDay!).key }
+            XCTAssertEqual(Set(keys).count, count)
+            model.foldAllGroups(keys, folded: true, on: .now)
+            XCTAssertEqual(model.rows(for: .now).count, 0, "every group is folded")
+            let visits = model.groupMembershipVisits, builds = model.rowsBuildCount
+            model.unfoldAddedTasks(created)
+            XCTAssertEqual(model.rows(for: .now).count, count, "every group opened")
+            return (model.groupMembershipVisits - visits, model.rowsBuildCount - builds)
+        }
+        let small = try measure(40), large = try measure(80)
+        XCTAssertLessThanOrEqual(large.visits, small.visits * 2 + 8, "membership work is linear (\(small.visits) for 40, \(large.visits) for 80)")
+        XCTAssertLessThanOrEqual(large.builds, small.builds + 1, "one fold update: the row list is rebuilt once, not per group (\(small.builds), \(large.builds))")
+        XCTAssertLessThanOrEqual(small.builds, 2)
+    }
+
+    /// Dot R-3, the other half: N copies into ONE group are found with one
+    /// pass, not a scan of the group per copy.
+    func testOpeningOneGroupForABatchOfTasksIsOnePass() throws {
+        func visits(_ count: Int) throws -> Int {
+            let store = try makeTestStore(now: { [clock] in clock.value })
+            let library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
+            let calendar = self.calendar
+            let model = TasksPageModel(library: library, services: TasksPageServices(
+                now: { [clock] in clock.value }, calendar: { calendar }, locale: locale, doneHold: .seconds(3_600)))
+            let created = try XCTUnwrap(library.createTasks((0..<count).map { TaskDraft(title: "Same day \($0)", dueDay: day(3)) }))
+            let key = try XCTUnwrap(model.groupKey(of: created[0].id, on: .now))
+            model.foldAllGroups([key], folded: true, on: .now)
+            let before = model.groupMembershipVisits
+            model.unfoldAddedTasks(created)
+            XCTAssertFalse(model.folded(on: .now).contains(key))
+            return model.groupMembershipVisits - before
+        }
+        let small = try visits(60), large = try visits(120)
+        XCTAssertLessThanOrEqual(large, small * 2 + 4, "one pass: \(small) for 60, \(large) for 120")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])

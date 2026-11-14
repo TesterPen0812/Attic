@@ -428,7 +428,12 @@ extension TasksPageModel {
     /// The date group a row is drawn in (nil for a done row under
     /// "Completed today").
     func groupKey(of id: UUID, on tab: TasksTab) -> String? {
-        sections(for: tab).groups.first { $0.ids.contains(id) }?.key
+        sections(for: tab).groups.first {
+            #if DEBUG
+            groupMembershipVisits += $0.ids.count
+            #endif
+            return $0.ids.contains(id)
+        }?.key
     }
 
     /// The rows of one state in `id`'s date group, as drawn: where a

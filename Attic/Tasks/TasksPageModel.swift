@@ -482,13 +482,57 @@ final class TasksPageModel: ObservableObject {
     /// before publishing its scroll request, without selecting the new row.
     func unfoldAddedTask(_ id: UUID, on tab: TasksTab) {
         guard tab != .done, let key = groupKey(of: id, on: tab) else { return }
-        // A group still closing folds the model only when its turn ends
-        // (`TasksFold`): end that turn, or the pending fold lands on the new
-        // task.
-        if let turn = foldTurn, turn.closing, turn.matches(tab, key) { foldTurn = nil }
-        guard folded(on: tab).contains(key) else { return }
-        toggleGroup(key, on: tab)
+        openGroups([key], on: tab)
     }
+
+    /// The same for a batch (a paste, duplicates): each task's group opens,
+    /// found in one pass over the groups and opened with one fold update per
+    /// page, so the work grows with the batch and no more.
+    func unfoldAddedTasks(_ tasks: [TaskItem]) {
+        var wanted: [TasksTab: Set<UUID>] = [:]
+        for task in tasks { wanted[task.listedStatus == .backlog ? .backlog : .now, default: []].insert(task.id) }
+        for (tab, ids) in wanted {
+            var keys: [String] = []
+            for group in sections(for: tab).groups {
+                #if DEBUG
+                groupMembershipVisits += group.ids.count
+                #endif
+                if group.ids.contains(where: ids.contains) { keys.append(group.key) }
+            }
+            openGroups(keys, on: tab)
+        }
+    }
+
+    #if DEBUG
+    /// Work counters for the batch guards: group member ids looked at to find
+    /// groups, and row lists built (`cached`).
+    var groupMembershipVisits = 0
+    var rowsBuildCount = 0
+    #endif
+
+    /// Opens groups (or Done days) for something that must be seen in them: a
+    /// new task, a `show`. A group still closing folds the model only when
+    /// its turn ends (`TasksFold`), which would land on that row: the turn
+    /// goes back instead, from where it is (the reversal a second click on
+    /// the header runs), and the model never folds.
+    private func openGroups(_ keys: [String], on tab: TasksTab) {
+        for key in keys {
+            guard let turn = foldTurn, turn.closing, turn.matches(tab, key) else { continue }
+            // Its own generations are negative: the page counts up from 0, and
+            // a turn's completion acts only on a turn of its own generation.
+            reversedFoldGenerations -= 1
+            TasksFold.turn(key, on: tab, folded: false, animation: TasksDesignMetrics.curve(0.26),
+                           generation: reversedFoldGenerations,
+                           state: Binding(get: { [unowned self] in foldTurn }, set: { [unowned self] in foldTurn = $0 })) {
+                [unowned self] target, key in toggleGroup(key, on: target)
+            }
+        }
+        let foldedNow = folded(on: tab)
+        let closed = keys.filter { foldedNow.contains($0) }
+        guard !closed.isEmpty else { return }
+        foldAllGroups(closed, folded: false, on: tab)
+    }
+    private var reversedFoldGenerations = 0
 
     /// A fold, filter, completion, or edit can remove a row from the current
     /// page. Don't leave a hidden row selected or holding keyboard shortcuts.
@@ -869,6 +913,9 @@ final class TasksPageModel: ObservableObject {
             return cached
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
+        #if DEBUG
+        rowsBuildCount += 1
+        #endif
         let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
         IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
@@ -1639,9 +1686,7 @@ final class TasksPageModel: ObservableObject {
             showAll(on: target)
         }
         // A folded date group opens to show it (the owner's panel design).
-        if target != .done, let key = groupKey(of: task.id, on: target), folded(on: target).contains(key) {
-            toggleGroup(key, on: target)
-        }
+        if target != .done, let key = groupKey(of: task.id, on: target) { openGroups([key], on: target) }
         if target == .done { unfoldDoneDay(of: task.id) }
         reveal(task.id)
         return .shown
@@ -1649,10 +1694,10 @@ final class TasksPageModel: ObservableObject {
 
     /// Opens the folded Done day that holds `id` (a `show`).
     private func unfoldDoneDay(of id: UUID) {
-        guard !folded(on: .done).isEmpty,
+        guard !folded(on: .done).isEmpty || foldTurn?.tab == .done,
               let task = store.listedTask(withID: id), let finished = task.completedAt ?? Optional(task.updatedAt) else { return }
         let key = TasksPanelDesign.GroupKind.finished(services.calendar().startOfDay(for: finished)).key
-        if folded(on: .done).contains(key) { toggleGroup(key, on: .done) }
+        openGroups([key], on: .done)
     }
 
     private func reveal(_ id: UUID) {
@@ -2704,7 +2749,7 @@ final class TasksPageModel: ObservableObject {
         // VoiceOver hears how many were added.
         if let first = created.first {
             // Every line's task opens its own folded group, not only the first's.
-            for task in created { unfoldAddedTask(task.id, on: task.listedStatus == .backlog ? .backlog : .now) }
+            unfoldAddedTasks(created)
             addedRequest = ScrollRequest(id: first.id)
         }
         let message = created.count == 1
