@@ -4,91 +4,12 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// Starts keyboard traversal at a real SwiftUI field in the same key window
-/// as the shared bottom bar, without claiming focus on the plus itself.
-@MainActor
-private struct SharedPlusKeyboardProbe: View {
-    let chrome: PanelSharedChrome
-    let page: PanelPage
-    let onStartingFocus: (Bool) -> Void
-    @FocusState private var startingFieldFocused: Bool
-    @State private var text = "Start here"
-
-    var body: some View {
-        VStack {
-            TextField("Keyboard start", text: $text)
-                .focused($startingFieldFocused)
-                .accessibilityIdentifier("shared-plus-keyboard-start")
-            Spacer()
-            PanelSharedBottomBar(chrome: chrome, page: page,
-                                 layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560)))
-        }
-        .frame(width: 340, height: 560)
-        .atticDesign(.default)
-        .onAppear {
-            DispatchQueue.main.async { startingFieldFocused = true }
-        }
-        .onChange(of: startingFieldFocused) { _, focused in onStartingFocus(focused) }
-    }
-}
-
 /// Owner, 2026-10-31 (Accepted "Shared controls stay still while pages
 /// switch"): the bottom bar and the top row's shared controls are one layer
 /// above the pages, and the page switch's open moves the bar with it.
 @MainActor
 final class PanelSharedChromeTests: XCTestCase {
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
-
-    func testBG67SharedNewButtonsExposeKeyboardFocusWithoutTasksRequests() throws {
-        try requireKeyWindowTests()
-        let focused = NSAccessibility.Attribute(rawValue: "AXFocused")
-        for (page, plus) in [(PanelPage.calendar, PanelBottomBarLook.calendarPlus),
-                             (PanelPage.notes, PanelBottomBarLook.notesPlus),
-                             (PanelPage.canvas, PanelBottomBarLook.drawPlus)] {
-            let chrome = PanelSharedChrome()
-            var activations = 0
-            var startingFieldFocused = false
-            chrome.setBar(PanelBottomBarLook(middle: .none, plus: plus),
-                          actions: PanelBottomBarActions(plus: { activations += 1 }), for: page)
-            let host = NSHostingView(rootView: SharedPlusKeyboardProbe(chrome: chrome, page: page,
-                onStartingFocus: { startingFieldFocused = $0 }))
-            let panel = AtticPanel(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
-                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.isReleasedWhenClosed = false
-            panel.contentView = host
-            panel.orderFront(nil)
-            panel.makeKey()
-            defer { panel.orderOut(nil); panel.contentView = nil; panel.close() }
-            spin(0.35)
-            XCTAssertTrue(panel.isKeyWindow, "\(page): the hosted shell must own keyboard input")
-            if page == .calendar {
-                XCTAssertTrue(startingFieldFocused, "Opening the panel must preserve the starting field's focus")
-            }
-            XCTAssertEqual(activations, 0)
-            let node = try XCTUnwrap(elements(host).first {
-                $0.accessibilityIdentifier?() == plus.identifier
-            } as? NSObject, "\(page): the shared plus must be an accessible control")
-            let keyboardFocusable = node.accessibilityIsAttributeSettable(focused)
-            print("BG67_FOCUS_ATTR page=\(page) settable=\(keyboardFocusable) fka=\(NSApp.isFullKeyboardAccessEnabled)")
-            XCTAssertTrue(keyboardFocusable, "\(page): the shared plus must accept keyboard focus")
-            // AppKit's native Tab-to-buttons path requires FKA. CI runs a
-            // dedicated FKA mode; on the Air keep the global preference intact.
-            if NSApp.isFullKeyboardAccessEnabled {
-                for _ in 0..<5 where activations == 0 {
-                    panel.selectNextKeyView(nil)
-                    spin(0.08)
-                    let space = try XCTUnwrap(NSEvent.keyEvent(
-                        with: .keyDown, location: .zero, modifierFlags: [],
-                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
-                        context: nil, characters: " ", charactersIgnoringModifiers: " ",
-                        isARepeat: false, keyCode: 49))
-                    panel.sendEvent(space)
-                    spin(0.08)
-                }
-                XCTAssertEqual(activations, 1, "\(page): Tab to shared plus and Space must activate its action")
-            }
-        }
-    }
 
     private func elements(_ root: AnyObject) -> [AnyObject] {
         let children = (root.accessibilityChildren?() ?? nil) ?? []
@@ -486,4 +407,168 @@ final class PanelSharedChromeTests: XCTestCase {
     // gone: Accepted 2026-10-31 "Tall island" moves the switch out of the
     // bottom bar ("the hover-to-open switch is gone"), so its open-and-push
     // test went with it. `PanelIslandTests` covers the island.
+}
+
+// MARK: - The real shell's keyboard (BG-67 and what it must not break)
+
+/// The production host: the real `AtticPanelView` in an `AtticPanelHostingView`
+/// (AppKit's own key loop), in a key `AtticPanel`, with real Tab key events.
+@MainActor
+private final class RealShell {
+    let panel: AtticPanel
+    let host: AtticPanelHostingView
+    let state: PanelUIState
+    let notes: NoteStore
+    let draft: NoteDraftController
+    private let suite: String
+
+    init(attachments: AttachmentFileStore) throws {
+        AtticDraw.enabledOverride = true
+        suite = "PanelSharedChromeKeys.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        _ = store.commit([TaskDraft(title: "Write launch notes", tags: ["launch"])])
+        notes = NoteStore(container: container, attachmentFileStore: attachments)
+        _ = try notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Launch plan")]), tags: ["launch"]).get()
+        draft = NoteDraftController(noteStore: notes)
+        state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        settings.panelSurfaceStyle = .solid
+        host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: draft, chromeInteractionState: chrome, uiState: state, settings: settings),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -6_000, y: -6_000), size: size),
+                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = host
+        panel.orderFront(nil)
+        panel.makeKey()
+        spin(0.8)
+    }
+
+    func close() {
+        host.cancelActiveInteraction(reason: .lostWindow)
+        state.releasePageContent()
+        spin(0.3)
+        panel.orderOut(nil)
+        panel.contentView = nil
+        panel.close()
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        AtticDraw.enabledOverride = nil
+    }
+
+    func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    func go(to section: PanelSection) {
+        state.switchPage(to: section, motion: .instant)
+        spin(0.8)
+    }
+
+    func tab(shift: Bool = false) {
+        let characters = shift ? "\u{19}" : "\t"
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: shift ? .shift : [],
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                         isARepeat: false, keyCode: 48)!
+            panel.sendEvent(event)
+        }
+        spin(0.12)
+    }
+
+    func press(_ characters: String, keyCode: UInt16) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                         isARepeat: false, keyCode: keyCode)!
+            panel.sendEvent(event)
+        }
+        spin(0.15)
+    }
+
+    func elements(_ root: AnyObject, depth: Int = 0) -> [AnyObject] {
+        guard depth < 40 else { return [root] }
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { elements($0 as AnyObject, depth: depth + 1) }
+    }
+
+    func element(_ identifier: String) -> NSObject? {
+        elements(host).first { $0.accessibilityIdentifier?() == identifier } as? NSObject
+    }
+
+    /// The accessibility identifiers of every element reporting keyboard focus.
+    func focusedIdentifiers() -> [String] {
+        let focused = NSAccessibility.Attribute(rawValue: "AXFocused")
+        return elements(host).compactMap { node -> String? in
+            guard let object = node as? NSObject,
+                  (object.accessibilityAttributeValue(focused) as? Bool) == true else { return nil }
+            let identifier: String? = node.accessibilityIdentifier?()
+            return identifier ?? "(no id: \(type(of: object)))"
+        }
+    }
+
+    var responder: String {
+        guard let responder = panel.firstResponder else { return "nil" }
+        return "\(type(of: responder))"
+    }
+}
+
+extension PanelSharedChromeTests {
+    /// BG-67 on the production host (round 1 review R-4): the real panel in
+    /// an `AtticPanelHostingView` (AppKit's own key loop), the real Calendar,
+    /// Notes and Draw pages, real Tab key events. Without Full Keyboard
+    /// Access (the Air, which keeps the Mac's setting) the plus must be
+    /// focusable (it was not on d3fcd6ed); with it (CI) Tab must reach the
+    /// plus once, and Space must press it.
+    func testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops() throws {
+        try requireKeyWindowTests()
+        let focused = NSAccessibility.Attribute(rawValue: "AXFocused")
+        let cases: [(PanelSection, PanelPage, PanelBottomBarLook.Plus)] = [
+            (.calendar, .calendar, PanelBottomBarLook.calendarPlus), (.notes, .notes, PanelBottomBarLook.notesPlus),
+            (.canvas, .canvas, PanelBottomBarLook.drawPlus)]
+        for (section, page, plus) in cases {
+            let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+            defer { shell.close() }
+            shell.go(to: section)
+            if page == .notes {
+                XCTAssertTrue(shell.draft.pages.showLibrary())
+                shell.spin(0.8)
+            }
+            XCTAssertTrue(shell.panel.isKeyWindow, "\(page): the hosted shell must own keyboard input")
+            XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): the shared plus is a keyboard stop")
+            let node = try XCTUnwrap(shell.element(plus.identifier), "\(page): the shared plus must be an accessible control")
+            XCTAssertTrue(node.accessibilityIsAttributeSettable(focused), "\(page): the shared plus must accept keyboard focus")
+            XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier), "\(page): a reveal never lands on the plus")
+            guard NSApp.isFullKeyboardAccessEnabled else { continue }
+            // Full Keyboard Access (CI): AppKit's own Tab walk.
+            let notesBefore = shell.notes.notes.count
+            let canvasBefore = DrawPageModel.shared.canvasID
+            var reached = false
+            for _ in 0..<24 where !reached {
+                shell.tab()
+                reached = shell.focusedIdentifiers().contains(plus.identifier)
+            }
+            XCTAssertTrue(reached, "\(page): Tab reaches the shared plus")
+            guard reached else { continue }
+            shell.tab()
+            XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier), "\(page): the plus is one stop, not two")
+            shell.tab(shift: true)
+            XCTAssertTrue(shell.focusedIdentifiers().contains(plus.identifier), "\(page): Shift-Tab comes back to the plus")
+            shell.press(" ", keyCode: 49)
+            switch page {
+            case .calendar: XCTAssertTrue(ComposerOverlay.isPresented, "calendar: Space on the plus opens the new-event card")
+            case .notes: XCTAssertEqual(shell.notes.notes.count, notesBefore + 1, "notes: Space on the plus makes a note")
+            case .canvas: XCTAssertNotEqual(DrawPageModel.shared.canvasID, canvasBefore, "draw: Space on the plus makes a canvas")
+            case .tasks: break
+            }
+        }
+    }
 }

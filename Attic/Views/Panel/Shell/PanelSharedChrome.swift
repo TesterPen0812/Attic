@@ -174,7 +174,17 @@ struct PanelBottomBarActions {
 /// The shared "+" as a stop in a page's Tab order (`TasksTabStop.plus`).
 struct PanelPlusFocusID: Hashable {}
 
+#if DEBUG
+/// Test seams: whether each shared control was last drawn as a keyboard
+/// stop (the value its focus modifier was given).
+enum PanelKeyStopSeam {
+    static var plus: [PanelPage: Bool] = [:]
+    static var tagKey: [String: Bool] = [:]
+}
+#endif
+
 private struct PanelPlusFocus: ViewModifier {
+    let page: PanelPage
     let requests: AtticFocusRequests?
     let action: () -> Void
     @FocusState private var focused: Bool
@@ -185,8 +195,12 @@ private struct PanelPlusFocus: ViewModifier {
     /// One structure on every page (only Tasks lends its Tab order): a
     /// branch here would rebuild the "+" on each page switch.
     func body(content: Content) -> some View {
+        let focusable = requests == nil || armed
+        #if DEBUG
+        let _ = PanelKeyStopSeam.plus[page] = focusable
+        #endif
         content
-            .focusable(requests == nil || armed, interactions: .activate)
+            .focusable(focusable, interactions: .activate)
             .focused($focused)
             .onKeyPress(keys: [.space, .return]) { _ in
                 guard focused else { return .ignored }
@@ -337,7 +351,7 @@ struct PanelSharedBottomBar: View {
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
                                               action: actions.plus)
                                 .atticDesignCorners()
-                                .modifier(PanelPlusFocus(requests: actions.focusRequests, action: actions.plus))
+                                .modifier(PanelPlusFocus(page: page, requests: actions.focusRequests, action: actions.plus))
                         }
                             .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)
