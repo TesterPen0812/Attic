@@ -895,13 +895,74 @@ final class AtticDropdownTests: XCTestCase {
 
             origin.pointerEntered("row-0")
             origin.pointerLeft("row-0")
-            spin(0.6)
+            wait { origin.pointerRow == nil }
+            XCTAssertNil(origin.pointerRow, "the flick's origin is gone once the update that carried it has run (parameter: \(viaParameter))")
             host.rootView = ViewportRows(highlighted: 0, viaParameter: viaParameter, box: box)
             host.layoutSubtreeIfNeeded()
             wait(for: host) { scrollView.contentView.bounds.origin.y < start - 4 }
             XCTAssertLessThan(scrollView.contentView.bounds.origin.y, start - 4,
                               "the keyboard's highlight on the cut-off row scrolls to it (parameter: \(viaParameter))")
         }
+    }
+
+    /// A row that is lit already has no highlight for the pointer to make: a
+    /// move over it records nothing (the gate on `isHighlighted`), while a
+    /// move over a row that is not lit does.
+    func testPF43AHoverOverTheLitRowRecordsNoPointerHighlight() throws {
+        struct LitRows: View {
+            let box: OriginBox
+            let hovered: () -> Void
+            var body: some View {
+                AtticDropdownViewport(height: 6 * AtticDropdownMetrics.rowHeight, highlighted: nil) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        OriginProbe(box: box)
+                        ForEach(0..<40, id: \.self) { index in
+                            AtticDropdownRow(title: "row-\(index)", isHighlighted: index == 0, onHover: { if $0 { hovered() } }) {}
+                        }
+                    }
+                }
+                .frame(width: 200)
+                .atticDesign(AtticDesignContext(reduceMotion: true))
+            }
+        }
+        let window = makeWindow()
+        defer { window.close() }
+        leaveAMouseMoveAsTheCurrentEvent(in: window)
+        defer { restoreNeutralCurrentEvent() }
+        let box = OriginBox()
+        var hovers = 0
+        let host = NSHostingView(rootView: LitRows(box: box, hovered: { hovers += 1 }))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        let origin = try XCTUnwrap(box.origin)
+        let list = try XCTUnwrap(scrollViews(in: host).first)
+        let pointer = Pointer()
+
+        try pointer.moveToTopEdge(of: list, in: host)
+        wait { hovers > 0 }
+        XCTAssertGreaterThan(hovers, 0, "the pointer reached the lit first row")
+        XCTAssertNil(origin.pointerRow, "a row that is lit already records no pointer highlight")
+
+        let secondRow = list.convert(NSPoint(x: list.bounds.midX,
+                                             y: list.isFlipped ? 6 + AtticDropdownMetrics.rowHeight : list.bounds.maxY - 6 - AtticDropdownMetrics.rowHeight),
+                                     to: nil)
+        try pointer.move(in: host, toWindowPoint: secondRow)
+        wait { origin.pointerRow == "row-1" }
+        XCTAssertEqual(origin.pointerRow, "row-1", "a row that is not lit records it (the hover path is live)")
+    }
+
+    /// A move inside the row the list has reported already is not a new
+    /// pointer highlight: leaving it afterwards clears the origin at once,
+    /// and not only once a later update has run.
+    func testPF43AMoveInsideAReportedRowDoesNotMakeItsLeaveWait() {
+        let origin = AtticHighlightOrigin()
+        origin.pointerEntered("row-3")
+        XCTAssertFalse(origin.shouldScroll(toHighlight: "row-3"), "the list reported the pointer's highlight")
+        origin.pointerEntered("row-3")
+        origin.pointerLeft("row-3")
+        XCTAssertNil(origin.pointerRow, "the same row is not a new highlight to report: its leave clears the origin at once")
     }
 
     // MARK: One id per row (R-6)
