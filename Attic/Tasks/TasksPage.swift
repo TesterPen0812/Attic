@@ -2992,6 +2992,22 @@ struct TasksPage: View {
                                                   modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
             current = owner.parent
         }
+        // A list's native row focus is still a separate Tab/FKA stop, but
+        // its task commands have one handler here. Attaching onKeyPress to
+        // every lazy row made every realized row another focus responder,
+        // including rows cached after scrolling far through Done.
+        // Return and the arrow keys retain their existing list routing.
+        if model.isPageShown, model.focusedSubtaskID == nil,
+           let focusedID, focusedID == current,
+           let command = AtticTaskKeys.command(key: press.key, characters: press.characters,
+                                               modifiers: press.modifiers, listCommands: true),
+           command != .editTitle {
+            let rowActions = actions(for: focusedID, in: model.tab)
+            if AtticTaskKeys.offers(command, rowActions) {
+                AtticTaskKeys.perform(command, rowActions)
+                return .handled
+            }
+        }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1

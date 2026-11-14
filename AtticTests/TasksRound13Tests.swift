@@ -28,6 +28,21 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, next.id, "Return edits the visibly focused task")
     }
 
+    func testPF8SpaceAndShiftSpaceStillActOnTheNativeFocusedRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let focused = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+        let initial = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == focused }?.status)
+        hosted.press(" ", keyCode: 49, modifiers: .shift)
+        let working = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == focused }?.status)
+        XCTAssertNotEqual(working, initial, "Shift-Space still toggles working on the native-focused row")
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(hosted.model.rows(for: .now).first { $0.id == focused }?.status, .done,
+                       "Space still completes the native-focused row")
+    }
+
     func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")

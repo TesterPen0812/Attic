@@ -305,8 +305,7 @@ private extension View {
     func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool,
                         external: AtticRowFocus? = nil, answersKeys: Bool = true) -> some View {
         if live, let external {
-            modifier(AtticListTaskFocusModifier(enabled: enabled, answersKeys: answersKeys, actions: actions,
-                                                listCommands: listCommands, focus: external))
+            modifier(AtticListTaskFocusModifier(enabled: enabled, focus: external))
         } else if live {
             modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled && answersKeys, actions: actions, listCommands: listCommands))
         } else {
@@ -391,15 +390,12 @@ struct AtticRowFocus {
     }
 }
 
-/// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
+/// The Tasks page owns one keyboard responder for its list. Its rows still
+/// expose native focus targets so keyboard focus, Full Keyboard Access and
+/// accessibility focus work as before, but adding a lazy row no longer adds
+/// another key responder to SwiftUI's focus tree.
 private struct AtticListTaskFocusModifier: ViewModifier {
     let enabled: Bool
-    /// Off while the row's title is edited: the row stays focusable (so
-    /// its focus never jumps elsewhere as the editor appears), but the
-    /// editor, not the row, takes the keys.
-    let answersKeys: Bool
-    let actions: AtticTaskActions
-    let listCommands: Bool
     let focus: AtticRowFocus
 
     func body(content: Content) -> some View {
@@ -407,13 +403,6 @@ private struct AtticListTaskFocusModifier: ViewModifier {
             .focusable(enabled)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
-            .onKeyPress(phases: .down) { press in
-                guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
-                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
-                ), AtticTaskKeys.offers(command, actions) else { return .ignored }
-                AtticTaskKeys.perform(command, actions)
-                return .handled
-            }
     }
 }
 

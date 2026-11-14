@@ -1,5 +1,7 @@
 import Darwin
+import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -7,6 +9,79 @@ import XCTest
 /// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
+
+    func testPF8RowKeyResponderRegistrationsAreConstantAtScale() throws {
+        // The live row owns its native focus target, but a SwiftUI key
+        // handler on every lazy row adds an extra focus responder. Check
+        // the modifier's actual source as well as hosted scrolling: a
+        // counter only incremented by an old handler would always read zero
+        // once that handler was removed and miss its accidental return.
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../Attic/DesignSystem/Components/AtticTaskComponents.swift")
+            .standardizedFileURL
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private struct AtticListTaskFocusModifier: ViewModifier {"))
+        let bodyAndAfter = source[start.upperBound...]
+        let end = try XCTUnwrap(bodyAndAfter.range(of: "/// Editing a row"))
+        let modifierSource = bodyAndAfter[..<end.lowerBound]
+        let rowKeyHandlers = String(modifierSource).components(separatedBy: ".onKeyPress").count - 1
+        XCTAssertEqual(rowKeyHandlers, 0, "A realized list row must not register a private keyboard responder")
+
+        let actions = AtticTaskActions(toggleDone: {}, openPage: {})
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+        for count in [50, 500, 5_000] {
+            let ids = (0..<count).map { _ in UUID() }
+            var realized = 0
+            var live = 0
+            var maxLive = 0
+            let root = TasksRowFocusOwner { binding in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(ids.indices, id: \.self) { index in
+                            AtticTaskRow(model: AtticTaskRowModel(title: "Focus task \(index)"),
+                                         actions: actions, onToggleExpanded: {}, onSelect: {},
+                                         focus: AtticRowFocus(binding: binding,
+                                                              id: AtticRowFocusID(page: 0, id: ids[index]), isFocused: false))
+                                .onAppear {
+                                    realized += 1
+                                    live += 1
+                                    maxLive = max(maxLive, live)
+                                }
+                                .onDisappear { live -= 1 }
+                        }
+                    }
+                }
+            }
+            let window = NSWindow(contentRect: CGRect(x: -5_000, y: -5_000, width: 360, height: 500),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: root.atticDesign(AtticDesignContext(mode: .light)))
+            window.orderFront(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            let scroll = try XCTUnwrap(window.contentView.flatMap(scrollView(in:)), "A genuine SwiftUI scroll view")
+            var largestRowStep = 0
+            for _ in 0..<100 {
+                let beforeRows = realized
+                let clip = scroll.contentView
+                let maximum = max(0, (scroll.documentView?.frame.height ?? 0) - clip.bounds.height)
+                clip.scroll(to: CGPoint(x: clip.bounds.minX, y: min(clip.bounds.minY + 42, maximum)))
+                scroll.reflectScrolledClipView(clip)
+                window.contentView?.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+                largestRowStep = max(largestRowStep, realized - beforeRows)
+            }
+            window.contentView = nil
+            window.close()
+            XCTAssertLessThanOrEqual(largestRowStep, 12, "One wheel step should realize only nearby rows")
+            XCTAssertLessThanOrEqual(maxLive, 45, "Realized rows stay bounded even for \(count) task rows")
+            print("ATTIC_PF8 count=\(count) steps=100 row_key_handlers_source=\(rowKeyHandlers) " +
+                  "realized_total=\(realized) max_realized_step=\(largestRowStep) peak_live=\(maxLive)")
+        }
+    }
 
     func testR04BulkAcknowledgementsRollBackEveryReplicaAndPreserveOneUndoStep() async throws {
         struct Rejected: Error {}
