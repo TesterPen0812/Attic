@@ -130,10 +130,7 @@ struct TasksDonePage<Cell: View>: View {
                         .padding(.leading, AtticLayout.circleX)
                         .accessibilityIdentifier("tasks-done-load-failed")
                 } else if model.doneLogHasMore {
-                    AtticLoadingRows(count: 2)
-                        // Only a drawn page pages on; one drawn again with
-                        // the sentinel already in view reads the next page.
-                        .task(id: drawn) { if drawn { model.loadMoreDoneLog() } }
+                    TasksDonePagingSentinel(model: model, results: results, drawn: drawn)
                 }
                 if lines.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,6 +169,49 @@ struct TasksDonePage<Cell: View>: View {
         // The page scrolls the log to a `show`'s row, also one made before
         // the log was built (round 10).
         .onAppear { registerList(proxy) }
+        }
+    }
+}
+
+/// A folded completion day can hide multiple pages behind one heading. The
+/// sentinel must request each successive page *while it stays visible*, and
+/// stop as soon as later rows push it beyond the scroll viewport.
+private struct TasksDonePagingSentinel: View {
+    let model: TasksPageModel
+    @ObservedObject var results: TasksDoneResults
+    let drawn: Bool
+    @State private var visible = false
+
+    var body: some View {
+        AtticLoadingRows(count: 2)
+            .onAppear {
+                // LazyVStack appearance works even in hosts that do not
+                // publish scroll-visibility notifications.
+                visible = true
+                requestPage()
+            }
+            .onDisappear { visible = false }
+            .onScrollVisibilityChange { now in
+                visible = now
+                if now { requestPage() }
+            }
+            .onChange(of: model.doneLogTasks.count) { _, _ in
+                // Expanded rows displace the sentinel. A folded tail can
+                // need another page without changing its visible slots.
+                if visible, model.doneDays().last?.folded == true { requestPage() }
+            }
+            .onChange(of: drawn) { _, now in
+                if now && visible { requestPage() }
+            }
+    }
+
+    private func requestPage() {
+        guard drawn, visible, model.doneLogHasMore, model.doneLogFailure == nil else { return }
+        // Let the lazy stack settle its next layout before deciding whether
+        // another read is necessary. No loop runs during layout.
+        DispatchQueue.main.async {
+            guard drawn, visible, model.doneLogHasMore, model.doneLogFailure == nil else { return }
+            model.loadMoreDoneLog()
         }
     }
 }

@@ -1,4 +1,6 @@
+import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -260,6 +262,80 @@ final class TasksReviewFixTests: XCTestCase {
     }
 
     // MARK: 4. The Done log walks physical rows
+
+    func testBG3FoldedHighVolumeDoneDayKeepsPagingUntilTheOlderDayIsReachable() throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: base)
+        let now = today.addingTimeInterval(16 * 3_600)
+        let store = try makeTestStore(now: { now })
+        let context = ModelContext(store.container)
+        let older = UUID()
+        for i in 0..<131 {
+            let completed = today.addingTimeInterval(12 * 3_600 + Double(i))
+            let item = TaskItem(id: UUID(), title: "Recent \(i)", status: .done,
+                createdAt: today, updatedAt: completed, completedAt: completed)
+            item.doneLoggedAt = completed
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        let oldCompletion = calendar.date(byAdding: .day, value: -2, to: today)!.addingTimeInterval(12 * 3_600)
+        let old = TaskItem(id: older, title: "Older day", status: .done,
+                           createdAt: oldCompletion, updatedAt: oldCompletion, completedAt: oldCompletion)
+        old.doneLoggedAt = oldCompletion
+        old.listOrderVersion = TaskItem.currentListOrderVersion
+        context.insert(old)
+        try context.save()
+        store.refresh()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store),
+                                   services: TasksPageServices(now: { now }, calendar: { calendar }))
+        let size = CGSize(width: 360, height: 520)
+        let page = TasksPage(model: model, store: store,
+            layout: PanelPageLayout(cornerSize: 24, panelSize: size), addBarFocused: .constant(false))
+        final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+        let window = KeyPanel(contentRect: CGRect(x: -8_000, y: -8_000, width: 360, height: 520),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
+            .frame(width: 360, height: 520))
+        window.orderFront(nil)
+        window.makeKey()
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        // TasksPage intentionally resets a newly shown page to Now. Select
+        // Done after mounting, just as a real tab click does.
+        model.select(tab: .done)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+        XCTAssertEqual(model.tab, .done)
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        let recent = try XCTUnwrap(model.doneDays().first)
+        model.toggleGroup(recent.key, on: .done)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        // The paging contract is visibility-driven: scroll to the bottom
+        // of the actually drawn Done list before expecting another page.
+        func visibleList(in view: NSView) -> NSScrollView? {
+            if let keeper = view as? TasksScrollKeeper.KeeperView,
+               let scroll = keeper.enclosingScrollView {
+                let frame = scroll.convert(scroll.bounds, to: window.contentView)
+                if frame.width > size.width / 2, frame.height > size.height / 3,
+                   frame.minX >= -1, frame.minX < size.width / 2 { return scroll }
+            }
+            return view.subviews.lazy.compactMap { visibleList(in: $0) }.first
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(window.contentView.flatMap { visibleList(in: $0) }, "Done must have a drawn scroll view")
+        let contentHeight = try XCTUnwrap(scroll.documentView).bounds.height
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, contentHeight - scroll.contentView.bounds.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        for _ in 0..<80 where !model.doneLogTasks.contains(where: { $0.id == older }) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        }
+        XCTAssertTrue(model.doneLogTasks.contains { $0.id == older },
+            "BG-3: a visible loading sentinel must keep paging through folded same-day rows")
+        XCTAssertFalse(model.doneLogHasMore)
+        XCTAssertTrue(model.folded(on: .done).contains(recent.key))
+    }
 
     func testDoneLogPagesReachEveryTaskAcrossDuplicatesAndSupersededCopies() throws {
         let store = try makeTestStore()
