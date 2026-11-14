@@ -297,6 +297,13 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertIn('s["skippedTests"]==0', focused)
 
+    def test_shared_chrome_key_window_helper_requires_explicit_opt_in(self):
+        source = (Path(__file__).resolve().parent.parent / 'AtticTests/PanelSharedChromeTests.swift').read_text()
+        helper = source.split('private func mountKeyBar(', 1)[1].split('    private func ', 1)[0]
+        self.assertIn('throws -> AtticPanel', helper)
+        self.assertLess(helper.index('try requireKeyWindowTests()') if 'try requireKeyWindowTests()' in helper else len(helper),
+                        helper.index('let panel = AtticPanel'), 'the key-window guard must run before creating or presenting a panel')
+
     def test_optimized_cost_callers_keep_their_fixtures_in_the_main_bundle(self):
         import json
         import re

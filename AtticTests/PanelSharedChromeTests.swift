@@ -634,7 +634,8 @@ extension PanelSharedChromeTests {
         return window
     }
 
-    private func mountKeyBar(_ chrome: PanelSharedChrome, _ model: SharedBarModel) -> AtticPanel {
+    private func mountKeyBar(_ chrome: PanelSharedChrome, _ model: SharedBarModel) throws -> AtticPanel {
+        try requireKeyWindowTests()
         let panel = AtticPanel(contentRect: CGRect(x: -6000, y: -6000, width: 340, height: 560),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
@@ -817,7 +818,7 @@ extension PanelSharedChromeTests {
         chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
                       actions: PanelBottomBarActions(plus: { taps[.calendar, default: 0] += 1 }), for: .calendar)
         let model = SharedBarModel(page: .tasks)
-        let panel = mountKeyBar(chrome, model)
+        let panel = try mountKeyBar(chrome, model)
         defer { close(panel) }
         XCTAssertTrue(panel.isKeyWindow, "the hosted shell must own keyboard input")
         requests.focus(PanelPlusFocusID())
@@ -842,7 +843,7 @@ extension PanelSharedChromeTests {
         chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
                       actions: PanelBottomBarActions(plus: { taps += 1 }, focusRequests: requests), for: .tasks)
         let model = SharedBarModel(page: .tasks)
-        let panel = mountKeyBar(chrome, model)
+        let panel = try mountKeyBar(chrome, model)
         defer { close(panel) }
         XCTAssertTrue(panel.isKeyWindow, "the hosted shell must own keyboard input")
         requests.focus(PanelPlusFocusID())
@@ -954,7 +955,7 @@ extension PanelSharedChromeTests {
             chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.tasksPlus),
                           actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
             let model = SharedBarModel(page: .tasks)
-            let panel = mountKeyBar(chrome, model)
+            let panel = try mountKeyBar(chrome, model)
             defer { close(panel) }
             requests.focus(PanelPlusFocusID())
             spin(0.4)
@@ -1007,7 +1008,7 @@ extension PanelSharedChromeTests {
         chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
         chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
         let model = SharedBarModel(page: .tasks)
-        let panel = mountKeyBar(chrome, model)
+        let panel = try mountKeyBar(chrome, model)
         defer { close(panel) }
         requests.focus(PanelTagKeyFocusID())
         spin(0.4)
@@ -1230,7 +1231,7 @@ extension PanelSharedChromeTests {
             chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
                           actions: PanelBottomBarActions(), for: .calendar)
             let model = SharedBarModel(page: .tasks)
-            let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
+            let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? try mountKeyBar(chrome, model) : mountBar(chrome, model)
             defer { close(window) }
             PanelKeyStopSeam.holdsHandoffs = true
             PanelKeyStopSeam.held = []
@@ -1255,7 +1256,7 @@ extension PanelSharedChromeTests {
         chrome.setBar(tagLook(.tasks), actions: PanelBottomBarActions(focusRequests: requests), for: .tasks)
         chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
         let model = SharedBarModel(page: .tasks)
-        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
+        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? try mountKeyBar(chrome, model) : mountBar(chrome, model)
         defer { close(window) }
         PanelKeyStopSeam.holdsHandoffs = true
         PanelKeyStopSeam.held = []
@@ -1323,7 +1324,7 @@ extension PanelSharedChromeTests {
         let chrome = PanelSharedChrome()
         chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
         let model = SharedBarModel(page: .notes)
-        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
+        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? try mountKeyBar(chrome, model) : mountBar(chrome, model)
         defer { close(window) }
         PanelKeyStopSeam.holdsHandoffs = true
         PanelKeyStopSeam.tagKeyAssignments = 0
