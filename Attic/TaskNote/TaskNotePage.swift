@@ -584,7 +584,9 @@ struct TaskNotePage: View {
                 } else if let item = taskItems.first {
                     // A task with no note: its command failures still show,
                     // in the same pill, without creating a note (review P2-6).
-                    AtticStatusPill(item: item, inlineAction: item.actions.first) {}
+                    // There are no details to open, so its words are plain
+                    // and only Retry (when offered) is a control.
+                    AtticStatusPill(item: item, inlineAction: item.actions.first, onOpen: nil)
                         .transition(.opacity)
                 }
                 Spacer(minLength: AtticSpacing.s12)

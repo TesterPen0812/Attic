@@ -854,6 +854,7 @@ extension AtticDesignSystemHostedTests {
 @MainActor
 private final class TransientFocusProbe: ObservableObject {
     @Published var shown = 0
+    @Published var writing = "Keep typing here"
     var statusOpens = 0
     var statusRetries = 0
     var statusCancels = 0
@@ -864,7 +865,7 @@ private struct TransientFocusHost: View {
 
     var body: some View {
         VStack {
-            TextEditor(text: .constant("Keep typing here"))
+            TextEditor(text: $probe.writing)
                 .frame(height: 90)
             if probe.shown == 1 {
                 AtticStatusPill(item: AtticStatusItem(id: "save", systemName: "exclamationmark.circle",
@@ -881,6 +882,13 @@ private struct TransientFocusHost: View {
                                 inlineAction: nil, onCancel: { probe.statusCancels += 1 },
                                 onOpen: { probe.statusOpens += 1 })
                     .id("import")
+            } else if probe.shown == 4 {
+                // A task's failure with no note: no details to open.
+                AtticStatusPill(item: AtticStatusItem(id: "taskFailure", systemName: "exclamationmark.circle",
+                                                      title: "Couldn't save", tone: .caution),
+                                inlineAction: AtticStatusItem.Action(title: "Retry", handler: { probe.statusRetries += 1 }),
+                                onOpen: nil)
+                    .id("taskFailure")
             }
         }
         .frame(width: 340, height: 155)
@@ -893,12 +901,25 @@ extension AtticDesignSystemHostedTests {
         guard NSApp.isFullKeyboardAccessEnabled else {
             throw XCTSkip("Status-button Tab traversal requires Full Keyboard Access")
         }
+        try runBG66TabFlow()
+    }
+
+    /// Round 2, Opus R-4: the same flow with Full Keyboard Access off, the
+    /// default. The system setting is not touched, and the test does not
+    /// depend on it: Tab then Space must reach Details, Retry and Cancel.
+    func testBG66StatusActionsAreReachableByTabWithoutFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        try runBG66TabFlow()
+    }
+
+    private func runBG66TabFlow() throws {
+        print("BG66_FULL_KEYBOARD_ACCESS=\(NSApp.isFullKeyboardAccessEnabled)")
         let probe = TransientFocusProbe()
         let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
         let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
         XCTAssertTrue(window.makeFirstResponder(editor))
         func capture(_ state: String) throws {
-            guard ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" else { return }
+            guard (ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1") else { return }
             hosting.layoutSubtreeIfNeeded()
             let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 700, pixelsHigh: 340,
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -932,6 +953,65 @@ extension AtticDesignSystemHostedTests {
         XCTAssertEqual(probe.statusOpens, 2)
         try tabAndPress()
         XCTAssertEqual(probe.statusCancels, 1)
+    }
+
+    /// Round 2, Opus R-5: a save fails while the person types, so the pill
+    /// stays mounted; the window resigning and becoming key again must leave
+    /// the typing with the note, not hand the responder to Retry.
+    func testBG66StatusPillDoesNotTakeTypingWhenTheWindowBecomesKeyAgain() throws {
+        try requireKeyWindowTests()
+        let probe = TransientFocusProbe()
+        let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        probe.shown = 1
+        spin(0.2)
+        for round in 1...3 {
+            window.resignKey()
+            spin(0.1)
+            window.becomeKey()
+            spin(0.2)
+            XCTAssertTrue(window.firstResponder === editor, "the window becoming key again (\(round)) leaves typing with the note")
+            key(window, "a", code: 0)
+            XCTAssertTrue(probe.writing.contains(String(repeating: "a", count: round)), "typing still reaches the note")
+        }
+        XCTAssertEqual(probe.statusRetries + probe.statusOpens, 0, "nothing was activated")
+    }
+
+    /// Round 2, Dot R-7: a task failure with no note has no details to open,
+    /// so its words are not a control that does nothing; Retry is the only
+    /// button. Tab from the note reaches Retry first with either keyboard policy.
+    func testBG66NoNoteTaskFailureOffersOnlyRetryAsAControl() throws {
+        try requireKeyWindowTests()
+        let probe = TransientFocusProbe()
+        let (window, hosting) = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: true)
+        let editor = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextView }.first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        probe.shown = 4
+        spin(0.3)
+        XCTAssertTrue(window.firstResponder === editor, "the failure appearing leaves typing with the note")
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        hosting.layoutSubtreeIfNeeded()
+        let all = elements(hosting)
+        let words = try XCTUnwrap(all.first { $0.accessibilityIdentifier?() == "notes-status-primary" }, "the failure's words")
+        XCTAssertNotEqual(words.accessibilityRole?(), .button, "words with nothing to open are not a button")
+        XCTAssertFalse(words.accessibilityPerformPress?() ?? false, "nothing to press")
+        let retry = try XCTUnwrap(all.first { $0.accessibilityIdentifier?() == "notes-status-action" }, "Retry")
+        XCTAssertTrue(retry.accessibilityPerformPress?() ?? false, "Retry presses")
+        XCTAssertEqual(probe.statusRetries, 1)
+        XCTAssertEqual(probe.statusOpens, 0)
+        window.selectNextKeyView(nil)
+        spin(0.1)
+        key(window, " ", code: 49)
+        XCTAssertEqual(probe.statusRetries, 2, "the first Tab stop is Retry")
+        XCTAssertEqual(probe.statusOpens, 0)
     }
 
     func testR26TransientFeedbackMountPreservesEditorFirstResponder() throws {

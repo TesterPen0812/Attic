@@ -1,3 +1,18 @@
+## 2026-11-14 · Status actions: keyboard reach without Full Keyboard Access (BG-66)
+
+The Notes status pill's Details button, its Retry and its Cancel ✕ now use
+the house gated focus ring (R-26). On macOS 26
+`.focusable(true)` plus Space/Return handling lets Tab reach them and Space
+activate them with Full Keyboard Access off, the default (`.activate` alone
+still skips them). Their focus ring still registers a
+focus state only while the keyboard drives (`atticOwnFocusRing`), so a status
+appearing, or the window becoming key again, never takes the typing from the
+note. Retry no longer keeps an always-on focus proxy of its own. A task's
+failure with no note has no details to open: its words are plain text (not a
+control that does nothing) and Retry is the only stop. `AtticSmallButton`
+gains `reachableWithoutFullKeyboardAccess` (off by default; only the status
+✕ sets it). The look is unchanged.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another

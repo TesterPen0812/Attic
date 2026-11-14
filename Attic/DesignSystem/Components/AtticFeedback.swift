@@ -77,20 +77,23 @@ private struct AtticToastButton: View {
     let title: String
     let outerRadius: CGFloat
     var acceptsKeyboardFocus = true
-    var onFocus: (Bool) -> Void = { _ in }
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
-    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @State private var hovered = false
-    @FocusState private var focused: Bool
 
     var body: some View {
         if acceptsKeyboardFocus {
+            // Reachable by Tab with Full Keyboard Access off too; the focus
+            // state behind the ring is only registered while the keyboard
+            // drives (`atticOwnFocusRing`), so a window becoming key again
+            // never hands the typing to it.
             button
-                .focused($focused)
-                .onChange(of: focused) { _, now in onFocus(now) }
+                .modifier(AtticKeyboardReach(action: action))
+                .focusEffectDisabled()
+                .atticOwnFocusRing(.rounded(radius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius,
+                                            height: AtticControlSize.smallHeight))
         } else {
             // Do not register a FocusState for transient Undo chrome:
             // SwiftUI's native key proxy would take the editor's responder.
@@ -108,8 +111,6 @@ private struct AtticToastButton: View {
                 .contentShape(AtticUndoToast.buttonShape(outer: outerRadius))
         }
         .buttonStyle(.plain)
-        .atticFocusRing(acceptsKeyboardFocus && focused && keyboardFocusVisible,
-                        cornerRadius: AtticUndoToast.buttonShape(outer: outerRadius).cornerRadius)
         .onHover { hovered = $0 }
     }
 }
@@ -533,7 +534,10 @@ struct AtticStatusPill: View {
     var onCancel: (() -> Void)?
     /// The room the bottom row leaves it (it truncates its words to fit).
     var maxWidth: CGFloat = AtticNoteMetrics.pillMaxWidth
-    let onOpen: () -> Void
+    /// Opens the details. Nil when there are none to show (a task's failure
+    /// with no note): the words are then plain, not a control that does
+    /// nothing, and Retry or ✕ stay the pill's only controls.
+    let onOpen: (() -> Void)?
 
     @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
@@ -546,39 +550,13 @@ struct AtticStatusPill: View {
         // material in some Dark palettes (the appearance matrix).
         let ink: AtticInk = .body
         HStack(spacing: m.pillGap) {
-            Button(action: onOpen) {
-                HStack(spacing: m.pillGap) {
-                    if let systemName = item.systemName {
-                        AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium, ink: item.tone.iconInk)
-                    } else {
-                        AtticSpinner()
-                    }
-                    AtticText(verbatim: item.title, style: .toast, ink: ink, truncates: true)
-                    if more > 0 {
-                        AtticText(verbatim: "+\(more)", style: .count, ink: .body)
-                            .padding(.horizontal, AtticTagMetrics.horizontalPadding)
-                            .frame(height: AtticControlSize.tagHeight)
-                            .background(AtticControlShape.shape(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight), exponent: AtticShape.controlExponent)
-                                .fill(design.tokens.chipHover.color))
-                    }
-                }
-                .frame(height: m.pillHeight)
-                .padding(.leading, m.pillPadding)
-                .padding(.trailing, inlineAction == nil && onCancel == nil ? m.pillPadding : 0)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(AtticUndimmedButtonStyle())
-            .focusEffectDisabled()
-            .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
-            .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
-            .accessibilityHint(String(localized: "Shows details"))
-            .accessibilityIdentifier("notes-status-primary")
+            primary(radius: radius, ink: ink)
             if let inlineAction {
                 AtticToastButton(title: inlineAction.title, outerRadius: radius,
                                  action: inlineAction.handler)
                     .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
             } else if let onCancel {
-                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
+                AtticSmallButton(systemName: "xmark", label: "Cancel", reachableWithoutFullKeyboardAccess: true, action: onCancel)
                     .accessibilityIdentifier("notes-status-cancel")
             }
         }
@@ -590,6 +568,49 @@ struct AtticStatusPill: View {
         .accessibilityElement(children: .contain)
         .atticControlProbe("Status pill", id: probeID, expectedSize: nil, radius: radius,
                            expectedRadius: AtticRadius.control(height: m.pillHeight))
+    }
+
+    /// The state's glyph and words: the details button, or plain words when
+    /// there are no details to open.
+    @ViewBuilder
+    private func primary(radius: CGFloat, ink: AtticInk) -> some View {
+        let m = AtticNoteMetrics.self
+        let content = HStack(spacing: m.pillGap) {
+            if let systemName = item.systemName {
+                AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium, ink: item.tone.iconInk)
+            } else {
+                AtticSpinner()
+            }
+            AtticText(verbatim: item.title, style: .toast, ink: ink, truncates: true)
+            if more > 0 {
+                AtticText(verbatim: "+\(more)", style: .count, ink: .body)
+                    .padding(.horizontal, AtticTagMetrics.horizontalPadding)
+                    .frame(height: AtticControlSize.tagHeight)
+                    .background(AtticControlShape.shape(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight), exponent: AtticShape.controlExponent)
+                        .fill(design.tokens.chipHover.color))
+            }
+        }
+        .frame(height: m.pillHeight)
+        .padding(.leading, m.pillPadding)
+        .padding(.trailing, inlineAction == nil && onCancel == nil ? m.pillPadding : 0)
+        .contentShape(Rectangle())
+        if let onOpen {
+            Button(action: onOpen) { content }
+                .buttonStyle(AtticUndimmedButtonStyle())
+                // Tab reaches it with Full Keyboard Access off too; its
+                // ring registers a focus state only while the keyboard drives.
+                .modifier(AtticKeyboardReach(action: onOpen))
+                .focusEffectDisabled()
+                .atticOwnFocusRing(.rounded(radius: radius, height: m.pillHeight))
+                .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
+                .accessibilityHint(String(localized: "Shows details"))
+                .accessibilityIdentifier("notes-status-primary")
+        } else {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(item.title)
+                .accessibilityIdentifier("notes-status-primary")
+        }
     }
 }
 
@@ -762,5 +783,27 @@ private struct AtticErrorAnnouncementModifier: ViewModifier {
 extension View {
     func atticAnnounceErrors(_ messages: [String]) -> some View {
         modifier(AtticErrorAnnouncementModifier(messages: messages))
+    }
+}
+
+
+
+/// A button Tab reaches with Full Keyboard Access off, the default. Measured
+/// on macOS 26: `focusable(true, interactions: .activate)` (the notice
+/// action's policy) joins the key loop only under Full Keyboard Access; the
+/// automatic interactions join it always, but then Space and Return no
+/// longer press the button, so they are handled here.
+struct AtticKeyboardReach: ViewModifier {
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(isEnabled)
+            .onKeyPress(keys: [.space, .return], phases: .down) { key in
+                guard isEnabled, key.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+                action()
+                return .handled
+            }
     }
 }

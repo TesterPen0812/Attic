@@ -1398,6 +1398,9 @@ struct AtticSmallButton: View {
     /// tall, hover and press as the material's fills.
     let floating: Bool
     let acceptsKeyboardFocus: Bool
+    /// Tab reaches it with Full Keyboard Access off too (a status pill's ✕):
+    /// the focus ring still registers a focus state only while the keyboard drives.
+    let reachableWithoutFullKeyboardAccess: Bool
     let action: () -> Void
 
     @Environment(\.atticSmallControlBarSize) private var barSize
@@ -1411,13 +1414,14 @@ struct AtticSmallButton: View {
 
     init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
          quietIcon: Bool = false, floating: Bool = false, acceptsKeyboardFocus: Bool = true,
-         action: @escaping () -> Void) {
+         reachableWithoutFullKeyboardAccess: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
         self.quietIcon = quietIcon
         self.floating = floating
         self.acceptsKeyboardFocus = acceptsKeyboardFocus
+        self.reachableWithoutFullKeyboardAccess = reachableWithoutFullKeyboardAccess
         self.action = action
     }
 
@@ -1431,6 +1435,7 @@ struct AtticSmallButton: View {
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
+        .modifier(AtticOptionalActivateFocus(enabled: reachableWithoutFullKeyboardAccess && acceptsKeyboardFocus, action: action))
         .focusEffectDisabled()
         .atticOwnFocusRing(.rounded(radius: radius, height: height), acceptsKeyboardFocus: acceptsKeyboardFocus)
         .onHover { hovered = $0 }
@@ -1439,6 +1444,18 @@ struct AtticSmallButton: View {
         .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius,
                            expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height)
                                : (barSize.map { AtticRadius.control(height: $0.height) } ?? 12))
+    }
+}
+
+/// `AtticKeyboardReach` when enabled: a button Tab reaches without Full
+/// Keyboard Access.
+private struct AtticOptionalActivateFocus: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled { content.modifier(AtticKeyboardReach(action: action)) } else { content }
     }
 }
 
