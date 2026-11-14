@@ -394,16 +394,14 @@ final class AtticDropdownTests: XCTestCase {
         spin(0.2)
         realized.removeAll()
         leaveAMouseMoveAsTheCurrentEvent(in: window)
+        defer { restoreNeutralCurrentEvent() }
         XCTAssertEqual(NSApp.currentEvent?.type, .mouseMoved, "the stale pointer event is in place")
         host.rootView = TagList(tags: tags, highlighted: tags.count - 1, onRowAppear: { realized.insert($0) })
             .atticDesign(AtticDesignContext(reduceMotion: true))
         host.layoutSubtreeIfNeeded()
-        let deadline = Date().addingTimeInterval(3)
-        while !realized.contains("tag-1999"), Date() < deadline {
-            host.layoutSubtreeIfNeeded()
-            spin(0.02)
-        }
+        wait(for: host) { realized.contains("tag-1999") }
         XCTAssertTrue(realized.contains("tag-1999"), "a key press's highlight scrolls to its row after a stale mouse move")
+        XCTAssertLessThan(realized.count, 70, "scroll-to-last cannot mount the full tag inventory")
     }
 
     // MARK: Where a highlight came from
@@ -486,13 +484,10 @@ final class AtticDropdownTests: XCTestCase {
             XCTAssertEqual(scrollOffset(in: host) ?? -1, start, accuracy: 0.5, "a hover highlight never scrolls the list (parameter: \(viaParameter))")
 
             leaveAMouseMoveAsTheCurrentEvent(in: window)
+            defer { restoreNeutralCurrentEvent() }
             host.rootView = ViewportRows(highlighted: 35, viaParameter: viaParameter, box: box)
             host.layoutSubtreeIfNeeded()
-            let deadline = Date().addingTimeInterval(3)
-            while (scrollOffset(in: host) ?? start) - start < 20, Date() < deadline {
-                host.layoutSubtreeIfNeeded()
-                spin(0.02)
-            }
+            wait(for: host) { (scrollOffset(in: host) ?? start) - start >= 20 }
             XCTAssertGreaterThan((scrollOffset(in: host) ?? start) - start, 20,
                                  "an arrow key's highlight is brought into view (parameter: \(viaParameter))")
         }
@@ -803,6 +798,44 @@ final class AtticDropdownTests: XCTestCase {
             spin(0.5)
             XCTAssertEqual(scrollOffset(in: host) ?? -1, start, accuracy: 0.5,
                            "a highlight the pointer made does not scroll, off the row already (parameter: \(viaParameter))")
+        }
+    }
+
+    // MARK: One id per row (R-6)
+
+    /// A row's `.id`, the id it publishes and the id the pointer reports
+    /// are one: the viewport tells a hover from the keyboard by comparing
+    /// them. Checked on the real tag and task pickers' rows.
+    func testPF43TagAndTaskRowsReportOneIDToTheirIdentityTheHighlightAndThePointer() throws {
+        let choices = (0..<30).map { AtticTaskPicker.Choice(id: UUID(), title: String(format: "Task %02d", $0)) }
+        for kind in ["tags", "tasks"] {
+            let window = makeWindow()
+            defer { window.close() }
+            leaveAMouseMoveAsTheCurrentEvent(in: window)
+            defer { restoreNeutralCurrentEvent() }
+            let model = NestedModel()
+            let host = kind == "tags" ? NSHostingView(rootView: AnyView(NestedTagCard(model: model, tags: tagNames(30))))
+                                      : NSHostingView(rootView: AnyView(NestedTaskCard(model: model, choices: choices)))
+            host.frame = CGRect(x: 0, y: 0, width: 240, height: 420)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            spin(0.3)
+            let inner = try XCTUnwrap(scrollViews(in: host).last, "the list scrolls (\(kind))")
+            scroll(inner, to: 16)
+            spin(0.3)
+
+            try Pointer().moveToBottomEdge(of: inner, in: host)
+            wait(for: host) { model.highlighted != nil && model.preference != nil && model.origin.pointerRow != nil }
+            let index = try XCTUnwrap(model.highlighted, "the pointer lit the cut-off row (\(kind))")
+            let expected = kind == "tags" ? String(format: "tag-%02d", index) : choices[index].id.uuidString
+            XCTAssertEqual(model.origin.pointerRow, expected, "the pointer reports the row's id (\(kind))")
+            XCTAssertEqual(model.preference, expected, "the row publishes the same id (\(kind))")
+
+            // `.id`: scrolling to that id finds the row.
+            let before = inner.contentView.bounds.origin.y
+            model.proxy?.scrollTo(expected)
+            wait(for: host) { inner.contentView.bounds.origin.y > before + 4 }
+            XCTAssertGreaterThan(inner.contentView.bounds.origin.y, before + 4, "a row with that `.id` is in the list (\(kind))")
         }
     }
 
