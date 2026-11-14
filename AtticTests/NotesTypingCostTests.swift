@@ -533,6 +533,27 @@ final class NotesTypingCostTests: XCTestCase {
         XCTAssertEqual(view.selectedRange(), NSRange(location: typedAt + 1, length: 0), "and the caret stays in the body")
     }
 
+    /// Review R-7 (c): the matches already shown stay, and stay navigable,
+    /// until a scan's replacement publishes: Return or ⌘G right after a key is
+    /// not dropped and the count does not flicker to "No matches".
+    func testPF16PreviousMatchesStayNavigableUntilTheNewScanPublishes() async {
+        let (engine, view) = longFindEditor()
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 3)
+        engine.find.query = "needl"
+        XCTAssertEqual(engine.find.matches.count, 3, "the count does not flicker while the next scan runs")
+        let before = view.selectedRange()
+        engine.find.next()
+        XCTAssertNotEqual(view.selectedRange(), before, "⌘G straight after a key is not dropped")
+        let moved = view.selectedRange()
+        await engine.find.waitForSearch()
+        XCTAssertEqual(engine.find.matches.count, 3)
+        XCTAssertEqual(view.selectedRange(), moved, "the late publication leaves the person's navigation alone")
+    }
+
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
         let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
             .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])

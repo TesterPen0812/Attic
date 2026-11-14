@@ -221,16 +221,35 @@ final class NoteFindController: ObservableObject {
                     cell: engine.activeTableView?.activeCell)
     }
 
-    private func scheduleBackgroundSearch(in engine: NoteEditorEngine, origin: Interaction?) {
+    private func scheduleBackgroundSearch(in engine: NoteEditorEngine, origin: Interaction?,
+                                          changedTable: NoteTableAttachment? = nil) {
         let selectFirst = origin != nil
         searchOrigin = origin
         let current = searchGeneration
         let needle = query
         let input = snapshot(in: engine)
-        let previous = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
-        matches = []
-        index = nil
-        updateHighlights(clear: true)
+        // The matches already shown stay (and stay navigable, so Return or ⌘G
+        // right after a key still works and the count does not flicker) until
+        // the new ones publish, except where this edit made them wrong.
+        let shown = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        let previous: Match?
+        if let rebased = pendingMatches {
+            previous = pendingOldMatch
+            matches = rebased
+            index = pendingOldMatch.flatMap { rebased.firstIndex(of: $0) }
+        } else if pendingFullSearch {
+            // The text changed under the matches and nothing tracked the shift.
+            previous = shown
+            matches = []
+            index = nil
+        } else if let table = changedTable {
+            previous = shown
+            matches = matches.filter { $0.tableID != table.objectID }
+            index = shown.flatMap { matches.firstIndex(of: $0) }
+        } else {
+            previous = shown
+        }
+        updateHighlights(clear: matches.isEmpty)
         let worker = Task.detached(priority: .userInitiated) {
             NoteFindWorker.scan(input, for: needle)
         }
@@ -594,7 +613,7 @@ final class NoteFindController: ObservableObject {
         let needsFullScan = selectFirst || wasSearching || pendingFullSearch
             || (changedTable == nil && pendingSearchRange == nil)
         if needsFullScan, needsBackgroundSearch(in: engine) {
-            scheduleBackgroundSearch(in: engine, origin: origin)
+            scheduleBackgroundSearch(in: engine, origin: origin, changedTable: changedTable)
             return
         }
         let old = pendingMatches != nil ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
