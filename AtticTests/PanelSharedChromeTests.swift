@@ -1240,3 +1240,29 @@ extension PanelSharedChromeTests {
         XCTAssertFalse(flat.contains("notes-tag-bar"), "the summary's container is not a stop")
     }
 }
+
+extension PanelSharedChromeTests {
+    /// Closing the bar must beat a request whose next-turn focus handoff
+    /// has not run yet. No native FKA focus is needed to observe the stale
+    /// assignment itself; CI additionally observes native focus below.
+    func testClosingTheTagBarCancelsItsQueuedKeyboardHandoff() throws {
+        let chrome = PanelSharedChrome()
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        let model = SharedBarModel(page: .notes)
+        let window: NSWindow = NSApp.isFullKeyboardAccessEnabled ? mountKeyBar(chrome, model) : mountBar(chrome, model)
+        defer { close(window) }
+        PanelKeyStopSeam.holdsHandoffs = true
+        PanelKeyStopSeam.tagKeyAssignments = 0
+        chrome.tagBar.requestKeyFocus()
+        spin(0.2)
+        XCTAssertEqual(PanelKeyStopSeam.held.count, 1, "the request is queued before native focus takes")
+        chrome.tagBar.close()
+        spin(0.2)
+        let held = PanelKeyStopSeam.held
+        PanelKeyStopSeam.held = []
+        held.forEach { $0() }
+        spin(0.2)
+        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "close wins over the queued request")
+        XCTAssertFalse(chrome.tagBar.keyFocused)
+    }
+}

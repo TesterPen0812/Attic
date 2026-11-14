@@ -75,7 +75,8 @@ final class PanelTagBarState: ObservableObject {
     /// Asks "#" to give the keyboard up (a click elsewhere, the panel's
     /// reveal, the bar closing). Tasks orders its own Tab and ignores it.
     func releaseKeyFocus() {
-        if keyFocused { keyReleaseRequest &+= 1 }
+        // A requested handoff may still be queued before keyFocused becomes true.
+        keyReleaseRequest &+= 1
     }
 
     func setCursor(_ stop: PanelTagBarStop?) {
@@ -639,10 +640,17 @@ private struct PanelTagKeyFocus: ViewModifier {
             .onChange(of: state.keyFocusRequest) { _, _ in arm() }
             .onChange(of: state.keyReleaseRequest) { _, _ in
                 guard !managed else { return }
+                // Cancel pending focus now, even if it has not landed yet.
+                handoff.cancel()
+                armed = false
+                let released = handoff.generation
                 // After the click (or reveal) that asked has been dispatched:
                 // a field it focused already has the keyboard, and "#" then
                 // has nothing to give up.
-                DispatchQueue.main.async { if state.keyFocused { release() } }
+                DispatchQueue.main.async {
+                    guard handoff.generation == released else { return }
+                    if state.keyFocused { release() }
+                }
             }
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
                 guard asked == AnyHashable(PanelTagKeyFocusID()) else { return }
