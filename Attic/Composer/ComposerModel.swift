@@ -387,18 +387,23 @@ final class ComposerModel: ObservableObject {
         guard let saved = preferredID.flatMap({ id in failedTaskDrafts.first { $0.id == id } })
                 ?? failedTaskDrafts.first else { return false }
         let alreadyRecovering = recoveringFailedTaskID == saved.id
-        // The kept card's submission identity restores its recovery state
-        // even when its words changed after the failed submission.
+        // Identical words can belong to a genuinely newer draft with other
+        // picks or files. Only the kept card's submission identity proves
+        // that an occupied editor belongs to this recovery record.
         let keptRecovery = restoringKeptDraft && services.drafts?.load()?.recoveringTaskID == saved.id
-        let sameWords = tasks.addBar.text == saved.title && writing == saved.writing
-        guard !hasDraft || alreadyRecovering || keptRecovery || sameWords,
+        guard !hasDraft || alreadyRecovering || keptRecovery,
               tasks.addBarState.files.isEmpty || alreadyRecovering else { return false }
         if !alreadyRecovering {
             let keptTitle = tasks.addBar.text
             tasks.addBar = failedTaskContents[saved.id]?.title ?? saved.addBar
             if keptRecovery { tasks.addBar.text = keptTitle }
             else { writing = saved.writing }
-            if let files = failedTaskContents[saved.id]?.files { tasks.restoreComposerFiles(files) }
+            if let contents = failedTaskContents[saved.id] {
+                tasks.restoreComposerFiles(contents.files)
+                // Ownership moves to the editor. Keeping a second copy here
+                // could later advertise files the user removed from the card.
+                failedTaskContents[saved.id] = (contents.title, [])
+            }
         }
         recoveringFailedTaskID = saved.id
         failed = true

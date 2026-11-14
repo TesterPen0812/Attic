@@ -225,6 +225,65 @@ final class ComposerTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: drafts.key + ".failedTasks"), "saved retries must clear the durable failure queue")
     }
 
+    func testFailedTaskOwnsStagedBytesUntilRecoveryThenTransfersOwnershipToEditor() throws {
+        var staging = TaskAttachmentStaging()
+        let directory = try staging.makeOwnedDirectory()
+        let file = directory.appendingPathComponent("owned.pdf")
+        let payload = Data("owned staged bytes".utf8)
+        try payload.write(to: file)
+        staging.urls = [file]
+        page.services.acknowledgementDelay = .seconds(3600)
+        model.open(on: .tasks(.now))
+        type("Failed owner")
+        model.writing = "Writing forces the atomic save failure"
+        page.addBarState.files = [TasksComposerFiles(staging: staging)]
+        model.submit()
+        type("Another draft")
+        saveFailure.on = true
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(page.addBarState.files.isEmpty, "the next draft never claims A's files")
+        page.clearComposerFiles()
+        XCTAssertEqual(try Data(contentsOf: file), payload, "clearing B must not delete A's referenced staged bytes")
+        model.clearDraft()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar.text, "Failed owner")
+        XCTAssertEqual(page.addBarState.fileNames, ["owned.pdf"])
+        XCTAssertEqual(try Data(contentsOf: file), payload)
+        // Explicitly removing the recovered file transfers no ownership back
+        // to the failed queue. Reopening must never advertise deleted bytes.
+        page.clearComposerFiles()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        model.clearDraft()
+        model.open(on: .tasks(.now))
+        XCTAssertEqual(page.addBar.text, "Failed owner")
+        XCTAssertTrue(page.addBarState.fileNames.isEmpty)
+    }
+
+    func testIdenticallyWordedNewDraftNeverTakesFailedDraftPicksOrFiles() throws {
+        page.services.acknowledgementDelay = .seconds(3600)
+        model.open(on: .tasks(.now))
+        type("Same words")
+        model.writing = "Same writing"
+        page.addBar.picked.priority = .high
+        let file = try ownedTemporaryFile(named: "first.pdf", prefix: "ComposerIdenticalDrafts")
+        try Data("first only".utf8).write(to: file)
+        page.addComposerFiles(urls: [file])
+        model.submit()
+        type("Same words")
+        model.writing = "Same writing"
+        page.addBar.picked.priority = .low
+        saveFailure.on = true
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(page.addBar.picked.priority, .low)
+        XCTAssertTrue(page.addBarState.fileNames.isEmpty)
+        saveFailure.on = false
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(liveTasks().map(\.priority), [.low])
+        XCTAssertEqual(page.addBar.picked.priority, .high)
+        XCTAssertEqual(page.addBarState.fileNames, ["first.pdf"])
+    }
+
     func testPendingTaskSubmissionSurvivesQuitBeforeAcknowledgedSave() throws {
         let suite = "ComposerPendingTasks.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -1912,6 +1971,34 @@ final class ComposerRecoveryTests: XCTestCase {
         restarted.page.settlePendingCompletionAcknowledgements()
         XCTAssertEqual(try rows(restarted).map(\.id), [pendingID])
         XCTAssertTrue(try rows(restarted).allSatisfy { $0.attachments.isEmpty })
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+    }
+
+    func testIdenticallyWordedNewDraftAndPendingDraftRemainSeparateAfterRelaunch() throws {
+        let first = try launch()
+        type("Same words", in: first)
+        first.page.addBar.picked.priority = .high
+        first.composer.submit()
+        failure.on = true
+        first.page.settlePendingCompletionAcknowledgements() // recovery now owns the kept-card backup
+        first.composer.submit() // retry; a new draft can begin while this one saves
+        type("Same words", in: first)
+        first.page.settlePendingCompletionAcknowledgements()
+        XCTAssertNil(first.page.addBar.picked.priority, "even an older kept recovery identity cannot claim newer typing")
+        first.composer.saveKeptDraft()
+        let pendingID = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        let restarted = try launch()
+        XCTAssertNil(restarted.page.addBar.picked.priority, "the newer kept draft is not the pending high-priority task")
+        failure.on = false
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).count, 1)
+        XCTAssertNotEqual(try rows(restarted).first?.id, pendingID)
+        XCTAssertEqual(restarted.page.addBar.picked.priority, .high)
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).count, 2)
+        XCTAssertTrue(try rows(restarted).contains { $0.id == pendingID && $0.priority == .high })
         XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
     }
 
