@@ -1559,7 +1559,12 @@ final class DrawPageModel: ObservableObject {
         // in the store's undo history for recovery.
         let editorConflicts = editing.map { edit in
             guard let updated = fresh.first(where: { $0.id == edit.id }),
-                  case .text(let text) = updated.content else { return true }
+                  case .text(let text) = updated.content else {
+                // An emptied box (its removal is queued or saved) and a new
+                // box are not in the store: that absence is not an agent's
+                // delete, and the editor keeps the box's retained identity.
+                return edit.stored
+            }
             return text != edit.text
         } ?? false
         guard fresh != objects else { refreshHistory(); return }

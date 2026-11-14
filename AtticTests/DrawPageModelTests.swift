@@ -72,6 +72,31 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stored.first { $0.id == text.id }), replacement)
     }
 
+    /// BG-30 review (Opus R-5): emptying a stored text box queues its removal;
+    /// an unrelated external change (the agent adds another object) must not
+    /// close the editor, or the retained width, scale and layer are never used.
+    func testBG30ClearedTextBoxSurvivesAnUnrelatedExternalChange() throws {
+        let canvas = try XCTUnwrap(model.canvasID)
+        let text = DrawObject(frame: DrawFrame(x: 25, y: 50, width: 70, height: 30), zIndex: 1,
+                              content: .text("Original long text"), textWidth: 70, textScale: 1.5)
+        XCTAssertTrue(store.perform(.put([text]), on: canvas).isSaved)
+        model.open(canvas)
+        model.edit(text.id)
+        model.typed("")
+        let other = DrawObject(frame: DrawFrame(x: 200, y: 200, width: 40, height: 40), zIndex: 3,
+                               content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([other]), on: canvas).isSaved)
+        model.syncExternalChanges()
+        XCTAssertNotNil(model.editing, "An unrelated external change must not close the emptied text editor")
+        model.typed("x")
+        model.endEditing()
+        let replacement = try XCTUnwrap(stored.first { $0.id == text.id })
+        XCTAssertEqual(replacement.textWidth, 70)
+        XCTAssertEqual(replacement.textScale, 1.5)
+        XCTAssertEqual(replacement.zIndex, 1)
+        XCTAssertNotNil(stored.first { $0.id == other.id })
+    }
+
     func testBG31ZeroHeightAndWidthResizeUseOnlyNonzeroAxis() {
         for vertical in [false, true] {
             let original = DrawObject(frame: DrawFrame(x: 10, y: 20,
