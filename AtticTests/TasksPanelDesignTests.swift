@@ -182,6 +182,26 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertNil(model.foldTurn)
     }
 
+    // MARK: - pro-bugs-tasks-r1 fix 1: what BG-2 left
+
+    /// Opus R-4 = Dot R-6: a header click starts a closing turn that folds the
+    /// model only when it ends. A task added in that window must not be
+    /// folded away by the pending completion.
+    func testBG2AddingIntoAGroupThatIsStillClosingKeepsItOpen() throws {
+        let anchor = try add("Today anchor", due: 0)
+        let key = try XCTUnwrap(model.groupKey(of: anchor, on: .now))
+        model.foldTurn = TasksFoldTurn(tab: .now, key: key, closing: true, headerFolded: true, progress: 0.5, generation: 7)
+        model.addBar.text = "Added while Today closes"
+        model.addBar.picked.day = day(0)
+        let created = try XCTUnwrap(model.submitAddBar())
+        XCTAssertEqual(model.groupKey(of: created, on: .now), key)
+        XCTAssertFalse(model.folded(on: .now).contains(key))
+        // The turn's completion (TasksFold.turn) folds only its own turn.
+        if let turn = model.foldTurn, turn.generation == 7, turn.closing { model.toggleGroup(turn.key, on: turn.tab) }
+        XCTAssertFalse(model.folded(on: .now).contains(key), "BG-2: a closing group must not fold over the new task")
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == created })
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])

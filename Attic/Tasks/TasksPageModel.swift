@@ -481,7 +481,12 @@ final class TasksPageModel: ObservableObject {
     /// A new task can land in a folded date group. Open that destination
     /// before publishing its scroll request, without selecting the new row.
     func unfoldAddedTask(_ id: UUID, on tab: TasksTab) {
-        guard tab != .done, let key = groupKey(of: id, on: tab), folded(on: tab).contains(key) else { return }
+        guard tab != .done, let key = groupKey(of: id, on: tab) else { return }
+        // A group still closing folds the model only when its turn ends
+        // (`TasksFold`): end that turn, or the pending fold lands on the new
+        // task.
+        if let turn = foldTurn, turn.closing, turn.matches(tab, key) { foldTurn = nil }
+        guard folded(on: tab).contains(key) else { return }
         toggleGroup(key, on: tab)
     }
 
