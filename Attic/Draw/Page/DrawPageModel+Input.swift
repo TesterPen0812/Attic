@@ -207,10 +207,11 @@ extension DrawPageModel {
         case .ink(let trace):
             let samples = DrawInk.smooth(trace.samples)
             if !samples.isEmpty {
-                let object = DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: topZ + 1,
+                let layers = DrawLayerOrder.reserve(objects, above: 1)
+                let object = DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: layers.last + 1,
                                         style: DrawStyle(colour: colour, size: strokeSize, corners: .square),
                                         content: .stroke(samples))
-                performAcknowledged(.put([object]))
+                performAcknowledged(.put(layers.reindexed + [object]))
             }
         case .erase(let gone, _):
             if !gone.isEmpty { performAcknowledged(.remove(Array(gone))) } else { board?.drawContentChanged() }
@@ -219,10 +220,11 @@ extension DrawPageModel {
                 let frame = kind == .line || kind == .arrow
                     ? DrawGeometry.lineFrame(from: start, to: end) : DrawGeometry.boxFrame(from: start, to: end)
                 // Rectangles start square; Rounded is in Style.
-                let object = DrawObject(frame: frame, zIndex: topZ + 1,
+                let layers = DrawLayerOrder.reserve(objects, above: 1)
+                let object = DrawObject(frame: frame, zIndex: layers.last + 1,
                                         style: DrawStyle(colour: colour, size: strokeSize, corners: .square),
                                         content: .shape(kind))
-                performAcknowledged(.put([object]))
+                performAcknowledged(.put(layers.reindexed + [object]))
                 // Shapes return to Select (and nothing is selected after adding).
                 tool = .select
             }

@@ -142,8 +142,12 @@ extension DrawPageModel {
     /// canvas the images were dropped on.
     private func place(_ imports: [DrawImageImport], at drop: DrawImageDrop) -> DrawSaveResult? {
         guard !imports.isEmpty else { return nil }
+        flushLiveInput()
+        syncExternalChanges()
         let room = drop.room, step = drop.step, centre = drop.centre
-        var z = drop.canvas == canvasID ? topZ : (try? store.open(drop.canvas).objects.map(\.zIndex).max()) ?? 0
+        let existing = drop.canvas == canvasID ? objects : ((try? store.open(drop.canvas).objects) ?? [])
+        let layers = DrawLayerOrder.reserve(existing, above: imports.count)
+        var z = layers.last
         let placed = imports.enumerated().map { index, item -> DrawObject in
             let size = item.naturalSize
             let scale = min(1, room.width / max(size.width, 0.001), room.height / max(size.height, 0.001))
@@ -154,7 +158,7 @@ extension DrawPageModel {
                                                width: width, height: height),
                               zIndex: z, content: .image(item.image))
         }
-        let result = perform(.put(placed), on: drop.canvas)
+        let result = perform(.put(layers.reindexed + placed), on: drop.canvas)
         AtticSounds.play(.attached, if: result.isSaved)
         return result
     }

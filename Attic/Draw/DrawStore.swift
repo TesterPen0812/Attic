@@ -561,14 +561,15 @@ class DrawStore: DrawStoreProtocol {
         do {
             let clipboard = try JSONDecoder().decode(Clipboard.self, from: data)
             guard clipboard.version == 1, offset.x.isFinite, offset.y.isFinite else { throw DrawStoreError.invalidClipboard }
-            let top = try state(id).objects.values.map(\.zIndex).max() ?? -1
-            guard top < Int64.max - Int64(clipboard.objects.count) else { throw DrawStoreError.invalidClipboard }
+            let current = try state(id).snapshot.objects
+            let layers = DrawLayerOrder.reserve(current, above: clipboard.objects.count)
+            let top = current.isEmpty ? -1 : layers.last
             let objects = clipboard.objects.enumerated().map { index, object in
                 var copy = object.translated(by: offset)
                 copy.zIndex = top + Int64(index) + 1
                 return copy
             }
-            return perform(.put(objects), on: id)
+            return perform(.put(layers.reindexed + objects), on: id)
         } catch { return .held("Cannot paste these Draw objects: \(error)") }
     }
 

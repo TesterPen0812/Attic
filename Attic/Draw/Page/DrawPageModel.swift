@@ -843,7 +843,8 @@ final class DrawPageModel: ObservableObject {
         syncExternalChanges()
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
-        var z = topZ
+        let layers = DrawLayerOrder.reserve(objects, above: chosen.count)
+        var z = layers.last
         let step = 12 / viewport.zoom
         let copies = chosen.map { object -> DrawObject in
             z += 1
@@ -851,7 +852,7 @@ final class DrawPageModel: ObservableObject {
             copy.zIndex = z
             return copy
         }
-        performAcknowledged(.put(copies))
+        performAcknowledged(.put(layers.reindexed + copies))
         select(copies.map(\.id))
     }
 
@@ -859,16 +860,19 @@ final class DrawPageModel: ObservableObject {
         syncExternalChanges()
         let chosen = selectedObjects
         guard !chosen.isEmpty else { return }
+        let layers = DrawLayerOrder.reserve(objects, above: toFront ? chosen.count : 0,
+                                            below: toFront ? 0 : chosen.count + 1)
         // Pre-increment below: leave every chosen object's z below the
         // previous bottom, so UUID tie-breaking cannot leave one in front.
-        var z = toFront ? topZ : (objects.first?.zIndex ?? 0) - Int64(chosen.count) - 1
+        var z = toFront ? layers.last : layers.first - Int64(chosen.count) - 1
         let moved = chosen.map { object -> DrawObject in
             z += 1
             var copy = object
             copy.zIndex = z
             return copy
         }
-        performAcknowledged(.put(moved))
+        let movingIDs = Set(chosen.map(\.id))
+        performAcknowledged(.put(layers.reindexed.filter { !movingIDs.contains($0.id) } + moved))
     }
 
     func copySelection() {
@@ -1019,8 +1023,11 @@ final class DrawPageModel: ObservableObject {
             }
             return
         }
-        var object = object(edit.id) ?? DrawObject(id: edit.id, frame: DrawFrame(x: edit.origin.x, y: edit.origin.y),
-                                                   zIndex: topZ + 1, style: edit.style, content: .text(text))
+        let existing = object(edit.id)
+        let layers: (reindexed: [DrawObject], first: Int64, last: Int64) =
+            existing == nil ? DrawLayerOrder.reserve(objects, above: 1) : ([], 0, 0)
+        var object = existing ?? DrawObject(id: edit.id, frame: DrawFrame(x: edit.origin.x, y: edit.origin.y),
+                                            zIndex: layers.last + 1, style: edit.style, content: .text(text))
         object.content = .text(text)
         object.style = edit.style
         object.frame.x = edit.origin.x
@@ -1028,7 +1035,12 @@ final class DrawPageModel: ObservableObject {
         Self.measure(&object, text: text)
         edit.stored = true
         editing = edit
-        if store is DrawPersistentStore {
+        if !layers.reindexed.isEmpty {
+            // On an extreme imported layer, create the box and rebalance in
+            // one Undo step. A typing burst cannot merge edits to multiple
+            // object IDs, so only this exceptional first key saves immediately.
+            perform(.put(layers.reindexed + [object]))
+        } else if store is DrawPersistentStore {
             queueTyping(.put([object]), changed: object, id: edit.id)
         } else { perform(.put([object])) }
     }

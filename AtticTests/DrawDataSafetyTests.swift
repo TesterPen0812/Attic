@@ -697,6 +697,61 @@ final class DrawDataSafetyTests: XCTestCase {
         XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([original.id, duplicateID, pastedID]))
     }
 
+    func testHunt17MaximumAndMinimumLayersStayEditableAndUndoable() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let id = try XCTUnwrap(page.canvasID)
+        let highest = DrawObject(zIndex: .max, content: .shape(.ellipse))
+        XCTAssertTrue(page.perform(.put([highest])).isSaved)
+        page.setTool(.shape)
+        page.pointerDown(at: CGPoint(x: 30, y: 35))
+        page.pointerDragged(to: CGPoint(x: 85, y: 110))
+        page.pointerUp()
+        page.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(id).objects.count, 2)
+        XCTAssertEqual(try store.open(id).objects.last?.content, .shape(.rectangle))
+        page.undo()
+        XCTAssertEqual(try store.open(id).objects, [highest], "Undo must restore the original Int64.max layer")
+
+        page.beginText(at: CGPoint(x: 75, y: 90))
+        page.typed("Highest layer text")
+        page.endEditing()
+        XCTAssertEqual(try store.open(id).objects.count, 2)
+        page.undo()
+        XCTAssertEqual(try store.open(id).objects, [highest], "Undo of text also restores the old layer")
+
+        let clipboard = try store.copy([highest.id], from: id)
+        XCTAssertTrue(store.paste(clipboard, into: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects.count, 2)
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        page.syncExternalChanges()
+        XCTAssertEqual(try store.open(id).objects, [highest])
+
+        page.setTool(.select)
+        page.select([highest.id])
+        page.duplicateSelection()
+        page.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(id).objects.count, 2)
+        page.undo()
+        XCTAssertEqual(try store.open(id).objects, [highest])
+
+        let lowest = DrawObject(zIndex: .min, content: .shape(.rectangle))
+        XCTAssertTrue(page.perform(.put([lowest])).isSaved)
+        page.select([highest.id])
+        page.arrange(toFront: false)
+        page.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(id).objects.first?.id, highest.id)
+        page.undo()
+        XCTAssertEqual(try store.open(id).objects, [lowest, highest], "Undo restores both extreme layer values")
+
+        let agent = try actions(store)
+        _ = try agent.drawAction("draw_add_shape", ["canvas_id": id.uuidString, "shape": "ellipse", "x": 25, "y": 35], beforeMutation: {})
+        XCTAssertEqual(try store.open(id).objects.count, 3)
+        XCTAssertEqual(try DrawPersistentStore(container: store.container).open(id).objects,
+                       try store.open(id).objects)
+    }
+
     func testHunt17SeededToolsPaletteClipboardAndUndoSurviveReopen() throws {
         for seed: UInt64 in [0xD17A_0101, 0xD17A_0202] {
             var state = seed

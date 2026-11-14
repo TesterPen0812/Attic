@@ -110,6 +110,26 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// Make room for new front/back layers without overflowing a valid imported
+/// Int64 layer. Reindexing preserves visual order and belongs to the same
+/// undoable command as the new object or arrangement.
+enum DrawLayerOrder {
+    static func reserve(_ ordered: [DrawObject], above: Int = 0, below: Int = 0)
+        -> (reindexed: [DrawObject], first: Int64, last: Int64) {
+        let first = ordered.first?.zIndex ?? 0
+        let last = ordered.last?.zIndex ?? 0
+        guard last > Int64.max - Int64(above) || first < Int64.min + Int64(below) else {
+            return ([], first, last)
+        }
+        let rebased = ordered.enumerated().map { index, object -> DrawObject in
+            var copy = object
+            copy.zIndex = Int64(index)
+            return copy
+        }
+        return (rebased, 0, Int64(rebased.count - 1))
+    }
+}
+
 struct DrawCanvas: Identifiable, Codable, Equatable, Sendable {
     var id: UUID = UUID()
     var name: String = "Untitled"

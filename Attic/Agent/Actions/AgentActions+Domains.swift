@@ -577,10 +577,11 @@ extension AgentActions {
         default:
             throw AgentActionsError.invalid("Unknown Draw action.")
         }
-        let object = DrawObject(frame: frame, zIndex: (snapshot.objects.map(\.zIndex).max() ?? 0) + 1,
+        let layers = DrawLayerOrder.reserve(snapshot.objects, above: 1)
+        let object = DrawObject(frame: frame, zIndex: layers.last + 1,
                                 style: style, content: content)
         try beforeMutation()
-        let save = draw.performAgent(.put([object]), on: canvasID)
+        let save = draw.performAgent(.put(layers.reindexed + [object]), on: canvasID)
         guard save.isSaved else {
             throw AgentActionsError.invalid("Draw edit did not save: \(String(describing: save))")
         }
