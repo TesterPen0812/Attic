@@ -692,7 +692,10 @@ struct AtticDropdownRow: View {
             switch phase {
             case .active:
                 guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                highlightOrigin?.pointerEntered(scrollID ?? title)
+                // Only a hover that moves the highlight is the pointer's: a
+                // row with no `onHover` (the tag suggestions) leaves the
+                // keyboard's highlight to scroll its row into view.
+                if onHover != nil { highlightOrigin?.pointerEntered(scrollID ?? title) }
                 if !hovered { hovered = true }
                 onHover?(true)
             case .ended:

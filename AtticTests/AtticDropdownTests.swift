@@ -734,6 +734,49 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(card0.contentView.bounds.origin.y, 0, accuracy: 0.5, "a click on › does not scroll the card")
     }
 
+    // MARK: A hover that does not move the highlight (R-3)
+
+    /// The Notes tag suggestions: rows with no `onHover`, so the pointer
+    /// moves no highlight. A resting pointer on a cut-off row must not
+    /// stop the keyboard's highlight from scrolling that row into view.
+    func testPF43APointerOnASuggestionRowDoesNotStopTheKeyboardsHighlightScrollingToIt() throws {
+        struct Suggestions: View {
+            let origin: AtticHighlightOrigin
+            let highlighted: Int
+            var body: some View {
+                AtticTagSuggestionList(suggestions: (0..<30).map { AtticTagSuggestion(name: String(format: "tag-%02d", $0), count: 1, isNew: false) },
+                                       highlighted: highlighted, onPick: { _ in })
+                    .environment(\.atticDropdownHeight, 6 * AtticDropdownMetrics.rowHeight + 2 * AtticDropdownMetrics.inset)
+                    .environment(\.atticDropdownContentHeightChanged, { _ in })
+                    .environment(\.atticHighlightOrigin, origin)
+                    .atticDesign(AtticDesignContext(reduceMotion: true))
+            }
+        }
+        let window = makeWindow()
+        defer { window.close() }
+        leaveAMouseMoveAsTheCurrentEvent(in: window)
+        defer { restoreNeutralCurrentEvent() }
+        let origin = AtticHighlightOrigin()
+        let host = NSHostingView(rootView: Suggestions(origin: origin, highlighted: -1))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 320)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.3)
+        let list = try XCTUnwrap(scrollViews(in: host).first, "the suggestions scroll")
+        scroll(list, to: 16)
+        spin(0.3)
+
+        try Pointer().moveToBottomEdge(of: list, in: host)
+        spin(0.3)
+        XCTAssertNil(origin.pointerRow, "the pointer moved no highlight, so it made none")
+
+        // ↓ lands on the row under the resting pointer, half hidden.
+        let row = Int((16 + list.contentView.bounds.height - 6) / AtticDropdownMetrics.rowHeight)
+        host.rootView = Suggestions(origin: origin, highlighted: row)
+        wait(for: host) { list.contentView.bounds.origin.y > 20 }
+        XCTAssertGreaterThan(list.contentView.bounds.origin.y, 20, "the keyboard's row is brought wholly into view")
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {
