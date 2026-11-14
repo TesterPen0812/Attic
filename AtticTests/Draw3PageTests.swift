@@ -45,6 +45,32 @@ enum Draw3Images {
 /// "2026-10-31 · Draw: the canvas page").
 @MainActor
 final class Draw3PageTests: XCTestCase {
+    func testReviewSameLengthReplacementImageRendersNewPixels() throws {
+        var red = Draw3Images.encoded(width: 32, height: 32, red: 1, green: 0, blue: 0)
+        var blue = Draw3Images.encoded(width: 32, height: 32, red: 0, green: 0, blue: 1)
+        // Two valid PNGs may have different compression sizes; trailing bytes
+        // do not change their pixels and make this cache-key collision exact.
+        let count = max(red.count, blue.count)
+        red.append(Data(repeating: 0, count: count - red.count))
+        blue.append(Data(repeating: 0, count: count - blue.count))
+        XCTAssertEqual(red.count, blue.count)
+        XCTAssertNotEqual(red, blue)
+        let uncachedRed = try XCTUnwrap(Draw3Images.cgImage(red))
+        let uncachedBlue = try XCTUnwrap(Draw3Images.cgImage(blue))
+        XCTAssertNotEqual(Draw3Images.pixel(uncachedRed, x: 16, y: 16),
+                          Draw3Images.pixel(uncachedBlue, x: 16, y: 16),
+                          "both input images decode to different valid pixels before testing the cache")
+
+        let id = UUID()
+        let first = DrawImage(original: red, pixelWidth: 32, pixelHeight: 32)
+        let replacement = DrawImage(original: blue, pixelWidth: 32, pixelHeight: 32)
+        let originalPixels = try XCTUnwrap(DrawRaster.decoded(first, id: id, side: 32))
+        let replacedPixels = try XCTUnwrap(DrawRaster.decoded(replacement, id: id, side: 32))
+        XCTAssertNotEqual(Draw3Images.pixel(originalPixels, x: 16, y: 16),
+                          Draw3Images.pixel(replacedPixels, x: 16, y: 16),
+                          "replacing an image in place must show its current saved bytes")
+    }
+
     func testR19StrokeThenTypingInSameFrameKeepsBothFramesAndUndoOrder() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("R19MixedInput-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

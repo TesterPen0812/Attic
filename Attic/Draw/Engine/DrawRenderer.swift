@@ -128,7 +128,17 @@ enum DrawRasterProbe {
 /// The committed board: every object in the drawing's world extent, on a
 /// clear background (the dots are their own layer). Runs on the renderer's worker.
 enum DrawRaster {
-    private static let imageCache = NSCache<NSString, CGImage>()
+    private final class CachedImage {
+        let original: Data
+        let decoded: CGImage
+
+        init(original: Data, decoded: CGImage) {
+            self.original = original
+            self.decoded = decoded
+        }
+    }
+
+    private static let imageCache = NSCache<NSString, CachedImage>()
 
     static func render(_ request: DrawRasterRequest, cancelled: () -> Bool = { false }) -> DrawRasterImage? {
         DrawRasterProbe.record()
@@ -252,7 +262,12 @@ enum DrawRaster {
     /// The image decoded with its longest side at most `side` pixels.
     static func decoded(_ image: DrawImage, id: UUID, side: Int) -> CGImage? {
         let cacheKey = "\(id.uuidString)-\(image.original.count)-\(side)" as NSString
-        if let cached = imageCache.object(forKey: cacheKey) { return cached }
+        // A put may replace an image while keeping its object ID and byte count.
+        // Data compares shared immutable storage cheaply; differing bytes must
+        // never reuse a decoded bitmap from the previous payload.
+        if let cached = imageCache.object(forKey: cacheKey), cached.original == image.original {
+            return cached.decoded
+        }
         guard let source = CGImageSourceCreateWithData(image.original as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return nil }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -262,7 +277,9 @@ enum DrawRaster {
         guard let made = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         DrawImageDecodeProbe.record(pixelSide: max(made.width, made.height))
         // A full-resolution export copy isn't kept.
-        if made.width * made.height <= 4096 * 4096 { imageCache.setObject(made, forKey: cacheKey) }
+        if made.width * made.height <= 4096 * 4096 {
+            imageCache.setObject(CachedImage(original: image.original, decoded: made), forKey: cacheKey)
+        }
         return made
     }
 }
