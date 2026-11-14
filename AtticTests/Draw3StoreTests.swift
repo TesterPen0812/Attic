@@ -324,6 +324,30 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertEqual(found.name, "Made later")
     }
 
+    /// Dot R-5: one damaged record in a batch must not hide the valid rows
+    /// that were batched with it.
+    func testR5ADamagedRecordNeverHidesTheValidRowsBatchedWithIt() throws {
+        let container = try container()
+        let bytes = Data(repeating: 37, count: 256)
+        try seedBoards(container, count: 20)
+        let reader = DrawPersistentStore(container: container)
+        let menu = try reader.presentationLibrary()
+        let damaged = menu[5].id
+        let other = ModelContext(container)
+        let record = try XCTUnwrap(other.fetch(FetchDescriptor<DrawCanvasRecord>()).first { $0.id == damaged })
+        record.tagsJSON = "{not json"
+        try other.save()
+
+        XCTAssertEqual(try reader.searchThumbnail(menu[2].id)?.thumbnail, bytes,
+                       "a valid row loads although a damaged record is in its window")
+        reader.metrics.reset()
+        for row in menu[2..<12] where row.id != damaged {
+            XCTAssertEqual(try reader.searchThumbnail(row.id)?.thumbnail, bytes)
+        }
+        XCTAssertEqual(reader.metrics.thumbnailHydrations, 0, "the other rows of that window were loaded with it")
+        XCTAssertThrowsError(try reader.searchThumbnail(damaged), "the damaged row alone fails")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)

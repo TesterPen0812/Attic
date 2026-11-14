@@ -45,6 +45,10 @@ class DrawStore: DrawStoreProtocol {
     /// its own entry; any other change drops them all.
     @ObservationIgnored private var searchThumbnails: [UUID: CachedThumbnail] = [:]
     @ObservationIgnored private var thumbnailUse: UInt64 = 0
+    /// Canvases whose record could not be read in a batch, left out of later
+    /// batches so one damaged record never hides the others. Same lifetime
+    /// as `searchThumbnails`.
+    @ObservationIgnored private var unreadableThumbnails = Set<UUID>()
     /// The last search result's order, which batches follow while its rows
     /// are on screen; otherwise batches follow the library order.
     @ObservationIgnored private var searchOrder: [UUID] = []
@@ -160,8 +164,10 @@ class DrawStore: DrawStoreProtocol {
         revision &+= 1
         if let id {
             searchThumbnails[id] = nil
+            unreadableThumbnails.remove(id)
         } else {
             searchThumbnails.removeAll()
+            unreadableThumbnails.removeAll()
         }
     }
 
@@ -237,19 +243,22 @@ class DrawStore: DrawStoreProtocol {
         // A miss reads the uncached rows from this one to the end of its
         // window (a page of `thumbnailWindow` rows in the order the caller
         // lists them) in one batch: one context, two fetches.
-        let inSearch = searchOrderIsCurrent ? searchOrderPositions[id] : nil
-        let order = inSearch == nil ? snapshot.ids : searchOrder
-        let start = inSearch ?? snapshot.positions[id]!
-        let end = min((start / Self.thumbnailWindow + 1) * Self.thumbnailWindow, order.count)
-        let batch: [DrawCanvas] = order[start..<end].compactMap { rowID in
-            guard rowID == id || needsThumbnailRead(rowID), let at = snapshot.positions[rowID] else { return nil }
-            return snapshot.canvases[at]
+        var batch = [metadata]
+        if !unreadableThumbnails.contains(id) {
+            let inSearch = searchOrderIsCurrent ? searchOrderPositions[id] : nil
+            let order = inSearch == nil ? snapshot.ids : searchOrder
+            let start = inSearch ?? snapshot.positions[id]!
+            let end = min((start / Self.thumbnailWindow + 1) * Self.thumbnailWindow, order.count)
+            batch = order[start..<end].compactMap { rowID in
+                guard rowID == id || needsThumbnailRead(rowID), let at = snapshot.positions[rowID] else { return nil }
+                return snapshot.canvases[at]
+            }
         }
         return try loadThumbnails(batch, requested: id) ?? metadata
     }
 
     private func needsThumbnailRead(_ id: UUID) -> Bool {
-        searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id)
+        searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id) && !unreadableThumbnails.contains(id)
     }
 
     private func merged(_ canvas: DrawCanvas, _ entry: CachedThumbnail) -> DrawCanvas {
@@ -267,16 +276,33 @@ class DrawStore: DrawStoreProtocol {
     }
 
     /// Reads the batch into the cache and returns the row for `requested`.
+    /// One damaged record fails the whole batch read, so a failed batch is
+    /// read again row by row: the valid rows load, the damaged one is left
+    /// out of later batches, and only the requested row's own error escapes.
     @discardableResult
     private func loadThumbnails(_ batch: [DrawCanvas], requested: UUID? = nil) throws -> DrawCanvas? {
         guard !batch.isEmpty else { return nil }
         var found: DrawCanvas?
-        for row in try repository.hydrateSearchThumbnails(batch) {
-            thumbnailUse &+= 1
-            searchThumbnails[row.id] = CachedThumbnail(thumbnail: row.thumbnail, thumbnailDark: row.thumbnailDark,
-                                                       used: thumbnailUse)
-            if row.id == requested { found = row }
+        var failure: Error?
+        func keep(_ rows: [DrawCanvas]) {
+            for row in rows {
+                thumbnailUse &+= 1
+                searchThumbnails[row.id] = CachedThumbnail(thumbnail: row.thumbnail, thumbnailDark: row.thumbnailDark,
+                                                           used: thumbnailUse)
+                if row.id == requested { found = row }
+            }
         }
+        do {
+            keep(try repository.hydrateSearchThumbnails(batch))
+        } catch where batch.count > 1 {
+            for canvas in batch {
+                do { keep(try repository.hydrateSearchThumbnails([canvas])) } catch {
+                    unreadableThumbnails.insert(canvas.id)
+                    if canvas.id == requested { failure = error }
+                }
+            }
+        }
+        if let failure { throw failure }
         evictThumbnails()
         return found
     }
