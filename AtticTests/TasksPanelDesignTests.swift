@@ -344,6 +344,18 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertLessThanOrEqual(large, small * 2 + 4, "one pass: \(small) for 60, \(large) for 120")
     }
 
+    /// Opus R-12: a paste under a tag filter keeps its rows in view, as a
+    /// task added with Return does.
+    func testPasteUnderATagFilterKeepsTheNewRowsInView() throws {
+        _ = try add("Tagged", due: nil)
+        model.chooseTagChip("launch")
+        _ = model.rows(for: .now)
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer("pasted one\npasted two"))
+        model.acceptPaste(asOne: false)
+        let shown = Set(model.rows(for: .now).map(\.model.title))
+        XCTAssertTrue(shown.isSuperset(of: ["pasted one", "pasted two"]), "R-12: the pasted rows are not hidden by the filter: \(shown)")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])

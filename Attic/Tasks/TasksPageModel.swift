@@ -1164,6 +1164,11 @@ final class TasksPageModel: ObservableObject {
         rowsCache[tab] = nil
     }
 
+    /// A batch made at once (a paste): each task, on the page its state lists it.
+    func keepInView(_ tasks: [TaskItem]) {
+        for task in tasks { keepInView(task.id, on: task.listedStatus == .backlog ? .backlog : .now) }
+    }
+
     /// The view changed for the person (the panel hid, another tab): what
     /// a filter kept in view leaves.
     func releaseFilterStay() {
@@ -2748,7 +2753,9 @@ final class TasksPageModel: ObservableObject {
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.
         if let first = created.first {
-            // Every line's task opens its own folded group, not only the first's.
+            // Every line's task stays in view under a filter and opens its own
+            // folded group, not only the first's (as one added with Return).
+            keepInView(created)
             unfoldAddedTasks(created)
             addedRequest = ScrollRequest(id: first.id)
         }
