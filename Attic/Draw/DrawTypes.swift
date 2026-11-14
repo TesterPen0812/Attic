@@ -211,8 +211,8 @@ protocol DrawStoreProtocol: AnyObject {
     var hasUnsettledEdits: Bool { get }
     var recoveryIssue: String? { get }
     func library(deleted: Bool) throws -> [DrawCanvas]
-    /// The live library list needs only initial-row thumbnails; row tasks
-    /// hydrate the remaining bodies when they enter the viewport.
+    /// The live library list is metadata only; each row reads its own
+    /// thumbnail body through `searchThumbnail` when it is built.
     func presentationLibrary() throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
     /// Hydrate one realized search result without opening its drawing.

@@ -144,8 +144,11 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
+    /// The menu's canvases from the cached metadata snapshot: one read per
+    /// revision, however often the list asks. Rows read their own thumbnail
+    /// (`searchThumbnail`) when they are built, so nothing is hydrated here.
     func presentationLibrary() throws -> [DrawCanvas] {
-        try hydratedPresentation(try searchMetadata())
+        try searchMetadata()
     }
 
     func search(_ query: String) throws -> [DrawSearchMatch] {
