@@ -396,6 +396,73 @@ final class AdaptiveFindTests: XCTestCase {
         }
     }
 
+    /// Round 2, Opus R-6: plain keys typed ahead are one search each. The
+    /// field takes the query as it stands; it does not interpret the keys a
+    /// second time (another search per key at the handoff).
+    func testPlainKeysTypedAheadRunOneSearchEachAcrossTheHandoff() throws {
+        try withNote { host, panel, _, engine, _ in
+            panel.makeFirstResponder(engine.textView)
+            engine.find.show()
+            let base = engine.find.refreshCount
+            for (code, characters) in [(UInt16(11), "b"), (31, "o"), (16, "y"), (14, "e")] {
+                XCTAssertTrue(engine.find.typeAhead(key(code, characters)))
+            }
+            XCTAssertEqual(engine.find.refreshCount - base, 4, "one search per typed key")
+            spin(0.8)
+            XCTAssertEqual(engine.find.refreshCount - base, 4, "mounting the field starts no second search per key")
+            let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier })
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            XCTAssertEqual(field.stringValue, "boye")
+            XCTAssertEqual(editor.string, "boye")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0), "the caret after what was typed")
+            XCTAssertEqual(engine.find.query, "boye")
+            engine.find.close(returnFocus: false)
+        }
+    }
+
+    /// Round 2, Opus R-8: an input method's keys typed before the field
+    /// mounts stay with native input. The raw letters are never the query
+    /// (nothing searches "ni"), the composition is marked text in the field
+    /// editor, and only the committed text becomes the query. The field
+    /// editor here composes the way an input method does (the key events
+    /// make marked text); a unit test cannot switch the real input source.
+    func testBG72InputMethodKeysBeforeTheFieldMountsNeverSearchTheRawLetters() throws {
+        try withNote { host, panel, _, engine, _ in
+            let original = engine.textStorage.string
+            AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = { ComposingEditor(usingTextLayoutManager: false) }
+            defer { AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = nil }
+            engine.find.inputSourceIdentifier = { "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" }
+            var queries: [String] = []
+            let observation = engine.find.$query.sink { queries.append($0) }
+            defer { observation.cancel() }
+            panel.makeFirstResponder(engine.textView)
+            engine.find.show()
+            let base = engine.find.refreshCount
+            XCTAssertTrue(engine.find.typeAhead(key(45, "n")), "Find holds the key for the field")
+            XCTAssertTrue(engine.find.typeAhead(key(34, "i")))
+            XCTAssertEqual(engine.find.query, "", "the raw letters are not the query")
+            XCTAssertEqual(engine.find.refreshCount, base, "nothing searched the raw letters")
+            XCTAssertEqual(engine.textStorage.string, original, "the note is untouched")
+            spin(0.8)
+            let editor = try XCTUnwrap(panel.firstResponder as? ComposingEditor, "the field's editor has the keyboard")
+            XCTAssertEqual(editor.romaji, "ni", "the typed-ahead keys went to the editor, not the query")
+            XCTAssertTrue(editor.hasMarkedText(), "the pre-mount keys are still a native marked composition")
+            engine.find.refresh() // a view update while the candidate is live
+            spin(0.1)
+            XCTAssertTrue(editor.hasMarkedText(), "a binding refresh must not cancel the native composition")
+            XCTAssertEqual(editor.string, "に")
+            XCTAssertTrue(queries.allSatisfy { $0.isEmpty }, "no intermediate marked text is searched: \(queries)")
+            XCTAssertFalse(queries.contains("ni"), "no search of the raw romaji at any point: \(queries)")
+            editor.insertText("日本", replacementRange: NSRange(location: NSNotFound, length: 0))
+            spin(0.2)
+            XCTAssertFalse(editor.hasMarkedText(), "the candidate committed")
+            XCTAssertEqual(engine.find.query, "日本", "Find searches what the input method committed")
+            XCTAssertEqual(engine.textStorage.string, original)
+            engine.find.close(returnFocus: false)
+        }
+    }
+
     func testKeysTypedBeforeTheFieldArrivesGoToTheQuery() throws {
         try withNote { host, panel, _, engine, _ in
             let text = engine.textStorage.string
@@ -489,5 +556,18 @@ final class AdaptiveFindTests: XCTestCase {
         XCTAssertEqual(engine.find.matches.count, 2)
         engine.find.close(returnFocus: false)
         XCTAssertEqual(scroll.contentInsets.top, inset)
+    }
+}
+
+
+/// A deterministic input-method driver for the real field's native
+/// NSTextInputClient. No input source or system setting is changed.
+private final class ComposingEditor: NSTextView {
+    var romaji = ""
+    override func interpretKeyEvents(_ events: [NSEvent]) {
+        for event in events { romaji += event.characters ?? "" }
+        let marked = romaji == "ni" ? "に" : romaji
+        setMarkedText(marked, selectedRange: NSRange(location: (marked as NSString).length, length: 0),
+                      replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 }

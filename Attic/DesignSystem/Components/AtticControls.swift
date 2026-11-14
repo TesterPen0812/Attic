@@ -2690,8 +2690,16 @@ struct AtticNativeSearchInput: NSViewRepresentable {
     /// layout through AppKit's constraint-hosting bridge. A cell-scoped
     /// TextKit 1 editor draws that text without changing the view tree.
     final class QueryCell: NSTextFieldCell {
+        #if DEBUG
+        /// Hosts a deterministic native input-method client in composition tests.
+        static var makeFieldEditorForTesting: (() -> NSTextView)?
+        #endif
         private lazy var queryEditor: NSTextView = {
+            #if DEBUG
+            let editor = Self.makeFieldEditorForTesting?() ?? NSTextView(usingTextLayoutManager: false)
+            #else
             let editor = NSTextView(usingTextLayoutManager: false)
+            #endif
             editor.isFieldEditor = true
             return editor
         }()
@@ -2771,14 +2779,18 @@ struct AtticNativeSearchInput: NSViewRepresentable {
         field.textColor = color
         field.placeholderAttributedString = NSAttributedString(string: placeholder,
             attributes: [.font: font, .foregroundColor: placeholderColor])
-        if field.stringValue != text { field.stringValue = text }
+        // The binding holds committed text. A view update must not replace
+        // the input context's in-progress candidate with that older value.
+        if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+           field.stringValue != text { field.stringValue = text }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var owner: AtticNativeSearchInput
         init(_ owner: AtticNativeSearchInput) { self.owner = owner }
         func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSTextField else { return }
+            guard let field = notification.object as? NSTextField,
+                  (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
             owner.text = field.stringValue
         }
         func controlTextDidBeginEditing(_ notification: Notification) {

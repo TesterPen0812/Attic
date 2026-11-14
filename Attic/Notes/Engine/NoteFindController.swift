@@ -70,6 +70,12 @@ final class NoteFindController: ObservableObject {
     private(set) var invalidatedUTF16Count = 0
     private(set) var objectSearchPassCount = 0
     private(set) var highlightLayoutPassCount = 0
+    /// How many searches the query's changes started (a plain key typed
+    /// ahead of the field is one).
+    private(set) var refreshCount = 0
+    /// The keyboard input source in use (an identifier such as
+    /// `com.apple.keylayout.ABC`); a test seam over the text input context.
+    var inputSourceIdentifier: () -> String? = { nil }
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
     /// The room the card takes above the note: none in the top row.
     var clearance: CGFloat { isShown && !shownInTopRow ? Self.height : 0 }
@@ -138,6 +144,15 @@ final class NoteFindController: ObservableObject {
         }
     }
 
+    /// The input source composes text (a Japanese, Chinese or Korean input
+    /// method): its key-downs carry raw letters that are not the text, so
+    /// they never become a provisional query. A plain keyboard layout does not.
+    private var inputSourceComposes: Bool {
+        let identifier = inputSourceIdentifier() ?? engine?.textView?.inputContext?.selectedKeyboardInputSource
+        guard let identifier else { return false }
+        return !identifier.contains(".keylayout.")
+    }
+
     /// The editing commands a search field takes (⌘V ⌘A ⌘Z ⇧⌘Z ⌘X ⌘C): while
     /// the field mounts they belong to it, never to the note.
     private static func editingCommand(_ event: NSEvent) -> Selector? {
@@ -192,6 +207,7 @@ final class NoteFindController: ObservableObject {
         }
         pendingInputEvents.append(event)
         pendingInputComposition = pendingInputComposition || isComposingKey || modifiers.contains(.option) || event.keyCode == 117
+            || inputSourceComposes
         if !pendingInputComposition {
             if isDelete {
                 if replacesQuery { query = "" } else if !query.isEmpty { query.removeLast() }
@@ -230,6 +246,18 @@ final class NoteFindController: ObservableObject {
         if !editor.hasMarkedText(), query != editor.string { query = editor.string }
     }
 
+    /// Plain keys typed ahead already stand in the query, one search each:
+    /// the field takes that text as it is (no second pass over the keys).
+    private func commitTypedAheadQuery(to editor: NSTextView, field: NSTextField) {
+        pendingInputEvents.removeAll()
+        pendingInputBaseQuery = nil
+        pendingInputReplacesQuery = false
+        pendingInputComposition = false
+        if field.stringValue != query { field.stringValue = query }
+        if editor.string != query { editor.string = query }
+        editor.setSelectedRange(NSRange(location: (query as NSString).length, length: 0))
+    }
+
     /// The top row's field has appeared: it takes the keyboard (unless the
     /// keyboard went elsewhere meanwhile), the last query selected, or the
     /// caret after what was typed ahead.
@@ -248,8 +276,10 @@ final class NoteFindController: ObservableObject {
         if pendingInputEvents.isEmpty {
             let length = (editor.string as NSString).length
             editor.selectedRange = replacesQuery ? NSRange(location: 0, length: length) : NSRange(location: length, length: 0)
-        } else {
+        } else if pendingInputComposition {
             replayPendingInput(to: editor, field: field)
+        } else {
+            commitTypedAheadQuery(to: editor, field: field)
         }
         replacesQuery = false
     }
@@ -469,6 +499,7 @@ final class NoteFindController: ObservableObject {
 
     func refresh(selectFirst: Bool = false, changedTable: NoteTableAttachment? = nil) {
         guard isShown, let engine else { return }
+        refreshCount += 1
         defer {
             pendingSearchRange = nil; pendingMatches = nil; pendingOldMatch = nil; pendingFullSearch = false
         }
