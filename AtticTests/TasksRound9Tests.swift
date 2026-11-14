@@ -49,6 +49,35 @@ final class TasksRound9Tests: XCTestCase {
         for _ in 0..<momentum { send(.none, dx: dx, momentum: true) }
     }
 
+    // MARK: - Ownership is decided once per gesture (pro-bugs-tasks-r1 fix 1, Opus R-7)
+
+    /// A vertical trackpad scroll with its momentum, and plain vertical wheel
+    /// ticks, never ask where the pointer is more than once: the hit test and
+    /// view walk behind `allowed` are per gesture, not per 60-120 Hz event.
+    func testOwnershipIsDecidedOncePerGestureNotPerScrollEvent() {
+        var checks = 0
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, dx: CGFloat = 0, dy: CGFloat = 0, momentum: Bool = false) {
+            time += 1.0 / 120
+            _ = model.pagerScrolled(.init(phase: phase, momentum: momentum, dx: dx, dy: dy, time: time, precise: true),
+                                    allowed: { checks += 1; return true }())
+        }
+        send(.began)
+        for _ in 0..<30 { send(.changed, dy: -3) }
+        send(.ended)
+        for _ in 0..<20 { send(.none, dy: -2, momentum: true) }
+        XCTAssertLessThanOrEqual(checks, 1, "a vertical gesture and its momentum decide ownership at most once")
+        checks = 0
+        // A wheel that only scrolls the list never reaches the question.
+        for _ in 0..<30 { send(.none, dy: -4) }
+        XCTAssertEqual(checks, 0, "vertical wheel ticks are the list's: no ownership question")
+        checks = 0
+        // A horizontal swipe asks once, at its start.
+        send(.began)
+        for _ in 0..<10 { send(.changed, dx: -12) }
+        send(.ended)
+        XCTAssertLessThanOrEqual(checks, 1, "a horizontal swipe decides ownership once")
+    }
+
     // MARK: - Decisions
 
     /// Released: past a quarter of a page it turns, short of it it stays,

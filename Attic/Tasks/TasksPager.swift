@@ -882,8 +882,10 @@ final class TasksPagerSwipe {
 
     /// A scroll event reached the page. `shown` is the model's page;
     /// `allowed` says whether it is over the pager's lists, on the page the
-    /// shell shows (it decides only where a gesture or wheel event starts).
-    func handle(_ sample: Sample, shown: Int, allowed: Bool) -> Output {
+    /// shell shows. It decides only where a gesture or a sideways wheel event
+    /// starts, and it is costly (a hit test and a view walk), so it is asked
+    /// only then: once per gesture, never per scroll event or for momentum.
+    func handle(_ sample: Sample, shown: Int, allowed: @autoclosure () -> Bool) -> Output {
         if sample.momentum {
             return ownsMomentum ? .consume : .pass
         }
@@ -893,7 +895,7 @@ final class TasksPagerSwipe {
         case .mayBegin:
             return .pass
         case .began:
-            begin(allowed: allowed)
+            begin(allowed: allowed())
             // AppKit usually begins with a still event, which goes on so the
             // list (and the panel) see a whole gesture. One that already
             // moves decides the axis now: sideways, not even the panel's
@@ -901,7 +903,7 @@ final class TasksPagerSwipe {
             guard sample.dx != 0 || sample.dy != 0 else { return .pass }
             return changed(sample, shown: shown)
         case .changed:
-            if axis == nil { begin(allowed: allowed) }
+            if axis == nil { begin(allowed: allowed()) }
             return changed(sample, shown: shown)
         case .ended, .cancelled:
             return end(sample)
@@ -1069,9 +1071,9 @@ final class TasksPagerSwipe {
 
     /// A wheel's horizontal scroll (or anything with no trackpad phases):
     /// one page per burst. Vertical wheel scrolling is the list's.
-    private func wheel(_ sample: Sample, shown: Int, allowed: Bool) -> Output {
+    private func wheel(_ sample: Sample, shown: Int, allowed: () -> Bool) -> Output {
         guard sample.dx != 0, abs(sample.dx) > abs(sample.dy) else { return .pass }
-        guard allowed, !dragActive, width > 0 else { return .pass }
+        guard !dragActive, width > 0, allowed() else { return .pass }
         if sample.time < wheelBurstUntil {
             wheelBurstUntil = sample.time + Self.wheelBurstGap
             return .consume
@@ -1179,14 +1181,14 @@ extension TasksPageModel {
     /// the page follows the fingers, then settles on the model's tab (the
     /// neighbour, or back when an edit that can't be saved held the tab).
     /// Returns whether the pager took the event.
-    func pagerScrolled(_ sample: TasksPagerSwipe.Sample, allowed: Bool) -> Bool {
+    func pagerScrolled(_ sample: TasksPagerSwipe.Sample, allowed: @autoclosure () -> Bool) -> Bool {
         // Only the page the shell shows reads scroll events at all: a
         // gesture it owned before it was left is not continued behind
         // Notes or Canvas, or while the panel is hidden (round 10).
         guard isPageShown, !isHidden else { return false }
         let swipe = pagerSwipe
         let shown = TasksTab.allCases.firstIndex(of: tab) ?? 0
-        let output = swipe.handle(sample, shown: shown, allowed: allowed)
+        let output = swipe.handle(sample, shown: shown, allowed: allowed())
         if let page = output.page, page != shown, TasksTab.allCases.indices.contains(page) {
             select(tab: TasksTab.allCases[page], bySwipe: true)
             if tab == TasksTab.allCases[page] { swipe.motion.tabSwitched() }

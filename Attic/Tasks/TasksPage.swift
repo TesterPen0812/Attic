@@ -502,11 +502,14 @@ struct TasksPage: View {
                 // takes nothing, not even a gesture it owned before.
                 guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
                       event.window === window else { return event }
-                let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
-                                              stackHeight: bottomStack.height, pageShown: model.isPageShown)
                 if event.phase == .began { PerformanceSignposts.noteInput("scroll-began") }
                 let sample = TasksPagerSwipe.Sample(event)
-                let consumed = model.pagerScrolled(sample, allowed: allowed)
+                // Asked only where a gesture or sideways wheel event starts
+                // (`TasksPagerSwipe.handle`): the hit test behind it is not
+                // paid per scroll event.
+                let consumed = model.pagerScrolled(sample, allowed: Self.pagerTakes(
+                    event, pointer: pointer, band: swipe.band, stackHeight: bottomStack.height,
+                    pageShown: model.isPageShown))
                 listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
                 return consumed ? nil : event
             }
@@ -1565,6 +1568,8 @@ struct TasksPage: View {
                            pageShown: Bool) -> Bool {
         guard pageShown, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
               let point = pointer.location(of: event), let view = pointer.view else { return false }
+        // The band first: it is a comparison, and outside it nothing below matters.
+        guard band.contains(point, height: view.bounds.height, stackHeight: stackHeight) else { return false }
         // A horizontal tile strip owns gestures that begin over its clip.
         // TasksPagerSwipe remembers a foreign gesture through its end and
         // momentum, even if the pointer later crosses ordinary row space.
@@ -1583,7 +1588,7 @@ struct TasksPage: View {
             // native clip. The clip's own geometry still owns the gesture.
             if Self.scrollableTile(at: inRoot, root: root, inside: root) { return false }
         }
-        return band.contains(point, height: view.bounds.height, stackHeight: stackHeight)
+        return true
     }
 
     private static func scrollableTile(at point: CGPoint, root: NSView, inside view: NSView) -> Bool {
