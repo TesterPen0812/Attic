@@ -11,6 +11,33 @@ import XCTest
 @MainActor
 final class TasksRound12Tests: XCTestCase {
 
+
+    func testR5NonArrowFocusEndsAVanishedHeadingBeforeItReturns() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let groups = try nowGroups(model)
+        model.foldAllGroups([groups[1].key], folded: true, on: .now)
+        hosted.spin(0.2)
+        hosted.press("\t", keyCode: 48)
+        hosted.press("\t", keyCode: 48)
+        XCTAssertNil(model.keyboardFocus, "Tab is on the folded second heading")
+        XCTAssertTrue(model.delete(groups[1].rows).isApplied)
+        hosted.spin(0.3)
+        XCTAssertFalse(model.sections(for: .now).groups.contains { $0.key == groups[1].key })
+        let row = groups[0].rows[0]
+        model.requestReturnFocus(row)
+        hosted.spin(0.4)
+        XCTAssertEqual(model.keyboardFocus?.id, row, "the non-arrow return route focused a row")
+        model.undo()
+        hosted.spin(0.4)
+        XCTAssertTrue(model.sections(for: .now).groups.contains { $0.key == groups[1].key })
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(model.editingTitleID, row, "the resurrected heading must not take Return")
+        XCTAssertTrue(model.folded(on: .now).contains(groups[1].key))
+    }
+
     func testBG5TabAndSpaceReopenFoldedDateHeadersOnNowAndDone() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)

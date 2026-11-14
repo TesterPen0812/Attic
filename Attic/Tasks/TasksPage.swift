@@ -171,7 +171,8 @@ struct TasksPage: View {
     /// target of a heading Tab chose: this is the one place that does it.
     private func setFocus(_ id: UUID?) {
         focusedRow = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
-        if id != nil, heldGroupKey != nil { endTabTarget() }
+        if case .group = tabTarget.stop { endTabTarget() }
+        else if focusRequests.current?.base is TasksGroupFocusID { endTabTarget() }
     }
 
     /// The keyboard leaves a stop Tab chose (a heading) by another route: the
