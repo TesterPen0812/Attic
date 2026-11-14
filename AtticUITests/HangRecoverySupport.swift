@@ -130,10 +130,10 @@ enum HangPassGuard {
 /// It follows the recovery's status and which files exist, never only the
 /// latest dump's prefix (the fallback can fire while the file still says ARMED).
 enum HangEvidencePlan {
-    enum Item: Equatable { case probeLatest, probeFirst, screenshot, screenshotUnavailableNote, sample }
+    enum Item: Equatable { case probeLatest, probeFirst, screenshot, screenshotUnavailableNote, sample, recoveryLog }
 
     static func items(recovered: Bool, probeText: String?, probeFirstExists: Bool,
-                      screenshotExists: Bool, sampleExists: Bool) -> [Item] {
+                      screenshotExists: Bool, sampleExists: Bool, recoveryLogExists: Bool = false) -> [Item] {
         var items: [Item] = []
         if recovered || probeText?.hasPrefix("HANG:") == true {
             if probeText != nil { items.append(.probeLatest) }
@@ -142,6 +142,7 @@ enum HangEvidencePlan {
         guard recovered else { return items }
         items.append(screenshotExists ? .screenshot : .screenshotUnavailableNote)
         if sampleExists { items.append(.sample) }
+        if recoveryLogExists { items.append(.recoveryLog) }
         return items
     }
 }
@@ -176,18 +177,25 @@ enum HangWindowCapture {
     }
 }
 
-/// Runs a short-lived tool with a hard time limit. Returns whether it exited by itself.
+/// Runs a short-lived tool with a hard time limit and says what happened
+/// (launch failure, timeout, exit status and the start of its error output),
+/// so a recovery that could not take a picture or a stack can say why.
 @discardableResult
-func runHangTool(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Bool {
+func runHangTool(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
+    let errors = Pipe()
+    process.standardError = errors
+    process.standardOutput = errors
     let exited = DispatchSemaphore(value: 0)
     process.terminationHandler = { _ in exited.signal() }
-    guard (try? process.run()) != nil else { return false }
+    do { try process.run() } catch { return "could not start: \(error)" }
     if exited.wait(timeout: .now() + timeout) == .timedOut {
         process.terminate()
-        return false
+        return "timed out after \(Int(timeout)) s and was terminated"
     }
-    return true
+    let output = String(decoding: errors.fileHandleForReading.availableData.prefix(400), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return "exited \(process.terminationStatus)" + (output.isEmpty ? "" : ": \(output)")
 }

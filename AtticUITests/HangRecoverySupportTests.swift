@@ -112,6 +112,10 @@ final class HangRecoverySupportTests: XCTestCase {
                                            probeFirstExists: false, screenshotExists: true, sampleExists: true)
         XCTAssertEqual(items, [.probeLatest, .screenshot, .sample])
         XCTAssertEqual(HangEvidencePlan.items(recovered: true, probeText: "ARMED\n", probeFirstExists: false,
+                                              screenshotExists: false, sampleExists: false, recoveryLogExists: true),
+                       [.probeLatest, .screenshotUnavailableNote, .recoveryLog],
+                       "the recovery's own log says why a picture or a stack is missing")
+        XCTAssertEqual(HangEvidencePlan.items(recovered: true, probeText: "ARMED\n", probeFirstExists: false,
                                               screenshotExists: false, sampleExists: false),
                        [.probeLatest, .screenshotUnavailableNote])
         // A launch-time dump of a pass that recovered by itself is kept as evidence, and nothing else.

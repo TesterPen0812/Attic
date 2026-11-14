@@ -134,6 +134,8 @@ final class ScrollEdgeUITests: XCTestCase {
             .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
         let sample = FileManager.default.temporaryDirectory
             .appendingPathComponent("attic-hang-sample-\(UUID().uuidString).txt")
+        let recoveryLog = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attic-hang-recovery-\(UUID().uuidString).txt")
         private(set) var probe: URL?
         private(set) var recovery: HoverScrollHangRecovery?
 
@@ -141,7 +143,7 @@ final class ScrollEdgeUITests: XCTestCase {
 
         func arm(pid: Int32, probe: URL) -> HoverScrollHangRecovery {
             self.probe = probe
-            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot, sample: sample)
+            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot, sample: sample, log: recoveryLog)
             self.recovery = recovery
             recovery.start()
             return recovery
@@ -194,7 +196,8 @@ final class ScrollEdgeUITests: XCTestCase {
             probeText: latest.flatMap { try? String(contentsOf: $0, encoding: .utf8) },
             probeFirstExists: first.map { fileManager.fileExists(atPath: $0.path) } ?? false,
             screenshotExists: fileManager.fileExists(atPath: pass.screenshot.path),
-            sampleExists: fileManager.fileExists(atPath: pass.sample.path))
+            sampleExists: fileManager.fileExists(atPath: pass.sample.path),
+            recoveryLogExists: fileManager.fileExists(atPath: pass.recoveryLog.path))
         func attach(_ url: URL, _ name: String) {
             let attachment = XCTAttachment(contentsOfFile: url)
             attachment.name = "\(pass.prefix)-\(name)"
@@ -207,6 +210,7 @@ final class ScrollEdgeUITests: XCTestCase {
             case .probeFirst: if let first { attach(first, "probe-first") }
             case .screenshot: attach(pass.screenshot, "frozen-window")
             case .sample: attach(pass.sample, "sample")
+            case .recoveryLog: attach(pass.recoveryLog, "recovery-log")
             case .screenshotUnavailableNote:
                 let note = XCTAttachment(string: "No window of the launched app was on screen for \(pass.prefix); no picture was taken.")
                 note.name = "\(pass.prefix)-frozen-window-unavailable"
@@ -493,14 +497,16 @@ private final class HoverScrollHangRecovery {
     private let probe: URL
     private let screenshot: URL
     private let sample: URL
+    private let log: URL
     private let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "attic.ci.hover-scroll.recovery"))
     private let finished = DispatchGroup()
     private let lock = NSLock()
     private var policy: HangRecoveryPolicy
     private var reason: String?
 
-    init(pid: Int32, probe: URL, screenshot: URL, sample: URL) {
+    init(pid: Int32, probe: URL, screenshot: URL, sample: URL, log: URL) {
         self.pid = pid
+        self.log = log
         self.probe = probe
         self.screenshot = screenshot
         self.sample = sample
@@ -547,12 +553,19 @@ private final class HoverScrollHangRecovery {
                 : "scroll/AX made no progress for 60 seconds"
         }
         // Only the app's own window, found without asking the (hung) app. No window: no picture.
-        let windowID = HangWindowCapture.windowID(forPID: pid, in: HangWindowCapture.currentWindows())
+        var steps = ["decision: \(decision), pid \(pid), probe \(probe.path)"]
+        let windows = HangWindowCapture.currentWindows()
+        let windowID = HangWindowCapture.windowID(forPID: pid, in: windows)
+        let own = windows.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+        steps.append("window list: \(windows.count) windows, \(own.count) owned by the app, chosen id \(windowID.map(String.init) ?? "none")")
         if let arguments = HangWindowCapture.arguments(windowID: windowID, path: screenshot.path) {
-            runHangTool("/usr/sbin/screencapture", arguments, timeout: 3)
+            steps.append("screencapture \(runHangTool("/usr/sbin/screencapture", arguments, timeout: 3)); file \(FileManager.default.fileExists(atPath: screenshot.path) ? "written" : "missing")")
+        } else {
+            steps.append("screencapture not run: no window of the app")
         }
         // The stack the freeze is in, before the process is killed.
-        runHangTool("/usr/bin/sample", [String(pid), "3", "-file", sample.path], timeout: 10)
+        steps.append("sample \(runHangTool("/usr/bin/sample", [String(pid), "3", "-file", sample.path], timeout: 10)); file \(FileManager.default.fileExists(atPath: sample.path) ? "written" : "missing")")
+        try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
         if pid > 0 { _ = Darwin.kill(pid, SIGTERM) }
         timer.cancel()
     }
