@@ -114,6 +114,66 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(emitted, 0, "no geometry broadcasts remain from dismissed pickers")
     }
 
+    /// Measures what leftover picker notification flags cost a live resize:
+    /// 120 open/close cycles, then 40 window-resize steps, counting every
+    /// frame and bounds notification the hierarchy posts. Run once from the
+    /// natural AppKit defaults and once from flags explicitly off.
+    func testPerfLiveResizeNotificationsAfter120PickerCycles() throws {
+        for startsWithFlagsOn in [true, false] {
+            let window = makeUnshownWindow()
+            defer { window.close() }
+            let root = try XCTUnwrap(window.contentView)
+            let scroll = NSScrollView(frame: root.bounds)
+            scroll.autoresizingMask = [.width, .height]
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 4400))
+            document.autoresizingMask = [.width]
+            scroll.documentView = document
+            root.addSubview(scroll)
+
+            let presenter = AtticDropdownPresenter()
+            presenter.takesKeyboard = false
+            presenter.opaqueMotion = true
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = AnyView(Text("Picker").frame(width: 100, height: 28))
+            defer { presenter.close(restoreFocus: false, immediately: true) }
+
+            var anchors: [NSView] = []
+            for index in 0..<120 {
+                let anchor = AtticDropdownAnchor.AnchorView(frame: NSRect(x: 280, y: CGFloat(index * 36), width: 24, height: 24))
+                anchor.autoresizingMask = [.minXMargin]
+                document.addSubview(anchor)
+                if !startsWithFlagsOn {
+                    anchor.postsFrameChangedNotifications = false
+                    anchor.postsBoundsChangedNotifications = false
+                }
+                presenter.present(from: anchor)
+                presenter.close(restoreFocus: false, immediately: true)
+                anchors.append(anchor)
+            }
+            let views: [NSView] = anchors + [document, scroll.contentView, scroll, root]
+            let flagsFrame = views.filter(\.postsFrameChangedNotifications).count
+            let flagsBounds = views.filter(\.postsBoundsChangedNotifications).count
+
+            var frames = 0, bounds = 0
+            let center = NotificationCenter.default
+            let tokens = [
+                center.addObserver(forName: NSView.frameDidChangeNotification, object: nil, queue: nil) { note in
+                    if let view = note.object as? NSView, view.window === window { frames += 1 }
+                },
+                center.addObserver(forName: NSView.boundsDidChangeNotification, object: nil, queue: nil) { note in
+                    if let view = note.object as? NSView, view.window === window { bounds += 1 }
+                },
+            ]
+            defer { tokens.forEach { center.removeObserver($0) } }
+            for step in 0..<40 {
+                var frame = window.frame
+                frame.size.width = 320 + CGFloat(step) * 3
+                window.setFrame(frame, display: false)
+            }
+            print("PERF_PICKER_LIVE_RESIZE startFlagsOn=\(startsWithFlagsOn) viewsWithFlags frame=\(flagsFrame)/\(views.count) bounds=\(flagsBounds)/\(views.count) resizeNotifications frame=\(frames) bounds=\(bounds) per 40 steps")
+        }
+    }
+
     func testPerfConcurrentPickersKeepSharedGeometryNotificationsUntilLastClose() throws {
         let window = makeUnshownWindow()
         defer { window.close() }
