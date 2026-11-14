@@ -116,8 +116,14 @@ extension DrawPageModel {
         let signX: CGFloat = handle == .topLeft || handle == .bottomLeft ? -1 : 1
         let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
         let flatX = box.width < 0.001, flatY = box.height < 0.001
-        var sx = flatX ? 1 : max(minimum, box.width + signX * delta.x) / box.width
-        var sy = flatY ? 1 : max(minimum, box.height + signY * delta.y) / box.height
+        // The minimum is a floor for the pointer, never a size to grow to: an
+        // axis already shorter than it keeps its own length as the floor, so
+        // dragging along the other axis cannot change it.
+        func scale(_ extent: CGFloat, _ delta: CGFloat) -> CGFloat {
+            max(min(minimum, extent), extent + delta) / extent
+        }
+        var sx = flatX ? 1 : scale(box.width, signX * delta.x)
+        var sy = flatY ? 1 : scale(box.height, signY * delta.y)
         // Images and groups keep their proportions; Shift keeps a shape's.
         let uniform = shift || originals.count > 1 || first.isImage || flatX || flatY
         if uniform {

@@ -470,6 +470,45 @@ final class DrawDataSafetyTests: XCTestCase {
     /// for. A 400 x 3 image asked for 400 x 6 scales proportionally to 800 x 6,
     /// and a thin non-image stroke asked for 50 x 1 is not lifted to the pointer's
     /// 4 pt minimum.
+    /// BG-31 round 3 (Opus R-15, Dot R-13): a line or arrow keeps the signed
+    /// difference of its endpoints, so its frame can have a negative width or
+    /// height. The agent's size is the box the object covers: every endpoint
+    /// direction gets exactly the asked size, with one Undo.
+    func testBG31AgentResizeOfSignedLineAndArrowFramesIsExact() throws {
+        for kind in [DrawShape.line, .arrow] {
+            for (signX, signY) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                let store = try persistent()
+                let canvas = store.create(name: "Signed \(kind)")
+                let agent = try actions(store)
+                let original = DrawObject(frame: DrawFrame(x: 200, y: 200, width: 100 * signX, height: 50 * signY),
+                                          content: .shape(kind))
+                XCTAssertTrue(store.perform(.put([original]), on: canvas.id).isSaved)
+                let label = "\(kind) \(signX),\(signY)"
+                func resize(_ width: Double, _ height: Double) throws {
+                    let token = try XCTUnwrap(read(agent, canvas: canvas.id)["object_token"] as? String)
+                    _ = try agent.drawAction("draw_resize_object", ["canvas_id": canvas.id.uuidString,
+                        "object_id": original.id.uuidString, "object_token": token, "width": width, "height": height],
+                        beforeMutation: {})
+                }
+                XCTAssertThrowsError(try resize(100, 50), "\(label): the current size is not a change")
+                try resize(50, 25)
+                let resized = try XCTUnwrap(store.open(canvas.id).objects.first)
+                let box = DrawGeometry.frame(resized.frame)
+                XCTAssertEqual(box.width, 50, accuracy: 0.001, label)
+                XCTAssertEqual(box.height, 25, accuracy: 0.001, label)
+                XCTAssertEqual(resized.frame.width.sign, original.frame.width.sign, "\(label): endpoint direction kept")
+                XCTAssertEqual(resized.frame.height.sign, original.frame.height.sign, "\(label): endpoint direction kept")
+                let origin = DrawGeometry.frame(original.frame)
+                XCTAssertEqual(box.minX, origin.minX, accuracy: 0.001, "\(label): the top-left corner stays")
+                XCTAssertEqual(box.minY, origin.minY, accuracy: 0.001, "\(label): the top-left corner stays")
+                try resize(120, 80)
+                XCTAssertEqual(store.undoStepID(on: canvas.id) == nil, false)
+                XCTAssertTrue(store.undo(on: canvas.id).isSaved)
+                XCTAssertEqual(try store.open(canvas.id).objects.first, resized, "\(label): one Undo takes back one resize")
+            }
+        }
+    }
+
     func testBG31AgentResizeOfThinObjectsUsesNoPointerMinimum() throws {
         let store = try persistent()
         let canvas = store.create(name: "Thin")

@@ -851,6 +851,55 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(frame.width, 140, accuracy: 0.01)
     }
 
+    /// BG-31 round 3 (Opus R-14): the 4 pt pointer minimum must not enlarge a
+    /// short axis on the default, non-proportional drag either. Pulling the
+    /// corner of a 100 x 2 stroke to the right changes its width only.
+    func testBG31DraggingAThinStrokeSidewaysNeverChangesItsHeight() throws {
+        let points = [DrawPoint(x: 0, y: 50), DrawPoint(x: 50, y: 51), DrawPoint(x: 100, y: 52)]
+        let thin = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        XCTAssertEqual(thin.frame.height, 2, accuracy: 0.0001)
+        put(thin)
+        model.setTool(.select)
+        model.select([thin.id])
+        let original = model.objects[0]
+        let corner = spot(.bottomRight)
+        drag([corner, CGPoint(x: corner.x + 5, y: corner.y), CGPoint(x: corner.x + 10, y: corner.y)])
+        let after = model.objects[0]
+        XCTAssertEqual(after.frame.height, original.frame.height, accuracy: 0.0001, "the height does not change")
+        XCTAssertGreaterThan(after.frame.width, original.frame.width, "the width follows the pointer")
+        for handle in [DrawHandle.topLeft, .topRight, .bottomLeft] {
+            let before = model.objects[0].frame
+            let start = spot(handle)
+            let sideways: CGFloat = handle == .topLeft || handle == .bottomLeft ? -10 : 10
+            drag([start, CGPoint(x: start.x + sideways, y: start.y)])
+            XCTAssertEqual(model.objects[0].frame.height, before.height, accuracy: 0.0001, "\(handle): height unchanged")
+            XCTAssertGreaterThan(model.objects[0].frame.width, before.width, "\(handle): the width grows")
+        }
+    }
+
+    /// BG-31 round 3 (Dot R-12, by decision): the 4 pt pointer floor stays a
+    /// floor. A stroke already smaller than it is not made smaller by the
+    /// pointer from any corner: its size is unchanged and no Undo step is added.
+    func testBG31AnObjectBelowThePointerFloorIsNotShrunkFurtherByThePointer() throws {
+        let points = [DrawPoint(x: 100, y: 100), DrawPoint(x: 102, y: 102)]
+        let tiny = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        put(tiny)
+        model.setTool(.select)
+        model.select([tiny.id])
+        let original = model.objects[0]
+        let head = store.undoStepID(on: model.canvasID!)
+        XCTAssertNotNil(head)
+        let centre = CGPoint(x: model.viewport.screen(CGPoint(x: 101, y: 101)).x, y: model.viewport.screen(CGPoint(x: 101, y: 101)).y)
+        for handle in [DrawHandle.topLeft, .topRight, .bottomLeft, .bottomRight] {
+            for shift in [false, true] {
+                let start = spot(handle)
+                drag([start, CGPoint(x: (start.x + centre.x) / 2, y: (start.y + centre.y) / 2), centre], shift: shift)
+                XCTAssertEqual(model.objects[0], original, "\(handle) shift=\(shift): size unchanged")
+                XCTAssertEqual(store.undoStepID(on: model.canvasID!), head, "\(handle) shift=\(shift): no Undo step added")
+            }
+        }
+    }
+
     func testImagesAlwaysKeepTheirAspectRatio() {
         put(imageObject(Draw3Images.encoded(width: 40, height: 20), width: 40, height: 20,
                         frame: DrawFrame(x: 50, y: 60, width: 200, height: 100)))
