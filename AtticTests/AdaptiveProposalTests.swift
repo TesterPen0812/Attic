@@ -159,6 +159,26 @@ final class AdaptiveProposalTests: XCTestCase {
         XCTAssertTrue(decided.controls.isEmpty)
     }
 
+    func testReviewObjectComparisonKeepsStableDisplayIdentityAcrossUnrelatedRedraws() throws {
+        let objectID = UUID(), attachmentID = UUID()
+        let current = NoteDocument(blocks: [.text("Title"),
+            .file(id: objectID, attachmentID: attachmentID, filename: "original.pdf",
+                  contentTypeIdentifier: "com.adobe.pdf", byteCount: 100)])
+        let proposed = NoteDocument(blocks: [.text("Title"),
+            .file(id: objectID, attachmentID: attachmentID, filename: "updated.pdf",
+                  contentTypeIdentifier: "com.adobe.pdf", byteCount: 100)])
+        let comparison = NoteProposalChangeSet(current: current, proposed: proposed)
+        XCTAssertEqual(comparison.changes.count, 1)
+        let first = comparison.display(decisions: [:])
+        let removed = try XCTUnwrap(first.document.blocks[1].id)
+        XCTAssertNotEqual(removed, objectID, "The struck copy must not reuse the live file placement ID")
+        XCTAssertEqual(first.document.blocks[2].id, objectID)
+        for cycle in 0..<128 {
+            XCTAssertEqual(comparison.display(decisions: [:]), first,
+                           "Unrelated SwiftUI updates must not rebuild the review editor (cycle \(cycle))")
+        }
+    }
+
     func testTheReviewEngineMarksEachChangedParagraph() {
         let set = NoteProposalChangeSet(current: Self.current, proposed: Self.proposed)
         let display = set.display(decisions: [:])

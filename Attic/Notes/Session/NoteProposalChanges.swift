@@ -35,6 +35,13 @@ struct NoteProposalChangeSet: Equatable, Sendable {
     let current: NoteDocument
     let proposed: NoteDocument
     let changes: [NoteProposalChange]
+    /// A removed object's display copy must keep its own identity through
+    /// unrelated SwiftUI redraws, without colliding with either document.
+    private let removedObjectIDs: [Int: UUID]
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.current == rhs.current && lhs.proposed == rhs.proposed && lhs.changes == rhs.changes
+    }
 
     /// Above this many compared pairs the middle of the note is one change
     /// (the comparison stays bounded for very long notes).
@@ -43,7 +50,20 @@ struct NoteProposalChangeSet: Equatable, Sendable {
     init(current: NoteDocument, proposed: NoteDocument) {
         self.current = current
         self.proposed = proposed
-        changes = Self.compare(current.blocks.map(Self.comparable), proposed.blocks.map(Self.comparable))
+        let compared = Self.compare(current.blocks.map(Self.comparable), proposed.blocks.map(Self.comparable))
+        changes = compared
+        var occupied = Set(current.blocks.compactMap(\.id))
+        occupied.formUnion(proposed.blocks.compactMap(\.id))
+        var displayIDs: [Int: UUID] = [:]
+        for change in compared {
+            for index in change.removed where current.blocks[index].id != nil {
+                var id = UUID()
+                while occupied.contains(id) { id = UUID() }
+                occupied.insert(id)
+                displayIDs[index] = id
+            }
+        }
+        removedObjectIDs = displayIDs
     }
 
     /// The note built from the current text and the accepted changes only.
@@ -79,8 +99,8 @@ struct NoteProposalChangeSet: Equatable, Sendable {
             case true?: keep(proposed.blocks[change.added])
             case false?: keep(current.blocks[change.removed])
             case nil:
-                for block in current.blocks[change.removed] {
-                    blocks.append(Self.struck(block))
+                for index in change.removed {
+                    blocks.append(Self.struck(current.blocks[index], replacementID: removedObjectIDs[index]))
                     marks.append(.removed(change.id))
                 }
                 for block in proposed.blocks[change.added] {
@@ -151,10 +171,11 @@ struct NoteProposalChangeSet: Equatable, Sendable {
     }
 
     /// The removed copy shown above its replacement: struck through, and
-    /// under a fresh object id so one engine never holds an id twice.
-    private static func struck(_ block: NoteBlock) -> NoteBlock {
+    /// under a stable comparison-owned object id so one engine never holds
+    /// the same placement id twice, and redraws can reuse its view.
+    private static func struck(_ block: NoteBlock, replacementID: UUID?) -> NoteBlock {
         var copy = block
-        if copy.id != nil { copy.id = UUID() }
+        if copy.id != nil { copy.id = replacementID }
         if copy.kind == .text || copy.kind == .checklist, !copy.text.isEmpty,
            !copy.marks.contains(where: { $0.kind == .strikethrough && $0.offset == 0 && $0.length >= copy.text.utf16.count }) {
             copy.marks.append(NoteMark(.strikethrough, offset: 0, length: copy.text.utf16.count))
