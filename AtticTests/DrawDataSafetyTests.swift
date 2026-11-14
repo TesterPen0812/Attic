@@ -543,4 +543,237 @@ final class DrawDataSafetyTests: XCTestCase {
             XCTAssertEqual(try store.open(canvas.id).objects, [object], "Rendering must never rewrite stored geometry")
         }
     }
+
+    func testHunt17DeletingImmediatelyAfterStrokeKeepsStrokeInCanvasRestore() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let canvasID = try XCTUnwrap(page.canvasID)
+        let original = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(page.perform(.put([original])).isSaved)
+
+        page.setTool(.pen)
+        page.pointerDown(at: CGPoint(x: 50, y: 140))
+        page.pointerDragged(to: CGPoint(x: 90, y: 155))
+        page.pointerUp(at: CGPoint(x: 120, y: 160))
+        XCTAssertEqual(page.objects.count, 2, "A completed stroke appears before its queued disk write")
+
+        let toasts = PanelToastCenter()
+        page.library.toasts = toasts
+        page.library.perform(.delete)
+        XCTAssertTrue(page.library.undoDeletionIfOffered())
+        XCTAssertEqual(try store.open(canvasID).objects.count, 2,
+                       "Delete/Undo must restore a stroke completed immediately before opening the library")
+    }
+
+    func testHunt17RapidDuplicateThenCopyUsesTheVisibleSelection() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let original = DrawObject(content: .shape(.ellipse))
+        XCTAssertTrue(page.perform(.put([original])).isSaved)
+        let pasteboard = NSPasteboard(name: .init("DrawRapidCopy-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        page.pasteboard = pasteboard
+        page.select([original.id])
+        page.duplicateSelection()
+        let copiedID = try XCTUnwrap(page.selection.first)
+        XCTAssertNotEqual(copiedID, original.id)
+
+        page.copySelection()
+        let data = try XCTUnwrap(pasteboard.data(forType: .init(DrawStore.clipboardType)))
+        let other = store.create(name: "Paste target")
+        XCTAssertTrue(store.paste(data, into: other.id).isSaved)
+        XCTAssertEqual(try store.open(other.id).objects.map(\.content), [original.content],
+                       "Copy immediately after Duplicate must copy the visible new object")
+    }
+
+    func testHunt17RapidDuplicateThenCutRemovesOnlyTheDuplicate() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let id = try XCTUnwrap(page.canvasID)
+        let original = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(page.perform(.put([original])).isSaved)
+        let pasteboard = NSPasteboard(name: .init("DrawRapidCut-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        page.pasteboard = pasteboard
+        page.select([original.id])
+        page.duplicateSelection()
+        let duplicatedID = try XCTUnwrap(page.selection.first)
+
+        page.cutSelection()
+        page.flushAcknowledgedDraw()
+        XCTAssertEqual(try store.open(id).objects.map(\.id), [original.id],
+                       "A rapid Cut must remove the just-duplicated object")
+        XCTAssertTrue(store.undo(on: id).isSaved)
+        XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([original.id, duplicatedID]),
+                       "Undo after Cut restores the exact duplicate")
+    }
+
+    func testHunt17DuplicatingCanvasImmediatelyAfterInkIncludesTheLastStroke() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let source = try XCTUnwrap(page.canvasID)
+        XCTAssertTrue(page.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
+        page.setTool(.pen)
+        page.pointerDown(at: CGPoint(x: 35, y: 80))
+        page.pointerDragged(to: CGPoint(x: 110, y: 125))
+        page.pointerUp()
+        XCTAssertEqual(page.objects.count, 2)
+        page.library.perform(.duplicate)
+
+        let copyID = try XCTUnwrap(page.canvasID)
+        XCTAssertNotEqual(copyID, source)
+        XCTAssertEqual(try store.open(copyID).objects.map(\.content), try store.open(source).objects.map(\.content),
+                       "A library duplicate must include the last visible but queued stroke")
+    }
+
+    func testHunt17TagImmediatelyAfterStrokeUndoesTheTagBeforeTheInk() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let id = try XCTUnwrap(page.canvasID)
+        page.setTool(.shape)
+        page.pointerDown(at: CGPoint(x: 25, y: 30))
+        page.pointerDragged(to: CGPoint(x: 65, y: 80))
+        page.pointerUp()
+        XCTAssertEqual(page.objects.count, 1)
+        page.library.setTag("important", on: true)
+        XCTAssertEqual(try store.open(id).canvas.tags, ["important"])
+        page.undo()
+        XCTAssertEqual(try store.open(id).canvas.tags, [], "Undo should reverse the latest tag edit")
+        XCTAssertEqual(try store.open(id).objects.count, 1, "Undo must not consume the older stroke")
+        page.redo()
+        XCTAssertEqual(try store.open(id).canvas.tags, ["important"])
+        XCTAssertEqual(try store.open(id).objects.count, 1)
+    }
+
+    func testHunt17PasteAfterQueuedDuplicateUndoesPasteBeforeDuplicate() throws {
+        let store = try persistent()
+        let page = DrawPageModel(store: store)
+        page.start()
+        let id = try XCTUnwrap(page.canvasID)
+        let original = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(page.perform(.put([original])).isSaved)
+        let pasteboard = NSPasteboard(name: .init("DrawHunt17Paste-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        page.pasteboard = pasteboard
+        page.select([original.id])
+        page.copySelection()
+        page.duplicateSelection()
+        let duplicateID = try XCTUnwrap(page.selection.first)
+        page.paste()
+        let pastedID = try XCTUnwrap(page.selection.first)
+        XCTAssertNotEqual(pastedID, duplicateID)
+        page.flushAcknowledgedDraw()
+        let snapshot = try store.open(id)
+        XCTAssertEqual(snapshot.objects.count, 3)
+        XCTAssertEqual(snapshot.objects.last?.id, pastedID, "Pasted objects must be layered above earlier duplicates")
+        page.undo()
+        XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([original.id, duplicateID]),
+                       "Undo after Duplicate, Paste must remove Paste, the latest user action")
+        page.redo()
+        XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([original.id, duplicateID, pastedID]))
+    }
+
+    func testHunt17SeededToolsPaletteClipboardAndUndoSurviveReopen() throws {
+        for seed: UInt64 in [0xD17A_0101, 0xD17A_0202] {
+            var state = seed
+            func choose(_ range: UInt64) -> Int {
+                state ^= state << 13
+                state ^= state >> 7
+                state ^= state << 17
+                return Int(state % range)
+            }
+            let store = try persistent()
+            let page = DrawPageModel(store: store)
+            page.start()
+            let canvasID = try XCTUnwrap(page.canvasID)
+            let pasteboard = NSPasteboard(name: .init("DrawHunt17Seed-\(seed)"))
+            defer { pasteboard.releaseGlobally() }
+            page.pasteboard = pasteboard
+            for step in 0..<210 {
+                let before = try store.open(canvasID).objects
+                let action = choose(8)
+                let x = CGFloat(20 + choose(170))
+                let y = CGFloat(30 + choose(140))
+                if action < 2 || before.isEmpty {
+                    page.setTool(.pen)
+                    page.pointerDown(at: CGPoint(x: x, y: y))
+                    page.pointerDragged(to: CGPoint(x: x + 20, y: y + 16))
+                    page.pointerUp(at: CGPoint(x: x + 35, y: y + 21))
+                } else if action < 4 {
+                    page.setTool(.shape)
+                    page.pickShape(DrawShape.allCases[choose(UInt64(DrawShape.allCases.count))])
+                    page.pointerDown(at: CGPoint(x: x, y: y))
+                    page.pointerDragged(to: CGPoint(x: x + 35, y: y + 25))
+                    page.pointerUp()
+                } else {
+                    page.setTool(.select)
+                    let picked = before[choose(UInt64(before.count))]
+                    page.select([picked.id])
+                    switch action {
+                    case 4:
+                        page.styleSelection(colour: [.red, .blue, .green, .orange][choose(4)])
+                    case 5:
+                        page.duplicateSelection()
+                    case 6:
+                        page.deleteSelection()
+                    default:
+                        page.copySelection()
+                        page.paste()
+                    }
+                }
+                page.flushAcknowledgedDraw()
+                let after = try store.open(canvasID).objects
+                XCTAssertEqual(page.objects, after, "seed \(seed), step \(step), action \(action)")
+                if before != after {
+                    page.undo()
+                    XCTAssertEqual(try store.open(canvasID).objects, before,
+                                   "Undo seed \(seed), step \(step), action \(action)")
+                    page.redo()
+                    XCTAssertEqual(try store.open(canvasID).objects, after,
+                                   "Redo seed \(seed), step \(step), action \(action)")
+                }
+                if step.isMultiple(of: 30) {
+                    let reopened = try DrawPersistentStore(container: store.container).open(canvasID)
+                    XCTAssertEqual(reopened.objects, after, "Reopen seed \(seed), step \(step)")
+                    XCTAssertFalse(store.hasUnsettledEdits)
+                }
+            }
+            print("DRAW_HUNT17_SEED=\(seed) STEPS=210")
+        }
+    }
+
+    func testHunt17QuitImmediatelyAfterStrokeRestoresTheSameCanvasFromDisk() async throws {
+        let root = try directory()
+        let defaultsName = "DrawHunt17Reopen-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        var canvasID = UUID()
+        var expected: [DrawObject] = []
+        do {
+            let store = try persistent(at: root)
+            let page = DrawPageModel(store: store, resumeDefaults: defaults)
+            page.start()
+            canvasID = try XCTUnwrap(page.canvasID)
+            page.setTool(.pen)
+            page.pointerDown(at: CGPoint(x: 40, y: 55))
+            page.pointerDragged(to: CGPoint(x: 120, y: 90))
+            page.pointerUp()
+            expected = page.objects
+            XCTAssertEqual(expected.count, 1)
+            let didQuit = await page.prepareToQuit()
+            XCTAssertTrue(didQuit)
+            XCTAssertEqual(try store.open(canvasID).objects, expected)
+        }
+        let reopenedStore = try persistent(at: root)
+        let relaunched = DrawPageModel(store: reopenedStore, resumeDefaults: defaults)
+        relaunched.start()
+        XCTAssertEqual(relaunched.canvasID, canvasID)
+        XCTAssertEqual(relaunched.objects, expected)
+        XCTAssertEqual(try reopenedStore.open(canvasID).objects, expected)
+    }
 }

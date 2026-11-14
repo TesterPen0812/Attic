@@ -19,6 +19,9 @@ struct DrawLibraryActions {
     /// These canvases' thumbnails are about to show (the menu, Search): the
     /// page re-renders any drawn for the other appearance.
     let thumbnailsShown: @MainActor (_ canvases: [DrawCanvas]) -> Void
+    /// Settle completed board gestures before a library command reads or
+    /// mutates that canvas. The page owns the queued input, not the library.
+    private let settleCanvasAction: @MainActor (_ canvasID: UUID) -> Void
 
     init(open: @escaping @MainActor (_ canvasID: UUID) -> Void,
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
@@ -28,7 +31,8 @@ struct DrawLibraryActions {
          export: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
          hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true },
-         thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in }) {
+         thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in },
+         settleCanvas: @escaping @MainActor (_ canvasID: UUID) -> Void = { _ in }) {
         openCanvas = open
         makeCanvas = newCanvas
         revealObject = reveal
@@ -38,6 +42,7 @@ struct DrawLibraryActions {
         self.copyAsImage = copyAsImage
         self.hasContent = hasContent
         self.thumbnailsShown = thumbnailsShown
+        settleCanvasAction = settleCanvas
     }
 
     /// Shows this canvas on the board.
@@ -49,4 +54,5 @@ struct DrawLibraryActions {
     /// Closes the canvas menu (the capsule shows the name again).
     @MainActor func close() { closeMenu() }
     @MainActor func canvasChanged() { canvasChangedAction() }
+    @MainActor func settleCanvas(_ canvasID: UUID) { settleCanvasAction(canvasID) }
 }

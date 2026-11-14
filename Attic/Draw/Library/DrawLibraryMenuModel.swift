@@ -307,6 +307,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         case .linkedFrom:
             return
         case .duplicate:
+            actions.settleCanvas(canvas.id)
             guard store.pendingEdits[canvas.id] == nil else { return }
             do {
                 guard let copy = try store.duplicate(canvas.id) else {
@@ -338,6 +339,7 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// Delete: the canvas goes to Recently Deleted, the board moves to the
     /// newest other canvas (or a new one), and a toast offers Undo.
     private func delete(_ canvas: DrawCanvas) {
+        actions.settleCanvas(canvas.id)
         let result = store.perform(.deleteCanvas, on: canvas.id)
         switch result {
         case .saved: AtticSounds.play(.trashed)
@@ -376,6 +378,7 @@ final class DrawLibraryMenuModel: ObservableObject {
               let original = nameBeforeRename else { return }
         let name = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != original else { cancelRename(); return }
+        actions.settleCanvas(id)
 
         // Retrying the same draft must settle its pending write, never queue
         // a second rename. If the text changed, discard the earlier failed
@@ -442,6 +445,7 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     func setTag(_ name: String, on: Bool) {
         guard let canvas = currentCanvas, let tag = AtticTag.normalize(name) else { return }
+        actions.settleCanvas(canvas.id)
         var tags = canvas.tags
         if on { if !tags.contains(tag) { tags.append(tag) } } else { tags.removeAll { $0 == tag } }
         _ = store.perform(.tags(tags), on: canvas.id)

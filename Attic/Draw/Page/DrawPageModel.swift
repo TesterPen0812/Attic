@@ -289,7 +289,14 @@ final class DrawPageModel: ObservableObject {
                            export: { [weak self] in self?.images.exportCanvas($0) },
                            copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
                            hasContent: { [weak self] in self?.hasContent($0) ?? false },
-                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) })
+                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) },
+                           settleCanvas: { [weak self] id in
+                               guard let self, self.canvasID == id else { return }
+                               self.finishLiveInput()
+                               self.endEditing()
+                               self.flushAcknowledgedDraw()
+                               self.flushTyping()
+                           })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -864,12 +871,19 @@ final class DrawPageModel: ObservableObject {
     }
 
     func copySelection() {
+        // The clipboard reads the store's durable snapshot. A duplicate or
+        // finished stroke can be visible while its 20 ms write is still queued.
+        flushAcknowledgedDraw()
+        flushTyping()
+        syncExternalChanges()
         guard let canvasID, !selection.isEmpty, let data = try? store.copy(selection, from: canvasID) else { return }
         pasteboard.clearContents()
         pasteboard.setData(data, forType: NSPasteboard.PasteboardType(DrawStore.clipboardType))
     }
 
     func cutSelection() {
+        flushAcknowledgedDraw()
+        flushTyping()
         syncExternalChanges()
         guard let canvasID, !selection.isEmpty, let data = try? store.copy(selection, from: canvasID) else { return }
         pasteboard.clearContents()
@@ -887,6 +901,10 @@ final class DrawPageModel: ObservableObject {
     /// centre of the view.
     func paste() {
         let requestedCanvas = canvasID
+        // Paste calculates the new layer order in the store; first persist
+        // preceding visible gestures so Paste and Undo retain input order.
+        flushAcknowledgedDraw()
+        flushTyping()
         // Establish the current object set before comparing IDs. An agent
         // may have inserted objects since the last asynchronous observation;
         // those must never become part of the owner's pasted selection.
