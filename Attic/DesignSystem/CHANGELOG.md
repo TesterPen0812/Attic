@@ -1,3 +1,28 @@
+## 2026-11-14 · Lists scroll to the keyboard's highlight, never to a hover
+
+A scrolling list (`AtticDropdownViewport`) brings a highlight into view only
+when the keyboard or typing made it. It no longer reads `NSApp.currentEvent`
+to tell them apart (a stale mouse move left over from an earlier event made a
+key press look like a hover, and the list never reached the last tag).
+The viewport knows the source from the change itself, through a shared
+`AtticHighlightOrigin`:
+
+- A row the pointer lit never scrolls any viewport. A picker inside a
+  presenter's persistent, height-limited card has two viewports; they share
+  one origin, so the hover scrolls neither.
+- Only a hover that moves the highlight counts as the pointer's. Rows with no
+  `onHover` (the Notes tag suggestions) leave the keyboard's highlight to
+  scroll its row into view even when the pointer rests on it.
+- A pointer that leaves the row before the list reports its highlight still
+  made it, so a quick flick across the cut-off edge does not scroll.
+- A click on ‹ or › in a date card cut short to fit the panel turns the month
+  without scrolling the card; the arrow stays under the pointer. A key that
+  turns the month still scrolls to the day it lights.
+- A tag row's id, the id it publishes for the highlight and the id the
+  pointer reports are one: the tag's name.
+
+No look, motion, size or token changes.
+
 ## 2026-11-13 · Tag picker large-list performance
 
 The tag picker now mounts rows lazily within its existing six-row viewport,
