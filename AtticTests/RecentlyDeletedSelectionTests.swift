@@ -138,6 +138,55 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
     // MARK: - Restore Selected
 
+    func testBG27RestoreSelectedAcrossMoreThanEightDrawCanvasesKeepsUndoAndRedo() throws {
+        let fixture = try makeFixture()
+        let draw = DrawInMemoryStore()
+        let ids = (0..<9).map { number -> UUID in
+            let canvas = draw.create(name: "Drawing \(number)")
+            XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("Saved \(number)"))]), on: canvas.id).isSaved)
+            XCTAssertTrue(draw.perform(.deleteCanvas, on: canvas.id).isSaved)
+            return canvas.id
+        }
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        XCTAssertEqual(model.entries.count, 9)
+        model.selectAll()
+        model.restoreSelected()
+        XCTAssertNil(model.message, model.message?.text ?? "")
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(model.canUndo)
+
+        model.undo()
+        XCTAssertEqual(model.entries.count, 9, "One Undo must reverse the entire restored group")
+        for id in ids { XCTAssertNotNil(try draw.open(id).canvas.deletedAt) }
+        XCTAssertTrue(fixture.library.undo.redo(in: .library), "Redo must restore the group")
+        model.reload()
+        XCTAssertTrue(model.entries.isEmpty)
+    }
+
+    func testBG27VisitingOtherSavedCanvasesDoesNotEraseOffscreenRestoreUndo() throws {
+        let fixture = try makeFixture()
+        let draw = DrawInMemoryStore()
+        let original = draw.create(name: "Restored")
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("keep"))]), on: original.id).isSaved)
+        XCTAssertTrue(draw.perform(.thumbnail(Data([1, 2, 3])), on: original.id).isSaved)
+        XCTAssertTrue(draw.perform(.deleteCanvas, on: original.id).isSaved)
+        let model = RecentlyDeletedModel(library: fixture.library, draw: { draw })
+        model.reload()
+        model.selectAll()
+        model.restoreSelected()
+        XCTAssertTrue(model.canUndo)
+        for number in 0..<12 {
+            let canvas = draw.create(name: "Other \(number)")
+            XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("data"))]), on: canvas.id).isSaved)
+            _ = try draw.open(canvas.id)
+        }
+        model.undo()
+        XCTAssertNotNil(try draw.open(original.id).canvas.deletedAt, "Reading other canvases cannot revoke offered Undo")
+        XCTAssertEqual(try draw.open(original.id).canvas.thumbnail, Data([1, 2, 3]),
+                       "Replaying an evicted canvas's history must preserve its thumbnail")
+    }
+
     func testDrawOnlyRestoreSelectedIsOneUndoAcrossCanvasesAndDeletedImage() throws {
         let fixture = try makeFixture()
         let draw = DrawInMemoryStore()

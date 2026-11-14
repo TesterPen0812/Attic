@@ -187,7 +187,8 @@ class DrawStore: DrawStoreProtocol {
         }.sorted { (stateAccess[$0] ?? 0) < (stateAccess[$1] ?? 0) }
         for key in candidates.prefix(states.count - Self.maxCachedStates) {
             states[key] = nil
-            histories[key] = nil
+            // Body snapshots are reconstructible; offered Undo/Redo steps are
+            // not. A grouped restore may still refer to this canvas's head.
             stateAccess[key] = nil
         }
     }
@@ -521,10 +522,14 @@ class DrawStore: DrawStoreProtocol {
 
     func undo(on id: UUID) -> DrawSaveResult {
         guard canUndo(on: id), let step = histories[id]?.undo.last else { return .unchanged }
+        // Restore the current metadata before stamping a retained history
+        // step. The body cache may have been evicted while Undo was offered.
+        guard (try? state(id)) != nil else { return .held("Could not reload this canvas for Undo.") }
         return IdleLatencyTrace.span("draw_store_undo") { execute(step.reversed, action: .undo) }
     }
     func redo(on id: UUID) -> DrawSaveResult {
         guard canRedo(on: id), let step = histories[id]?.redo.last else { return .unchanged }
+        guard (try? state(id)) != nil else { return .held("Could not reload this canvas for Redo.") }
         return execute(step, action: .redo)
     }
 
