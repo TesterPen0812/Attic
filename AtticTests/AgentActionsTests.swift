@@ -2119,6 +2119,77 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertTrue(f.store.orderedTasks(for: .todo).allSatisfy { $0.priority == .none })
     }
 
+    func testBG53ExactItemNamesBeatShortenedMatchesAcrossTasksNotesAndDraw() async throws {
+        let store = try makeTestStore()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: store, notes: notes)
+        let draw = DrawInMemoryStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: store, noteStore: notes, library: library), draw: draw)
+        let tasks = try XCTUnwrap(library.createTasks([
+            TaskDraft(title: "The plan"), TaskDraft(title: "Plan")
+        ]))
+        let firstNote = try XCTUnwrap(notes.create(title: "The note", body: "First"))
+        let secondNote = try XCTUnwrap(notes.create(title: "Note", body: "Second"))
+        let firstCanvas = draw.create(name: "The plan")
+        let secondCanvas = draw.create(name: "Plan")
+        for canvas in [firstCanvas, secondCanvas] {
+            XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("Existing"))]), on: canvas.id).isSaved)
+        }
+        let request = actions.beginRequest(title: "Exact names")
+
+        _ = try performed(await actions.call(name: "update_task", arguments: [
+            "query": "The plan", "priority": "high"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(store.task(withID: tasks[0].id)?.priority, .high)
+        XCTAssertEqual(store.task(withID: tasks[1].id)?.priority, TaskPriority.none)
+
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "The note", "body": "Updated first"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: firstNote.id)?.body, "Updated first")
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Second")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "Note", "body": "Updated second"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Updated second")
+
+        let added = try performed(await actions.call(name: "draw_add_text", arguments: [
+            "canvas_name": "The plan", "text": "For this board", "x": 12, "y": 16
+        ], watching: false, requestID: request))
+        XCTAssertEqual(added.step.targets.first?.containerID, firstCanvas.id)
+        XCTAssertEqual(try draw.open(firstCanvas.id).objects.count, 2)
+        XCTAssertEqual(try draw.open(secondCanvas.id).objects.count, 1)
+    }
+
+    func testBG54CalendarReadsMustDistinguishAccessDenialFromNoEvents() async throws {
+        let f = try fixture()
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let occurrenceID = "fixture@\(date.timeIntervalSinceReferenceDate)"
+        let request = f.actions.beginRequest(title: "Calendar access")
+        for access in [CalendarAccessState.notDetermined, .denied, .restricted] {
+            f.source.accessState = access
+            for (name, arguments) in [
+                ("calendar_search", ["query": "Meeting", "start": iso(date),
+                                     "end": iso(date.addingTimeInterval(7200))]),
+                ("calendar_read", ["occurrence_id": occurrenceID])
+            ] {
+                do {
+                    _ = try await f.actions.call(name: name, arguments: arguments,
+                                                 watching: false, requestID: request)
+                    XCTFail("\(name) must not report a successful empty read without Calendar access: \(access)")
+                } catch {
+                    XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("calendar access"),
+                                  "Access refusal must explain the permission problem: \(error)")
+                }
+            }
+        }
+        f.source.accessState = .granted
+        let authorizedEmpty = try performed(await f.actions.call(name: "calendar_search", arguments: [
+            "query": "Meeting", "start": iso(date), "end": iso(date.addingTimeInterval(7200))
+        ], watching: false, requestID: request))
+        XCTAssertEqual(try payload(authorizedEmpty.text)["count"] as? Int, 0)
+    }
+
     func testRunConvenienceNoteEditsResolveTitleAndRevisionWithoutPreRead() async throws {
         let store = try makeTestStore()
         let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())

@@ -686,6 +686,32 @@ final class AgentChatTests: XCTestCase {
         await finishRun()
     }
 
+    func testBG45TwoFilesWithTheSameNameSurvivePickingSendingAndRemoving() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-two-files-\(UUID().uuidString)")
+        let a = folder.appendingPathComponent("first", isDirectory: true)
+        let b = folder.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = a.appendingPathComponent("README.md")
+        let second = b.appendingPathComponent("README.md")
+        try Data("First project".utf8).write(to: first)
+        try Data("Second project".utf8).write(to: second)
+
+        model.attachFile(at: first)
+        model.attachFile(at: second)
+        XCTAssertEqual(model.attachments.map(\.name), ["README.md", "README.md"])
+        XCTAssertEqual(Set(model.attachments.map(\.id)).count, 2)
+        let firstID = try XCTUnwrap(model.attachments.first?.id)
+        model.removeAttachment(firstID)
+        XCTAssertEqual(model.attachments.count, 1)
+        XCTAssertEqual(model.requestContext.files.map(\.text), ["Second project"])
+        model.attachFile(at: first)
+        await start("Compare these files")
+        XCTAssertEqual(runner.contexts.last?.files.map(\.text), ["Second project", "First project"])
+        await finishRun()
+    }
+
     func testFileRefusesAnythingButSmallTextFiles() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-files-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -750,6 +776,120 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(reply.wordTimes.allSatisfy { $0 == .distantPast }, "A reopened reply is already written")
         XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) }, "Nothing in it plays again")
         XCTAssertEqual(model.phase, .idle)
+    }
+
+    func testBG44EmptyNewChatStillProvidesAccessToSavedConversations() throws {
+        let saved = AgentChatSummary(id: UUID(), title: "Earlier plan", updated: Date())
+        runner.saved = [saved]
+        runner.savedEntries[saved.id] = [AgentThreadEntry(id: UUID(), role: "user", text: "Earlier plan")]
+        model.open()
+        model.newChat()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertEqual(model.history, [saved])
+
+        let size = CGSize(width: 320, height: 480)
+        let stage = AgentChatStage(model: model, fx: AgentChatFX(), shown: true,
+                                   layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                                   rows: { _ in [] }, setTyping: { _ in }, didClose: {})
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        let host = NSHostingView(rootView: stage.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -7000, y: -7000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+        func hasHistory(_ node: AnyObject, seen: inout Set<ObjectIdentifier>) -> Bool {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return false }
+            if (node.accessibilityIdentifier?() ?? nil) == "agent-chat-history" { return true }
+            return ((node.accessibilityChildren?() ?? nil) ?? []).contains {
+                hasHistory($0 as AnyObject, seen: &seen)
+            }
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        var seen = Set<ObjectIdentifier>()
+        XCTAssertTrue(hasHistory(host, seen: &seen), "A blank thread must still expose saved Chats")
+        if ProcessInfo.processInfo.environment["ATTIC_BG44_CAPTURE_DIR"] != nil {
+            // The unit host is sandboxed; its own temporary directory is
+            // writable, while the external Air job build folder is not.
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-bg44-shots-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            print("BG44_CAPTURE_DIR=\(directory.path)")
+            func capture(_ name: String) throws {
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                bitmap.size = size
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: directory.appendingPathComponent(name))
+            }
+            try capture("blank-with-history-after.png")
+            // With zero saved chats, the current empty stage has the same
+            // control-free visual state as the original broken branch.
+            runner.saved = []
+            model.newChat()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            try capture("blank-with-history-before-equivalent.png")
+            runner.saved = [saved]
+            model.newChat()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        model.reopen(saved.id)
+        XCTAssertFalse(model.entries.isEmpty, "Saved conversation opens without sending a new question")
+        model.newChat()
+        model.close()
+        model.open()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        seen = []
+        XCTAssertTrue(hasHistory(host, seen: &seen), "History stays reachable after closing and reopening a blank chat")
+    }
+
+    func testBG51BackdropEscapeBelongsToTheActiveInputMethod() throws {
+        var routedEscapes = 0
+        let size = CGSize(width: 300, height: 360)
+        let editor = NSTextView(frame: CGRect(x: 15, y: 15, width: 250, height: 44))
+        let backdrop = NSHostingView(rootView: AgentChatBackdrop(
+            shown: true, reveal: 1, origin: CGPoint(x: 150, y: 180),
+            tint: .clear, fades: true, solid: true, onEscape: { routedEscapes += 1 }
+        ).frame(width: size.width, height: size.height))
+        let content = NSView(frame: CGRect(origin: .zero, size: size))
+        content.addSubview(backdrop)
+        content.addSubview(editor)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -7000, y: -7000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = content
+        defer { window.close() }
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+
+        func escape() throws {
+            let key = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}",
+                isARepeat: false, keyCode: 53
+            ))
+            NSApp.sendEvent(key)
+        }
+        editor.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText(), "The input method owns the first Escape")
+        try escape()
+        XCTAssertEqual(routedEscapes, 0, "Cancelling a marked composition must leave chat open")
+        editor.unmarkText()
+        try escape()
+        XCTAssertEqual(routedEscapes, 1, "The next ordinary Escape should dismiss chat")
     }
 
     func testHistoryDaysReadTodayAWeekdayOrTheDate() throws {
@@ -1490,6 +1630,48 @@ final class AgentChatHostedTests: XCTestCase {
     func testSA5ComposerPhaseGeometryRespectsReduceMotion() {
         XCTAssertNil(AgentChatComposer.phaseAnimation(alive: false), "Reduce Motion must move composer geometry instantly")
         XCTAssertNotNil(AgentChatComposer.phaseAnimation(alive: true), "Standard composer motion stays enabled")
+    }
+
+    func testBG43ShiftReturnReplacesTheSelectedRangeInTheLiveComposer() throws {
+        model.open()
+        spin(0.5)
+        model.draft = "ABCDEF"
+        spin(0.15)
+
+        func fields(in view: NSView) -> [NSTextField] {
+            let own = (view as? NSTextField).map { [$0] } ?? []
+            return own + view.subviews.flatMap { fields(in: $0) }
+        }
+        let field = try XCTUnwrap(fields(in: try XCTUnwrap(window.contentView))
+            .first { $0.placeholderString == "Ask Attic" }, "Find the real SwiftUI composer text field")
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView, "Editing the composer uses the native text editor")
+
+        func pressReturn(shift: Bool) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                isARepeat: false, keyCode: 36))
+            window.sendEvent(event)
+            spin(0.12)
+        }
+
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        try pressReturn(shift: true)
+        XCTAssertEqual(model.draft, "ABC\nDEF", "Shift-Return inserts at the caret")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+
+        model.draft = "AB🎯CDEF"
+        spin(0.1)
+        editor.setSelectedRange(NSRange(location: 4, length: 2))
+        try pressReturn(shift: true)
+        XCTAssertEqual(model.draft, "AB🎯\nEF", "Selected text is replaced at UTF-16 offsets after an emoji")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0))
+
+        try pressReturn(shift: false)
+        XCTAssertEqual(runner.sent.count, 1, "Unmodified Return still sends once")
+        XCTAssertEqual(runner.sent.first?.text, "AB🎯\nEF")
     }
 
     override func setUp() async throws {

@@ -1125,6 +1125,26 @@ final class AgentChatModel: ObservableObject {
         #if DEBUG && ATTIC_LOCAL_ONLY
         AgentPassProbe.mark("StopRequested")
         #endif
+        if let queued = newChatQueuedSend {
+            // The visible Stop belongs to the pending new thread, while the
+            // previous thread still has committed action receipts to drain.
+            // Cancelling its runner would not cancel this queued intent.
+            newChatQueuedSend = nil
+            if let last = entries.last, case let .asked(text) = last.content, text == queued.text {
+                entries.removeLast()
+            }
+            if draft.isEmpty && attachments.isEmpty {
+                draft = queued.text
+                attachments = queued.attachments
+            } else {
+                entries.append(AgentChatEntry(.note(Self.unsentQueuedNotice(queued))))
+            }
+            phase = .idle
+            isRunning = false
+            progress = nil
+            refreshBar()
+            return
+        }
         runner?.cancel()
     }
 
@@ -1272,7 +1292,7 @@ final class AgentChatModel: ObservableObject {
         for attachment in attachments {
             switch attachment {
             case let .item(target): context.items.append(target)
-            case let .file(file): context.files.append(file)
+            case let .file(file, _): context.files.append(file)
             }
         }
         return context
@@ -1296,8 +1316,7 @@ final class AgentChatModel: ObservableObject {
     func attachFile(at url: URL) {
         switch AgentChatFiles.read(url) {
         case let .success(file):
-            let attachment = AgentChatAttachment.file(file)
-            attachments.removeAll { $0.id == attachment.id }
+            let attachment = AgentChatAttachment.file(file, id: UUID())
             attachments.append(attachment)
             attachmentRefusal = nil
         case let .failure(refusal):

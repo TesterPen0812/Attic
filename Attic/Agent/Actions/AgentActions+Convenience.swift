@@ -373,6 +373,10 @@ extension AgentActions {
 
     static func matchScore(query: String, in candidate: String) -> Int? {
         let text = words(candidate).joined(separator: " ")
+        // A literal title must win before removing conversational filler.
+        // Otherwise "The plan" wrongly picks a different item titled "Plan".
+        let fullQuery = words(query).joined(separator: " ")
+        if !fullQuery.isEmpty, text == fullQuery { return 2000 }
         let normalized = words(query).filter { !["the", "a", "an", "my", "please", "task", "note", "to"].contains($0) }
         guard !normalized.isEmpty else { return nil }
         let needle = normalized.joined(separator: " ")
