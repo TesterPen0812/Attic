@@ -2703,8 +2703,8 @@ final class TasksPageModel: ObservableObject {
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.
         if let first = created.first {
-            let destination: TasksTab = first.listedStatus == .backlog ? .backlog : .now
-            unfoldAddedTask(first.id, on: destination)
+            // Every line's task opens its own folded group, not only the first's.
+            for task in created { unfoldAddedTask(task.id, on: task.listedStatus == .backlog ? .backlog : .now) }
             addedRequest = ScrollRequest(id: first.id)
         }
         let message = created.count == 1

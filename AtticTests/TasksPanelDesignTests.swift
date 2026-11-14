@@ -202,6 +202,27 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(model.rows(for: .now).contains { $0.id == created })
     }
 
+    /// Opus R-5: every pasted task's group opens, not only the first's.
+    func testBG2PasteOpensTheFoldedGroupOfEveryCreatedTask() throws {
+        let today = try add("Seed today", due: 0)
+        let tomorrow = try add("Seed tomorrow", due: 1)
+        let friday = try add("Seed friday", due: 4)
+        let keys = try [today, tomorrow, friday].map { try XCTUnwrap(model.groupKey(of: $0, on: .now)) }
+        XCTAssertEqual(Set(keys).count, 3)
+        model.foldAllGroups(keys, folded: true, on: .now)
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer("a today\nb tomorrow\nc friday"))
+        model.acceptPaste(asOne: false)
+        let created = store.tasks.filter { ["a", "b", "c"].contains($0.title.prefix(1)) && $0.title.count <= 3 }
+        XCTAssertEqual(created.count, 3, "the paste made three tasks: \(store.tasks.map(\.title))")
+        let destinations = Set(created.compactMap { model.groupKey(of: $0.id, on: .now) })
+        XCTAssertEqual(destinations.count, 3, "the lines land in three different groups")
+        for key in destinations {
+            XCTAssertFalse(model.folded(on: .now).contains(key), "BG-2: every created task's group opens")
+        }
+        let shown = Set(model.rows(for: .now).map(\.id))
+        XCTAssertTrue(created.allSatisfy { shown.contains($0.id) }, "every pasted task is drawn")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])
