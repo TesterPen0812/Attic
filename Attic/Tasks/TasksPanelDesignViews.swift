@@ -1,4 +1,62 @@
+import Combine
 import SwiftUI
+
+/// Date headings participate in the page's custom keyboard traversal.
+struct TasksGroupFocusID: Hashable {
+    let tab: TasksTab
+    let key: String
+}
+
+/// A custom Tab move to an editor or row ends the preceding header's ring.
+struct TasksGroupFocusRelease: Hashable {}
+
+/// Only Tasks overrides the native button focus chain. Notes' shared group
+/// header retains its normal Full Keyboard Access behavior.
+private struct TasksGroupKeyboardFocus: ViewModifier {
+    let id: TasksGroupFocusID?
+    let toggle: () -> Void
+
+    @Environment(\.atticFocusRequests) private var requests
+    @FocusState private var focused: Bool
+    @State private var armed = false
+    // The page drives Tab itself. Some AppKit hosts receive the focus request
+    // but never settle SwiftUI's FocusState; retain the requested stop/ring.
+    @State private var selectedByTab = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let id {
+            content
+                .focusable(armed, interactions: .activate)
+                .focused($focused)
+                .focusEffectDisabled()
+                .atticFocusRing(focused || selectedByTab, cornerRadius: AtticRadius.control(height: TasksDesignMetrics.groupHeaderHeight))
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    guard focused || selectedByTab else { return .ignored }
+                    toggle()
+                    return .handled
+                }
+                .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
+                    if asked == AnyHashable(id) {
+                        selectedByTab = true
+                        requests?.note(id, focused: true)
+                        armed = true
+                        DispatchQueue.main.async { focused = true }
+                    } else if selectedByTab {
+                        selectedByTab = false
+                        requests?.note(id, focused: false)
+                    }
+                }
+                .onChange(of: focused) { _, now in
+                    requests?.note(id, focused: now)
+                    if !now { armed = false; selectedByTab = false }
+                }
+                .onDisappear { if focused || selectedByTab { requests?.note(id, focused: false) } }
+        } else {
+            content.focusEffectDisabled()
+        }
+    }
+}
 
 /// A date group's header (the owner's panel design, 2026-10-27): 11 pt in
 /// the design's header grey, the primary ink under the pointer. A click folds or
@@ -24,6 +82,7 @@ struct TasksGroupHeader: View {
     /// header takes the title's ink, as under the pointer.
     var isDropTarget = false
     var items: Items = .tasks
+    var focusID: TasksGroupFocusID? = nil
     let toggle: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -58,7 +117,6 @@ struct TasksGroupHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .focusEffectDisabled()
         .onHover { hovered = $0 }
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.2), value: folded)
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : .easeOut(duration: 0.15), value: lit)
@@ -68,6 +126,7 @@ struct TasksGroupHeader: View {
         .accessibilityValue(folded ? String(localized: "Folded, \(items.count(count))") : items.count(count))
         .accessibilityAddTraits([.isHeader, .isButton])
         .accessibilityHint(folded ? items.showHint : items.hideHint)
+        .modifier(TasksGroupKeyboardFocus(id: focusID, toggle: toggle))
     }
 }
 

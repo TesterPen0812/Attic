@@ -479,6 +479,7 @@ struct TasksPage: View {
                 TasksDragCancellation.consumeEscape(event)
                     || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
+                    || groupActivationPressed(event)
                     || tabPressed(event)
                     ? nil : event
             }
@@ -1167,6 +1168,30 @@ struct TasksPage: View {
         return tabPressed(backward: modifiers == .shift)
     }
 
+    /// A header chosen through the custom Tab order must activate even when
+    /// an inactive AppKit host retains its previous native key responder.
+    private func groupActivationPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, [36, 49, 76].contains(Int(event.keyCode)),
+              event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+              model.isPageShown, let window = pointer.view?.window,
+              event.window === window, window.isKeyWindow,
+              !Self.isComposing(window.firstResponder),
+              !searchFocused, model.editingTitleID == nil,
+              model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              metaPopover == nil, selectionPicker == nil, !composerPickerOpen,
+              panelComposer?.isOpen() != true, drag == nil,
+              let groupKey = (focusRequests.current?.base as? TasksGroupFocusID)
+                  .flatMap({ $0.tab == model.tab ? $0.key : nil })
+                  ?? (tabTarget.stop.flatMap { if case let .group(key) = $0 { return key }; return nil }),
+              // A tab change can leave the add field falsely focused even
+              // after the page's Tab explicitly chose a date heading.
+              (!addBarFocused || tabTarget.stop == .group(groupKey)),
+              tabStops().contains(.group(groupKey)) else { return false }
+        toggleGroup(groupKey, on: model.tab,
+                    animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
+        return true
+    }
+
     /// NSTextView may consume Tab before the page's local key monitor sees it.
     /// Both routes use the same visible-stop order and focus settlement.
     private func tabPressed(backward: Bool) -> Bool {
@@ -1198,19 +1223,50 @@ struct TasksPage: View {
                 open[row.id] = row.subtasks.map(\.id)
             }
         }
+        var list: [TasksTabStop] = []
+        if tab == .done {
+            for day in model.doneDays() {
+                list.append(.group(day.key))
+                list.append(contentsOf: day.rows.map { .row($0.id) })
+            }
+        } else {
+            let sections = model.sections(for: tab)
+            for group in sections.groups {
+                if group.showsHeader { list.append(.group(group.key)) }
+                for row in sections.groupRows[group.key] ?? [] {
+                    list.append(.row(row.id))
+                    list.append(contentsOf: (open[row.id] ?? []).map(TasksTabStop.subtask))
+                }
+            }
+        }
+        // Completed Today and any non-grouped rows keep their existing
+        // order after the dated list, and each stop appears only once.
+        let listed = Set(list.compactMap { stop -> UUID? in
+            if case let .row(id) = stop { return id }; return nil
+        })
+        for id in ids where !listed.contains(id) {
+            list.append(.row(id))
+            list.append(contentsOf: (open[id] ?? []).map(TasksTabStop.subtask))
+        }
         let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
         return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
                                    strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled,
                                    plus: panelComposer != nil,
                                    tagKey: panelComposer != nil && !model.tagChips().isEmpty && !selectionBarShown,
-                                   tagMatch: tagBarState?.isOpen == true && model.tagPicks(on: tab).showsMatch)
+                                   tagMatch: tagBarState?.isOpen == true && model.tagPicks(on: tab).showsMatch,
+                                   list: list)
     }
 
     /// Where the keyboard is among `stops`, if it is on one.
     private func currentTabStop(in stops: [TasksTabStop]) -> TasksTabStop? {
         if searchFocused { return .find }
+        // A requested header takes precedence over a retained native add
+        // field whose focus notification arrived after the Tab handoff.
+        if case let .group(key) = tabTarget.stop, stops.contains(.group(key)) { return .group(key) }
         if addBarFocused { return .addBar }
         if focusRequests.current?.base is PanelPlusFocusID { return .plus }
+        if let group = focusRequests.current?.base as? TasksGroupFocusID, group.tab == model.tab,
+           stops.contains(.group(group.key)) { return .group(group.key) }
         if focusRequests.current?.base is PanelTagKeyFocusID {
             if case .match = tagBarState?.cursor, stops.contains(.tagMatch) { return .tagMatch }
             return .tagKey
@@ -1224,6 +1280,11 @@ struct TasksPage: View {
     private func moveKeyboard(to stop: TasksTabStop, from current: TasksTabStop?, in stops: [TasksTabStop]) {
         let tab = model.tab
         tabTarget.request(stop)
+        if case .group = current, current != stop {
+            // An editor or row has no focus-request subscriber to release
+            // the previous header's custom keyboard-focus indicator.
+            focusRequests.focus(TasksGroupFocusRelease())
+        }
         switch stop {
         case .find:
             focusedRow = nil
@@ -1233,6 +1294,27 @@ struct TasksPage: View {
             focusedRow = nil
             searchFocused = false
             addBarFocused = true
+        case let .group(key):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            let target = TasksGroupFocusID(tab: tab, key: key)
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts,
+                           landed: { focusRequests.current?.base as? TasksGroupFocusID == target }, revealing: nil) {
+                listProxies.lists[tab]?.scrollTo("group:" + key, anchor: .center)
+                focusRequests.focus(target)
+            }
+            // In a retained page AppKit can leave an old row's editable
+            // text view as first responder after SwiftUI settles the header.
+            // The requested group owns this Tab move, so release that field.
+            let generation = tabTarget.generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) {
+                guard tabTarget.isCurrent(stop, generation: generation), model.tab == tab,
+                      !searchFocused, let window = pointer.view?.window,
+                      AtticTextInput.isTyping(window.firstResponder) else { return }
+                addBarFocused = false
+                window.makeFirstResponder(nil)
+            }
         case let .strip(button):
             focusedRow = nil
             searchFocused = false
@@ -1737,7 +1819,8 @@ struct TasksPage: View {
                                 // (Adaptive picks), read in the header's own body.
                                 TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
                                     TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
-                                                     overdue: dateGroup.isOverdue, isDropTarget: targeted) {
+                                                     overdue: dateGroup.isOverdue, isDropTarget: targeted,
+                                                     focusID: TasksGroupFocusID(tab: tab, key: dateGroup.key)) {
                                         toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                                     }
                                 }
@@ -2898,6 +2981,11 @@ struct TasksPage: View {
               event.window === window else {
             pointer.endInvocation()
             return
+        }
+        // A pointer click leaves the header selected through Tab navigation.
+        // End that stop before the clicked row, field, or control takes input.
+        if focusRequests.current?.base is TasksGroupFocusID {
+            focusRequests.focus(TasksGroupFocusRelease())
         }
         tabTarget.cancel()
         dragSession.newPress()
@@ -5621,6 +5709,7 @@ final class TasksTabTarget {
 /// One stop of the Tasks page's own Tab order.
 enum TasksTabStop: Hashable {
     case find
+    case group(String)
     case row(UUID)
     case subtask(UUID)
     case addBar
@@ -5642,11 +5731,16 @@ enum TasksTabStop: Hashable {
 /// the last stop goes round to the first: never to an unseen stop.
 enum TasksTabOrder {
     static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool,
-                      plus: Bool = false, tagKey: Bool = false, tagMatch: Bool = false) -> [TasksTabStop] {
+                      plus: Bool = false, tagKey: Bool = false, tagMatch: Bool = false,
+                      list: [TasksTabStop]? = nil) -> [TasksTabStop] {
         var stops: [TasksTabStop] = find ? [.find] : []
-        for row in rows {
-            stops.append(.row(row.id))
-            stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
+        if let list {
+            stops.append(contentsOf: list)
+        } else {
+            for row in rows {
+                stops.append(.row(row.id))
+                stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
+            }
         }
         if plus {
             // The bottom bar, left to right: "#" (and the open bar's

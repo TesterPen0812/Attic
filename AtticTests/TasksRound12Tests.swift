@@ -10,6 +10,34 @@ import XCTest
 /// of one task are two rows). Plus the computer-use review's bugs.
 @MainActor
 final class TasksRound12Tests: XCTestCase {
+
+    func testBG5TabAndSpaceReopenFoldedDateHeadersOnNowAndDone() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+
+        let nowGroups = model.sections(for: .now).groups.filter(\.showsHeader)
+        XCTAssertFalse(nowGroups.isEmpty)
+        model.foldAllGroups(nowGroups.map(\.key), folded: true, on: .now)
+        hosted.spin(0.2)
+        XCTAssertTrue(model.rows(for: .now).isEmpty)
+        hosted.press("\t", keyCode: 48)
+        hosted.press(" ", keyCode: 49)
+        XCTAssertFalse(model.folded(on: .now).contains(nowGroups[0].key),
+            "BG-5: a header must be the first Tab stop when every group is folded")
+
+        hosted.go(to: .done)
+        model.loadDoneLogIfNeeded()
+        let days = model.doneDays()
+        XCTAssertFalse(days.isEmpty)
+        model.foldAllGroups(days.map(\.key), folded: true, on: .done)
+        hosted.spin(0.2)
+        hosted.press("\t", keyCode: 48)
+        hosted.press(" ", keyCode: 49)
+        XCTAssertFalse(model.folded(on: .done).contains(days[0].key),
+            "BG-5: a Done header must be keyboard-accessible with no visible rows")
+    }
     private final class ProbePanel: NSPanel {
         override var canBecomeKey: Bool { true }
     }

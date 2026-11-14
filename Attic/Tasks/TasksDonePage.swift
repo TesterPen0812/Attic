@@ -111,9 +111,11 @@ struct TasksDonePage<Cell: View>: View {
                         // The owner's panel design: the day's header folds
                         // or unfolds its tasks.
                         TasksGroupHeader(title: day.title, count: day.total,
-                                         folded: turn?.key == day.key ? turn?.headerFolded ?? day.folded : day.folded) {
+                                         folded: turn?.key == day.key ? turn?.headerFolded ?? day.folded : day.folded,
+                                         focusID: TasksGroupFocusID(tab: .done, key: day.key)) {
                             toggleDay(day.key)
                         }
+                        .id("group:" + day.key)
                     case let .row(row):
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.
