@@ -721,6 +721,42 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, legacy.id, "Legacy fallback retains legacy context")
     }
 
+    func testBG60AgentShowWaitsForFocusedNativeDrawTextEditor() throws {
+        let panel = try makePanel()
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .canvas), .shown)
+        panel.uiState.setPanelKey(true)
+
+        let draw = DrawPageModel(store: DrawInMemoryStore())
+        let board = DrawBoardView(model: draw)
+        draw.start()
+        draw.setShown(true)
+        board.setFrameSize(CGSize(width: 320, height: 320))
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 320, height: 320),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = board
+        window.orderFrontRegardless()
+        defer {
+            draw.setShown(false)
+            window.makeFirstResponder(nil)
+            window.orderOut(nil)
+            window.close()
+        }
+        XCTAssertTrue(window.makeFirstResponder(board))
+        draw.beginText(at: CGPoint(x: 50, y: 70))
+        XCTAssertTrue(window.firstResponder is DrawTextEditorView)
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel)
+        XCTAssertEqual(panel.presenter.presentForAgent(.page(.tasks)), .userIsTyping)
+        XCTAssertEqual(panel.uiState.selectedSection, .canvas)
+
+        window.makeFirstResponder(board)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel)
+        guard case .shown = panel.presenter.presentForAgent(.page(.tasks)) else {
+            return XCTFail("Agent must be allowed to show Tasks after editor releases focus")
+        }
+    }
+
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {

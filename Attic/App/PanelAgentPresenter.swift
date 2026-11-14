@@ -15,7 +15,8 @@ final class PanelAgentPresenter: AgentPanelPresenting {
     /// Whether a canvas text editor holds the keyboard in the visible panel.
     /// It sets no interaction lock, so it is asked directly. Tests replace it.
     var canvasTextEditorIsActive: () -> Bool = {
-        CanvasSemanticTextEditor.focusedInVisibleWindow != nil
+        if AtticDraw.isEnabled { return DrawTextEditorView.focusedInVisibleWindow != nil }
+        return CanvasSemanticTextEditor.focusedInVisibleWindow != nil
     }
 
     init(

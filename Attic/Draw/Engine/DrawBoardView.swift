@@ -1290,6 +1290,22 @@ extension DrawBoardView {
 final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
     weak var owner: DrawBoardView?
     private var applying = false
+    private static weak var lastFocused: DrawTextEditorView?
+
+    /// Editor owning keyboard focus while its Draw surface is visible.
+    static var focusedInVisibleWindow: DrawTextEditorView? {
+        guard let editor = lastFocused, let window = editor.window,
+              window.isVisible, window.firstResponder === editor,
+              editor.owner?.model.isShown == true,
+              !editor.isHiddenOrHasHiddenAncestor else { return nil }
+        return editor
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        Self.lastFocused = self
+        return true
+    }
 
     override init(frame frameRect: NSRect) {
         let storage = NSTextStorage()
