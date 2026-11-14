@@ -1780,3 +1780,318 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(ComposerCard.length(30), "30 min")
     }
 }
+
+/// BT9: a real disk store and a new container/controller on every relaunch.
+/// All paths and defaults belong to this fixture, never the app's store.
+@MainActor
+final class ComposerRecoveryTests: XCTestCase {
+    private final class Failure { var on = false }
+    private struct Session {
+        let container: ModelContainer
+        let library: AtticLibrary
+        let page: TasksPageModel
+        let composer: ComposerModel
+    }
+    private var root: URL!
+    private var defaults: UserDefaults!
+    private var suite: String!
+    private let failure = Failure()
+
+    override func setUp() async throws {
+        root = ownedTemporaryDirectory(prefix: "ComposerRecoveryDisk")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        suite = "ComposerRecoveryDisk.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    }
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suite)
+    }
+    private var drafts: ComposerDraftStore {
+        ComposerDraftStore(defaults: defaults, taskRecoveryURL: root.appendingPathComponent("pending.json"))
+    }
+    private func launch(_ recovery: ComposerDraftStore? = nil) throws -> Session {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("files")))
+        let failing = failure
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, persist: { context in
+            if failing.on { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let page = TasksPageModel(library: library)
+        page.services.acknowledgementDelay = .seconds(3600)
+        let composer = ComposerModel(tasks: page, services: ComposerServices(drafts: recovery ?? drafts))
+        composer.open(on: .tasks(.now))
+        // A simulated quit leaves the old controller's delayed command alive
+        // in this test process. Abort it before the temporary store disappears;
+        // it must never commit later or query a removed SQLite file.
+        addTeardownBlock { @MainActor [weak page, failing] in
+            failing.on = true
+            page?.settlePendingCompletionAcknowledgements()
+        }
+        return Session(container: container, library: library, page: page, composer: composer)
+    }
+    private func rows(_ session: Session) throws -> [TaskItem] {
+        try ModelContext(session.container).fetch(FetchDescriptor<TaskItem>())
+    }
+    private func type(_ text: String, in session: Session) {
+        session.page.addBar = TaskAddBarText(text: text)
+        session.composer.writing = "Writing that must survive"
+    }
+
+    func testPendingDiskRecoveryPrecedesClearAndRelaunchRetryKeepsIdentity() throws {
+        let first = try launch()
+        type("Pending task", in: first)
+        first.page.addBar.picked.tags = ["chosen"]
+        first.page.addBar.picked.priority = .high
+        first.composer.submit()
+        XCTAssertTrue(first.page.addBar.text.isEmpty)
+        XCTAssertTrue(try rows(first).isEmpty)
+        // Reading from a new draft store goes to disk, not the old object.
+        let bytes = try Data(contentsOf: XCTUnwrap(drafts.taskRecoveryURL))
+        XCTAssertEqual(try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: bytes).tasks.count, 1)
+        let pending = try XCTUnwrap(try drafts.readFailedTasks().first)
+        XCTAssertEqual(pending.writing, "Writing that must survive")
+        XCTAssertEqual(pending.pickedTags, ["chosen"])
+        let restarted = try launch()
+        XCTAssertEqual(restarted.page.addBar.text, "Pending task")
+        XCTAssertEqual(restarted.page.addBar.picked.priority, .high)
+        XCTAssertTrue(restarted.page.addBarState.fileNames.isEmpty)
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).map(\.id), [pending.id])
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        let again = try launch()
+        XCTAssertEqual(try rows(again).map(\.id), [pending.id])
+        XCTAssertTrue(again.page.addBar.text.isEmpty)
+    }
+
+    func testRecoveryWriteFailureLeavesWordsPicksFilesAndStoreUntouched() throws {
+        var recovery = drafts
+        recovery.persistTaskRecovery = { _, _ in throw CocoaError(.fileWriteOutOfSpace) }
+        let session = try launch(recovery)
+        type("Never clear this", in: session)
+        session.page.addBar.picked.tags = ["keep"]
+        let file = root.appendingPathComponent("keep.pdf")
+        try Data("keep file".utf8).write(to: file)
+        session.page.addComposerFiles(urls: [file])
+        session.composer.submit()
+        XCTAssertEqual(session.page.addBar.text, "Never clear this")
+        XCTAssertEqual(session.composer.writing, "Writing that must survive")
+        XCTAssertEqual(session.page.addBar.picked.tags, ["keep"])
+        XCTAssertEqual(session.page.addBarState.fileNames, ["keep.pdf"])
+        XCTAssertTrue(session.composer.failed)
+        XCTAssertFalse(session.composer.isCreating)
+        session.page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(try rows(session).isEmpty)
+        XCTAssertEqual(session.library.undo.undoCount(in: .tasks), 0)
+        XCTAssertEqual(try Data(contentsOf: file), Data("keep file".utf8))
+        XCTAssertTrue(try rows(try launch()).isEmpty)
+    }
+
+    func testTaskSaveFailureKeepsDiskRecoveryAndRelaunchHasNoPhantomFiles() throws {
+        let session = try launch()
+        type("Failed task", in: session)
+        let file = root.appendingPathComponent("reattach.pdf")
+        try Data("still owned".utf8).write(to: file)
+        session.page.addComposerFiles(urls: [file])
+        session.composer.submit()
+        let pendingID = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true
+        session.page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(try rows(session).isEmpty)
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [pendingID])
+        XCTAssertEqual(session.page.addBarState.fileNames, ["reattach.pdf"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        let restarted = try launch()
+        XCTAssertEqual(restarted.page.addBar.text, "Failed task")
+        XCTAssertEqual(restarted.composer.writing, "Writing that must survive")
+        XCTAssertTrue(restarted.page.addBarState.fileNames.isEmpty, "BT10: relaunch must require reattaching, never claim lost file ownership")
+        failure.on = false
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).map(\.id), [pendingID])
+        XCTAssertTrue(try rows(restarted).allSatisfy { $0.attachments.isEmpty })
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+    }
+
+    func testCrashAfterCommitBeforeCleanupDoesNotRestoreKeptRecoveryOrDuplicateReplicas() throws {
+        let first = try launch()
+        type("Committed recovery", in: first)
+        first.composer.submit()
+        // Relaunch restores the pending task and saves a kept-card backup.
+        var recovery = drafts
+        let write = recovery.persistTaskRecovery
+        recovery.persistTaskRecovery = { data, url in
+            if try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: data).tasks.isEmpty {
+                throw CocoaError(.fileWriteUnknown) // crash window: commit succeeded, retirement did not
+            }
+            try write(data, url)
+        }
+        let retry = try launch(recovery)
+        let keptAtCrash = try XCTUnwrap(drafts.load())
+        retry.composer.submit()
+        retry.page.settlePendingCompletionAcknowledgements()
+        // The actual crash stops the callback before it can clear this
+        // older kept-card backup. Retain that exact disk state here.
+        drafts.save(keptAtCrash)
+        let id = try XCTUnwrap(try rows(retry).first?.id)
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id])
+        // Two physical app-level replicas, one logical task.
+        let context = ModelContext(retry.container)
+        context.insert(TaskItem(id: id, title: "Committed recovery"))
+        try context.save()
+        let restarted = try launch()
+        XCTAssertEqual(try rows(restarted).count, 2)
+        XCTAssertEqual(restarted.library.tasks.tasks.count, 1)
+        XCTAssertTrue(restarted.page.addBar.text.isEmpty)
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        restarted.composer.submit() // an empty card cannot duplicate the committed UUID
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).count, 2)
+        XCTAssertTrue(restarted.page.setStatus(.inProgress, for: [id]).isApplied)
+        XCTAssertTrue(try rows(restarted).allSatisfy { $0.status == .inProgress })
+        XCTAssertTrue(restarted.library.delete(AtticItemRef(.task, id), in: .tasks))
+        XCTAssertTrue(try rows(restarted).allSatisfy { $0.deletedAt != nil })
+        XCTAssertEqual(try rows(try launch()).count, 2)
+    }
+
+    func testRecoveryWriteThatReplacesFileThenThrowsKeepsBothSubmissionIdentities() throws {
+        let first = try launch()
+        type("Earlier failed draft", in: first)
+        first.composer.submit()
+        type("Newer draft", in: first)
+        failure.on = true
+        first.page.settlePendingCompletionAcknowledgements()
+        failure.on = false
+        var recovery = drafts
+        let write = recovery.persistTaskRecovery
+        var reportFailure = true
+        recovery.persistTaskRecovery = { data, url in
+            try write(data, url)
+            if reportFailure { reportFailure = false; throw CocoaError(.fileWriteUnknown) }
+        }
+        first.composer.services.drafts = recovery
+        first.composer.submit()
+        XCTAssertEqual(first.page.addBar.text, "Newer draft")
+        XCTAssertTrue(first.composer.failed)
+        XCTAssertFalse(first.composer.isCreating)
+        XCTAssertTrue(try rows(first).isEmpty)
+        let pendingID = try XCTUnwrap(try drafts.readFailedTasks().first { $0.title == "Newer draft" }?.id)
+        first.composer.saveKeptDraft()
+        let restarted = try launch()
+        XCTAssertEqual(restarted.page.addBar.text, "Newer draft")
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).map(\.id), [pendingID])
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.title), ["Earlier failed draft"])
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).count, 2)
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+    }
+
+    func testEditedRecoveryRelaunchKeepsWordsAndOriginalSubmissionIdentity() throws {
+        let first = try launch()
+        type("Original words", in: first)
+        first.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        let retry = try launch()
+        type("Edited recovery words", in: retry)
+        retry.composer.saveKeptDraft()
+        let restarted = try launch()
+        XCTAssertEqual(restarted.page.addBar.text, "Edited recovery words")
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).map(\.id), [id])
+        XCTAssertEqual(try rows(restarted).first?.title, "Edited recovery words")
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+    }
+
+    func testSubmittingPreviouslyKeptDraftAtomicallyConsumesItsBackup() throws {
+        let first = try launch()
+        type("Previously kept", in: first)
+        first.composer.saveKeptDraft()
+        XCTAssertEqual(drafts.load()?.title, "Previously kept")
+        first.composer.submit()
+        let pendingID = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        XCTAssertNil(drafts.load(), "acknowledgement atomically moves the kept card into the pending record")
+        // A physical commit followed immediately by a crash: neither the
+        // original controller's callback nor its defaults cleanup ran.
+        XCTAssertNotNil(first.library.createTask(TaskDraft(title: "Previously kept"),
+            writing: "Writing that must survive", in: .tasks, id: pendingID))
+        let restarted = try launch()
+        XCTAssertTrue(restarted.page.addBar.text.isEmpty)
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).map(\.id), [pendingID])
+    }
+
+    func testCrashAfterRecordRetirementStillDiscardsCommittedKeptDraft() throws {
+        let first = try launch()
+        type("Retired before crash", in: first)
+        first.composer.submit()
+        let retry = try launch()
+        let keptAtCrash = try XCTUnwrap(drafts.load())
+        retry.composer.submit()
+        retry.page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        // The ledger retirement was durable; the process stopped immediately
+        // before clearing the older kept-card backup.
+        drafts.save(keptAtCrash)
+        let restarted = try launch()
+        XCTAssertTrue(restarted.page.addBar.text.isEmpty)
+        restarted.composer.submit()
+        restarted.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(restarted).count, 1)
+        XCTAssertEqual(try rows(restarted).first?.id, keptAtCrash.recoveringTaskID)
+    }
+
+    func testReconcileCommittedTombstonesDoesNotResurrectDeletedTask() throws {
+        let session = try launch()
+        type("Already deleted", in: session)
+        session.composer.submit()
+        let pending = try drafts.readFailedTasks()
+        session.page.settlePendingCompletionAcknowledgements()
+        let id = try XCTUnwrap(try rows(session).first?.id)
+        XCTAssertTrue(session.library.delete(AtticItemRef(.task, id), in: .tasks))
+        XCTAssertTrue(drafts.saveFailedTasks(pending)) // record survived the crash; task was committed then deleted
+        let restarted = try launch()
+        XCTAssertTrue(restarted.page.addBar.text.isEmpty)
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        XCTAssertEqual(try rows(restarted).count, 1)
+        XCTAssertTrue(try rows(restarted).allSatisfy { $0.deletedAt != nil })
+    }
+
+    func testRecoveryRecordRetiresOnlyOnceAfterCommit() throws {
+        var recovery = drafts
+        let write = recovery.persistTaskRecovery
+        var transitions: [Int] = []
+        recovery.persistTaskRecovery = { data, url in
+            transitions.append(try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: data).tasks.count)
+            try write(data, url)
+        }
+        let session = try launch(recovery)
+        type("Exactly once", in: session)
+        session.composer.submit()
+        XCTAssertEqual(transitions, [1], "pending record is durable before acknowledgement")
+        XCTAssertTrue(try rows(session).isEmpty)
+        session.page.settlePendingCompletionAcknowledgements()
+        session.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(transitions, [1, 0])
+        XCTAssertEqual(try rows(try launch(recovery)).count, 1)
+        XCTAssertEqual(transitions, [1, 0], "reconciliation must not retire an already removed record")
+    }
+
+    func testUnreadableRecoveryRefusesToOverwriteOrClearAnotherDraft() throws {
+        let url = try XCTUnwrap(drafts.taskRecoveryURL)
+        let bytes = Data("unreadable interrupted recovery".utf8)
+        try bytes.write(to: url)
+        let session = try launch()
+        type("Do not clear", in: session)
+        session.composer.submit()
+        XCTAssertEqual(session.page.addBar.text, "Do not clear")
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertTrue(try rows(session).isEmpty)
+    }
+}

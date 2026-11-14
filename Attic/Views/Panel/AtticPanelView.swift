@@ -462,7 +462,10 @@ struct AtticPanelView: View {
             eventFailure: { [toasts] message in
                 toasts.showFailure(message)
             },
-            drafts: ComposerDraftStore(defaults: settings.userDefaults))
+            drafts: ComposerDraftStore(defaults: settings.userDefaults,
+                taskRecoveryURL: store.container.configurations.first.flatMap {
+                    $0.isStoredInMemoryOnly ? nil : $0.url.appendingPathExtension("composer-tasks.json")
+                }))
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
