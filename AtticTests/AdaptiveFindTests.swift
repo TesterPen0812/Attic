@@ -554,6 +554,41 @@ final class AdaptiveFindTests: XCTestCase {
         }
     }
 
+    func testR3NonLatinMenuEquivalentWhileFindMountsPastesOnlyIntoFind() throws {
+        try requireKeyWindowTests()
+        try withNote { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.selectAll(nil)
+            let original = engine.document()
+            let undo = engine.history.undoOps.map(ObjectIdentifier.init)
+            let board = NSPasteboard.general
+            let kept = board.string(forType: .string)
+            defer { board.clearContents(); if let kept { board.setString(kept, forType: .string) } }
+            board.clearContents(); board.setString("new query", forType: .string)
+            let oldMenu = NSApp.mainMenu
+            let menu = NSMenu()
+            let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "м")
+            paste.target = view
+            menu.addItem(paste)
+            NSApp.mainMenu = menu
+            defer { NSApp.mainMenu = oldMenu }
+            XCTAssertNil(engine.find.routeKeyDown(key(3, "f", flags: .command, in: panel)))
+            XCTAssertNotNil(engine.find.routeKeyDown(key(0, "q", flags: .command, in: panel)),
+                            "a logical global equivalent on a remapped Latin layout is not Select All")
+            let event = key(9, "м", flags: .command, in: panel)
+            let forwarded = engine.find.routeKeyDown(event)
+            XCTAssertNil(forwarded, "physical V is Paste on a non-Latin layout")
+            if let forwarded, !menu.performKeyEquivalent(with: forwarded) { panel.sendEvent(forwarded) }
+            spin(0.7)
+            XCTAssertEqual(engine.find.query, "new query")
+            XCTAssertEqual(engine.document(), original)
+            XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
+            engine.find.close(returnFocus: false)
+        }
+    }
+
     // MARK: The Search button
 
     func testSearchFindsOnANoteAndSearchesOverAllNotesAndItsTooltipSaysWhich() throws {

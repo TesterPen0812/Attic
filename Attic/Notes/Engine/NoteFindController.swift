@@ -194,19 +194,30 @@ final class NoteFindController: ObservableObject {
     /// the field mounts they belong to it, never to the note.
     private static func editingCommand(_ event: NSEvent) -> Selector? {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let key = event.charactersIgnoringModifiers?.lowercased()
+        // Keep logical Latin equivalents (including remapped layouts), then
+        // use the physical equivalent for non-Latin layouts such as Russian.
+        let code: UInt16
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "v": code = 9
+        case "a": code = 0
+        case "x": code = 7
+        case "c": code = 8
+        case "z": code = 6
+        case let characters? where characters.unicodeScalars.allSatisfy(\.isASCII): return nil
+        default: code = event.keyCode
+        }
         if flags == .command {
-            switch key {
-            case "v": return #selector(NSText.paste(_:))
-            case "a": return #selector(NSText.selectAll(_:))
-            case "x": return #selector(NSText.cut(_:))
-            case "c": return #selector(NSText.copy(_:))
-            case "z": return #selector(UndoManager.undo)
+            switch code {
+            case 9: return #selector(NSText.paste(_:))
+            case 0: return #selector(NSText.selectAll(_:))
+            case 7: return #selector(NSText.cut(_:))
+            case 8: return #selector(NSText.copy(_:))
+            case 6: return #selector(UndoManager.undo)
             default: return nil
             }
         }
-        if flags == [.command, .shift], key == "z" { return #selector(UndoManager.redo) }
-        if flags == [.command, .option, .shift], key == "v" { return #selector(NSText.paste(_:)) }
+        if flags == [.command, .shift], code == 6 { return #selector(UndoManager.redo) }
+        if flags == [.command, .option, .shift], code == 9 { return #selector(NSText.paste(_:)) }
         return nil
     }
 
