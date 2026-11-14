@@ -323,6 +323,32 @@ final class NotesTypingCostTests: XCTestCase {
             engine.find.close(); engine.detachView()
         }
     }
+    func testPF12PlainTypingDoesNotRestyleUnchangedRichNeighbor() {
+        for length in [1_000, 100_000] {
+            var rich = NoteBlock.text(String(repeating: "a", count: length))
+            rich.marks = [NoteMark(.bold, offset: 0, length: length / 2),
+                          NoteMark(.italic, offset: length / 2, length: length / 2)]
+            let (engine, view) = editor([.text("Title"), .text("edit here"), rich])
+            defer { engine.detachView() }
+            let originalMarks = engine.document().blocks[2].marks
+            let offset = (view.string as NSString).range(of: "edit here").location + 4
+            view.setSelectedRange(NSRange(location: offset, length: 0))
+            let touched = engine.restyleTouchedUTF16Count
+            let visited = engine.restyleMarkRunVisitCount
+            for _ in 0..<100 {
+                view.insertText("x", replacementRange: view.selectedRange())
+            }
+            let change = engine.restyleTouchedUTF16Count - touched
+            let runs = engine.restyleMarkRunVisitCount - visited
+            print("PF12 length=\(length) edits=100 restyled_utf16=\(change) mark_runs=\(runs)")
+            XCTAssertLessThan(change, 5_000, "ordinary typing must not restyle unchanged rich neighbors")
+            XCTAssertLessThan(runs, 500)
+            XCTAssertEqual(engine.document().blocks[2].marks, originalMarks)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[2].marks, originalMarks)
+        }
+    }
+
     func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
         let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
             .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])

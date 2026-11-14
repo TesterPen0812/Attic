@@ -358,6 +358,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Diagnostic: time spent in the last per-edit upkeep (ms).
     private(set) var lastUpkeepMilliseconds: Double = 0
+    /// Count actual ranges and mark runs normalized by TextKit upkeep.
+    private(set) var restyleTouchedUTF16Count = 0
+    private(set) var restyleMarkRunVisitCount = 0
     var blockRangeParagraphVisits = 0
     var blockRunIntervals: [NSRange] = []
     private(set) var documentProjectionUTF16Count = 0
@@ -1083,6 +1086,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             while position < bodyEnd {
                 let paragraph = string.paragraphRange(for: NSRange(location: position, length: 0))
                 let actual = NSIntersectionRange(paragraph, NSRange(location: bodyStart, length: bodyEnd - bodyStart))
+                restyleTouchedUTF16Count += actual.length
                 let metadata = textStorage.attributes(at: position, effectiveRange: nil)
                 let name = metadata[.noteBlockStyle] as? String
                 let depth = metadata[.noteBlockIndent] as? Int ?? 0
@@ -1131,6 +1135,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func restyleMarks(in range: NSRange, base: [NSAttributedString.Key: Any]) {
         var runs: [([NoteMark.Kind: Any], NSRange)] = []
         textStorage.enumerateAttributes(in: range) { values, markRange, _ in
+            restyleMarkRunVisitCount += 1
             let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
                 values[.noteMark(kind)].map { (kind, $0) }
             })
@@ -2495,6 +2500,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             } else { headingSectionsCache = nil }
         } else { invalidateOutlineIfNeeded(in: editedRange) }
         guard editedMask.contains(.editedCharacters) else { return }
+        let announcedTextEdit = pendingImportEdit
+        let hadPendingParagraphChange = pendingParagraphStyle != nil || pendingEmptiedParagraph != nil
         documentEditGeneration &+= 1
         if let session = textView?.calloutIconSession {
             afterStorageEdit { [weak session] _ in session?.cancel(reason: "document characters edited") }
@@ -2574,21 +2581,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // A selected-range deletion, cut, or replacement can remove the box
         // without using a marker-first key route. Normalize its surviving
         // paragraph before history captures the edit.
-        let nearby = paragraphs(around: editedRange)
-        var nearbyStart = nearby.location
-        while nearbyStart < NSMaxRange(nearby), nearbyStart < textStorage.length {
-            let line = lineRange(at: nearbyStart)
-            if !isTitleLine(line.location), line.length > 0, checklistBox(inParagraphAt: line.location) == nil {
-                let name = textStorage.attribute(.noteBlockStyle, at: line.location, effectiveRange: nil) as? String
-                if !["bullet", "number", "quote"].contains(name ?? ""),
-                   textStorage.attribute(.noteBlockIndent, at: line.location, effectiveRange: nil) != nil {
-                    let extent = (textStorage.string as NSString).paragraphRange(for: NSRange(location: line.location, length: 0))
-                    textStorage.removeAttribute(.noteBlockIndent, range: extent)
+        if !textOnly {
+            let nearby = paragraphs(around: editedRange)
+            var nearbyStart = nearby.location
+            while nearbyStart < NSMaxRange(nearby), nearbyStart < textStorage.length {
+                let line = lineRange(at: nearbyStart)
+                if !isTitleLine(line.location), line.length > 0, checklistBox(inParagraphAt: line.location) == nil {
+                    let name = textStorage.attribute(.noteBlockStyle, at: line.location, effectiveRange: nil) as? String
+                    if !["bullet", "number", "quote"].contains(name ?? ""),
+                       textStorage.attribute(.noteBlockIndent, at: line.location, effectiveRange: nil) != nil {
+                        let extent = (textStorage.string as NSString).paragraphRange(for: NSRange(location: line.location, length: 0))
+                        textStorage.removeAttribute(.noteBlockIndent, range: extent)
+                    }
                 }
+                let next = NSMaxRange(line) + 1
+                if next <= nearbyStart { break }
+                nearbyStart = next
             }
-            let next = NSMaxRange(line) + 1
-            if next <= nearbyStart { break }
-            nearbyStart = next
         }
         if let anchor = importAnchor {
             // TextKit's processed range also includes neighbouring attributes,
@@ -2691,8 +2700,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         let start = DispatchTime.now().uptimeNanoseconds
         find.charactersChanged(in: editedRange, delta: delta)
-        let around = paragraphs(around: editedRange)
-        restyle(around)
+        // Native text-only edits inherit their paragraph metadata and marks.
+        // Only the inserted/replaced characters need a fresh display style;
+        // re-styling the whole paragraph and its neighbours can invalidate
+        // 100k unchanged rich characters for a single key.
+        let safeInlineEdit = textOnly && activity != .composing && textView?.hasMarkedText() != true
+            && !hadPendingParagraphChange
+        let around: NSRange
+        if safeInlineEdit, let edit = announcedTextEdit,
+           edit.range.location >= 0, edit.replacementLength > 0,
+           edit.range.location + edit.replacementLength <= textStorage.length,
+           !isTitleLine(edit.range.location),
+           paragraphStyle(at: edit.range.location)?.isCode != true {
+            around = NSRange(location: edit.range.location, length: edit.replacementLength)
+        } else {
+            around = paragraphs(around: editedRange)
+        }
+        if around.length > 0 { restyle(around) }
         // Filling or emptying a pending heading can change membership even
         // without a separator. Compare its local semantics after normalization.
         if textOnly { invalidateOutlineIfNeeded(in: editedRange) }
