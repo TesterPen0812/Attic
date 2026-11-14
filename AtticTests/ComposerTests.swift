@@ -171,7 +171,6 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(again.kind, .note)
     }
 
-
     func testR5MarkedWritingLeavesCommandReturnToTheInputMethod() throws {
         let (window, host, title) = try mountForKeys(on: .notes)
         typeKeys(title, "Composition note")
@@ -218,7 +217,6 @@ final class ComposerTests: XCTestCase {
         }
     }
 
-
     func testR5LibraryTagsSeedTheNoteAfterItsTaskOwnerIsSetAside() throws {
         for taskTitle in ["", "Invoice for Bob"] {
             let fresh = TasksPageModel(library: library)
@@ -228,6 +226,7 @@ final class ComposerTests: XCTestCase {
             fresh.addBarState.stagingFiles = 1
             card.startTags(["library"])
             card.open(on: .notes)
+            try captureR13NoteDraft(taskTitle.isEmpty ? "R5-tags-empty" : "R5-tags-words", card: card)
             XCTAssertEqual(fresh.addBar.picked.tags, ["library"], "the opened Note owns the library filter")
             fresh.addBar.text = "Half a note"
             card.open(on: .tasks(.now))
@@ -236,7 +235,6 @@ final class ComposerTests: XCTestCase {
             XCTAssertTrue(fresh.addBar.picked.tags.isEmpty, "Notes tags never leak onto the Task")
         }
     }
-
 
     func testR5SwitchingOwnedDraftsRestoresTheNativeTitleSelection() throws {
         let (window, _, title) = try mountForKeys(on: .tasks(.now))
@@ -267,7 +265,6 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(title.selectedRange(), NSRange(location: (title.string as NSString).length, length: 0))
     }
 
-
     func testR5FileDropSetsAsideAKeptNoteBeforeForcingTask() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("r5-drop-\(UUID().uuidString).txt")
         try "dropped".write(to: file, atomically: true, encoding: .utf8)
@@ -282,6 +279,7 @@ final class ComposerTests: XCTestCase {
         let route = PanelComposerRoute(open: { [model] page, kind in model?.open(on: page, as: kind) })
         XCTAssertTrue(page.dropFilesOnComposer([try XCTUnwrap(NSItemProvider(contentsOf: file))], card: route))
         for _ in 0..<100 where page.addBarState.stagingFiles > 0 { try await Task.sleep(for: .milliseconds(20)) }
+        try captureR13NoteDraft("R5-file-drop")
         XCTAssertEqual(model.kind, .task)
         XCTAssertEqual(page.addBar.text, "", "a file's Task must not borrow the kept Note's title")
         XCTAssertEqual(model.writing, "")
@@ -292,6 +290,17 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.writing, "Only the Note owns these words")
         XCTAssertTrue(model.pinned)
         XCTAssertEqual(page.addBarState.selection, NSRange(location: 2, length: 4))
+    }
+
+    private var r13RenderDirectory: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("R13Renders-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    }
+
+    func testR5RenderOutputStaysInTheTestTemporaryDirectory() {
+        let output = r13RenderDirectory.standardizedFileURL.path
+        let temporary = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        XCTAssertTrue(output.hasPrefix(temporary + "/"), "render output must stay in test temporary storage: \(output)")
     }
 
     private func type(_ text: String) {
@@ -1731,8 +1740,7 @@ final class ComposerTests: XCTestCase {
                 }
                 if mode == .light, text.components(separatedBy: "\n").count == 5,
                    ProcessInfo.processInfo.environment["ATTIC_R13_RENDER"] != nil {
-                    let directory = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
-                        .appendingPathComponent("R13Renders", isDirectory: true)
+                    let directory = r13RenderDirectory
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     for (name, view) in [("writing-native.png", field as NSView), ("writing-legacy.png", reference as NSView)] {
                         let bitmap = try writingBitmap(in: view)
@@ -1841,10 +1849,10 @@ final class ComposerTests: XCTestCase {
     }
 
     /// Optional 2× captures of the real card for the hunt's HTML proof.
-    private func captureR13NoteDraft(_ route: String) throws {
+    private func captureR13NoteDraft(_ route: String, card: ComposerModel? = nil) throws {
         guard let phase = ProcessInfo.processInfo.environment["ATTIC_R13_RENDER"] else { return }
         let design = AtticDesignContext(mode: .light, reduceTransparency: true)
-        let host = NSHostingView(rootView: ComposerCard(model: model, drawsChrome: false)
+        let host = NSHostingView(rootView: ComposerCard(model: card ?? model, drawsChrome: false)
             .atticDesign(design).background(design.tokens.panel.base.color))
         host.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
         let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 200),
@@ -1860,10 +1868,9 @@ final class ComposerTests: XCTestCase {
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         bitmap.size = host.bounds.size
         host.cacheDisplay(in: host.bounds, to: bitmap)
-        let directory = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
-            .appendingPathComponent("R13Renders", isDirectory: true)
+        let directory = r13RenderDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = (route.hasPrefix("Tasks") ? "quick-note" : "notes")
+        let name = route.hasPrefix("R5-") ? route : (route.hasPrefix("Tasks") ? "quick-note" : "notes")
             + (route.contains("restored") ? "-restored-task" : "")
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             .write(to: directory.appendingPathComponent("\(phase)-\(name).png"))
