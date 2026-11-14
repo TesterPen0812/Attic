@@ -66,7 +66,7 @@ final class AdaptiveFindTests: XCTestCase {
 
     /// The real panel on Notes with one note open whose body says "quote"
     /// three times.
-    private func withNote(_ body: (_ host: AtticPanelHostingView, _ panel: NSPanel, _ draft: NoteDraftController,
+    private func withNote(document: NoteDocument? = nil, _ body: (_ host: AtticPanelHostingView, _ panel: NSPanel, _ draft: NoteDraftController,
                                    _ engine: NoteEditorEngine, _ library: () -> NotesLibraryModel?) throws -> Void) throws {
         let suite = "AdaptiveFind.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -75,7 +75,7 @@ final class AdaptiveFindTests: XCTestCase {
         let store = TaskStore(container: container)
         let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
         let id = UUID()
-        _ = try notes.createDocumentNote(id: id, document: NoteDocument(blocks: [
+        _ = try notes.createDocumentNote(id: id, document: document ?? NoteDocument(blocks: [
             .text("Boiler replacement"),
             .text("We need three quotes by Friday."),
             .text("Warmflow sent a quote; HeatRight's quote follows."),
@@ -585,6 +585,38 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertEqual(engine.find.query, "new query")
             XCTAssertEqual(engine.document(), original)
             XCTAssertEqual(engine.history.undoOps.map(ObjectIdentifier.init), undo)
+            engine.find.close(returnFocus: false)
+        }
+    }
+
+    func testR3ReturnWaitsForQueuedPasteBeforeRevealingATableMatch() throws {
+        try requireKeyWindowTests()
+        try withNote(document: NoteDocument(blocks: [.text("Title"), .text("new query"),
+                .table(NoteTable(texts: [["old query", "other"]]))])) { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            engine.find.show()
+            spin(0.65)
+            engine.find.query = "old query"
+            XCTAssertNotNil(engine.find.matches.first?.tableID)
+            engine.find.close()
+            spin(0.15)
+            let original = engine.document()
+            let board = NSPasteboard.general
+            let kept = board.string(forType: .string)
+            defer { board.clearContents(); if let kept { board.setString(kept, forType: .string) } }
+            board.clearContents(); board.setString("new query", forType: .string)
+            for event in [key(3, "f", flags: .command, in: panel),
+                          key(9, "v", flags: .command, in: panel), key(36, "\r", in: panel)] {
+                if let forwarded = engine.find.routeKeyDown(event) { panel.sendEvent(forwarded) }
+            }
+            spin(0.8)
+            XCTAssertEqual(engine.find.query, "new query", "the queued paste is applied before navigation")
+            XCTAssertNil(engine.find.matches.first?.tableID, "navigation uses the new matches")
+            XCTAssertTrue(engine.find.fieldFocused, "the stale table match must not take focus")
+            XCTAssertTrue((panel.firstResponder as? NSTextView)?.isFieldEditor == true)
+            XCTAssertEqual(engine.document(), original)
             engine.find.close(returnFocus: false)
         }
     }

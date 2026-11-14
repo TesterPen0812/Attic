@@ -221,6 +221,13 @@ final class NoteFindController: ObservableObject {
         return nil
     }
 
+    private static func navigationDirection(_ event: NSEvent) -> Bool? {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if event.keyCode == 36, flags.isEmpty || flags == .shift { return flags.contains(.shift) }
+        if event.keyCode == 5, flags == .command || flags == [.command, .shift] { return flags.contains(.shift) }
+        return nil
+    }
+
     /// Capture keys before the field appears. Early plain-text feedback is
     /// provisional; the field editor remains the authority for composition
     /// and for editing commands.
@@ -228,7 +235,7 @@ final class NoteFindController: ObservableObject {
     func typeAhead(_ event: NSEvent) -> Bool {
         guard shownInTopRow, isShown, fieldFocused, awaitingField else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if Self.editingCommand(event) != nil || Self.isNativeEditingKey(event) {
+        if Self.editingCommand(event) != nil || Self.navigationDirection(event) != nil || Self.isNativeEditingKey(event) {
             // ⌘V and the like would reach the note's own selection: queue
             // them for the field and replay them there, in order.
             if pendingInputEvents.isEmpty {
@@ -283,7 +290,9 @@ final class NoteFindController: ObservableObject {
         pendingInputBaseQuery = nil
         pendingInputReplacesQuery = false
         pendingInputComposition = false
+        var navigation: [Bool] = []
         for event in events {
+            if let backward = Self.navigationDirection(event) { navigation.append(backward); continue }
             guard let command = Self.editingCommand(event) else { editor.interpretKeyEvents([event]); continue }
             switch command {
             case #selector(UndoManager.undo): editor.undoManager?.undo()
@@ -292,6 +301,7 @@ final class NoteFindController: ObservableObject {
             }
         }
         if !editor.hasMarkedText(), query != editor.string { query = editor.string }
+        for backward in navigation { next(backward: backward) }
     }
 
     /// Plain keys typed ahead already stand in the query, one search each:
