@@ -1081,13 +1081,21 @@ extension PanelSharedChromeTests {
 extension PanelSharedChromeTests {
     private static let downArrow = "\u{F701}"
 
-    private func notesLibraryShell() throws -> (RealShell, NotesLibraryModel) {
+    private func notesLibraryShell(resolve: (@MainActor (RealShell) throws -> NotesLibraryModel)? = nil) throws -> (RealShell, NotesLibraryModel) {
         let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+        var handedOut = false
+        defer { if !handedOut { shell.close() } }
         shell.go(to: .notes)
         XCTAssertTrue(shell.draft.pages.showLibrary())
         shell.spin(0.8)
         XCTAssertTrue(shell.panel.isKeyWindow, "the hosted shell must own keyboard input")
-        let library = try XCTUnwrap(shell.draft.pages.liveLibraryModel, "All notes shows")
+        let library: NotesLibraryModel
+        if let resolve { library = try resolve(shell) }
+        else {
+            let live = shell.draft.pages.liveLibraryModel
+            library = try XCTUnwrap(live, "All notes shows")
+        }
+        handedOut = true
         return (shell, library)
     }
 
@@ -1515,5 +1523,29 @@ extension PanelSharedChromeTests {
         XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(KeyEquivalent(Character("\u{3}"))), "keypad Enter is an activation key")
         XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(.return))
         XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(.space))
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3AThrowWhileResolvingTheLibraryClosesItsKeyShell() throws {
+        try requireKeyWindowTests()
+        enum Injected: Error { case failure }
+        weak var panel: AtticPanel?
+        var resolverEntered = false
+        XCTAssertThrowsError(try notesLibraryShell { shell in
+            resolverEntered = true
+            panel = shell.panel
+            throw Injected.failure
+        }) { error in XCTAssertTrue(error is Injected) }
+        XCTAssertTrue(resolverEntered, "the injected failure occurred after the key shell was created")
+        // Diagnostic callback captures must not be the reason a window survives.
+        PanelKeyStopSeam.plusFocusReports = [:]
+        spin(0.4)
+        XCTAssertFalse(panel?.isVisible == true, "throwing setup must close the panel before the caller can install a defer")
+        XCTAssertFalse(panel?.isKeyWindow == true)
+        panel?.orderOut(nil) // red-run cleanup only, after the oracle
+        panel?.contentView = nil
+        panel?.close()
     }
 }

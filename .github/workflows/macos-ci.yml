@@ -180,6 +180,7 @@ jobs:
             testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
             testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard
             testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
+            testR3AThrowWhileResolvingTheLibraryClosesItsKeyShell
             testR3RevealAddsNoShellBodyPass
             testR3TheTabDriverUsesTheApplicationsKeyboardPath
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
