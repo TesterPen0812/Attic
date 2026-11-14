@@ -118,7 +118,7 @@ final class AtticHangProbe: @unchecked Sendable {
             self?.runLoop(activity)
         }) else { return }
         self.observer = observer
-        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes)
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, CFRunLoopMode.commonModes)
 
         let queue = DispatchQueue(label: "attic.ci.hang-probe", qos: .utility)
         queue.async { [self] in write("ARMED: main-run-loop watchdog, 3s threshold\n") }
