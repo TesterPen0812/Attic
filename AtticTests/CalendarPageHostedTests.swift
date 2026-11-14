@@ -659,13 +659,13 @@ final class CalendarPageHostedTests: XCTestCase {
             end: start.addingTimeInterval(3600), isAllDay: false, location: nil,
             calendarTitle: "Test", colour: .init(red: 0.2, green: 0.5, blue: 0.9))
         let chat = AgentChatModel()
-        let board = AgentWatchBoard.shared
+        let board = AgentWatchBoard()
         chat.open()
         board.bindWatching(to: chat)
         defer { chat.close(); board.retireDayRequest() }
 
         try withReducedMotion {
-            try withPage(events: [event], height: 900, makeWriter: { writer }) { page in
+            try withPage(events: [event], height: 900, makeWriter: { writer }, watchBoard: board) { page in
                 page.model.select(day(2026, 10, 30))
                 page.model.setDayView(true)
                 page.settle(0.3)
@@ -1252,6 +1252,7 @@ final class CalendarPageHostedTests: XCTestCase {
                           taskActions: ((TaskStore) -> CalendarTaskRowActions)? = nil, keyWindow: Bool = false,
                           height: CGFloat = 900, makeWriter: (() throws -> CalendarEventWriter)? = nil,
                           resumeDefaults: UserDefaults? = nil, chrome: PanelSharedChrome? = nil,
+                          watchBoard: AgentWatchBoard = .shared,
                           _ body: (MountedPage) throws -> Void) throws {
         let store = try makeTestStore()
         try seed(store)
@@ -1265,7 +1266,7 @@ final class CalendarPageHostedTests: XCTestCase {
         design.reduceTransparency = AtticTransparencySeam.systemOverride ?? false
         let page = CalendarPage(model: model, layout: layout,
                                 taskActions: taskActions?(store) ?? CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
-                                onNewTask: { _ in })
+                                onNewTask: { _ in }, watchBoard: watchBoard)
             .environment(\.panelResumeDefaults, resumeDefaults)
             .environment(\.panelSharedChrome, chrome)
             .atticDesign(design)

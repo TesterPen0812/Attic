@@ -20,6 +20,7 @@ struct CalendarPage: View {
     /// The native panel is actually ordered front. Prewarming a selected
     /// page must not request Calendar access or start visible-page work.
     var panelIsVisible = true
+    let watchBoard: AgentWatchBoard
 
     @Environment(\.atticDesign) private var design
     @Environment(\.panelSharedChrome) private var sharedChrome
@@ -56,12 +57,13 @@ struct CalendarPage: View {
     final class OffsetBox { var y: CGFloat = 0 }
 
     init(model: CalendarPageModel, layout: PanelPageLayout, taskActions: CalendarTaskRowActions,
-         onNewTask: @escaping (DueDay) -> Void, panelIsVisible: Bool = true) {
+         onNewTask: @escaping (DueDay) -> Void, panelIsVisible: Bool = true, watchBoard: AgentWatchBoard = .shared) {
         self.model = model
         self.layout = layout
         self.taskActions = taskActions
         self.onNewTask = onNewTask
         self.panelIsVisible = panelIsVisible
+        self.watchBoard = watchBoard
         _flags = State(initialValue: ScrollFlags(weekView: model.isWeekPicked))
         _weekOnly = State(initialValue: model.isWeekPicked)
     }
@@ -135,7 +137,7 @@ struct CalendarPage: View {
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         // The agent picks a day while you watch (the spark taps its key).
-        .onReceive(AgentWatchBoard.shared.$dayRequest.compactMap { $0 }) { request in
+        .onReceive(watchBoard.$dayRequest.compactMap { $0 }) { request in
             // @Published sends before updating its stored value; check the
             // latest request once the publication has finished.
             Task { @MainActor in applyWatchedDayRequest(request) }
@@ -372,11 +374,11 @@ struct CalendarPage: View {
     }
 
     private func applyWatchedDayRequest() {
-        if let request = AgentWatchBoard.shared.dayRequest { applyWatchedDayRequest(request) }
+        if let request = watchBoard.dayRequest { applyWatchedDayRequest(request) }
     }
 
     private func applyWatchedDayRequest(_ request: (day: DueDay, id: UUID, generation: UInt64)) {
-        let board = AgentWatchBoard.shared
+        let board = watchBoard
         guard board.acceptsDayRequest(id: request.id, generation: request.generation,
                                       pageIsVisible: isReallyVisible) else { return }
         afterClosingEvent {
