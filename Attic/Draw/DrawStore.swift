@@ -45,10 +45,19 @@ class DrawStore: DrawStoreProtocol {
     /// its own entry; any other change drops them all.
     @ObservationIgnored private var searchThumbnails: [UUID: CachedThumbnail] = [:]
     @ObservationIgnored private var thumbnailUse: UInt64 = 0
-    /// Canvases whose record could not be read in a batch, left out of later
-    /// batches so one damaged record never hides the others. Same lifetime
-    /// as `searchThumbnails`.
-    @ObservationIgnored private var unreadableThumbnails = Set<UUID>()
+    /// A canvas whose thumbnail read failed, and when. Until the revision
+    /// moves on it is neither read again nor batched with its neighbours,
+    /// so one damaged record is read once per revision and never hides the
+    /// others. A successful read clears the mark.
+    private struct Unreadable {
+        var revision: UInt64
+        var error: Error
+    }
+    @ObservationIgnored private var unreadableThumbnails: [UUID: Unreadable] = [:]
+    /// The revision at which a whole batch (and each of its rows) failed. A
+    /// failure that is not one record's own: until the revision moves on, or
+    /// a read succeeds, rows read one at a time.
+    @ObservationIgnored private var batchFailureRevision: UInt64?
     var searchThumbnailCacheCount: Int { searchThumbnails.count }
     var unreadableThumbnailCount: Int { unreadableThumbnails.count }
     @ObservationIgnored private var histories: [UUID: History] = [:]
@@ -160,7 +169,7 @@ class DrawStore: DrawStoreProtocol {
         revision &+= 1
         if let id {
             searchThumbnails[id] = nil
-            unreadableThumbnails.remove(id)
+            unreadableThumbnails[id] = nil
         } else {
             searchThumbnails.removeAll()
             unreadableThumbnails.removeAll()
@@ -212,8 +221,10 @@ class DrawStore: DrawStoreProtocol {
     /// first. They come through the per-canvas cache, so an edit to one match
     /// re-reads only that match; the remaining rows hydrate as they are built.
     private func hydratedPresentation(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
-        let window = canvases.prefix(Self.thumbnailWindow).filter { needsThumbnailRead($0.id) }
-        try loadThumbnails(Array(window))
+        if batchFailureRevision != revision {
+            let window = canvases.prefix(Self.thumbnailWindow).filter { needsThumbnailRead($0.id) }
+            try loadThumbnails(Array(window))
+        }
         return canvases.map { canvas in
             guard !recoveredCanvasIDs.contains(canvas.id), let entry = cachedThumbnail(canvas.id) else { return canvas }
             return merged(canvas, entry)
@@ -244,8 +255,10 @@ class DrawStore: DrawStoreProtocol {
         }
         let metadata = snapshot.canvases[snapshot.positions[id]!]
         if let entry = cachedThumbnail(id) { return merged(metadata, entry) }
+        // Already failed at this revision: report it again without a read.
+        if let failed = unreadableThumbnails[id], failed.revision == revision { throw failed.error }
         var batch = [metadata]
-        if !unreadableThumbnails.contains(id) {
+        if batchFailureRevision != revision {
             batch = near.prefix(2 * Self.thumbnailWindow).compactMap { rowID in
                 guard rowID == id || needsThumbnailRead(rowID), let at = snapshot.positions[rowID] else { return nil }
                 return snapshot.canvases[at]
@@ -261,7 +274,7 @@ class DrawStore: DrawStoreProtocol {
     }
 
     private func needsThumbnailRead(_ id: UUID) -> Bool {
-        searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id) && !unreadableThumbnails.contains(id)
+        searchThumbnails[id] == nil && !recoveredCanvasIDs.contains(id) && unreadableThumbnails[id]?.revision != revision
     }
 
     private func merged(_ canvas: DrawCanvas, _ entry: CachedThumbnail) -> DrawCanvas {
@@ -280,37 +293,51 @@ class DrawStore: DrawStoreProtocol {
 
     /// Reads the batch into the cache and returns the row for `requested`.
     /// One damaged record fails the whole batch read, so a failed batch is
-    /// read again row by row: the valid rows load, the damaged one is left
-    /// out of later batches, and only the requested row's own error escapes.
+    /// read again row by row: the valid rows load, and the rows that still
+    /// fail are marked for this revision. Only the requested row's own error
+    /// escapes, whatever the batch size; a search that names no row never
+    /// throws. If every row of a batch fails, the failure is not any one
+    /// record's: only the requested row is marked. The cache never exceeds
+    /// its bound, not even right after an error.
     @discardableResult
     private func loadThumbnails(_ batch: [DrawCanvas], requested: UUID? = nil) throws -> DrawCanvas? {
         guard !batch.isEmpty else { return nil }
+        defer { evictThumbnails() }
         var found: DrawCanvas?
-        var failure: Error?
         func keep(_ rows: [DrawCanvas]) {
             for row in rows {
                 thumbnailUse &+= 1
                 searchThumbnails[row.id] = CachedThumbnail(thumbnail: row.thumbnail, thumbnailDark: row.thumbnailDark,
                                                            used: thumbnailUse)
+                unreadableThumbnails[row.id] = nil
                 if row.id == requested { found = row }
             }
+            if !rows.isEmpty { batchFailureRevision = nil }
         }
         do {
             keep(try repository.hydrateSearchThumbnails(batch))
-        } catch where batch.count > 1 {
-            for canvas in batch {
-                do { keep(try repository.hydrateSearchThumbnails([canvas])) } catch {
-                    unreadableThumbnails.insert(canvas.id)
-                    if canvas.id == requested { failure = error }
+            return found
+        } catch {
+            var failures: [UUID: Error] = [:]
+            if batch.count == 1 {
+                failures[batch[0].id] = error
+            } else {
+                for canvas in batch {
+                    do { keep(try repository.hydrateSearchThumbnails([canvas])) } catch { failures[canvas.id] = error }
+                }
+                if failures.count == batch.count {
+                    batchFailureRevision = revision
+                    failures = failures.filter { $0.key == requested }
                 }
             }
+            for (id, error) in failures { unreadableThumbnails[id] = Unreadable(revision: revision, error: error) }
+            if let requested, let error = failures[requested] { throw error }
+            return found
         }
-        if let failure { throw failure }
-        evictThumbnails()
-        return found
     }
 
     private func evictThumbnails() {
+        unreadableThumbnails = unreadableThumbnails.filter { $0.value.revision == revision }
         let excess = searchThumbnails.count - Self.maxCachedThumbnails
         guard excess > 0 else { return }
         for (id, _) in searchThumbnails.sorted(by: { $0.value.used < $1.value.used }).prefix(excess) {

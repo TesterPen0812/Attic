@@ -487,6 +487,100 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertEqual(probe.reads.flatMap { $0 }.count, 1, "the next search re-read \(probe.reads.flatMap { $0 }.count) thumbnails")
     }
 
+    /// Dot R-1 (P1): one unreadable canvas that is the only uncached row of a
+    /// search's window never empties the results.
+    func testR15AFailedReadOfTheOnlyUncachedRowNeverEmptiesTheSearch() throws {
+        let container = try container()
+        let bytes = Data(repeating: 5, count: 64)
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        for index in 0..<12 {
+            let canvas = DrawCanvas(name: "Board \(index)", tags: index < 11 ? ["mine"] : [], thumbnail: bytes)
+            let record = DrawCanvasRecord()
+            try record.apply(canvas)
+            seeded.insert(record)
+            let payload = DrawPayloadRecord()
+            payload.apply(bytes, id: canvas.id, canvasID: canvas.id, role: "thumbnail")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+        let (store, probe) = probeStore(container)
+        let first = try store.search("#mine")
+        XCTAssertEqual(first.count, 11)
+        let twelfth = try XCTUnwrap(try store.presentationLibrary().first { $0.tags.isEmpty }).id
+        probe.broken = [twelfth]
+
+        let broad = try store.search("Board")
+        XCTAssertEqual(broad.count, 12, "every match is still listed")
+        XCTAssertEqual(broad.filter { $0.canvas.thumbnail == bytes }.count, 11)
+        XCTAssertNil(broad.first { $0.canvas.id == twelfth }?.canvas.thumbnail)
+        XCTAssertThrowsError(try store.searchThumbnail(twelfth), "a requested damaged row still reports its error")
+    }
+
+    /// Dot R-2: failures on a requested row never let the cache pass its bound.
+    func testR15TheCacheStaysBoundedAfterFailedRequestedRows() throws {
+        let container = try container()
+        try seedBoards(container, count: 144)
+        let (store, probe) = probeStore(container)
+        let ids = try store.presentationLibrary().map(\.id)
+        for pageIndex in 0..<12 {
+            let first = pageIndex * DrawStore.thumbnailWindow
+            probe.broken = [ids[first]]
+            XCTAssertThrowsError(try rowThumbnail(store, ids, first))
+            XCTAssertLessThanOrEqual(store.searchThumbnailCacheCount, 128, "after window \(pageIndex)")
+        }
+    }
+
+    /// Dot R-4: a read that fails once leaves no lasting mark; the id is
+    /// retried later and its mark clears.
+    func testR15AnUnreadableMarkHealsOnALaterSuccessfulRead() throws {
+        let container = try container()
+        try seedBoards(container, count: 24)
+        let (store, probe) = probeStore(container)
+        let ids = try store.presentationLibrary().map(\.id)
+        let flaky = ids[5]
+        probe.broken = [flaky]
+        try rowThumbnail(store, ids, 0)
+        XCTAssertThrowsError(try rowThumbnail(store, ids, 5))
+        XCTAssertEqual(store.unreadableThumbnailCount, 1)
+        probe.broken = []
+        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[20]).isSaved) // the next revision
+        XCTAssertEqual(try rowThumbnail(store, ids, 5)?.thumbnail?.count, 256, "retried and loaded")
+        XCTAssertEqual(store.unreadableThumbnailCount, 0, "the mark cleared")
+    }
+
+    /// Dot R-4: a failure of the whole batch does not mark all its ids.
+    func testR15AWholeBatchFailureDoesNotMarkEveryRow() throws {
+        let container = try container()
+        try seedBoards(container, count: 24)
+        let (store, probe) = probeStore(container)
+        let ids = try store.presentationLibrary().map(\.id)
+        probe.failEveryRead = true
+        XCTAssertThrowsError(try rowThumbnail(store, ids, 0))
+        XCTAssertLessThanOrEqual(store.unreadableThumbnailCount, 1, "only the requested row is marked")
+        probe.failEveryRead = false
+        XCTAssertNotNil(try rowThumbnail(store, ids, 7)?.thumbnail, "the other rows read normally")
+    }
+
+    /// Dot R-4: a damaged id that is hovered again and again reads once per
+    /// revision.
+    func testR15ADamagedRowIsNotReadAgainOnEveryLookup() throws {
+        let container = try container()
+        try seedBoards(container, count: 24)
+        let (store, probe) = probeStore(container)
+        let ids = try store.presentationLibrary().map(\.id)
+        let bad = ids[3]
+        probe.broken = [bad]
+        _ = try? rowThumbnail(store, ids, 3)
+        let afterFirst = probe.reads(including: bad)
+        for _ in 0..<19 { _ = try? rowThumbnail(store, ids, 3) }
+        XCTAssertEqual(probe.reads(including: bad), afterFirst, "19 more lookups read nothing")
+        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[20]).isSaved)
+        let beforeNext = probe.reads(including: bad)
+        for _ in 0..<20 { _ = try? rowThumbnail(store, ids, 3) }
+        XCTAssertLessThanOrEqual(probe.reads(including: bad) - beforeNext, afterFirst, "one retry cycle for the new revision")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)
