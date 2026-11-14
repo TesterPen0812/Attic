@@ -442,6 +442,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                       let id = pages.active?.noteID else { return nil }
                 return AgentTarget(page: .notes, itemID: id, title: noteStore?.note(withID: id)?.title)
             case .canvas?:
+                if AtticDraw.isEnabled {
+                    let draw = DrawPageModel.shared
+                    guard let id = draw.canvasID else { return nil }
+                    return AgentTarget(page: .draw, itemID: id, title: draw.canvasName)
+                }
                 guard let canvas = canvasSession?.selectedCanvas else { return nil }
                 return AgentTarget(page: .draw, itemID: canvas.id, title: canvas.name)
             case .calendar?, nil:

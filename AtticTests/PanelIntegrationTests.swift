@@ -690,6 +690,37 @@ final class PanelIntegrationTests: XCTestCase {
 
     // MARK: Agent `show` over the real panel
 
+    func testBG59AgentThisPageTracksDrawRatherThanDormantLegacyCanvas() throws {
+        let previous = DrawPageModel.shared
+        let switchSetting = AtticDraw.enabledOverride
+        defer {
+            DrawPageModel.replaceShared(previous)
+            AtticDraw.enabledOverride = switchSetting
+        }
+        AtticDraw.enabledOverride = true
+        let store = DrawInMemoryStore()
+        let draw = DrawPageModel(store: store)
+        let first = store.create(name: "Draw first")
+        let second = store.create(name: "Draw second")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("A"))]), on: first.id).isSaved)
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("B"))]), on: second.id).isSaved)
+        draw.start()
+        draw.open(first.id)
+        DrawPageModel.replaceShared(draw)
+        let panel = try makePanel()
+        let legacy = try XCTUnwrap(panel.canvasSession.createCanvas(name: "Dormant old Canvas"))
+        XCTAssertTrue(panel.canvasSession.selectCanvas(legacy.id))
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, first.id)
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.title, "Draw first")
+        draw.open(second.id)
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, second.id, "Page context follows current Draw canvas")
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.title, "Draw second")
+
+        AtticDraw.enabledOverride = false
+        XCTAssertEqual(panel.uiState.agentChat.currentItem()?.itemID, legacy.id, "Legacy fallback retains legacy context")
+    }
+
     /// A canvas text editor sets no interaction lock; `show` must still see
     /// it and move nothing: not the page, not the board.
     func testShowNeverInterruptsAnActiveCanvasTextEditor() throws {
