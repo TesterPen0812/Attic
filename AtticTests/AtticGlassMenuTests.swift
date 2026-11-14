@@ -1240,6 +1240,31 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertNil(other.chosen)
     }
 
+    /// P2 review reproducer (remove after recording RED; leave behavior for
+    /// the next design-system round): a native press-drag-release can select
+    /// an action faster than the menu's 350 ms opener-release threshold.
+    func testReviewFastRightPressDragReleaseChoosesTheEnteredAction() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_DEFERRED_P2_RED"] == "1",
+                          "Deferred P2 red test (review-shell-r1): runs only with ATTIC_DEFERRED_P2_RED=1")
+        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown,
+            location: CGPoint(x: 400, y: 600), modifierFlags: [], timestamp: 100,
+            windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        let menu = AtticGlassMenu(commands(), appearance: nil, opener: press)
+        menu.open(.point(CGPoint(x: 400, y: 600)), visible: screen, source: nil)
+        let destination = center(of: 0, in: menu.cards[0])
+        let drag = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDragged,
+            location: destination, modifierFlags: [], timestamp: 100.06,
+            windowNumber: 0, context: nil, eventNumber: 2, clickCount: 1, pressure: 1))
+        let release = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseUp,
+            location: destination, modifierFlags: [], timestamp: 100.12,
+            windowNumber: 0, context: nil, eventNumber: 3, clickCount: 1, pressure: 0))
+        menu.handle(drag)
+        menu.handle(release)
+        XCTAssertEqual(menu.chosen?.title, "Complete",
+                       "Dragging to a row before releasing the opening press should select it")
+        menu.close(animated: false)
+    }
+
     // MARK: VoiceOver
 
     func testVoiceOverReadsAMenuOfMenuItemsWithMarksAndCanPressThem() throws {

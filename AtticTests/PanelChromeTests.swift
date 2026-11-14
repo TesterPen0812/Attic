@@ -314,6 +314,37 @@ final class PanelChromeTests: XCTestCase {
         try body(host, state, tasksState, store, draft, chrome)
     }
 
+    func testTagBarCollapsesOnHideAndRevealWithoutAnUnrelatedShellChange() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_DEFERRED_P2_RED"] == "1",
+                          "Deferred P2 red test (review-shell-r1): runs only with ATTIC_DEFERRED_P2_RED=1")
+        // Accepted 2026-11-13, 1A: every opening starts with a collapsed #.
+        // The shell observes only selected UI state, so a lifecycle counter
+        // must reach its tag bar even when no page or panel size changes.
+        try withPanel { host, ui, _, _, _, _ in
+            ui.selectSection(.tasks)
+            spin(0.15)
+            @MainActor func openTagBar() throws {
+                let key = try XCTUnwrap(element("tasks-tag-bar-key", in: host))
+                XCTAssertTrue(key.accessibilityPerformPress?() ?? false)
+                spin(0.12)
+                XCTAssertNotNil(element("tasks-tag-bar-books", in: host), "the tag bar opened")
+            }
+
+            try openTagBar()
+            ui.panelDidHide()
+            spin(0.12)
+            XCTAssertNil(element("tasks-tag-bar-books", in: host), "a hide collapses the tag bar even if pages stay mounted")
+
+            ui.panelDidReveal()
+            spin(0.12)
+            XCTAssertNil(element("tasks-tag-bar-books", in: host), "the next reveal starts with # collapsed")
+            try openTagBar()
+            ui.panelDidReveal()
+            spin(0.12)
+            XCTAssertNil(element("tasks-tag-bar-books", in: host), "a reveal event closes an open bar with no other UI change")
+        }
+    }
+
     /// An element's frame in the host's top-left space, or nil if absent.
     private func frame(of identifier: String, in host: AtticPanelHostingView) -> CGRect? {
         host.layoutSubtreeIfNeeded()
