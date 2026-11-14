@@ -522,8 +522,7 @@ private final class HoverScrollHangRecovery {
 
     /// The test advanced (an XCUI step returned): the no-progress deadline restarts.
     func noteProgress() {
-        let now = DispatchTime.now().uptimeNanoseconds
-        lock.withLock { policy.noteProgress(at: now) }
+        lock.withLock { policy.noteProgress(at: DispatchTime.now().uptimeNanoseconds) }
     }
 
     func start() {
@@ -548,9 +547,8 @@ private final class HoverScrollHangRecovery {
     }
 
     private func check() {
-        let now = DispatchTime.now().uptimeNanoseconds
         let reading = reading()
-        let decision = lock.withLock { policy.evaluate(now: now, reading: reading) }
+        let decision = lock.withLock { policy.evaluate(now: DispatchTime.now().uptimeNanoseconds, reading: reading) }
         guard let decision else { return }
         lock.withLock {
             reason = decision == .sustainedHang
@@ -658,18 +656,22 @@ struct HangRecoveryPolicy {
 
     mutating func noteProgress(at now: UInt64) { lastProgress = max(lastProgress, now) }
 
+    private static func age(_ now: UInt64, since earlier: UInt64) -> UInt64 {
+        now >= earlier ? now - earlier : 0
+    }
+
     mutating func evaluate(now: UInt64, reading: HangProbeReading?) -> Decision? {
         if let reading, reading.isHang, reading.ageSeconds < Self.freshSeconds {
             if sustainedSince == nil || reading.healthyWaits != generation {
                 sustainedSince = now
                 generation = reading.healthyWaits
             }
-            if now &- (sustainedSince ?? now) >= Self.sustainedNanos { return .sustainedHang }
+            if Self.age(now, since: sustainedSince ?? now) >= Self.sustainedNanos { return .sustainedHang }
         } else {
             sustainedSince = nil
             generation = nil
         }
-        return now &- lastProgress > Self.progressDeadlineNanos ? .noProgress : nil
+        return Self.age(now, since: lastProgress) > Self.progressDeadlineNanos ? .noProgress : nil
     }
 }
 
@@ -830,6 +832,16 @@ final class HangRecoverySupportTests: XCTestCase {
         // The XCUI call stops returning.
         XCTAssertNil(policy.evaluate(now: 359 * second, reading: nil))
         XCTAssertEqual(policy.evaluate(now: 361 * second, reading: nil), .noProgress)
+    }
+
+    func testAProgressTimestampNewerThanTheWatchdogDoesNotTriggerRecovery() {
+        var policy = HangRecoveryPolicy(startedAt: 0)
+        policy.noteProgress(at: 10 * second)
+        XCTAssertNil(policy.evaluate(now: 9 * second, reading: nil),
+                     "progress can arrive between the watchdog clock read and its lock")
+        XCTAssertNil(policy.evaluate(now: 10 * second, reading: hang(waits: 1)))
+        XCTAssertNil(policy.evaluate(now: 9 * second, reading: hang(waits: 1)),
+                     "the sustained interval must also saturate")
     }
 
     func testTheProbeReadingParsesTheHealthyWaitCount() {
