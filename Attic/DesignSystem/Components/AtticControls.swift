@@ -2724,6 +2724,10 @@ struct AtticNativeSearchInput: NSViewRepresentable {
     }
 
     final class Field: NSTextField {
+        #if DEBUG
+        /// Hosted tests distinguish a real representable update from a no-op refresh.
+        var representableUpdateCount = 0
+        #endif
         /// The field took the keyboard (a click back into it, ⌘F, Search).
         var onFocus: (() -> Void)?
         var fixedHeight: CGFloat = AtticNativeSearchInput.bodyHeight
@@ -2765,6 +2769,9 @@ struct AtticNativeSearchInput: NSViewRepresentable {
     }
 
     func updateNSView(_ field: Field, context: Context) {
+        #if DEBUG
+        field.representableUpdateCount &+= 1
+        #endif
         context.coordinator.owner = self
         let coordinator = context.coordinator
         field.onFocus = { [weak coordinator] in

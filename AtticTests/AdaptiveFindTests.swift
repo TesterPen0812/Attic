@@ -122,6 +122,7 @@ final class AdaptiveFindTests: XCTestCase {
         spin(1.0)
         XCTAssertFalse(draft.pages.isLibraryPresented, "a note is open")
         let engine = try XCTUnwrap(draft.pages.active?.engine, "the open note's engine")
+        engine.find.inputSourceIdentifier = { "com.apple.keylayout.ABC" }
         try body(host, panel, draft, engine, { library.value })
     }
 
@@ -433,6 +434,7 @@ final class AdaptiveFindTests: XCTestCase {
             AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = { ComposingEditor(usingTextLayoutManager: false) }
             defer { AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = nil }
             engine.find.inputSourceIdentifier = { "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" }
+            engine.find.query = "quote"
             var queries: [String] = []
             let observation = engine.find.$query.sink { queries.append($0) }
             defer { observation.cancel() }
@@ -441,18 +443,21 @@ final class AdaptiveFindTests: XCTestCase {
             let base = engine.find.refreshCount
             XCTAssertTrue(engine.find.typeAhead(key(45, "n")), "Find holds the key for the field")
             XCTAssertTrue(engine.find.typeAhead(key(34, "i")))
-            XCTAssertEqual(engine.find.query, "", "the raw letters are not the query")
+            XCTAssertEqual(engine.find.query, "quote", "the raw letters are not the query")
             XCTAssertEqual(engine.find.refreshCount, base, "nothing searched the raw letters")
             XCTAssertEqual(engine.textStorage.string, original, "the note is untouched")
             spin(0.8)
             let editor = try XCTUnwrap(panel.firstResponder as? ComposingEditor, "the field's editor has the keyboard")
             XCTAssertEqual(editor.romaji, "ni", "the typed-ahead keys went to the editor, not the query")
             XCTAssertTrue(editor.hasMarkedText(), "the pre-mount keys are still a native marked composition")
-            engine.find.refresh() // a view update while the candidate is live
+            let field = try XCTUnwrap(editor.delegate as? AtticNativeSearchInput.Field)
+            let updates = field.representableUpdateCount
+            engine.find.refresh() // nonempty query publishes matches and runs updateNSView while marked
             spin(0.1)
+            XCTAssertGreaterThan(field.representableUpdateCount, updates, "the guarded representable path actually ran")
             XCTAssertTrue(editor.hasMarkedText(), "a binding refresh must not cancel the native composition")
             XCTAssertEqual(editor.string, "に")
-            XCTAssertTrue(queries.allSatisfy { $0.isEmpty }, "no intermediate marked text is searched: \(queries)")
+            XCTAssertTrue(queries.allSatisfy { $0 == "quote" }, "no intermediate marked text is searched: \(queries)")
             XCTAssertFalse(queries.contains("ni"), "no search of the raw romaji at any point: \(queries)")
             editor.insertText("日本", replacementRange: NSRange(location: NSNotFound, length: 0))
             spin(0.2)

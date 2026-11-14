@@ -966,13 +966,28 @@ extension AtticDesignSystemHostedTests {
         XCTAssertTrue(window.makeFirstResponder(editor))
         probe.shown = 1
         spin(0.2)
+        let other = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 80, height: 80),
+                            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.orderOut(nil); other.close() }
+        // Use a real NSPanel rather than KeyTestWindow's always-true override.
+        let real = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 350, height: 170),
+                           styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        real.isReleasedWhenClosed = false
+        window.contentView = nil; real.contentView = hosting; real.makeKeyAndOrderFront(nil)
+        defer { real.orderOut(nil); real.contentView = nil; real.close() }
+        XCTAssertTrue(real.makeFirstResponder(editor))
         for round in 1...3 {
-            window.resignKey()
+            other.makeKeyAndOrderFront(nil)
             spin(0.1)
-            window.becomeKey()
+            XCTAssertTrue(other.isKeyWindow)
+            XCTAssertFalse(real.isKeyWindow, "the note window really lost key status")
+            real.makeKeyAndOrderFront(nil)
             spin(0.2)
-            XCTAssertTrue(window.firstResponder === editor, "the window becoming key again (\(round)) leaves typing with the note")
-            key(window, "a", code: 0)
+            XCTAssertTrue(real.isKeyWindow)
+            XCTAssertFalse(other.isKeyWindow)
+            XCTAssertTrue(real.firstResponder === editor, "the window becoming key again (\(round)) leaves typing with the note")
+            key(real, "a", code: 0)
             XCTAssertTrue(probe.writing.contains(String(repeating: "a", count: round)), "typing still reaches the note")
         }
         XCTAssertEqual(probe.statusRetries + probe.statusOpens, 0, "nothing was activated")
