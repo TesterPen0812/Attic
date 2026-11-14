@@ -1128,7 +1128,7 @@ extension PanelSharedChromeTests {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
         for searching in [false, true] {
-            for key in [("\r", UInt16(36)), (" ", UInt16(49))] {
+            for key in [("\r", UInt16(36)), (" ", UInt16(49)), ("\u{3}", UInt16(76))] {
                 let (shell, library) = try notesLibraryShell()
                 defer { shell.close() }
                 let notesBefore = shell.notes.notes.count
@@ -1503,5 +1503,17 @@ extension PanelSharedChromeTests {
         shell.state.panelDidReveal()
         shell.spin(0.6)
         XCTAssertEqual(passes, 0, "an idle reveal releases controls without rebuilding the retained shell")
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3ThePlusAcceptsKeypadEnterAsWellAsReturnAndSpace() throws {
+        let chrome = PanelSharedChrome()
+        let window = mountBar(chrome, SharedBarModel(page: .notes))
+        defer { close(window) }
+        XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(KeyEquivalent(Character("\u{3}"))), "keypad Enter is an activation key")
+        XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(.return))
+        XCTAssertTrue(PanelKeyStopSeam.plusActivationKeys.contains(.space))
     }
 }

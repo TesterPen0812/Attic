@@ -265,7 +265,7 @@ private struct PanelPlusFocus: ViewModifier {
     /// each page switch.
     func body(content: Content) -> some View {
         let focusable = reachable && (!page.managesOwnTabOrder || armed)
-        let activationKeys: Set<KeyEquivalent> = [.space, .return]
+        let activationKeys: Set<KeyEquivalent> = [.space, .return, KeyEquivalent(Character("\u{3}"))]
         #if DEBUG
         let _ = PanelKeyStopSeam.plus[page] = focusable
         let _ = PanelKeyStopSeam.plusActivationKeys = activationKeys
