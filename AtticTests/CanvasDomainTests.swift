@@ -2355,10 +2355,9 @@ final class CanvasAccessibilityTests: XCTestCase {
         // Undo/Redo availability now follows the focused editor, so each command
         // needs the panel to re-render before the next one is issued, and no
         // point is clicked twice in a row. The Add ▸ Edit halves of this test
-        // moved to testAddMenuUndoRoutesToFocusedTextEditor and
-        // testAddMenuRedoRoutesToFocusedTextEditor: opening that popup in this
-        // offline host freezes the rendered enabled states, so each menu command
-        // needs its own panel and a single menu open.
+        // have separate hosts in testAddMenuUndoRoutesToFocusedTextEditor and
+        // testAddMenuRedoRoutesToFocusedTextEditor, isolating each menu command's
+        // availability from the preceding toolbar operations.
         click(toolbarUndo)
         settleLayout()
         XCTAssertEqual(editor.string, "Keep", "toolbar Undo must undo typing in the focused editor")
@@ -2377,9 +2376,8 @@ final class CanvasAccessibilityTests: XCTestCase {
     }
 
     /// Add ▸ Edit ▸ Undo must reach the focused editor's undo manager, not
-    /// canvas history. It needs its own hosted panel because opening the popup
-    /// freezes the rendered enabled states, so only the command that is live at
-    /// the first open can be performed in one test.
+    /// canvas history. Its own hosted panel isolates the menu command's
+    /// availability from preceding toolbar operations.
     @MainActor
     func testAddMenuUndoRoutesToFocusedTextEditor() async throws {
         try requireKeyWindowTests()
@@ -2405,7 +2403,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(editor.string, "Keep draft")
         chrome.settle()
 
-        XCTAssertEqual(chrome.performEditMenuItem("Undo"), true,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo")
+        XCTAssertEqual(menuUndoEnabled, true,
                        "Undo must render enabled once the focused editor can undo")
         XCTAssertEqual(editor.string, "Keep", "menu Undo must undo typing in the focused editor")
         XCTAssertEqual(session.semanticObjects.count, 1, "menu Undo must not pop canvas history while editing")
@@ -2417,9 +2416,8 @@ final class CanvasAccessibilityTests: XCTestCase {
     }
 
     /// Add ▸ Edit ▸ Redo must reach the focused editor's undo manager, not
-    /// canvas history. It needs its own hosted panel because opening the popup
-    /// freezes the rendered enabled states, so only the command that is live at
-    /// the first open can be performed in one test.
+    /// canvas history. Its own hosted panel isolates the menu command's
+    /// availability from preceding toolbar operations.
     @MainActor
     func testAddMenuRedoRoutesToFocusedTextEditor() async throws {
         try requireKeyWindowTests()
@@ -2450,7 +2448,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(editor.string, "Keep")
         XCTAssertEqual(editor.undoManager?.canRedo, true)
 
-        XCTAssertEqual(chrome.performEditMenuItem("Redo"), true,
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo")
+        XCTAssertEqual(menuRedoEnabled, true,
                        "Redo must render enabled once the focused editor can redo")
         XCTAssertEqual(editor.string, "Keep draft", "menu Redo must redo typing in the focused editor")
         XCTAssertTrue(session.strokes.isEmpty, "menu Redo must not replay canvas history while editing")
@@ -2479,8 +2478,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         defer { chrome.tearDown() }
         // Locate the rendered toolbar buttons by their effect with no editor
         // focused, where availability comes from canvas history either way.
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
-        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton(from: toolbarUndo) { session.strokes.count == 1 })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
+        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton("canvas-redo") { session.strokes.count == 1 })
         // Leave canvas history with both an undo (the text insertion) and a
         // redo (the stroke), so a session-sourced predicate reads enabled.
         XCTAssertTrue(session.undo())
@@ -2504,12 +2503,13 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertFalse(CanvasEditCommandRoute.canRedo(session: session, section: .canvas),
                        "the route must report the focused editor's empty redo stack")
         // The toolbar and the Add ▸ Edit menu share `canUndoCanvasEdit`, so the
-        // rendered menu item is the observable enabled state for both. The popup
-        // freezes its items at the first open, and nothing below changes state
-        // between these two reads, so both describe this instant.
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        // rendered menu item is the observable enabled state for both. Nothing
+        // changes state between these two menu reads, so both describe this instant.
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must not render enabled while the focused editor has nothing to undo")
-        XCTAssertEqual(chrome.performEditMenuItem("Redo", perform: false), false,
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo", perform: false)
+        XCTAssertEqual(menuRedoEnabled, false,
                        "Redo must not render enabled while the focused editor has nothing to redo")
 
         // Whatever the chrome renders, neither click may reach canvas history.
@@ -2536,7 +2536,7 @@ final class CanvasAccessibilityTests: XCTestCase {
 
         let chrome = HostedCanvasChrome(session: session)
         defer { chrome.tearDown() }
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
         // A fresh board clears the history, leaving the focused editor as the
         // only possible undo target.
         XCTAssertNotNil(session.createCanvas(name: "Fresh"))
@@ -2600,15 +2600,15 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// committed editor's typing was still undoable from the new one, and Return
     /// focuses the editor without any publish, so chrome kept history's state.
     @MainActor
-    func testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo() throws {
+    func testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo() async throws {
         try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
 
         let chrome = HostedCanvasChrome(session: session)
         defer { chrome.tearDown() }
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
-        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton(from: toolbarUndo) { session.strokes.count == 1 })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
+        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton("canvas-redo") { session.strokes.count == 1 })
 
         // Type and commit new text through a real insertion editor.
         func textPlacementPending() -> Bool {
@@ -2652,9 +2652,11 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertFalse(chrome.plainEditItemEnabled(HostedCanvasChrome.plainRedo), "the app's plain Redo must agree")
         // The toolbar and Add ▸ Edit share one predicate; this first menu open
         // shows what the panel rendered after focus moved.
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must not stay enabled from canvas history once the fresh editor has focus")
-        XCTAssertEqual(chrome.performEditMenuItem("Redo", perform: false), false,
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo", perform: false)
+        XCTAssertEqual(menuRedoEnabled, false,
                        "Redo must not stay enabled from canvas history once the fresh editor has focus")
 
         // No click may reach the closed editor, the fresh one, or canvas history.
@@ -2691,7 +2693,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// publish. Chrome must still re-read Undo/Redo once that editor has focus,
     /// and the insertion draft must keep working.
     @MainActor
-    func testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory() throws {
+    func testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory() async throws {
         try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
@@ -2699,8 +2701,8 @@ final class CanvasAccessibilityTests: XCTestCase {
 
         let chrome = HostedCanvasChrome(session: session)
         defer { chrome.tearDown() }
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.count == 1 })
-        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton(from: toolbarUndo) { session.strokes.count == 2 })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.count == 1 })
+        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton("canvas-redo") { session.strokes.count == 2 })
         // Canvas history holds an undo and a redo, so stale chrome reads enabled.
         XCTAssertTrue(session.undo())
         XCTAssertEqual(session.strokes.count, 1)
@@ -2725,9 +2727,11 @@ final class CanvasAccessibilityTests: XCTestCase {
 
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
         XCTAssertFalse(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must not stay enabled from canvas history once the insertion editor has focus")
-        XCTAssertEqual(chrome.performEditMenuItem("Redo", perform: false), false,
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo", perform: false)
+        XCTAssertEqual(menuRedoEnabled, false,
                        "Redo must not stay enabled from canvas history once the insertion editor has focus")
         chrome.click(toolbarUndo)
         chrome.settle()
@@ -2780,7 +2784,7 @@ final class CanvasAccessibilityTests: XCTestCase {
 
         let chrome = HostedCanvasChrome(session: session)
         defer { chrome.tearDown() }
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
         XCTAssertTrue(session.canUndo)
         let object = try XCTUnwrap(session.semanticObjects.first)
         session.selectSemanticObject(object.id)
@@ -2808,9 +2812,11 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(editor.undoManager?.canUndo, false)
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
         XCTAssertFalse(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must re-render disabled once the restyle emptied the editor's history")
-        XCTAssertEqual(chrome.performEditMenuItem("Redo", perform: false), false)
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo", perform: false)
+        XCTAssertEqual(menuRedoEnabled, false)
         chrome.click(toolbarUndo)
         chrome.settle()
         XCTAssertTrue(canvas.semanticTextEditor === editor)
@@ -2921,8 +2927,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         let chrome = HostedCanvasChrome(session: session, resolvesFocusInHostWindow: false)
         defer { chrome.tearDown() }
         XCTAssertNil(NSApp.keyWindow)
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
-        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton(from: toolbarUndo) { session.strokes.count == 1 })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
+        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton("canvas-redo") { session.strokes.count == 1 })
         XCTAssertTrue(session.undo())
         XCTAssertTrue(session.canUndo)
         XCTAssertTrue(session.canRedo)
@@ -2939,9 +2945,11 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertTrue(CanvasEditCommandRoute.focusedResponder() === editor)
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
         XCTAssertFalse(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must follow the open editor, not canvas history")
-        XCTAssertEqual(chrome.performEditMenuItem("Redo", perform: false), false,
+        let menuRedoEnabled = await chrome.performEditMenuItem("Redo", perform: false)
+        XCTAssertEqual(menuRedoEnabled, false,
                        "Redo must follow the open editor, not canvas history")
         chrome.click(toolbarUndo)
         chrome.settle()
@@ -2980,15 +2988,15 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// Undo stayed enabled with nothing left to undo, Redo stayed disabled,
     /// and the saved draft kept the undone text.
     @MainActor
-    func testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft() throws {
+    func testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft() async throws {
         try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
 
         let chrome = HostedCanvasChrome(session: session)
         defer { chrome.tearDown() }
-        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton(from: nil) { session.strokes.isEmpty })
-        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton(from: toolbarUndo) { session.strokes.count == 1 })
+        let toolbarUndo = try XCTUnwrap(chrome.locateToolbarButton("canvas-undo") { session.strokes.isEmpty })
+        let toolbarRedo = try XCTUnwrap(chrome.locateToolbarButton("canvas-redo") { session.strokes.count == 1 })
 
         // Commit text through an insertion editor, then reopen it.
         func textPlacementPending() -> Bool {
@@ -3020,7 +3028,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         chrome.settle()
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
         XCTAssertTrue(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
-        XCTAssertEqual(chrome.performEditMenuItem("Undo", perform: false), false,
+        let menuUndoEnabled = await chrome.performEditMenuItem("Undo", perform: false)
+        XCTAssertEqual(menuUndoEnabled, false,
                        "Undo must not stay enabled once the editor has nothing left to undo")
         chrome.click(toolbarRedo)
         chrome.settle()
@@ -3234,74 +3243,153 @@ private final class HostedCanvasChrome {
         window.orderOut(nil)
     }
 
+    @MainActor
+    private final class MenuOperation {
+        var expired = false
+        var observed = false
+        var enabled: Bool?
+    }
+
+    /// The old coordinate sweep could open another control's menu and
+    /// leave its tracking loop running inside RunLoop.run. Bound every pump.
+    private func menuWatchdog(_ operation: MenuOperation) -> Timer {
+        let timer = Timer(timeInterval: 1, repeats: false) { [window] _ in
+            MainActor.assumeIsolated {
+                operation.expired = true
+                if let menu = AtticGlassMenu.current { menu.close(animated: false) }
+                else if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                    NSApp.postEvent(escape, atStart: true)
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        return timer
+    }
+
+    private func boundedMenuOperation<T>(_ body: () -> T) -> T {
+        let operation = MenuOperation()
+        let timer = menuWatchdog(operation)
+        defer { timer.invalidate() }
+        let result = body()
+        XCTAssertFalse(operation.expired, "A Canvas test operation left a menu tracking past its bounded wait")
+        return result
+    }
+
+    private func boundedMenuOperation<T>(_ body: @MainActor () async -> T) async -> T {
+        let operation = MenuOperation()
+        let timer = menuWatchdog(operation)
+        defer { timer.invalidate() }
+        let result = await body()
+        XCTAssertFalse(operation.expired, "A Canvas test operation left a menu tracking past its bounded wait")
+        return result
+    }
+
+    private func withAccessibility<T>(_ body: () -> T) -> T {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute) as? Bool ?? false
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        return body()
+    }
+
+    private func withAccessibility<T>(_ body: @MainActor () async -> T) async -> T {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute) as? Bool ?? false
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        return await body()
+    }
+
+    private func accessibilityElements() -> [AnyObject] {
+        var seen = Set<ObjectIdentifier>()
+        func walk(_ node: AnyObject) -> [AnyObject] {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return [] }
+            return [node] + ((node.accessibilityChildren?() ?? nil) ?? []).flatMap { walk($0 as AnyObject) }
+        }
+        return walk(host)
+    }
+
     func settle() {
-        for _ in 0..<6 {
-            host.layoutSubtreeIfNeeded()
-            // The hosting view only picks up a publish once the transaction is
-            // committed, which an off-screen host never does on its own.
-            CATransaction.flush()
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        boundedMenuOperation {
+            for _ in 0..<6 {
+                host.layoutSubtreeIfNeeded()
+                CATransaction.flush()
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
         }
     }
 
     func click(_ point: CGPoint) {
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            guard let event = NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0
-            ) else { continue }
-            window.sendEvent(event)
+        boundedMenuOperation {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0
+                ) else { continue }
+                window.sendEvent(event)
+            }
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 
-    /// Finds a rendered toolbar button by the effect its click produces. The
-    /// buttons carry no addressable geometry, so the sweep clicks the bottom
-    /// chrome until `effect` observes the command landing.
-    func locateToolbarButton(from start: CGPoint?, where effect: () -> Bool) -> CGPoint? {
-        for y in stride(from: start?.y ?? 0, through: 72, by: 4) {
-            for x in stride(from: start.map { $0.x + 4 } ?? 0, through: 480, by: 4) {
-                let point = CGPoint(x: x, y: y)
-                guard let hit = host.hitTest(point), !(hit is CanvasNSView) else { continue }
+    /// Address the rendered control, then retain the original effect check.
+    /// Bounds checks exclude controls outside the hosted content.
+    func locateToolbarButton(_ identifier: String, where effect: () -> Bool) -> CGPoint? {
+        withAccessibility {
+            for element in accessibilityElements() where element.accessibilityIdentifier?() == identifier {
+                guard let screen = element.accessibilityFrame?(), screen.width > 0, screen.height > 0 else { continue }
+                let rect = window.convertFromScreen(screen)
+                let point = CGPoint(x: rect.midX, y: rect.midY)
+                guard host.bounds.contains(host.convert(point, from: nil)) else { continue }
                 click(point)
                 if effect() { return point }
             }
-            if start != nil { return nil }
+            return nil
         }
-        return nil
     }
 
-    /// The rendered enabled state of an Add ▸ Edit item, performing it when it
-    /// is enabled and `perform` is true.
-    func performEditMenuItem(_ title: String, perform: Bool = true) -> Bool? {
-        var cells: [NSPopUpButtonCell] = []
-        for subview in host.subviews {
-            for child in subview.accessibilityChildren() ?? [] {
-                if let cell = child as? NSPopUpButtonCell { cells.append(cell) }
-            }
-        }
-        for cell in cells {
-            guard let control = cell.controlView else { continue }
-            var enabled: Bool?
-            let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    guard let menu = cell.menu else { return }
-                    if let edit = menu.items.first(where: { $0.title == "Edit" })?.submenu,
-                       let index = edit.items.firstIndex(where: { $0.title == title }) {
-                        enabled = edit.items[index].isEnabled
-                        if edit.items[index].isEnabled, perform { edit.performActionForItem(at: index) }
+    /// Inspect and press the actual glass-menu accessibility items. Canvas
+    /// stopped rendering native NSPopUpButtonCell menus in c1c6674b.
+    func performEditMenuItem(_ title: String, perform: Bool = true) async -> Bool? {
+        await withAccessibility {
+            await boundedMenuOperation {
+                guard let opener = accessibilityElements().first(where: {
+                    $0.accessibilityRole?() == .menuButton && $0.accessibilityLabel?() == "Canvas menu"
+                }) else { return nil }
+                let opened = XCTestExpectation(description: "Canvas Edit menu opened")
+                let operation = MenuOperation()
+                let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification,
+                    object: nil, queue: nil) { _ in
+                    MainActor.assumeIsolated {
+                        guard !operation.observed, let menu = AtticGlassMenu.current else { return }
+                        operation.observed = true
+                        defer { menu.close(animated: false); opened.fulfill() }
+                        guard let items = menu.cards.first?.view.accessibilityChildren() as? [AtticGlassMenuItemElement],
+                              let edit = items.first(where: { $0.accessibilityLabel() == "Edit" }) else {
+                            XCTFail("The rendered Canvas menu must contain Edit"); return
+                        }
+                        XCTAssertTrue(edit.accessibilityPerformPress())
+                        guard let child = edit.accessibilityChildren()?.first as? AtticGlassMenuView,
+                              let choices = child.accessibilityChildren() as? [AtticGlassMenuItemElement],
+                              let item = choices.first(where: { $0.accessibilityLabel() == title }) else {
+                            XCTFail("The rendered Edit submenu must contain \(title)"); return
+                        }
+                        operation.enabled = item.isAccessibilityEnabled()
+                        print("CI7_CANVAS_MENU \(title) enabled=\(operation.enabled == true) perform=\(perform)")
+                        if operation.enabled == true, perform { XCTAssertTrue(item.accessibilityPerformPress()) }
                     }
-                    menu.cancelTracking()
                 }
+                defer { NotificationCenter.default.removeObserver(observer) }
+                XCTAssertTrue(opener.accessibilityPerformPress?() == true)
+                let result = await XCTWaiter.fulfillment(of: [opened], timeout: 1)
+                XCTAssertEqual(result, .completed)
+                return operation.enabled
             }
-            RunLoop.main.add(timer, forMode: .eventTracking)
-            RunLoop.main.add(timer, forMode: .default)
-            cell.performClick(withFrame: control.bounds, in: control)
-            for _ in 0..<4 { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05)) }
-            if let enabled { return enabled }
         }
-        return nil
     }
 
     /// The app's plain Edit ▸ Undo/Redo items (not the canvas commands) send

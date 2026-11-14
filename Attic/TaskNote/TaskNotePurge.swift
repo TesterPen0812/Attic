@@ -7,6 +7,27 @@ import SwiftUI
 /// Busy, divergent or ambiguously owned families stay for a later cleanup.
 @MainActor
 enum TaskNotePurge {
+    /// A bounded candidate check before materializing any deletion families,
+    /// live notes, associations or preservation records. An unreadable
+    /// inventory must fall through to the existing conservative collector.
+    static func hasExpiredCandidates(in context: ModelContext, before cutoff: Date) -> Bool {
+        do {
+            var firstTask = FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletedAt != nil },
+                sortBy: [SortDescriptor(\.deletedAt)])
+            firstTask.fetchLimit = 1
+            if try context.fetch(firstTask).first?.deletedAt.map({ $0 < cutoff }) == true { return true }
+
+            var firstNote = FetchDescriptor<NoteItem>(
+                predicate: #Predicate { $0.deletedAt != nil && $0.deletionGroupID != nil },
+                sortBy: [SortDescriptor(\.deletedAt)])
+            firstNote.fetchLimit = 1
+            return try context.fetch(firstNote).first?.deletedAt.map({ $0 < cutoff }) == true
+        } catch {
+            return true
+        }
+    }
+
     struct Report: Equatable {
         var removedTaskIDs: Set<UUID> = []
         /// Own notes that became ordinary notes.
@@ -27,6 +48,7 @@ enum TaskNotePurge {
         var report = Report()
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return report }
         let context = coordinator.freshContext()
+        guard hasExpiredCandidates(in: context, before: cutoff) else { return report }
         guard let deleted = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.deletedAt != nil })) else { return report }
         var roots: [UUID: Date] = [:]
         for row in deleted {
@@ -37,9 +59,27 @@ enum TaskNotePurge {
         }
         let circleRoots = (try? TaskStore.circleRemovedRoots(in: context)) ?? []
         let circleMembers = (try? TaskStore.circleRemovedMembers(in: context)) ?? []
-        let allNotes = (try? context.fetch(FetchDescriptor<NoteItem>())) ?? []
-        let associations = (try? context.fetch(FetchDescriptor<TaskNoteAssociation>())) ?? []
-        let records = (try? context.fetch(FetchDescriptor<TaskDeletionPreservation>())) ?? []
+        // Only grouped notes, detached redirects and active circle-removal
+        // records can contribute to the candidate construction below.
+        // The transaction still re-reads complete physical families before
+        // deciding whether any of them can be removed.
+        let allNotes = (try? context.fetch(FetchDescriptor<NoteItem>(
+            predicate: #Predicate { $0.deletionGroupID != nil }
+        ))) ?? []
+        let associations = (try? context.fetch(FetchDescriptor<TaskNoteAssociation>(
+            predicate: #Predicate { $0.detachedAt != nil }
+        ))) ?? []
+        let records = (try? context.fetch(FetchDescriptor<TaskDeletionPreservation>(
+            predicate: #Predicate { $0.retiredAt == nil && $0.provenance == "circle removed" }
+        ))) ?? []
+        let deletedByRoot = Dictionary(grouping: deleted, by: { $0.deletionRootID ?? $0.id })
+        let deletedGroups = Set(deleted.compactMap(\.deletionGroupID))
+        let groupedRootIDs = Set(deleted.filter { $0.deletionGroupID != nil }.map(\.id))
+        let notesByGroup = Dictionary(grouping: allNotes, by: { $0.deletionGroupID! })
+        let redirectsByNote = Dictionary(grouping: associations.filter { circleRoots.contains($0.taskID) }, by: \.noteID)
+        let associationsByNote = Dictionary(grouping: associations, by: \.noteID)
+        let recordsByRoot = Dictionary(grouping: records, by: \.rootID)
+        let recordsByID = Dictionary(grouping: records, by: \.id)
         var work: [(root: UUID, group: UUID?, date: Date)] = []
         // Ordinary redirect notes must also use the combined transaction.
         // Manual selection confirms the note's own date, never the circle's.
@@ -48,8 +88,8 @@ enum TaskNotePurge {
         for note in allNotes {
             guard let date = note.deletedAt, date < cutoff, let group = note.deletionGroupID,
                   selectedNotes == nil || selectedNotes?[note.id] == date,
-                  !deleted.contains(where: { $0.deletionGroupID == group }),
-                  let redirect = associations.first(where: { $0.noteID == note.id && $0.detachedAt != nil && circleRoots.contains($0.taskID) }),
+                  !deletedGroups.contains(group),
+                  let redirect = redirectsByNote[note.id]?.first,
                   noteGroups.insert(group).inserted else { continue }
             work.append((redirect.taskID, group, date))
         }
@@ -57,18 +97,22 @@ enum TaskNotePurge {
         for item in work {
             let root = item.root
             if report.removedTaskIDs.contains(root) || (circleMembers.contains(root) && !circleRoots.contains(root)) { continue }
-            var ids = Set(deleted.filter { ($0.deletionRootID ?? $0.id) == root }.map(\.id))
-            var own = ownNotes(of: ids, in: coordinator.freshContext())
-            if let group = item.group { own.formUnion(allNotes.filter { $0.deletionGroupID == group }.map(\.id)) }
-            let dependent = Set(associations.filter { own.contains($0.noteID) && $0.detachedAt != nil }.compactMap(\.detachedPreservationID))
-            for record in records where record.retiredAt == nil && record.provenance == "circle removed"
-                && (record.rootID == root || dependent.contains(record.id)) {
+            var ids = Set((deletedByRoot[root] ?? []).map(\.id))
+            let firstIDs = ids
+            var own = ownNotes(of: firstIDs, in: coordinator.freshContext())
+            if let group = item.group { own.formUnion((notesByGroup[group] ?? []).map(\.id)) }
+            let dependent = Set(own.flatMap { (associationsByNote[$0] ?? []).compactMap(\.detachedPreservationID) })
+            let relevantRecords = (recordsByRoot[root] ?? []) + dependent.flatMap { recordsByID[$0] ?? [] }
+            var seenRecords = Set<PersistentIdentifier>()
+            for record in relevantRecords where seenRecords.insert(record.persistentModelID).inserted {
                 if let snapshot = try? JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot) {
                     ids.formUnion(snapshot.members.map(\.id))
                 }
             }
-            own.formUnion(ownNotes(of: ids, in: coordinator.freshContext()))
-            let grouped = deleted.contains { $0.id == root && $0.deletionGroupID != nil }
+            // `ids` only grew: the first result already covers `firstIDs`.
+            let addedIDs = ids.subtracting(firstIDs)
+            if !addedIDs.isEmpty { own.formUnion(ownNotes(of: addedIDs, in: coordinator.freshContext())) }
+            let grouped = groupedRootIDs.contains(root)
             guard item.group != nil || grouped || (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == true else { continue }
             guard let reservations = notes.reserveTaskNoteInput(own) else {
                 report.deferredRootIDs.insert(root)
@@ -134,7 +178,26 @@ enum TaskNotePurge {
         return report
     }
 
+    /// Each is a table scan on the main actor, so tests bound the count.
+    private(set) static var ownNotesFetchCount = 0
+
     private static func ownNotes(of taskIDs: Set<UUID>, in context: ModelContext) -> Set<UUID> {
+        guard !taskIDs.isEmpty else { return [] }
+        // Neither `taskID` column is indexed, so every fetch is a table scan:
+        // use one predicate per entity for all member UUIDs, matching every
+        // physical row. The broad fallback below stays if SwiftData cannot
+        // evaluate the scoped predicate.
+        do {
+            ownNotesFetchCount += 2
+            let owners = taskIDs.map(Optional.some)
+            let noteRows = try context.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { owners.contains($0.taskID) }))
+            let ids = Array(taskIDs)
+            let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(
+                predicate: #Predicate { ids.contains($0.taskID) && $0.detachedAt == nil }))
+            return Set(noteRows.map(\.id)).union(links.map(\.noteID))
+        } catch { /* Preserve the existing conservative broad read. */ }
+        ownNotesFetchCount += 2
         let notes = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID != nil }))) ?? []
         let links = (try? context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.detachedAt == nil }))) ?? []
         return Set(notes.filter { $0.taskID.map(taskIDs.contains) == true }.map(\.id))

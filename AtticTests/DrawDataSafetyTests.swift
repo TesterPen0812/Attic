@@ -123,6 +123,55 @@ final class DrawDataSafetyTests: XCTestCase {
         }
     }
 
+    func testCatchupR8AgentMutationsRefuseTheLiveGestureCanvasAndRetryAfterPointerUp() throws {
+        for deleting in [false, true] {
+            let store = try persistent()
+            let page = DrawPageModel(store: store)
+            page.start()
+            let canvas = try XCTUnwrap(page.canvasID)
+            let box = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 100, height: 50), content: .shape(.rectangle))
+            if !deleting { XCTAssertTrue(page.perform(.put([box])).isSaved) }
+            let agent = try actions(store)
+            page.setTool(deleting ? .pen : .select)
+            page.pointerDown(at: page.viewport.screen(CGPoint(x: 80, y: 100)))
+            page.pointerDragged(to: page.viewport.screen(CGPoint(x: 100, y: 110)))
+            XCTAssertNotNil(page.live)
+            let before = try store.open(canvas).objects
+            let name = deleting ? "draw_delete_canvas" : "draw_move_object"
+            var args: [String: Any] = ["canvas_id": canvas.uuidString, "object_id": box.id.uuidString,
+                "expected_x": box.frame.x, "expected_y": box.frame.y, "x": 300, "y": 300]
+            var mutations = 0
+            XCTAssertThrowsError(try agent.drawAction(name, args, beforeMutation: { mutations += 1 })) { error in
+                XCTAssertTrue(error.localizedDescription.lowercased().contains("owner is drawing"))
+                XCTAssertTrue(error.localizedDescription.lowercased().contains("retry"))
+            }
+            XCTAssertEqual(mutations, 0)
+            XCTAssertNotNil(page.live)
+            XCTAssertNil(try store.open(canvas).canvas.deletedAt)
+            XCTAssertEqual(try store.open(canvas).objects, before)
+            page.pointerDragged(to: page.viewport.screen(CGPoint(x: 180, y: 140)))
+            page.pointerUp()
+            page.flushAcknowledgedDraw()
+            let finished = try store.open(canvas)
+            XCTAssertEqual(finished.objects.count, 1, "the owner's complete gesture is durable")
+            if !deleting {
+                XCTAssertEqual(finished.objects.first?.frame.x, 140)
+                XCTAssertEqual(finished.objects.first?.frame.y, 120)
+                args["expected_x"] = finished.objects.first?.frame.x
+                args["expected_y"] = finished.objects.first?.frame.y
+            }
+            if finished.canvas.deletedAt != nil { continue }
+            _ = try agent.drawAction(name, args, beforeMutation: {})
+            if deleting {
+                XCTAssertTrue(store.undo(on: canvas).isSaved)
+                XCTAssertEqual(try store.open(canvas).objects, finished.objects, "restoring a deleted canvas keeps the stroke")
+            } else {
+                XCTAssertEqual(try store.open(canvas).objects.first?.frame.x, 300)
+                XCTAssertEqual(try store.open(canvas).objects.first?.frame.y, 300)
+            }
+        }
+    }
+
     func testDS6PendingTypingFlushesBeforeAgentSnapshotAndValidation() throws {
         let store = try persistent()
         let page = DrawPageModel(store: store)
@@ -146,6 +195,35 @@ final class DrawDataSafetyTests: XCTestCase {
         XCTAssertEqual(try store.open(canvas).objects.first?.text, "cats")
         XCTAssertTrue(store.undo(on: canvas).isSaved)
         XCTAssertEqual(try store.open(canvas).objects.first?.text, "cat")
+    }
+
+    func testCatchupR8AgentUndoCannotChangeACanvasDuringTheOwnerGesture() async throws {
+        for durable in [false, true] {
+            let store: DrawStore = durable ? try persistent() : DrawInMemoryStore()
+            let page = DrawPageModel(store: store)
+            page.start()
+            let canvas = try XCTUnwrap(page.canvasID)
+            let box = DrawObject(frame: DrawFrame(x: 40, y: 80, width: 100, height: 50), content: .shape(.rectangle))
+            XCTAssertTrue(page.perform(.put([box])).isSaved)
+            let agent = try actions(store)
+            let request = agent.beginRequest(title: "Agent move")
+            _ = try await agent.call(name: "draw_move_object", arguments: ["canvas_id": canvas.uuidString,
+                "object_id": box.id.uuidString, "expected_x": 40, "expected_y": 80, "x": 60, "y": 80],
+                watching: false, requestID: request)
+            page.syncExternalChanges()
+            page.setTool(.select)
+            page.pointerDown(at: page.viewport.screen(CGPoint(x: 80, y: 100)))
+            page.pointerDragged(to: page.viewport.screen(CGPoint(x: 100, y: 110)))
+            let before = try store.open(canvas).objects
+            let result = await agent.undo(changeSet: request)
+            XCTAssertEqual(result.undone, 0)
+            XCTAssertEqual(result.failures.count, 1)
+            XCTAssertNotNil(page.live)
+            XCTAssertEqual(try store.open(canvas).objects, before)
+            page.pointerUp()
+            page.flushAcknowledgedDraw()
+            XCTAssertEqual(try store.open(canvas).objects.first?.frame.x, 80)
+        }
     }
 
     func testDS6QueuedTypingCannotResurrectDeletedObjectOrOverwriteStyleAndGeometry() throws {

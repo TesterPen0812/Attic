@@ -55,6 +55,37 @@ final class AgentActionsTests: XCTestCase {
 
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
+    func testPF28MutationUsesTwoDurableWritesAndNeverReencodesSettledInverses() async throws {
+        let tasks = try makeTestStore()
+        let journal = ownedTemporaryDirectory(prefix: "PF28JournalCost").appendingPathComponent("undo.json")
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: journal)
+        for index in 0..<24 {
+            let request = actions.beginRequest(title: "Recorded change \(index)")
+            _ = try performed(await actions.call(name: "create_task", arguments: ["title": "Task \(index)"],
+                                                 watching: false, requestID: request))
+            actions.sealRequest(request)
+        }
+        print("PF28 24 mutations journalWrites=\(actions.journalWrites) inverseConversions=\(actions.inverseConversions)")
+        XCTAssertEqual(actions.journalWrites, 48, "One required intent and one completed receipt per mutation")
+        XCTAssertEqual(actions.inverseConversions, 24, "Each immutable inverse must be converted only once")
+        XCTAssertEqual(actions.durableChangeSets().count, 24)
+    }
+
+    func testPF40SealedReadOnlyRequestsDoNotGrowResidentMetadata() throws {
+        let tasks = try makeTestStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: tasks, library: AtticLibrary(tasks: tasks)),
+                                   journalURL: ownedTemporaryDirectory(prefix: "PF40").appendingPathComponent("undo.json"))
+        for index in 0..<1_000 {
+            let id = actions.beginRequest(title: "Read only \(index)")
+            actions.sealRequest(id)
+            XCTAssertThrowsError(try actions.setMode(.auto, for: id))
+        }
+        print("PF40 sealed=1000 retainedMetadata=\(actions.retainedRequestMetadataCount)")
+        XCTAssertEqual(actions.retainedRequestMetadataCount, 0,
+                       "A completed read-only run has neither a durable inverse nor remaining admission rights")
+    }
+
     /// Suspends a real fake-backed writer at the await boundary, so an owner
     /// command can commit independently before an agent call resumes.
     private final class HeldAgentCalendarWriter: CalendarEventWriter {
@@ -573,6 +604,94 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(result.step.kind, .openPage)
         XCTAssertEqual(result.step.targets.first?.page, .calendar)
         XCTAssertNil(result.changeSet)
+    }
+
+    private final class HeldAgentCalendarReader: CalendarEventSource, AsyncCalendarEventReading {
+        var accessState: CalendarAccessState = .granted
+        var onChange: (@MainActor () -> Void)?
+        var occurrences: [CalendarEvent] = []
+        private(set) var syncReads = 0
+        private(set) var asyncReads = 0
+        private var pending: [CheckedContinuation<[CalendarEvent], Never>] = []
+        var hold = false
+
+        func requestAccess() async -> CalendarAccessState { accessState }
+        func events(in interval: DateInterval) -> [CalendarEvent] {
+            syncReads += 1
+            return occurrences.filter { $0.overlaps(interval) }
+        }
+        func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] {
+            events(in: interval).filter { $0.matches(text) }
+        }
+        func loadEvents(in interval: DateInterval) async -> [CalendarEvent] {
+            asyncReads += 1
+            if hold {
+                return await withCheckedContinuation { pending.append($0) }
+            }
+            return occurrences.filter { $0.overlaps(interval) }
+        }
+        func resume() { pending.removeFirst().resume(returning: occurrences) }
+    }
+
+    func testPF32CalendarAgentReadsNeverBlockOnSynchronousEventKitBridge() async throws {
+        let f = try fixture()
+        let source = HeldAgentCalendarReader()
+        let actions = AgentActions(tasks: f.actions.tasks, calendarSource: source)
+        let start = Date(timeIntervalSince1970: 1_793_361_600)
+        let occurrenceID = "fixture@\(start.timeIntervalSinceReferenceDate)"
+        source.occurrences = [CalendarEvent(id: occurrenceID, title: "Calendar audit", start: start,
+                                            end: start.addingTimeInterval(3600), isAllDay: false,
+                                            calendarTitle: "Fake", colour: .init(red: 0, green: 0, blue: 0))]
+        let request = actions.beginRequest(title: "Read Calendar")
+        source.hold = true
+        let search = Task {
+            try await actions.call(name: "calendar_search", arguments: [
+                "query": "audit", "start": iso(start.addingTimeInterval(-3600)),
+                "end": iso(start.addingTimeInterval(7200))], watching: false, requestID: request)
+        }
+        for _ in 0..<500 where source.asyncReads == 0 { await Task.yield() }
+        let heldAsync = source.asyncReads == 1
+        var otherMainActorWork = 0
+        Task { @MainActor in otherMainActorWork += 1 }
+        for _ in 0..<20 where otherMainActorWork == 0 { await Task.yield() }
+        if heldAsync { source.hold = false; source.resume() }
+        let searchResult = try performed(await search.value)
+        XCTAssertTrue(heldAsync, "the agent must suspend on the async reader")
+        XCTAssertEqual(otherMainActorWork, 1, "the suspended read must allow other UI work")
+        XCTAssertEqual(try payload(searchResult.text)["count"] as? Int, 1)
+
+        for _ in 0..<100 {
+            let read = try performed(await actions.call(name: "calendar_read", arguments: [
+                "occurrence_id": occurrenceID], watching: false, requestID: request))
+            XCTAssertEqual((try payload(read.text)["event"] as? [String: Any])?["title"] as? String,
+                           "Calendar audit")
+        }
+        XCTAssertEqual(source.syncReads, 0, "101 reads must issue no synchronous worker waits")
+        XCTAssertEqual(source.asyncReads, 101, "read work stays constant across identical requests")
+
+        // Deterministic 256-step read/search sequence (seed 0x13112026):
+        // main-actor work per request is a single async source projection,
+        // without a late switch back to synchronous worker reads.
+        var seed: UInt64 = 0x1311_2026
+        for step in 0..<256 {
+            seed = seed &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+            let search = (seed & 0x100) == 0
+            let args: [String: Any] = search
+                ? ["query": "audit", "start": iso(start.addingTimeInterval(-3600)),
+                   "end": iso(start.addingTimeInterval(7200))]
+                : ["occurrence_id": occurrenceID]
+            let response = try performed(await actions.call(name: search ? "calendar_search" : "calendar_read",
+                                                            arguments: args, watching: false, requestID: request))
+            let body = try payload(response.text)
+            if search {
+                XCTAssertEqual(body["count"] as? Int, 1, "sequence step \(step)")
+            } else {
+                XCTAssertEqual((body["event"] as? [String: Any])?["title"] as? String,
+                               "Calendar audit", "sequence step \(step)")
+            }
+            XCTAssertEqual(source.syncReads, 0, "step \(step) must not block on the EventKit sync bridge")
+            XCTAssertEqual(source.asyncReads, 102 + step, "source work stays flat per request")
+        }
     }
 
     func testCalendarSearchAndReadUseOnlyFakeSource() async throws {
@@ -1217,6 +1336,48 @@ final class AgentActionsTests: XCTestCase {
         for item in created {
             XCTAssertEqual(relaunchedTasks.task(withID: item.id)?.priority, TaskPriority.none)
         }
+    }
+
+    func testR2UndecodableNoteInverseCannotRecoverUndoAfterRelaunch() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let original = try XCTUnwrap(notes.create(title: "Original", body: "Before"))
+        let journal = ownedTemporaryDirectory(prefix: "AgentCorruptInverse").appendingPathComponent("undo.json")
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: AtticLibrary(tasks: tasks, notes: notes))
+        let actions = AgentActions(tasks: tools, journalURL: journal)
+        let request = actions.beginRequest(title: "Edit note")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "id": original.id.uuidString, "base_revision": original.revisionToken, "body": "After"
+        ], watching: false, requestID: request))
+        var saved = try payload(String(decoding: Data(contentsOf: journal), as: UTF8.self))
+        var requests = try XCTUnwrap(saved["requests"] as? [[String: Any]])
+        var entries = try XCTUnwrap(requests[0]["entries"] as? [[String: Any]])
+        var inverse = try XCTUnwrap(entries[0]["updatedNote"] as? [String: Any])
+        inverse["document"] = Data("undecodable document".utf8).base64EncodedString()
+        entries[0]["updatedNote"] = inverse
+        requests[0]["entries"] = entries
+        saved["requests"] = requests
+        try JSONSerialization.data(withJSONObject: saved).write(to: journal, options: .atomic)
+
+        let restored = AgentActions(tasks: tools, journalURL: journal)
+        XCTAssertEqual(restored.changeSet(for: request)?.count, 1, "The receipt itself must remain reviewable")
+        print("R2 canRecoverUndecodableInverse=\(restored.canRecoverUndo(request))")
+        XCTAssertFalse(restored.canRecoverUndo(request), "Recovery must use the decoded inverse's availability")
+        let chatURL = journal.deletingLastPathComponent().appendingPathComponent("chat.json")
+        let thread = [AgentThreadEntry(id: UUID(), role: "user", text: "Edit note")]
+        let archive: [String: Any] = ["activeRun": request.uuidString,
+            "entries": try JSONSerialization.jsonObject(with: JSONEncoder().encode(thread))]
+        try JSONSerialization.data(withJSONObject: archive).write(to: chatURL)
+        let engine = AgentRunEngine(tools: { fatalError("No live run in a restore test") }, journalURL: chatURL,
+                                   recoverUndo: { restored.canRecoverUndo($0) },
+                                   recoveredChangeSets: { restored.durableChangeSets() })
+        let chat = AgentChatModel()
+        chat.connect(engine)
+        let receipt = chat.entries.compactMap { entry -> AgentChatChanges? in
+            if case let .changes(value) = entry.content { return value }; return nil
+        }.first
+        XCTAssertEqual(receipt?.state, .recovered, "An unavailable restored inverse must not offer Undo")
+        XCTAssertEqual(notes.note(withID: original.id)?.body, "After")
     }
 
     func testLegacyPlainTextNoteEditUndoSurvivesRelaunch() async throws {
@@ -1956,6 +2117,77 @@ final class AgentActionsTests: XCTestCase {
         }
         XCTAssertNil(f.actions.changeSet(for: request))
         XCTAssertTrue(f.store.orderedTasks(for: .todo).allSatisfy { $0.priority == .none })
+    }
+
+    func testBG53ExactItemNamesBeatShortenedMatchesAcrossTasksNotesAndDraw() async throws {
+        let store = try makeTestStore()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: store, notes: notes)
+        let draw = DrawInMemoryStore()
+        let actions = AgentActions(tasks: AgentTaskTools(store: store, noteStore: notes, library: library), draw: draw)
+        let tasks = try XCTUnwrap(library.createTasks([
+            TaskDraft(title: "The plan"), TaskDraft(title: "Plan")
+        ]))
+        let firstNote = try XCTUnwrap(notes.create(title: "The note", body: "First"))
+        let secondNote = try XCTUnwrap(notes.create(title: "Note", body: "Second"))
+        let firstCanvas = draw.create(name: "The plan")
+        let secondCanvas = draw.create(name: "Plan")
+        for canvas in [firstCanvas, secondCanvas] {
+            XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("Existing"))]), on: canvas.id).isSaved)
+        }
+        let request = actions.beginRequest(title: "Exact names")
+
+        _ = try performed(await actions.call(name: "update_task", arguments: [
+            "query": "The plan", "priority": "high"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(store.task(withID: tasks[0].id)?.priority, .high)
+        XCTAssertEqual(store.task(withID: tasks[1].id)?.priority, TaskPriority.none)
+
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "The note", "body": "Updated first"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: firstNote.id)?.body, "Updated first")
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Second")
+        _ = try performed(await actions.call(name: "update_note", arguments: [
+            "query": "Note", "body": "Updated second"
+        ], watching: false, requestID: request))
+        XCTAssertEqual(notes.note(withID: secondNote.id)?.body, "Updated second")
+
+        let added = try performed(await actions.call(name: "draw_add_text", arguments: [
+            "canvas_name": "The plan", "text": "For this board", "x": 12, "y": 16
+        ], watching: false, requestID: request))
+        XCTAssertEqual(added.step.targets.first?.containerID, firstCanvas.id)
+        XCTAssertEqual(try draw.open(firstCanvas.id).objects.count, 2)
+        XCTAssertEqual(try draw.open(secondCanvas.id).objects.count, 1)
+    }
+
+    func testBG54CalendarReadsMustDistinguishAccessDenialFromNoEvents() async throws {
+        let f = try fixture()
+        let date = Date(timeIntervalSince1970: 1_793_361_600)
+        let occurrenceID = "fixture@\(date.timeIntervalSinceReferenceDate)"
+        let request = f.actions.beginRequest(title: "Calendar access")
+        for access in [CalendarAccessState.notDetermined, .denied, .restricted] {
+            f.source.accessState = access
+            for (name, arguments) in [
+                ("calendar_search", ["query": "Meeting", "start": iso(date),
+                                     "end": iso(date.addingTimeInterval(7200))]),
+                ("calendar_read", ["occurrence_id": occurrenceID])
+            ] {
+                do {
+                    _ = try await f.actions.call(name: name, arguments: arguments,
+                                                 watching: false, requestID: request)
+                    XCTFail("\(name) must not report a successful empty read without Calendar access: \(access)")
+                } catch {
+                    XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("calendar access"),
+                                  "Access refusal must explain the permission problem: \(error)")
+                }
+            }
+        }
+        f.source.accessState = .granted
+        let authorizedEmpty = try performed(await f.actions.call(name: "calendar_search", arguments: [
+            "query": "Meeting", "start": iso(date), "end": iso(date.addingTimeInterval(7200))
+        ], watching: false, requestID: request))
+        XCTAssertEqual(try payload(authorizedEmpty.text)["count"] as? Int, 0)
     }
 
     func testRunConvenienceNoteEditsResolveTitleAndRevisionWithoutPreRead() async throws {

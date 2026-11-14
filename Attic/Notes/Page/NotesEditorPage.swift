@@ -1303,6 +1303,8 @@ struct NoteStatusSlot: View {
     var leadingItems: [AtticStatusItem] = []
     /// N5: the room the proposal's pill has once it grows into the review bar.
     var reviewBarMaxWidth: CGFloat = .infinity
+    /// A named pasteboard can be supplied by hosted tests without replacing the user's clipboard.
+    var copyPasteboard: NSPasteboard = .general
     @State private var showingDetails = false
     @State private var showingProposal = false
     @Environment(\.atticDesign) private var design
@@ -1370,9 +1372,9 @@ struct NoteStatusSlot: View {
         ["notSaved", "taskFailure", "workspaceSave"].contains(item.id) ? item.actions.first : nil
     }
 
-    private func cancel(for item: AtticStatusItem) -> (() -> Void)? {
+    func cancel(for item: AtticStatusItem) -> (() -> Void)? {
         switch item.id {
-        case "importing": controller.cancelActiveImport
+        case "importing": { controller.cancelImport(in: session) }
         case "notice": { session.notice = nil }
         case "editedBy": { _ = store.acknowledgeExternalEdit(noteID: session.noteID) }
         default: nil
@@ -1411,7 +1413,7 @@ struct NoteStatusSlot: View {
               handler: details { Task { await controller.saveRecoveryCopy(of: session) } })
     }
 
-    private func item(_ status: NoteStatusItem) -> AtticStatusItem? {
+    func item(_ status: NoteStatusItem) -> AtticStatusItem? {
         let details = { (action: @escaping () -> Void) in { showingDetails = false; action() } }
         switch status {
         case .couldntFinishSaving:
@@ -1425,7 +1427,7 @@ struct NoteStatusSlot: View {
                                    explanation: status.explanation, tone: .error, actions: [
                                        .init(title: String(localized: "Retry"), handler: details { controller.retry(session) }),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
-                                             handler: details(controller.copyActiveText)),
+                                             handler: details { controller.copyText(of: session, to: copyPasteboard) }),
                                        saveRecoveryCopyAction(details)
                                    ])
         case .notSaved:
@@ -1434,14 +1436,14 @@ struct NoteStatusSlot: View {
                                        .init(title: String(localized: "Retry"), identifier: "notes-retry",
                                              handler: details { controller.retry(session) }),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
-                                             handler: details(controller.copyActiveText)),
+                                             handler: details { controller.copyText(of: session, to: copyPasteboard) }),
                                        saveRecoveryCopyAction(details)
                                    ])
         case .changedElsewhere, .deletedElsewhere:
             return AtticStatusItem(id: "conflict", systemName: "exclamationmark.circle", title: status.label,
                                    explanation: status.explanation, tone: .caution, actions: [
                                        .init(title: String(localized: "Keep as new note"), identifier: "notes-keep-as-new",
-                                             handler: details { Task { @MainActor in _ = await controller.keepAsNewNoteDurably() } }),
+                                             handler: details { Task { @MainActor in _ = await controller.keepAsNewNoteDurably(session) } }),
                                        .init(title: String(localized: "Review"), identifier: "notes-review-conflict",
                                              handler: details { showingProposal = true })
                                    ])
@@ -1492,7 +1494,7 @@ struct NoteStatusSlot: View {
             return AtticStatusItem(id: "importing", systemName: nil, title: NoteStatusPresentation.importLabel(progress),
                                    explanation: NoteStatusPresentation.importExplanation(progress), actions: [
                                        .init(title: String(localized: "Cancel Batch"), identifier: "notes-cancel-import",
-                                             handler: details(controller.cancelActiveImport))
+                                             handler: details { controller.cancelImport(in: session) })
                                    ])
         case .readOnly:
             return AtticStatusItem(id: "readOnly", systemName: "lock", title: status.label,

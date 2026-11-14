@@ -107,6 +107,41 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertEqual(AgentWorkspaceReadSet.captureCount, 0)
     }
 
+    func testPF33WorkspaceProofWorkDoesNotGrowWithUnrelatedTasksAndNotes() throws {
+        let context = ModelContext(store.container)
+        let root = UUID(), child = UUID(), noteID = UUID()
+        context.insert(TaskItem(id: root, title: "Project"))
+        context.insert(TaskItem(id: child, title: "Child", parentID: root))
+        let note = NoteItem(id: noteID, title: "Writing")
+        note.taskID = root
+        context.insert(note)
+        try context.save()
+
+        func proof() throws -> (AgentWorkspaceReadSet, Int, Int) {
+            AgentWorkspaceReadSet.taskRowsExamined = 0
+            WorkspaceItemLifecycle.writingRowsExamined = 0
+            let snapshot = try AgentWorkspaceReadSet.capture(taskID: root, noteID: nil, in: ModelContext(store.container))
+            return (snapshot, AgentWorkspaceReadSet.taskRowsExamined, WorkspaceItemLifecycle.writingRowsExamined)
+        }
+        let before = try proof()
+        for index in 0..<320 {
+            context.insert(TaskItem(title: "Unrelated \(index)"))
+            context.insert(NoteItem(title: "Unrelated writing \(index)"))
+        }
+        try context.save()
+        let after = try proof()
+        print("PF33 unrelated=320 taskRows=\(before.1)->\(after.1) writingRows=\(before.2)->\(after.2)")
+        XCTAssertEqual(after.0, before.0, "Unrelated storage must not alter a family proof")
+        XCTAssertEqual(after.1, before.1, "A selected family must not materialize unrelated tasks")
+        XCTAssertEqual(after.2, before.2, "A selected family must not materialize unrelated writing")
+        for _ in 0..<100 {
+            let repeated = try proof()
+            XCTAssertEqual(repeated.0, before.0)
+            XCTAssertEqual(repeated.1, before.1)
+            XCTAssertEqual(repeated.2, before.2)
+        }
+    }
+
     func testCreateAndUpdateTakeStateIncludingBacklog() throws {
         let created = try call("create_task", ["title": "Idea", "state": "backlog"])
         let task = try XCTUnwrap(created["task"] as? [String: Any])

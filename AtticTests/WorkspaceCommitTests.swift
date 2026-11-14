@@ -1490,6 +1490,11 @@ final class WorkspaceCommitTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(5))
             }
             XCTAssertTrue(gate.startupReconciled, "launch path \(environment)")
+            // Receipt pruning now pages across suspension points after the
+            // reconciliation, and the hold is released when that ends. Join
+            // the launch the stores started (no Notes visit starts one here)
+            // instead of racing the hold's release.
+            try await gate.finishLaunch()
             let lease = gate.ownership.tryAcquire([UUID()], kind: .collection)
             XCTAssertNotNil(lease, "launch hold must finish without a Notes visit")
             lease?.release()
@@ -1548,6 +1553,176 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertNotNil(library.tasks.task(withID: taskID))
         try await coordinator.finishLaunch()
         XCTAssertEqual(coordinator.launchPruneBatches, [64, 64, 2])
+    }
+
+    /// PF-50 review R-1: reconciliation lost during a launch prune (a journal
+    /// adoption, or a failed reconcile) used to leave the batch loop spinning
+    /// on a zero-progress batch, with the launch hold never released.
+    func testPF50LaunchPruningEndsAndReleasesTheHoldWhenReconciliationIsLostMidLaunch() async throws {
+        let context = coordinator.freshContext()
+        for _ in 0..<200 {
+            let receipt = OperationReceipt(id: UUID(), envelopeDigest: "released", affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true; receipt.handoffProof = Data(); receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+        let directory = coordinator.journal.directory
+        var flipped = false
+        // The first batch's save commits, then reconciliation is lost, exactly
+        // as an adoption during the loop's yield would leave it.
+        coordinator.save = { saving in
+            let pruning = saving.deletedModelsArray.contains { $0 is OperationReceipt }
+            try saving.save()
+            if pruning && !flipped {
+                flipped = true
+                try self.coordinator.adoptJournal(NoteDraftJournal(directory: directory))
+            }
+        }
+        coordinator.beginLaunchRegistration()
+        final class Done: @unchecked Sendable { var value = false }
+        let done = Done()
+        let launch = Task { @MainActor in
+            try await self.coordinator.finishLaunch()
+            done.value = true
+        }
+        // Wait on progress, not a raw yield count: the launch awaits real
+        // off-main I/O before its first batch, which a slow runner can delay
+        // for any number of main-actor yields. Once reconciliation is lost
+        // after a batch, a correct launch finishes within a few yields; a spin
+        // shows as no batch and no row read for a long run of yields. The
+        // outer bound is only a safety net, and nothing here reads a clock.
+        var stalledYields = 0, safety = 0
+        var lastProgress = (coordinator.launchPruneBatches.count, coordinator.receiptPruneFamilyRowsRead)
+        while !done.value && safety < 5_000_000 {
+            await Task.yield(); safety += 1
+            let progress = (coordinator.launchPruneBatches.count, coordinator.receiptPruneFamilyRowsRead)
+            if progress == lastProgress && flipped && !coordinator.startupReconciled { stalledYields += 1 }
+            else { stalledYields = 0 }
+            lastProgress = progress
+            if stalledYields >= 1_000 { break }
+        }
+        let ended = done.value
+        if !ended {
+            // Let the spinning loop finish so it cannot outlive this test.
+            try await coordinator.reconcileStartup()
+        }
+        try await launch.value
+        XCTAssertTrue(flipped, "the fixture must lose reconciliation after the first batch")
+        XCTAssertTrue(ended, "launch pruning must stop when a batch cannot make progress")
+        XCTAssertFalse(coordinator.startupReconciled)
+        XCTAssertEqual(coordinator.launchPruneBatches, [64])
+        let lease = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection),
+                                  "the launch hold must be released on every exit path")
+        lease.release()
+        // The retained receipts stay for a later reconcile and launch to finish.
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 136)
+        coordinator.save = { try $0.save() }
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.startupReconciled)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
+    /// PF-50: retained logical IDs at the head of a large archive must not
+    /// force full-archive materialization for every collection batch.
+    func testPF50LaunchPruningReadsBoundedPagesEvenBehindRetainedReceipts() async throws {
+        let context = coordinator.freshContext()
+        let retained = Set((0..<130).compactMap { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", $0)) })
+        for index in 0..<260 {
+            let id = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index)))
+            let receipt = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true
+            receipt.handoffProof = Data()
+            receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+        coordinator.historyReferences = { retained }
+        try await coordinator.finishLaunch()
+        let survivors = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        XCTAssertEqual(Set(survivors.map(\.id)), retained,
+                       "retained first-page receipts must not starve later collectable receipts")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneDiscoveryCounts.max() ?? 0, 64,
+                                 "one launch maintenance turn must read a bounded candidate page")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneDiscoveryCounts.reduce(0, +), 260,
+                                 "a sweep should discover each of 260 physical rows once")
+        XCTAssertLessThanOrEqual(coordinator.receiptPruneFamilyRowsRead, 130,
+                                 "each of 130 unowned families should need at most one complete proof fetch")
+    }
+
+    /// Candidate pages identify UUIDs, never individual physical replicas.
+    /// A contradictory replica must veto collection of the entire family.
+    func testPF50PruningKeepsDivergentPhysicalReceiptFamily() async throws {
+        // Reconcile a clean launch first. Divergent receipts deliberately
+        // violate reconciliation's evidence contract, so insert them only
+        // when testing the collector's separate family-level veto.
+        try await coordinator.reconcileStartup()
+        let context = coordinator.freshContext()
+        let duplicatedID = UUID()
+        let safeID = UUID()
+        for (id, digest) in [(duplicatedID, "first"), (duplicatedID, "different"), (safeID, "safe")] {
+            let receipt = OperationReceipt(id: id, envelopeDigest: digest, affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true
+            receipt.handoffProof = Data()
+            receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 64), 1)
+        let survivors = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        XCTAssertEqual(survivors.filter { $0.id == duplicatedID }.count, 2,
+                       "divergent physical copies must remain together")
+        XCTAssertFalse(survivors.contains { $0.id == safeID }, "an unrelated eligible family can be collected")
+        XCTAssertGreaterThanOrEqual(coordinator.receiptPruneMaxFamilyRows, 2,
+                                    "candidate discovery must prove all physical copies")
+    }
+
+    /// A receipt may gain a new on-disk owner after the discovery snapshot.
+    /// The next batch must recheck current ownership before collecting it.
+    func testPF50EnvelopeCreatedAfterSnapshotPreventsPruning() async throws {
+        try await coordinator.reconcileStartup()
+        let first = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let second = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
+        let context = coordinator.freshContext()
+        for (id, offset) in [(first, 0.0), (second, 1.0)] {
+            let row = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+            row.createdAt = Date(timeIntervalSince1970: 1_000 + offset)
+            row.publicationComplete = true
+            row.handoffProof = Data()
+            row.envelopeReleased = true
+            context.insert(row)
+        }
+        try context.save()
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 1)
+
+        let envelope = root.appendingPathComponent("NoteDrafts/operations", isDirectory: true)
+            .appendingPathComponent(second.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: envelope, withIntermediateDirectories: true)
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 0,
+                       "an owner arriving after snapshot must veto the second receipt")
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>()).map(\.id), [second])
+    }
+
+    /// A durable save can report a failure after persisting the delete.
+    /// Reconciliation must prove only the affected family has disappeared.
+    func testPF50SaveThenThrowReconcilesCommittedReceiptPrune() async throws {
+        try await coordinator.reconcileStartup()
+        let id = UUID()
+        let context = coordinator.freshContext()
+        let row = OperationReceipt(id: id, envelopeDigest: "complete", affectedIDs: Data(), resultingTokens: Data())
+        row.publicationComplete = true
+        row.handoffProof = Data()
+        row.envelopeReleased = true
+        context.insert(row)
+        try context.save()
+        coordinator.save = { context in
+            try context.save()
+            throw WorkspaceFoundationError.unknown
+        }
+        defer { coordinator.save = { try $0.save() } }
+
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(limit: 1), 1)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
     }
 
     func testR2DamagedCheckpointHoldsOnlyItsPublicationAndIndependentOffersContinue() async throws {

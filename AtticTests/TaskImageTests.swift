@@ -7,6 +7,193 @@ import XCTest
 
 @MainActor
 final class TaskImageTests: XCTestCase {
+    private final class FailedExportCopyFileManager: FileManager {
+        override func trashItem(at url: URL,
+                                resultingItemURL result: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            // Simulate the old action's destructive first step entirely inside
+            // the owned fixture; never send test data to the real Trash.
+            try removeItem(at: url)
+        }
+
+        override func copyItem(at srcURL: URL, to dstURL: URL) throws {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+    }
+
+    /// Intercept Trash so a hosted test never changes the real user's Trash.
+    private final class RecordingExportFileManager: FileManager, @unchecked Sendable {
+        private(set) var trashedData: Data?
+        private(set) var trashedName: String?
+        private(set) var copiedSources: [URL] = []
+        private(set) var copiedOnMainThread = false
+        var failTrash = false
+        private(set) var refusedTrashURL: URL?
+
+        override func copyItem(at source: URL, to destination: URL) throws {
+            copiedSources.append(source)
+            copiedOnMainThread = copiedOnMainThread || Thread.isMainThread
+            try super.copyItem(at: source, to: destination)
+        }
+
+        override func trashItem(at url: URL,
+                                resultingItemURL result: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            trashedData = try Data(contentsOf: url)
+            trashedName = url.lastPathComponent
+            if failTrash {
+                refusedTrashURL = url
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            try removeItem(at: url)
+        }
+    }
+
+    private final class FailedExportReplacementFileManager: FileManager {
+        private let ownedScratch: URL
+        var installReplacementBeforeFailure = false
+        private(set) var backupURL: URL?
+
+        init(ownedScratch: URL) { self.ownedScratch = ownedScratch; super.init() }
+
+        override func url(for directory: FileManager.SearchPathDirectory, in domain: FileManager.SearchPathDomainMask,
+                          appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL {
+            guard directory == .itemReplacementDirectory else {
+                return try super.url(for: directory, in: domain, appropriateFor: url, create: shouldCreate)
+            }
+            return ownedScratch
+        }
+
+        override func replaceItem(at originalItemURL: URL, withItemAt newItemURL: URL,
+                                  backupItemName: String?, options: FileManager.ItemReplacementOptions = [],
+                                  resultingItemURL resultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            if let backupItemName {
+                let backup = originalItemURL.deletingLastPathComponent().appendingPathComponent(backupItemName)
+                backupURL = backup
+                try moveItem(at: originalItemURL, to: backup)
+                if installReplacementBeforeFailure {
+                    try moveItem(at: newItemURL, to: originalItemURL)
+                }
+            }
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+    }
+
+    func testEarlierFilesExportCopyFailurePreservesExistingDestination() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ExportCopyReplacement")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent("destination.txt")
+        try Data("new data".utf8).write(to: source)
+        try Data("original data".utf8).write(to: destination)
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
+                                                                            fileManager: FailedExportCopyFileManager()))
+        XCTAssertEqual(try Data(contentsOf: destination), Data("original data".utf8))
+        let recording = RecordingExportFileManager()
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: recording)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new data".utf8))
+        XCTAssertEqual(recording.trashedData, Data("original data".utf8))
+        XCTAssertTrue(recording.trashedName?.contains("destination.txt") == true)
+    }
+
+    func testEarlierFilesExportCopyReplacementFailurePreservesExistingDestination() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ExportCopySwap")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent("destination.txt")
+        let scratch = ownedTemporaryDirectory(prefix: "ExportCopyInjectedScratch")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        try Data("new data".utf8).write(to: source)
+        try Data("original data".utf8).write(to: destination)
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination,
+                                                                            fileManager: FailedExportReplacementFileManager(ownedScratch: scratch)))
+        XCTAssertEqual(try Data(contentsOf: destination), Data("original data".utf8))
+        XCTAssertEqual(try Data(contentsOf: source), Data("new data".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path),
+            "a failed replacement must clean its scratch directory and redundant bytes")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(),
+                       ["destination.txt", "source.txt"])
+    }
+
+    func testR3_1ExportCopyFailureRestoresMovedOriginal() async throws {
+        try await checkR3_1PartialExportFailure(installedReplacement: false)
+    }
+
+    func testR3_1ExportCopyFailureRetainsBackupWhenDestinationExists() async throws {
+        try await checkR3_1PartialExportFailure(installedReplacement: true)
+    }
+
+    private func checkR3_1PartialExportFailure(installedReplacement: Bool) async throws {
+        let root = ownedTemporaryDirectory(prefix: "R3PartialExport")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent("destination.txt")
+        let scratch = root.appendingPathComponent("scratch")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        let original = Data("the user's original bytes".utf8)
+        let replacement = Data("exported bytes".utf8)
+        try replacement.write(to: source)
+        try original.write(to: destination)
+        let manager = FailedExportReplacementFileManager(ownedScratch: scratch)
+        manager.installReplacementBeforeFailure = installedReplacement
+
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(
+            from: source, to: destination, fileManager: manager))
+
+        let backup = try XCTUnwrap(manager.backupURL)
+        let originalLocation = installedReplacement ? backup : destination
+        XCTAssertEqual(try Data(contentsOf: originalLocation), original,
+            "partial replacement failure must restore or retain the only copy of the original")
+        XCTAssertEqual(try Data(contentsOf: source), replacement)
+        if installedReplacement {
+            XCTAssertEqual(try Data(contentsOf: destination), replacement,
+                "restoration must not overwrite a destination that still exists")
+        } else {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
+    }
+
+    func testR2_3ExportCopyReplacesA255ByteFilename() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2LongExport")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent(String(repeating: "a", count: 251) + ".txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+        XCTAssertEqual(manager.trashedData, Data("old".utf8))
+    }
+
+    func testR2_3ExportCopyDoesNotReadDestinationOrCopyOnMainThread() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2ExportIO")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt"), destination = root.appendingPathComponent("destination.txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager)
+        XCTAssertEqual(manager.copiedSources, [source], "replacement must not make a second full copy or hydrate the destination")
+        XCTAssertFalse(manager.copiedOnMainThread, "export filesystem work must leave the main actor")
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+    }
+
+    func testR2_3ExportCopyTrashFailureReportsDurableBackup() async throws {
+        let root = ownedTemporaryDirectory(prefix: "R2ExportTrash")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("source.txt"), destination = root.appendingPathComponent("destination.txt")
+        try Data("new".utf8).write(to: source)
+        try Data("old".utf8).write(to: destination)
+        let manager = RecordingExportFileManager()
+        manager.failTrash = true
+        await XCTAssertThrowsErrorAsync(try await TaskAttachmentActions.exportVerifiedCopy(from: source, to: destination, fileManager: manager))
+        let backup = try XCTUnwrap(manager.refusedTrashURL)
+        XCTAssertEqual(backup.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL,
+            "untrashed old bytes must stay beside the chosen file, outside purgeable TemporaryItems")
+        XCTAssertEqual(try Data(contentsOf: backup), Data("old".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+    }
+
     func testP3_4ReadmittingCandidateReleasesEveryAdmissionAfterFinish() throws {
         let files = AttachmentFileStore(rootURL: ownedTemporaryDirectory(prefix: "ReadmittedCandidate"))
         let id = UUID()

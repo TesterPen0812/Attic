@@ -1,3 +1,4 @@
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -9,6 +10,187 @@ import XCTest
 /// Empty All… still taking everything.
 @MainActor
 final class RecentlyDeletedSelectionTests: XCTestCase {
+    /// PF-47: the real Settings scroll column must mount a bounded number
+    /// of rows when one deleted-item section contains 5,000 entries.
+    func testPF47DeletedSectionRealizesOnlyVisibleRows() {
+        let entries = (0..<5_000).map { index in
+            RecentlyDeletedEntry(kind: .canvas, title: "Canvas \(index)", detail: "Deleted today",
+                                 deletedAt: Date(), ownerTitle: nil,
+                                 source: .draw(DrawDeletedItem(canvasID: UUID(), objectID: nil)))
+        }
+        var realized = Set<String>()
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 520, height: 420),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SettingsPage(section: .recentlyDeleted) {
+            ScrollViewReader { proxy in
+                SettingsGroup(title: "Canvases") {
+                    RecentlyDeletedSectionRows(entries: entries) { entry in
+                        Text(entry.title)
+                            .frame(height: 58)
+                            .frame(maxWidth: .infinity)
+                            .onAppear { realized.insert(entry.id) }
+                    }
+                }
+                .onAppear {
+                    // The keyboard uses the same proxy/ID path to bring an
+                    // unrealized last row into the viewport.
+                    DispatchQueue.main.async { proxy.scrollTo(entries[entries.count - 1].id) }
+                }
+            }
+        }.atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 520, height: 420)
+        window.contentView = host
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertGreaterThan(realized.count, 0)
+        XCTAssertLessThan(realized.count, 50,
+                          "a fixed-height Settings viewport may prefetch, but must not realize all 5,000 rows (mounted \(realized.count))")
+        // The scroll lands on the layout pass that follows the proxy call, not
+        // after a fixed delay: wait on the last row's appearance (the event),
+        // bounded only so a real regression still fails.
+        let last = entries[entries.count - 1].id
+        let deadline = Date().addingTimeInterval(10)
+        while !realized.contains(last), Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(realized.contains(last), "keyboard scrolling must still reach the last logical entry")
+    }
+
+    /// PF-46: stale Draw observation callbacks must not multiply work when
+    /// Settings is deactivated/reactivated before the next Draw revision.
+    func testPF46RepeatedSettingsActivationsDoNotMultiplyDrawReloads() async throws {
+        let draw = DrawInMemoryStore()
+        let canvas = draw.create(name: "Observed canvas")
+        let model = RecentlyDeletedModel(library: nil, draw: { draw })
+        for _ in 0..<50 { model.start(); model.stop() }
+        model.start()
+        defer { model.stop() }
+
+        var reloads = 0
+        let subscription = model.$entries.dropFirst().sink { _ in reloads += 1 }
+        defer { subscription.cancel() }
+
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("first"))]), on: canvas.id).isSaved)
+        try await Task.sleep(for: .milliseconds(60)) // Drain posted observation callbacks; measure work, not time.
+        XCTAssertEqual(reloads, 1, "one Draw change should reload once after 50 stop/start cycles")
+
+        reloads = 0
+        XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("second"))]), on: canvas.id).isSaved)
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(reloads, 1, "old callbacks must not rearm into additional observation chains")
+    }
+
+    /// PF-49: frequent activation with no expired task/redirect group must
+    /// start zero asynchronous ownership scans, independent of live data size.
+    func testPF49RepeatedActivationWithoutExpiredFamiliesStartsNoCoordinatedPurges() async throws {
+        let fixture = try makeFixture()
+        for index in 0..<120 { XCTAssertNotNil(fixture.tasks.create(title: "Live \(index)")) }
+        var started = 0
+        fixture.library.taskNotePurge = { _, _, _ in started += 1; return [] }
+        fixture.library.presentationDefaults = nil
+
+        for _ in 0..<100 {
+            _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        }
+        for _ in 0..<150 { await Task.yield() }
+        XCTAssertEqual(started, 0, "no expired groups means no speculative coordinated purge work")
+    }
+
+    /// One expired family must not materialize the many unrelated live
+    /// tasks/notes simply to preserve the family's Undo writing references.
+    func testPF49ExpiredFamilyInventoryAvoidsUnrelatedLiveRows() async throws {
+        let fixture = try makeFixture()
+        fixture.library.presentationDefaults = nil
+        let context = ModelContext(fixture.container)
+        for index in 0..<120 {
+            let live = try XCTUnwrap(fixture.tasks.create(title: "Unrelated \(index)"))
+            let note = NoteItem(id: UUID())
+            note.taskID = live.id
+            context.insert(note)
+        }
+        try context.save()
+        let expired = try XCTUnwrap(fixture.tasks.create(title: "Expired family"))
+        XCTAssertTrue(fixture.library.delete(.init(.task, expired.id)))
+        let linked = NoteItem(id: UUID())
+        linked.taskID = expired.id
+        context.insert(linked)
+        try context.save()
+        fixture.clock.value += 35 * 86_400
+        var started = 0
+        fixture.library.taskNotePurge = { _, _, _ in started += 1; return [] }
+
+        _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        for _ in 0..<200 where started == 0 { await Task.yield() }
+        XCTAssertEqual(started, 1, "the expired family still enters coordinated purge")
+        XCTAssertLessThanOrEqual(fixture.library.lastDeletedGroupWritingInventoryRows, 12,
+                                 "120 unrelated live task/note pairs should not be materialized for one expired family")
+    }
+
+    /// The fast eligibility probe must ignore independent note deletion,
+    /// but recognize a grouped redirect with no expired task row.
+    func testPF49CandidateProbeIncludesExpiredRedirectOnlyNoteGroups() throws {
+        let fixture = try makeFixture()
+        let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: fixture.clock.value, calendar: calendar)
+        let context = ModelContext(fixture.container)
+        let independent = NoteItem(id: UUID())
+        independent.deletedAt = cutoff.addingTimeInterval(-86_400)
+        context.insert(independent)
+        try context.save()
+        XCTAssertFalse(TaskNotePurge.hasExpiredCandidates(in: ModelContext(fixture.container), before: cutoff),
+                       "an unrelated deleted note does not need coordinated ownership scans")
+
+        let grouped = NoteItem(id: UUID())
+        grouped.deletedAt = cutoff.addingTimeInterval(-86_400)
+        grouped.deletionGroupID = UUID()
+        context.insert(grouped)
+        try context.save()
+        XCTAssertTrue(TaskNotePurge.hasExpiredCandidates(in: ModelContext(fixture.container), before: cutoff),
+                      "a redirect-note-only group still needs the coordinated purge")
+    }
+
+    /// Repeated wake/activation during a suspended coordinated purge must
+    /// leave one owner of that work and at most one follow-up cycle.
+    func testPF49OverlappingActivationsCoalesceCoordinatedPurge() async throws {
+        let fixture = try makeFixture()
+        fixture.library.presentationDefaults = nil
+        let task = try XCTUnwrap(fixture.tasks.create(title: "Task with writing"))
+        XCTAssertTrue(fixture.library.delete(.init(.task, task.id)))
+        let context = ModelContext(fixture.container)
+        let note = NoteItem(id: UUID())
+        note.taskID = task.id
+        context.insert(note)
+        try context.save()
+        fixture.clock.value += 35 * 86_400
+
+        let held = HeldFamilyPurge()
+        var started = 0
+        var concurrent = 0
+        var peak = 0
+        fixture.library.taskNotePurge = { _, _, _ in
+            started += 1
+            concurrent += 1
+            peak = max(peak, concurrent)
+            defer { concurrent -= 1 }
+            if started == 1 { return await held.wait() }
+            return []
+        }
+
+        _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar)
+        for _ in 0..<200 where held.gate == nil { await Task.yield() }
+        let gate = try XCTUnwrap(held.gate, "first coordinated purge must start")
+        for _ in 0..<50 { _ = fixture.library.purgeExpired(now: fixture.clock.value, calendar: calendar) }
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(started, 1, "activation must not start a second purge while the first waits")
+        gate.resume(returning: [])
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertLessThanOrEqual(started, 2, "50 overlapping activations need at most one follow-up")
+        XCTAssertEqual(peak, 1, "only one coordinated purge may own the same deletion family")
+    }
+
     private final class HeldFamilyPurge {
         var gate: CheckedContinuation<Set<UUID>, Never>?
         func wait() async -> Set<UUID> {

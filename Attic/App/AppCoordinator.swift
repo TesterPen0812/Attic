@@ -672,12 +672,27 @@ final class AppCoordinator: ObservableObject {
             let week = AgentChatModel.emptyWeek(holding: day)
             let events: [CalendarEvent]
             if let calendarSource, calendarSource.accessState == .granted,
+               !(calendarSource is AsyncCalendarEventReading),
                let first = week.first?.day, let last = week.last?.day,
                let end = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: last) {
                 events = calendarSource.events(in: DateInterval(start: first, end: end))
             } else { events = [] }
             return AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [],
                                        events: events)
+        }
+        if calendarSource is AsyncCalendarEventReading {
+            agentChat.loadWeekDays = { [weak store, weak calendarSource] day in
+                let week = AgentChatModel.emptyWeek(holding: day)
+                let events: [CalendarEvent]
+                if let calendarSource, calendarSource.accessState == .granted,
+                   let first = week.first?.day, let last = week.last?.day,
+                   let end = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: last) {
+                    events = await calendarSource.eventsWithoutBlocking(in: DateInterval(start: first, end: end))
+                } else { events = [] }
+                return AgentChatModel.week(holding: day, dueDays: store?.tasks.compactMap(\.dueDay) ?? [],
+                                           events: events)
+            }
+            calendarSource.onChange = { [weak agentChat] in agentChat?.calendarWeekSourceChanged() }
         }
         let agentActions = AgentActions(
             tasks: agentTools,

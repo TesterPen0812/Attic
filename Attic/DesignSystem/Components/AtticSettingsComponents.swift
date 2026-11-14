@@ -260,11 +260,6 @@ struct AtticPopUpRow<Choice: Hashable>: View {
             .accessibilityValue(title)
             .atticIdentifier(identifier)
             .background(AtticMenuAnchor(holder: menuAnchor).accessibilityHidden(true))
-            .accessibilityRepresentation {
-                AtticMenuButtonAccessibility(label: label, value: title) { _ in
-                    menuAnchor.open(commands, event: nil)
-                }
-            }
         }
     }
 }

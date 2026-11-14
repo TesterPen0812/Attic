@@ -127,6 +127,9 @@ final class WorkspaceOperationCoordinator {
         unclassifiedRecoveryBytes ? nil : retainedRecoveryBytes
     }
     private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
+    private var damagedCollectionHoldPending = false
+    private var damagedCollectionAdmission: Task<Void, Never>?
+    private var pendingCheckpointInventory: [NoteDraftRecoveryEntry]?
     private(set) var damagedCheckpointNotes = Set<UUID>()
     private var compatibilityPending = Set<UUID>()
     private var abortedCompatibility: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim)] = [:]
@@ -146,6 +149,14 @@ final class WorkspaceOperationCoordinator {
 
     private(set) var launchPruneBatches: [Int] = []
     private(set) var launchPruningError: String?
+    /// Number of receipt rows materialized for each pruning candidate scan.
+    /// The hosted PF-50 guard checks that it stays bounded across launch batches.
+    private(set) var receiptPruneDiscoveryCounts: [Int] = []
+    private(set) var receiptPruneFamilyRowsRead = 0
+    private(set) var receiptPruneMaxFamilyRows = 0
+    private var receiptPruneCandidateIDs: [UUID]?
+    private var receiptPruneCursor = 0
+    private var receiptPruneEnvelopeIDs = Set<UUID>()
 
     /// Called before creating the launch presentation, including Tasks-only
     /// launches. Collection waits while immutable journal owners are registered.
@@ -161,11 +172,22 @@ final class WorkspaceOperationCoordinator {
         let work = Task { @MainActor in
             try await self.reconcileStartup()
             self.launchPruningError = nil
-            repeat {
+            do { try await self.prepareLaunchReceiptPruneCandidates() }
+            catch { self.launchPruningError = error.localizedDescription }
+            // Stop as soon as a batch cannot make progress: reconciliation can
+            // be lost during a yield (journal adoption, a failed reconcile),
+            // and `prunePublishedReceipts` then returns 0 without moving the
+            // cursor. The candidates are dropped below; the next launch or
+            // sweep re-snapshots and finishes, so no receipt is lost.
+            while self.launchPruningError == nil,
+                  self.startupReconciled,
+                  self.receiptPruneCursor < (self.receiptPruneCandidateIDs?.count ?? 0),
+                  !Task.isCancelled {
+                let cursor = self.receiptPruneCursor
                 do {
                     let count = try self.prunePublishedReceipts(limit: 64)
-                    self.launchPruneBatches.append(count)
-                    if count < 64 { break }
+                    if count > 0 { self.launchPruneBatches.append(count) }
+                    guard self.receiptPruneCursor > cursor else { break }
                 } catch {
                     // Reconciled checkpoint offers do not depend on successful
                     // collection. Retain receipts and retry at the next sweep.
@@ -173,10 +195,15 @@ final class WorkspaceOperationCoordinator {
                     break
                 }
                 await Task.yield()
-            } while !Task.isCancelled
-            try Task.checkCancellation()
+            }
+            self.receiptPruneCandidateIDs = nil
+            self.receiptPruneCursor = 0
+            self.receiptPruneEnvelopeIDs.removeAll()
+            // Release on every exit, cancellation included; a launch whose
+            // reconciliation was lost is not finished and will run again.
             self.launchHold?.release(); self.launchHold = nil
-            self.launchFinished = self.launchPruningError == nil
+            try Task.checkCancellation()
+            self.launchFinished = self.launchPruningError == nil && self.startupReconciled
         }
         launchWork = work
         do { try await work.value; launchWork = nil }
@@ -335,16 +362,62 @@ final class WorkspaceOperationCoordinator {
     private func observeCheckpointInventory() {
         journal.inventoryChanged = { [weak self] entries in
             guard let self else { return }
-            do { try self.registerCheckpointInventory(entries) }
+            self.pendingCheckpointInventory = entries
+            do {
+                try self.registerCheckpointInventory(entries)
+                self.releaseDamagedCollectionHold()
+            }
             catch {
                 // Keep the last known owners and hold unbounded collection.
-                if self.damagedCollectionHold == nil {
-                    self.damagedCollectionHold = self.ownership.tryAcquire([self.ownership.unknownID], kind: .admission)
-                }
+                self.holdDamagedCollection()
             }
         }
     }
-    private func registerCheckpointInventory(_ entries: [NoteDraftRecoveryEntry]) throws {
+
+    isolated deinit { damagedCollectionAdmission?.cancel() }
+
+    private func releaseDamagedCollectionHold() {
+        pendingCheckpointInventory = nil
+        damagedCollectionHoldPending = false
+        damagedCollectionHold?.release()
+        damagedCollectionHold = nil
+    }
+
+    private func installPendingCheckpointInventory(excluding collection: WorkspaceOwnershipGate.Lease? = nil) {
+        guard let entries = pendingCheckpointInventory else { return }
+        do {
+            try registerCheckpointInventory(entries, excluding: collection)
+            releaseDamagedCollectionHold()
+        } catch { /* Damaged or unclassified ownership still needs the hold. */ }
+    }
+
+    private func holdDamagedCollection() {
+        guard damagedCollectionHold == nil else { return }
+        // Fail closed synchronously, including while an existing collector
+        // prevents the unknown-owner admission from being acquired.
+        damagedCollectionHoldPending = true
+        if let hold = ownership.tryAcquire([ownership.unknownID], kind: .admission) {
+            damagedCollectionHold = hold
+            damagedCollectionHoldPending = false
+            installPendingCheckpointInventory()
+            return
+        }
+        guard damagedCollectionAdmission == nil else { return }
+        let gate = ownership
+        damagedCollectionAdmission = Task { [weak self] in
+            guard let hold = try? await gate.admit([gate.unknownID]) else { return }
+            guard let self else { hold.release(); return }
+            self.damagedCollectionAdmission = nil
+            guard self.damagedCollectionHoldPending else { hold.release(); return }
+            self.damagedCollectionHold = hold
+            self.damagedCollectionHoldPending = false
+            // A complete retry may have arrived while collection was still
+            // active. Adopt its exact owners before releasing the global hold.
+            self.installPendingCheckpointInventory()
+        }
+    }
+    private func registerCheckpointInventory(_ entries: [NoteDraftRecoveryEntry],
+                                             excluding collection: WorkspaceOwnershipGate.Lease? = nil) throws {
         var rows = Set<WorkspaceOwner>(), bytes = Set<UUID>()
         for item in entries {
             guard case let .valid(entry, _, _) = item else { throw WorkspaceFoundationError.unknown }
@@ -354,7 +427,8 @@ final class WorkspaceOperationCoordinator {
                 .union(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
             bytes.formUnion(ids); rows.formUnion(ids.map { .init(entity: .attachment, id: $0) })
         }
-        guard let hold = ownership.tryAcquire(bytes.union(rows.map(\.id)), kind: .admission) else { throw WorkspaceFoundationError.unknown }
+        guard let hold = ownership.tryAcquire(bytes.union(rows.map(\.id)), kind: .admission,
+                                             excluding: collection) else { throw WorkspaceFoundationError.unknown }
         checkpointCollectionHold?.release(); checkpointCollectionHold = hold
         checkpointOwners = rows; checkpointBytes = bytes
         try releaseAbortedCompatibility(ownedCheckpoints: entries)
@@ -386,6 +460,7 @@ final class WorkspaceOperationCoordinator {
         // commits into that inaccessible directory.
         try FileManager.default.createDirectory(at: replacement.directory, withIntermediateDirectories: true)
         journal.inventoryChanged = nil
+        pendingCheckpointInventory = nil
         journal = replacement
         startupReconciled = false; launchFinished = false
         observeCheckpointInventory()
@@ -413,6 +488,7 @@ final class WorkspaceOperationCoordinator {
         for row in context.deletedModelsArray {
             guard launchHold == nil || startupReconciled,
                   damagedCollectionHold == nil,
+                  !damagedCollectionHoldPending,
                   (row as? NoteAttachment).map({ !unclassifiedRecoveryBytes && !abortedRecoveryBytes.contains($0.id) }) ?? true,
                   Self.owner(row).map({ !checkpointOwners.contains($0) && !heldOwners.contains($0) }) == true else {
                 throw WorkspaceFoundationError.protectedOwner
@@ -527,6 +603,12 @@ final class WorkspaceOperationCoordinator {
             defer { admission.release() }
             try validatePreservedOpaqueContent(context, before: envelope.tokens, contents: originalContents)
             try validateWriteSet(context, declared: envelope.writes)
+            if let collector = collection?.lease(for: ownership), ownership.validatesCollection(collector, ids: []) {
+                // Install complete checkpoint owners under the operation's
+                // own collection, just like its other write admissions. An
+                // unreadable inventory still keeps the pending deletion hold.
+                installPendingCheckpointInventory(excluding: collector)
+            }
             let resulting = try states(envelope.writes, in: context)
             context.insert(OperationReceipt(id: envelope.id, envelopeDigest: claim.digest,
                 affectedIDs: try WorkspaceModelFields.encode(sorted(affected)),
@@ -1074,14 +1156,13 @@ final class WorkspaceOperationCoordinator {
         defer { startupAdmission.release() }
         try registerCheckpointInventory(valid)
         damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
+        pendingCheckpointInventory = nil
         if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
             // Raw damage can name arbitrary bytes. Its note publication hold
             // is bounded by the filename; byte collection stays conservative
             // until explicit archive/repair proves the complete inventory.
-            if damagedCollectionHold == nil {
-                damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
-            }
-        } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
+            holdDamagedCollection()
+        } else { releaseDamagedCollectionHold() }
         let inventory = try await journal.operationInventory()
         var recorded = try await refreshOperationRecovery(inventory)
         let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in
@@ -1166,40 +1247,130 @@ final class WorkspaceOperationCoordinator {
         try journal.recordVerifiedAbortSynchronously(at: item.directory, claim: claim)
     }
 
-    func prunePublishedReceipts(limit: Int = 64) throws -> Int {
-        guard startupReconciled, limit > 0 else { return 0 }
-        histories = histories.filter { $0.value.value != nil }
-        let referenced = try historyReferences().union(recoveryReferences()).union(pending.keys)
-            .union(histories.values.reduce(into: Set<UUID>()) { $0.formUnion($1.value?.referencedOperationIDs ?? []) })
-        let operationFiles: [URL]
-        do { operationFiles = try FileManager.default.contentsOfDirectory(
-            at: journal.directory.appendingPathComponent("operations"), includingPropertiesForKeys: nil) }
+    /// Snapshot logical IDs a page at a time while no rows are removed, so
+    /// fetch offsets never skip later pages. Yield between pages on launch;
+    /// physical UUID families are always fetched afresh before deletion.
+    private func prepareLaunchReceiptPruneCandidates() async throws {
+        let total = try freshContext().fetchCount(FetchDescriptor<OperationReceipt>())
+        var seen = Set<UUID>()
+        var candidates: [UUID] = []
+        for offset in stride(from: 0, to: total, by: 64) {
+            var descriptor = FetchDescriptor<OperationReceipt>(sortBy: [SortDescriptor(\.createdAt), SortDescriptor(\.id)])
+            descriptor.fetchOffset = offset
+            descriptor.fetchLimit = 64
+            let rows = try freshContext().fetch(descriptor)
+            receiptPruneDiscoveryCounts.append(rows.count)
+            for row in rows where seen.insert(row.id).inserted { candidates.append(row.id) }
+            await Task.yield()
+        }
+        // Directory enumeration is I/O, and one snapshot suffices for this
+        // sweep. Before each actual delete we also check for a new envelope.
+        let directory = journal.directory.appendingPathComponent("operations", isDirectory: true)
+        let envelopes = try await Task.detached(priority: .utility) {
+            try Self.operationEnvelopeIDs(in: directory)
+        }.value
+        receiptPruneEnvelopeIDs = envelopes
+        receiptPruneCandidateIDs = candidates
+        receiptPruneCursor = 0
+    }
+
+    /// Direct maintenance callers share the same cursor across successive
+    /// batches; the launch path above avoids even this one full snapshot.
+    private func prepareReceiptPruneCandidatesIfNeeded() throws {
+        if let candidates = receiptPruneCandidateIDs, receiptPruneCursor < candidates.count { return }
+        let rows = try freshContext().fetch(FetchDescriptor<OperationReceipt>(
+            sortBy: [SortDescriptor(\.createdAt), SortDescriptor(\.id)]))
+        receiptPruneDiscoveryCounts.append(rows.count)
+        var seen = Set<UUID>()
+        let candidates = rows.compactMap { seen.insert($0.id).inserted ? $0.id : nil }
+        let envelopes = try Self.operationEnvelopeIDs(
+            in: journal.directory.appendingPathComponent("operations", isDirectory: true))
+        // Publish the cursor only after the ownership inventory succeeds.
+        // A transient read failure must not make the next call reuse stale
+        // envelope information as proof that a receipt is unowned.
+        receiptPruneCandidateIDs = candidates
+        receiptPruneCursor = 0
+        receiptPruneEnvelopeIDs = envelopes
+    }
+
+    nonisolated private static func operationEnvelopeIDs(in directory: URL) throws -> Set<UUID> {
+        let files: [URL]
+        do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
         catch {
             let failure = error as NSError
-            guard failure.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code) else { throw error }
-            operationFiles = []
+            guard failure.domain == NSCocoaErrorDomain,
+                  [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code) else { throw error }
+            return []
         }
-        let envelopes = Set(operationFiles.compactMap { UUID(uuidString: $0.lastPathComponent) })
-        let context = freshContext()
-        let families = Dictionary(grouping: try context.fetch(FetchDescriptor<OperationReceipt>()), by: \.id)
-        var removed = 0
-        var removedIDs = Set<UUID>()
-        for id in families.keys.sorted(by: { $0.uuidString < $1.uuidString }) where removed < limit {
-            let rows = families[id]!
-            guard !referenced.contains(id), !envelopes.contains(id), try agreeing(rows),
-                  rows.allSatisfy({ $0.publicationComplete && $0.handoffProof != nil && $0.envelopeReleased }) else { continue }
-            guard NotePhysicalFamilyRetention.mayDelete(rows, decision: { _ in .eligible }) else { continue }
-            rows.forEach(context.delete); removed += 1; removedIDs.insert(id)
-        }
-        if removed > 0 {
-            do { try gatedSave(context, before: [], using: save) }
-            catch {
-                let fresh = freshContext()
-                let survivors = try fresh.fetch(FetchDescriptor<OperationReceipt>())
-                guard survivors.allSatisfy({ !removedIDs.contains($0.id) }) else { throw error }
+        return Set(files.compactMap { UUID(uuidString: $0.lastPathComponent) })
+    }
+
+    /// Never treat an unreadable directory as proof of no envelope. The
+    /// snapshot guards pre-existing names of any case; these checks catch
+    /// canonical new entries created after the snapshot.
+    private func hasEnvelope(_ id: UUID) throws -> Bool {
+        if receiptPruneEnvelopeIDs.contains(id) { return true }
+        for component in [id.uuidString, id.uuidString.lowercased()] {
+            do {
+                _ = try FileManager.default.attributesOfItem(
+                    atPath: journal.directory.appendingPathComponent("operations", isDirectory: true)
+                        .appendingPathComponent(component).path)
+                return true
+            } catch {
+                let failure = error as NSError
+                guard failure.domain == NSCocoaErrorDomain,
+                      [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code) else { throw error }
             }
         }
-        return removed
+        return false
+    }
+
+    func prunePublishedReceipts(limit: Int = 64) throws -> Int {
+        guard startupReconciled, limit > 0 else { return 0 }
+        try prepareReceiptPruneCandidatesIfNeeded()
+        guard let candidates = receiptPruneCandidateIDs else { return 0 }
+        let originalCursor = receiptPruneCursor
+        do {
+            histories = histories.filter { $0.value.value != nil }
+            let referenced = try historyReferences().union(recoveryReferences()).union(pending.keys)
+                .union(histories.values.reduce(into: Set<UUID>()) { $0.formUnion($1.value?.referencedOperationIDs ?? []) })
+            let context = freshContext()
+            let stop = receiptPruneCursor + min(candidates.count - receiptPruneCursor, max(64, limit))
+            var removed = 0
+            var removedIDs = Set<UUID>()
+            while receiptPruneCursor < stop && removed < limit {
+                let id = candidates[receiptPruneCursor]
+                receiptPruneCursor += 1
+                guard !referenced.contains(id), try !hasEnvelope(id) else { continue }
+                // Every physical replica is read for this logical UUID,
+                // independent of the bounded candidate-discovery page.
+                let rows = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
+                receiptPruneFamilyRowsRead += rows.count
+                receiptPruneMaxFamilyRows = max(receiptPruneMaxFamilyRows, rows.count)
+                guard !rows.isEmpty, try agreeing(rows),
+                      rows.allSatisfy({ $0.publicationComplete && $0.handoffProof != nil && $0.envelopeReleased }),
+                      NotePhysicalFamilyRetention.mayDelete(rows, decision: { _ in .eligible }) else { continue }
+                rows.forEach(context.delete)
+                removed += 1
+                removedIDs.insert(id)
+            }
+            if removed > 0 {
+                do { try gatedSave(context, before: [], using: save) }
+                catch {
+                    // A save can commit and still throw; reconcile only the
+                    // attempted UUID families, not the unrelated archive.
+                    for id in removedIDs {
+                        let fresh = freshContext()
+                        guard try fresh.fetchCount(FetchDescriptor<OperationReceipt>(
+                            predicate: #Predicate { $0.id == id })) == 0 else { throw error }
+                    }
+                }
+            }
+            return removed
+        } catch {
+            receiptPruneCursor = originalCursor
+            throw error
+        }
     }
 
     private func bookkeeping(_ id: UUID, change: (OperationReceipt) -> Void) throws {

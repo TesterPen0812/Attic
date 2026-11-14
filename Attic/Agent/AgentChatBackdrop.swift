@@ -253,6 +253,8 @@ final class AgentChatBackdropView: NSView {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self, event.keyCode == 53, event.window === self.window, self.isShown else { return event }
+                // Escape first belongs to an in-progress input-method composition.
+                if (event.window?.firstResponder as? NSTextView)?.hasMarkedText() == true { return event }
                 self.onEscape()
                 return nil
             }

@@ -1,8 +1,39 @@
+## 2026-11-13 · Settings pop-up accessibility (CI8-AX)
+
+Settings pop-up rows keep their real, enabled VoiceOver button, identifier
+and live selected value while opening the accepted system-menu glass list.
+The replacement menu-button accessibility view had dropped the identifier
+and enabled state. The row's face, menu material and motion stay the same.
+
+## 2026-11-13 · Menu triggers (catchup-2 R-7)
+
+Switching menus also recognizes AppKit table grips, cell context menus, the
+code-language and callout-icon slots, and file-card menus. Notes row, board,
+title and note-menu buttons register their visible trigger regions. Ordinary
+dismissing clicks remain consumed; menu geometry and motion stay unchanged.
+
+## 2026-11-13 · Current menu opener (catchup-2 R-9)
+
+Clicking the control that opened the current menu closes it. Only a different
+menu trigger receives the press to switch menus.
+
+## 2026-11-13 · Context menu anchors during large task scrolls (DP-6)
+
+An ordinary row's context-click routing and VoiceOver Show Menu action now
+share one native anchor. The holder still remembers the row's position when
+it mounts, moves or detaches; nested tag context menus continue to use the
+same innermost-anchor routing. The menu appearance and placement stay the same.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
 registered menu trigger still forwards its full press; context-menu and
 keyboard-only anchors do not make an ordinary row click a menu trigger.
+## 2026-11-13 · Hosted mask diagnostics
+
+Mask-build counters can be scoped to a hosted fixture. The shadow-only
+closing guard now measures its own card while other hosts finish animations;
+its reveal, anchor and resize checks use the same scoped counter.
 
 ## 2026-11-13 · Corners: the measured fix
 
@@ -48,6 +79,12 @@ without animation, while Fade keeps the 0.12 s opacity change. Chat's inline
 attachment chooser uses the picker card and menu-item roles. The Dark opaque
 card's sRGB pixels were already #363637: its test no longer applies a second
 colour conversion to NSBitmapImageRep's calibrated colour result.
+## 2026-11-13 · Tag picker large-list performance
+
+The tag picker now mounts rows lazily within its existing six-row viewport,
+using stable tag names for highlighted-row scrolling and keeping the original
+row height, width, focus, checks and card motion. The fixed-width rule no
+longer allocates thousands of tag names and details on each body evaluation.
 
 ## 2026-11-13 · Corners round 2: the mini page and the picker cards
 

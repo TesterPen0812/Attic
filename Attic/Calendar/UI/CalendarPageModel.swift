@@ -45,6 +45,9 @@ final class CalendarPageModel: ObservableObject {
     private let resumeDefaults: UserDefaults?
     private var hasRequestedAccess = false
     private var searchTask: Task<Void, Never>?
+    /// A retained but hidden page may retain complete search results, never a
+    /// running stream or debounce. Cold fixture models remain queryable.
+    private var searchSuspended = false
     /// The last range fetched from the source, and the last search: reused
     /// until the source reports a change.
     private var eventCache: (interval: DateInterval, events: [CalendarEvent])?
@@ -146,14 +149,26 @@ final class CalendarPageModel: ObservableObject {
         guard visible != isVisible else { return }
         isVisible = visible
         if visible {
+            searchSuspended = false
             if needsVisibleRebuild {
                 needsVisibleRebuild = false
-                rebuild()
+                rebuild(query: searchText)
             } else {
                 refreshToday()
             }
             startNowPositionTimer()
         } else {
+            searchSuspended = true
+            if searchTask != nil || (searchRequest != nil && !searchCacheComplete) || searchText != snapshot.query {
+                needsVisibleRebuild = true
+            }
+            searchTask?.cancel()
+            searchTask = nil
+            eventSearchTask?.cancel()
+            eventSearchTask = nil
+            searchRequest = nil
+            if !searchCacheComplete { searchCache = nil }
+            searchCacheComplete = true
             navigationGeneration &+= 1
             pendingNavigation.removeAll()
             nowPositionTimer?.invalidate()
@@ -245,12 +260,15 @@ final class CalendarPageModel: ObservableObject {
             eventSearchTask = nil
             searchRequest = nil
             if !searchCacheComplete { searchCache = nil }
-            rebuild(query: text)
+            if searchSuspended { needsVisibleRebuild = true }
+            else { rebuild(query: text) }
             return
         }
+        if searchSuspended { needsVisibleRebuild = true; return }
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: Self.searchDelay)
             guard !Task.isCancelled, let self else { return }
+            self.searchTask = nil
             self.rebuild(query: self.searchText)
         }
     }
@@ -259,6 +277,7 @@ final class CalendarPageModel: ObservableObject {
     func commitSearch() {
         searchTask?.cancel()
         searchTask = nil
+        guard !searchSuspended else { needsVisibleRebuild = true; return }
         rebuild(query: searchText)
     }
 
@@ -399,6 +418,11 @@ final class CalendarPageModel: ObservableObject {
     }
 
     private func search(_ query: String, in interval: DateInterval) -> [CalendarEvent] {
+        if searchSuspended {
+            guard let searchCache, searchCacheComplete,
+                  searchCache.query == query, searchCache.interval == interval else { return [] }
+            return searchCache.events
+        }
         if let searchCache, searchCache.query == query, searchCache.interval == interval,
            searchCacheComplete || (searchRequest?.query == query && searchRequest?.interval == interval) {
             if searchRequest?.query != query || searchRequest?.interval != interval {

@@ -185,7 +185,7 @@ enum AgentRunError: LocalizedError {
 /// One chat: its thread, the CLI sessions that can continue it, and when it
 /// last had a message. The current chat lives in the journal file; the others
 /// in the history folder beside it, one file each.
-private struct AgentRunArchive: Codable {
+private struct AgentRunArchive: Codable, Sendable {
     var id = UUID()
     var updated: Date? = nil
     var entries: [AgentThreadEntry] = []
@@ -212,6 +212,93 @@ private struct AgentRunArchive: Codable {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let title = trimmed.count > 60 ? String(trimmed.prefix(59)) + "…" : trimmed
         return AgentChatSummary(id: id, title: title, updated: updated ?? .distantPast)
+    }
+}
+
+/// Serializes chat writes independently of the main actor. Streaming snapshots
+/// are replaceable: one in flight and at most one pending. A mandatory save
+/// runs behind them on the same queue, so a delayed checkpoint cannot replace
+/// a later durable completion or a newly selected conversation.
+private final class AgentChatCheckpointWriter: @unchecked Sendable {
+    private let url: URL
+    private let queue = DispatchQueue(label: "com.taha.Attic.agentChatCheckpoint", qos: .utility)
+    private let lock = NSLock()
+    private let checkpointGate: (@Sendable () -> Void)?
+    private var pending: AgentRunArchive?
+    private var draining = false
+    private var durable: AgentRunArchive
+    #if DEBUG
+    private var completedWrites = 0
+    private var maximumBuffered = 0
+    var diagnostics: (writes: Int, maximumBuffered: Int) {
+        lock.withLock { (completedWrites, maximumBuffered) }
+    }
+    #endif
+
+    init(url: URL, initial: AgentRunArchive, checkpointGate: (@Sendable () -> Void)? = nil) {
+        self.url = url
+        durable = initial
+        self.checkpointGate = checkpointGate
+    }
+
+    func checkpoint(_ snapshot: AgentRunArchive) {
+        let launch = lock.withLock { () -> Bool in
+            pending = snapshot
+            #if DEBUG
+            maximumBuffered = max(maximumBuffered, draining ? 2 : 1)
+            #endif
+            if draining { return false }
+            draining = true
+            return true
+        }
+        if launch { queue.async { [self] in drain() } }
+    }
+
+    private func drain() {
+        while true {
+            let snapshot: AgentRunArchive? = lock.withLock {
+                guard let snapshot = pending else { draining = false; return nil }
+                pending = nil
+                return snapshot
+            }
+            guard let snapshot else { return }
+            checkpointGate?()
+            if write(snapshot) {
+                lock.withLock {
+                    durable = snapshot
+                    #if DEBUG
+                    completedWrites += 1
+                    #endif
+                }
+            }
+        }
+    }
+
+    /// Termination cannot wait for an actor task to finish the run. Join all
+    /// already admitted checkpoints, including the coalesced pending snapshot.
+    func flush() { queue.sync {} }
+
+    func saveRequired(_ snapshot: AgentRunArchive) -> (success: Bool, lastDurable: AgentRunArchive) {
+        queue.sync {
+            let success = write(snapshot)
+            return lock.withLock {
+                if success {
+                    durable = snapshot
+                    #if DEBUG
+                    completedWrites += 1
+                    #endif
+                }
+                return (success, durable)
+            }
+        }
+    }
+
+    private func write(_ snapshot: AgentRunArchive) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
+            return true
+        } catch { return false }
     }
 }
 
@@ -286,6 +373,7 @@ final class AgentRunEngine: AgentRunning {
     private let recoveredChangeSets: @MainActor () -> [AgentChangeSet]
     private let describeContext: @MainActor (AgentRequestContext) -> String
     private let journalURL: URL
+    private let checkpointWriter: AgentChatCheckpointWriter
     private let history: AgentChatHistoryStore
     private let journalIssue: String?
 
@@ -321,6 +409,7 @@ final class AgentRunEngine: AgentRunning {
         helper: @escaping HelperFactory = { try AgentHelperClient() },
         tools: @escaping ToolFactory,
         journalURL: URL? = nil,
+        checkpointGate: (@Sendable () -> Void)? = nil,
         undo: (@MainActor (UUID) async throws -> Void)? = nil,
         recoverUndo: @escaping @MainActor (UUID) -> Bool = { _ in false },
         recoveredChangeSets: @escaping @MainActor () -> [AgentChangeSet] = { [] },
@@ -346,6 +435,7 @@ final class AgentRunEngine: AgentRunning {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: journalIssue))
         }
         lastPersistedArchive = archive
+        checkpointWriter = AgentChatCheckpointWriter(url: resolvedJournalURL, initial: archive, checkpointGate: checkpointGate)
         if journalIssue == nil, let interruptedRun = archive.activeRun {
             archive.activeRun = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error",
@@ -501,6 +591,7 @@ final class AgentRunEngine: AgentRunning {
     func shutdown() {
         if isRunning { endRun(.failed("The agent stopped.")) }
         else { shutdownTransport() }
+        checkpointWriter.flush()
     }
 
     private func run(title: String, prompt: String, id runID: UUID, reopened: Bool) async {
@@ -712,31 +803,33 @@ final class AgentRunEngine: AgentRunning {
 
     private func emit(_ event: AgentEvent) {
         currentEvents.append(event)
+        var shouldCheckpoint = false
         if case let .textDelta(delta) = event, let id = activeReplyID,
            let index = archive.entries.firstIndex(where: { $0.id == id }) {
             archive.entries[index].text += delta
             unflushedCharacters += delta.count
             if unflushedCharacters >= 256 {
                 unflushedCharacters = 0
-                _ = persist()
+                shouldCheckpoint = true
             }
         } else if case let .stepFinished(step) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "tool", text: step.title))
             if step.kind != .read && step.kind != .openPage {
                 recordedTargets.append(contentsOf: step.targets)
             }
-            _ = persist()
+            shouldCheckpoint = true
         } else if case let .changes(set) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "receipt", text: "",
                                                     changeSet: set, targets: recordedTargets))
-            _ = persist()
+            shouldCheckpoint = true
         } else if case let .failed(message) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
         } else if case let .notice(message) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "notice", text: message))
-            _ = persist()
+            shouldCheckpoint = true
         }
         for subscriber in subscribers.values { subscriber.yield(event) }
+        if shouldCheckpoint { checkpointWriter.checkpoint(archive) }
     }
 
     private func addSubscriber(replay: Bool) -> AsyncStream<AgentEvent> {
@@ -783,14 +876,14 @@ final class AgentRunEngine: AgentRunning {
     @discardableResult
     private func persist() -> Bool {
         guard journalIssue == nil else { return false }
-        do {
-            let directory = journalURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try JSONEncoder().encode(archive).write(to: journalURL, options: .atomic)
-            lastPersistedArchive = archive
-            return true
-        } catch { return false }
+        let result = checkpointWriter.saveRequired(archive)
+        lastPersistedArchive = result.lastDurable
+        return result.success
     }
+
+    #if DEBUG
+    var checkpointDiagnostics: (writes: Int, maximumBuffered: Int) { checkpointWriter.diagnostics }
+    #endif
 
     /// The saved chats sit beside the journal: `AtticAgentThread.json` keeps
     /// the others in `AtticAgentThread Chats/`.

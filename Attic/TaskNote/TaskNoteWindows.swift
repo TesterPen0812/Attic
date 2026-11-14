@@ -79,7 +79,7 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
             guard let library = tasks.commandLibrary else { throw WorkspaceFoundationError.protectedOwner }
             let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
                 design: entry.design, columnInset: 28)
-            guard let lease = presenter.lease else { return false }
+            guard let lease = presenter.lease else { throw WorkspaceFoundationError.protectedOwner }
             try presenter.page.retainAcrossItemChanges(lease: lease)
             entry.presenter = presenter
             installRoot(entry)
@@ -99,11 +99,25 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
         }
     }
 
+    /// The window's own reopen (Restore Note, Move into Note): the page
+    /// remounts in the same native window. `expecting` is the entry whose
+    /// root asked, so a stale root cannot remount a newer window.
+    @discardableResult
+    func reopenFromWindow(_ taskID: UUID, expecting expected: AnyObject? = nil) -> Bool {
+        // A close or move that already owns the entry will end this window.
+        guard let (id, entry) = entry(taskID), !closing.contains(id), expected == nil || expected === entry,
+              let controller = entry.presenter.page.controller else { return false }
+        return restoreAfterFileMove(taskID, entry: entry, tasks: entry.presenter.model.store, controller: controller)
+    }
+
     private func installRoot(_ entry: Entry) {
         guard let controller = entry.presenter.page.controller else { return }
         let taskID = entry.presenter.taskID
         let root = TaskNoteWindowRoot(presenter: entry.presenter, controller: controller, noteStore: controller.store) { [weak self] in
             Task { @MainActor in _ = await self?.moveToPanel(taskID: taskID) }
+        } onReopen: { [weak self, weak entry] in
+            guard let self, let entry else { return }
+            _ = self.reopenFromWindow(taskID, expecting: entry)
         }.environment(\.atticDesign, entry.design)
         let frame = entry.window.frame
         entry.window.contentViewController = NSHostingController(rootView: root)
@@ -211,12 +225,14 @@ private struct TaskNoteWindowRoot: View {
     let controller: NotesPageController
     let noteStore: NoteStore
     let onMoveToPanel: () -> Void
+    var onReopen: () -> Void = {}
 
     var body: some View {
         GeometryReader { proxy in
             TaskNotePage(presenter: presenter, controller: controller, noteStore: noteStore,
                          layout: PanelPageLayout(cornerSize: 20, panelSize: proxy.size),
-                         backTitle: String(localized: "Move to Panel"), placement: .window, onBack: onMoveToPanel)
+                         backTitle: String(localized: "Move to Panel"), placement: .window,
+                         onReopen: onReopen, onBack: onMoveToPanel)
                 .id(presenter.projectionGeneration)
         }.ignoresSafeArea()
             .atticKeyboardFocusTracking(keyboardFocus)

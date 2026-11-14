@@ -59,6 +59,7 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
         Publishers.MergeMany([
             changed(uiState.$selectedSection),
             changed(uiState.$panelSize),
+            changed(uiState.$retainedPageSizeDuringLiveResize),
             changed(uiState.$isPageContentLoaded),
             changed(uiState.$builtPages),
             changed(uiState.$pagesElsewhere),
@@ -194,7 +195,21 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
-                        pageHost(page)
+                        let frozenSize = page == currentPage ? nil : uiState.retainedPageSizeDuringLiveResize
+                        let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
+                            ?? pageLayout
+                        pageHost(page, layout: layout)
+                            // A fully invisible page has no reason to measure
+                            // again at each intermediate window size. Its
+                            // retained native editors and state stay mounted.
+                            .frame(width: frozenSize?.width, height: frozenSize?.height,
+                                   alignment: .topLeading)
+                            // A shrinking panel must not inherit the larger
+                            // retained page's ideal size: that would shift
+                            // the current page inside the ZStack.
+                            .frame(width: frozenSize == nil ? nil : panelSize.width,
+                                   height: frozenSize == nil ? nil : panelSize.height,
+                                   alignment: .topLeading)
                             .onAppear {
                                 PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
                             }
@@ -207,7 +222,7 @@ struct AtticPanelView: View {
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
                                 restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage),
-                                                                        width: panelSize.width),
+                                                                        width: layout.panelSize.width),
                                 motion: pageMotion,
                                 // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
@@ -310,19 +325,19 @@ struct AtticPanelView: View {
     }
 
     @ViewBuilder
-    private func pageHost(_ page: PanelPage) -> some View {
+    private func pageHost(_ page: PanelPage, layout: PanelPageLayout) -> some View {
         switch page {
         case .tasks:
             // Phase 3: a task's page opens over the list, which stays built
             // (covered) so Back returns to it exactly as it was.
             TaskNoteRouteHost(page: .tasks, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
-                              uiState: uiState, layout: pageLayout, isReady: hasRestoredNoteSession) { covered in
+                              uiState: uiState, layout: layout, isReady: hasRestoredNoteSession) { covered in
                 TasksPageHost(
                     store: store,
                     uiState: uiState,
                     settings: settings,
                     state: tasksPageState,
-                    layout: pageLayout,
+                    layout: layout,
                     chromeInteractionState: chromeInteractionState,
                     primaryInputFocusRequest: uiState.primaryInputFocusRequest,
                     isCurrent: page == currentPage && !covered,
@@ -336,10 +351,10 @@ struct AtticPanelView: View {
                 canvasSession: canvasSession,
                 toasts: toasts,
                 uiState: uiState,
-                layout: pageLayout,
+                layout: layout,
                 noticeHeight: noticeHeight,
                 headerControlRects: headerControlRects,
-                headerBottom: PanelHeaderLayout.bottom(chromeInsets: chromeInsets)
+                headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
             )
             .transition(pageTransition(.canvas))
         case .notes:
@@ -348,7 +363,7 @@ struct AtticPanelView: View {
                 taskStore: store,
                 noteDraft: noteDraft,
                 uiState: uiState,
-                layout: pageLayout,
+                layout: layout,
                 hasRestoredSession: hasRestoredNoteSession
             )
             .transition(pageTransition(.notes))
@@ -356,8 +371,8 @@ struct AtticPanelView: View {
             // A task's page opens over the Calendar, which stays built
             // (covered) so Back returns to it as it was.
             TaskNoteRouteHost(page: .calendar, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
-                              uiState: uiState, layout: pageLayout, isReady: hasRestoredNoteSession) { _ in
-                CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: pageLayout,
+                              uiState: uiState, layout: layout, isReady: hasRestoredNoteSession) { _ in
+                CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: layout,
                                  onNewTask: startNewTask, taskNotes: calendarTaskNoteEntryServices)
             }
             .transition(pageTransition(.calendar))

@@ -190,6 +190,8 @@ final class TasksSubtaskDraftState: ObservableObject {
 @MainActor
 final class TasksAddBarState: ObservableObject {
     @Published var text = TaskAddBarText()
+    /// Filter defaults belong to this draft, whichever page opened it.
+    var seededTags: [String]?
     @Published var caret: Int?
     /// The whole selection, for the draft history (not observed: only
     /// undo reads it).
@@ -235,6 +237,7 @@ final class TasksAddBarState: ObservableObject {
     /// The draft is gone (added, or cleared on purpose).
     func clearDraft() {
         text.clear()
+        seededTags = nil
         history.reset()
         selection = nil
         hiddenSuggestion = nil
@@ -617,6 +620,12 @@ final class TasksPageModel: ObservableObject {
     let toasts: PanelToastCenter
     private var holdTasks: [UUID: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
+    private var pruneQueued = false
+    /// Nil means at least one unknown/full store revision was published.
+    private var pendingPruneChangedIDs: Set<UUID>? = []
+    #if DEBUG
+    private(set) var selectionPruneExecutions = 0
+    #endif
 
     /// About three screens of the Done log: more load as its last row
     /// comes on screen. Each search hydrates one page in the keystroke's
@@ -642,8 +651,12 @@ final class TasksPageModel: ObservableObject {
         }.store(in: &cancellables)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
-        library.tasks.$revision
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
+        library.tasks.$revision.dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
+                self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+            }
             .store(in: &cancellables)
         library.tags.inventoryChanges
             .sink { [weak self] in
@@ -693,6 +706,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
+        #if DEBUG
+        rowProjectionBuildCount += 1
+        #endif
         let subtasks: [TaskItem]
         if task.doneLoggedAt != nil {
             // Archived families are loaded with the page. Looking these up
@@ -783,7 +799,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: self.tab == tab ? tagPicks(on: tab) : .none,
@@ -807,8 +823,69 @@ final class TasksPageModel: ObservableObject {
     }
 
     private var rowsCache: [TasksTab: RowsSnapshot] = [:]
+    private struct CachedRowProjection {
+        let task: TaskItem
+        let row: TasksListRow
+        let match: String?
+        let day: DueDay
+        let environment: DatePresentationEnvironment
+        let noteOwnersRevision: UInt64
+        let held: HeldPlace?
+        let expanded: Bool
+        let childIDs: Set<UUID>
+    }
+    private var rowProjections: [TasksTab: [UUID: CachedRowProjection]] = [:]
+    /// An old parent still needs invalidating when a child moves away.
+    private var rowProjectionParentByChild: [TasksTab: [UUID: UUID]] = [:]
+
+    private func removeRowProjection(_ id: UUID, from tab: TasksTab) {
+        guard let removed = rowProjections[tab]?.removeValue(forKey: id) else { return }
+        for child in removed.childIDs where rowProjectionParentByChild[tab]?[child] == id {
+            rowProjectionParentByChild[tab]?[child] = nil
+        }
+    }
+
+    private func invalidateRowProjections(changedIDs: Set<UUID>?) {
+        guard let changedIDs else {
+            rowProjections.removeAll()
+            rowProjectionParentByChild.removeAll()
+            return
+        }
+        guard !changedIDs.isEmpty else { return }
+        for tab in Array(rowProjections.keys) {
+            var affected = changedIDs
+            for id in changedIDs {
+                if let oldParent = rowProjectionParentByChild[tab]?[id] { affected.insert(oldParent) }
+                if let newParent = store.task(withID: id)?.parentID { affected.insert(newParent) }
+            }
+            for id in affected { removeRowProjection(id, from: tab) }
+        }
+    }
+
+    private func projectedRow(for task: TaskItem, tab: TasksTab, match: String?) -> TasksListRow {
+        let day = today
+        let environment = dateEnvironment
+        let open = expanded.contains(task.id)
+        let hold = held[task.id]
+        if let cached = rowProjections[tab]?[task.id], cached.task === task,
+           cached.match == match, cached.day == day, cached.environment == environment,
+           cached.noteOwnersRevision == noteOwnersRevision, cached.held == hold, cached.expanded == open {
+            return cached.row
+        }
+        let row = rowModel(for: task, match: match)
+        removeRowProjection(task.id, from: tab)
+        let children = Set(store.subtasks(of: task.id).map(\.id))
+        rowProjections[tab, default: [:]][task.id] = CachedRowProjection(
+            task: task, row: row, match: match, day: day, environment: environment,
+            noteOwnersRevision: noteOwnersRevision, held: hold, expanded: open, childIDs: children)
+        for child in children { rowProjectionParentByChild[tab, default: [:]][child] = task.id }
+        return row
+    }
     #if DEBUG
     private(set) var selectionRunRebuildCount = 0
+    private(set) var rowProjectionBuildCount = 0
+
+    func resetRowProjectionBuildCount() { rowProjectionBuildCount = 0 }
     #endif
 
     /// The rows a list shows, in order (the keyboard walks them): Now's
@@ -848,7 +925,7 @@ final class TasksPageModel: ObservableObject {
     func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }
 
     private func cached(_ tab: TasksTab) -> RowsSnapshot {
-        let key = RowsKey(tab: tab, revision: store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        let key = RowsKey(tab: tab, revision: trimmedQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
                           folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
@@ -1012,7 +1089,7 @@ final class TasksPageModel: ObservableObject {
                 tasks.insert(task, at: min(held[task.id]?.index ?? 0, tasks.count))
             }
         }
-        return tasks.map { rowModel(for: $0, match: query.isEmpty ? nil : query) }
+        return tasks.map { projectedRow(for: $0, tab: tab, match: query.isEmpty ? nil : query) }
     }
 
     /// The shared value-only inventory: Notes changes reach the add bar too.
@@ -1721,8 +1798,43 @@ final class TasksPageModel: ObservableObject {
     /// Each list's scroll position while it is not on screen (its page is
     /// not built then): restored when it is built again (round 10). Not
     /// published: saving it redraws nothing.
-    var scrollOffsets: [TasksTab: CGFloat] = [:] {
-        didSet { memory?.saveScrollOffsets(scrollOffsets) }
+    private var storedScrollOffsets: [TasksTab: CGFloat] = [:]
+    private var scrollSaveWorkItem: DispatchWorkItem?
+
+    var scrollOffsets: [TasksTab: CGFloat] {
+        get { storedScrollOffsets }
+        set {
+            // Explicit navigation and restoration writes stay durable immediately.
+            if storedScrollOffsets == newValue {
+                flushScrollOffsets()
+                return
+            }
+            scrollSaveWorkItem?.cancel()
+            scrollSaveWorkItem = nil
+            storedScrollOffsets = newValue
+            memory?.saveScrollOffsets(newValue)
+        }
+    }
+
+    /// Bounds notifications can arrive many times during a single gesture.
+    /// Keep the position immediately for warm pages, but checkpoint the whole
+    /// three-tab dictionary at a bounded cadence instead of on each event.
+    func recordScrollOffset(_ y: CGFloat, on tab: TasksTab) {
+        guard y.isFinite, abs(y) < 10_000_000, storedScrollOffsets[tab] != y else { return }
+        storedScrollOffsets[tab] = y
+        guard memory != nil, scrollSaveWorkItem == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushScrollOffsets() }
+        }
+        scrollSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
+    func flushScrollOffsets() {
+        guard let item = scrollSaveWorkItem else { return }
+        scrollSaveWorkItem = nil
+        item.cancel()
+        memory?.saveScrollOffsets(storedScrollOffsets)
     }
 
     // MARK: - Selection
@@ -1798,10 +1910,43 @@ final class TasksPageModel: ObservableObject {
         return visible.filter(selection.contains) + selection.subtracting(visible).sorted { $0.uuidString < $1.uuidString }
     }
 
-    private func pruneMissing() {
+    private func queuePruneMissing(changedIDs: Set<UUID>?) {
+        if let pending = pendingPruneChangedIDs, let changedIDs {
+            pendingPruneChangedIDs = pending.union(changedIDs)
+        } else {
+            pendingPruneChangedIDs = nil
+        }
+        guard !pruneQueued else { return }
+        pruneQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let changed = self.pendingPruneChangedIDs
+            self.pendingPruneChangedIDs = []
+            self.pruneQueued = false
+            #if DEBUG
+            self.selectionPruneExecutions += 1
+            #endif
+            self.pruneMissing(changedIDs: changed)
+        }
+    }
+
+    private func pruneMissing(changedIDs: Set<UUID>?) {
         pruneTagPicks()
+        let watched = selection.union([selectionAnchor, editingTitleID, newSubtaskParentID,
+                                       renamingSubtaskID, renamingSubtaskParentID].compactMap { $0 })
+        if let changedIDs, watched.isDisjoint(with: changedIDs) { return }
+
+        let listed: [UUID: TaskItem]
+        if tab == .done {
+            let relevant = changedIDs.map { watched.intersection($0) } ?? watched
+            guard let found = store.listedTasks(withIDs: relevant) else { return }
+            listed = found
+        } else {
+            listed = [:]
+        }
         let live = { (id: UUID) in
-            self.tab == .done ? self.store.listedTask(withID: id) != nil : self.store.task(withID: id) != nil
+            if let changedIDs, !changedIDs.contains(id) { return true }
+            return self.tab == .done ? listed[id] != nil : self.store.task(withID: id) != nil
         }
         let keptSelection = selection.filter(live)
         if keptSelection != selection { selection = keptSelection }
@@ -1809,10 +1954,11 @@ final class TasksPageModel: ObservableObject {
         // Check logical ownership, not the anchor's one-/two-line view
         // lifetime. Done-log rows remain valid while they are listed.
         func hasRow(_ id: UUID) -> Bool {
+            if let changedIDs, !changedIDs.contains(id) { return true }
             guard live(id) else { return false }
             // Done reloads its paged projection asynchronously. An empty
             // intermediate page is not evidence that a listed task vanished.
-            if tab == .done { return store.listedTask(withID: id)?.status == .done }
+            if tab == .done { return listed[id]?.status == .done }
             return rows(for: tab).contains { $0.id == id }
         }
         if let editingTitleID, !hasRow(editingTitleID) { cancelEditing() }
@@ -2605,6 +2751,7 @@ final class TasksPageModel: ObservableObject {
         let picks = tagPicks(on: tab)
         guard !picks.isEmpty, addBar == TaskAddBarText() else { return }
         addBar.picked.tags = picks.tags
+        addBarState.seededTags = picks.tags
     }
 
     var addPlaceholder: String {
@@ -2657,7 +2804,7 @@ final class TasksPageModel: ObservableObject {
 
     /// Preparing a provider cannot consume this draft yet. Keep the choice
     /// explicit: a later file callback must never submit a changed draft.
-    private func composerFilesReadyForSubmission() -> Bool {
+    func composerFilesReadyForSubmission() -> Bool {
         guard addBarState.stagingFiles > 0 else { return true }
         toasts.show(String(localized: "Preparing files · try again in a moment"),
                     actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})

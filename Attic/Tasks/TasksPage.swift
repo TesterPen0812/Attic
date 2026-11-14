@@ -14,6 +14,17 @@ struct TasksPageChrome {
     var editLock: (Bool) -> Void = { _ in }
 }
 
+enum TaskDeletionFocus {
+    static func next<ID: Hashable>(visible: [ID], deleting ids: [ID]) -> ID? {
+        let removed = Set(ids)
+        let lastSelectedIndex = visible.indices.last { removed.contains(visible[$0]) } ?? 0
+        if let following = visible.indices.first(where: { $0 > lastSelectedIndex && !removed.contains(visible[$0]) }) {
+            return visible[following]
+        }
+        return visible.last { !removed.contains($0) }
+    }
+}
+
 /// The Tasks page (spec § Tasks, Direction A): the page tabs (Now · Later ·
 /// Done) under the header, one list with status circles that complete in
 /// one click, "Completed today" after Now's open tasks, the row quick look,
@@ -2391,8 +2402,7 @@ struct TasksPage: View {
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
         let visible = visibleIDs()
-        let next = visible.first { !ids.contains($0) && (visible.firstIndex(of: $0) ?? 0) > (ids.compactMap { visible.firstIndex(of: $0) }.max() ?? 0) }
-            ?? visible.last { !ids.contains($0) }
+        let next = TaskDeletionFocus.next(visible: visible, deleting: ids)
         // The rows leave first, then the gap closes (Accepted 2026-11-10).
         rowsLeaving = true
         DispatchQueue.main.asyncAfter(deadline: .now() + AtticMotionScale.gapCloseDelay + AtticMotionScale.spatial * 2) {
@@ -4597,6 +4607,14 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             #endif
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
+        }
+        // A lazy cell can reappear at the same geometry. Its disappearance
+        // removed these registrations, so geometry-change callbacks alone
+        // cannot restore the live row and control hit regions.
+        .onAppear { [session, pointer, tab, id, reports] in
+            let row = TasksRowID(tab: tab, id: id)
+            if let frame = reports.frame { pointer.setFrame(frame, for: row, from: reports) }
+            if let controls = reports.controls { session.setControlFrames(controls, for: row, from: reports) }
         }
         .onDisappear { [session, pointer, tab, id, reports] in
             #if DEBUG

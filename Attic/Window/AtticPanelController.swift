@@ -211,10 +211,26 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         section.isTaskBased ? .tasks : section.isCalendar ? CalendarAgendaCommands.history : nil
     }
 
+    /// A task-note route only owns keyboard history while its origin's page
+    /// actually renders it. Draw has no task-note host (BG-21 owner decision).
+    static func displayedTaskNoteID(in uiState: PanelUIState) -> UUID? {
+        guard !uiState.selectedSection.isCanvas,
+              uiState.taskNoteOrigin == PanelPage(uiState.selectedSection) else { return nil }
+        return uiState.openTaskNoteID
+    }
+
     /// Called only after the focused editor or native field had its chance.
     /// Use the page's current model so header focus, menus and page changes
     /// still reach the same Undo command as the page's own controls.
-    static func performUnhandledUndo(redo: Bool, section: PanelSection, store: TaskStore, notes: NotesPageController) {
+    static func performUnhandledUndo(redo: Bool, section: PanelSection, openTaskNoteID: UUID? = nil,
+                                     store: TaskStore, notes: NotesPageController) {
+        if let taskID = openTaskNoteID {
+            // The page's own Undo: it closes the open typing group and
+            // refuses while a publication, replay or input reservation is pending.
+            let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
+            _ = redo ? history?.redo() : history?.undo()
+            return
+        }
         if section.isNotes {
             if notes.isLibraryPresented {
                 Task { @MainActor in
@@ -237,7 +253,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         else { _ = redo ? library.redo(in: history) : library.undo(in: history) }
     }
 
-    static func canPerformUnhandledUndo(redo: Bool, section: PanelSection, store: TaskStore, notes: NotesPageController) -> Bool {
+    static func canPerformUnhandledUndo(redo: Bool, section: PanelSection, openTaskNoteID: UUID? = nil,
+                                        store: TaskStore, notes: NotesPageController) -> Bool {
+        if let taskID = openTaskNoteID {
+            let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
+            return (redo ? history?.canRedo : history?.canUndo) ?? false
+        }
         if section.isNotes {
             if notes.isLibraryPresented { return redo ? notes.canRedoLibrary : notes.canUndoLibrary }
             guard let engine = notes.active?.engine else { return false }
@@ -1007,11 +1028,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self else { return }
             Self.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                openTaskNoteID: Self.displayedTaskNoteID(in: self.uiState),
                 store: self.store, notes: self.noteDraft.pages)
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
             guard let self else { return false }
             return Self.canPerformUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
+                openTaskNoteID: Self.displayedTaskNoteID(in: self.uiState),
                 store: self.store, notes: self.noteDraft.pages)
         }
         // A corner reveal must draw live glass before any click, while the

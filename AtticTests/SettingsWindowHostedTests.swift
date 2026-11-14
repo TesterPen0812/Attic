@@ -43,6 +43,138 @@ final class SettingsWindowHostedTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    private func ci8Elements(_ root: AnyObject) -> [AnyObject] {
+        var seen = Set<ObjectIdentifier>()
+        func walk(_ node: AnyObject) -> [AnyObject] {
+            guard seen.insert(ObjectIdentifier(node)).inserted else { return [] }
+            return [node] + ((node.accessibilityChildren?() ?? nil) ?? []).flatMap { walk($0 as AnyObject) }
+        }
+        return walk(root)
+    }
+
+    private func ci8Value(_ row: AnyObject?) -> String? {
+        guard let row else { return nil }
+        // SwiftUI's AccessibilityNode answers the selector without adopting
+        // the full NSAccessibilityProtocol. Keep its actual spoken value.
+        let value: String? = row.accessibilityValue?()
+        return value
+    }
+
+    private func withCI8Host<V: View>(_ view: V, check: (NSHostingView<V>) throws -> Void) rethrows {
+        print("CI8_HOST pid=\(getpid())")
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 650, height: 1400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view)
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            AtticGlassMenu.testDriver = nil
+            AtticGlassMenu.ordersCardsFront = true
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+            NSApp.accessibilitySetValue(previous, forAttribute: enhanced)
+        }
+        AtticGlassMenu.ordersCardsFront = false
+        host.layoutSubtreeIfNeeded()
+        spin()
+        try check(host)
+    }
+
+    /// CI8-AX: M-02 replaced the row's real button with a virtual menu
+    /// button, losing its identifier and enabled state on macOS 26.
+    func testCI8PopUpRowIsOneEnabledVoiceOverButton() throws {
+        try withCI8Host(AtticPopUpRow(label: "Surface", choices: [("solid", "Solid"), ("glass", "Glass")],
+                                    selection: .constant("solid"), identifier: "menu-lab-popup")) { host in
+            let rows = ci8Elements(host).filter { $0.accessibilityLabel?() == "Surface" }
+            XCTAssertEqual(rows.count, 1, "The entire pop-up row is one VoiceOver element")
+            let row = try XCTUnwrap(rows.first)
+            XCTAssertEqual(row.accessibilityRole?()?.rawValue, "AXButton")
+            XCTAssertEqual(row.accessibilityIdentifier?(), "menu-lab-popup")
+            XCTAssertEqual(row.isAccessibilityEnabled?(), true)
+            XCTAssertEqual(ci8Value(row), "Solid")
+        }
+    }
+
+    func testCI8GeneralAnimationsIsIdentifiableAndChooses() throws {
+        let oldLevel = AtticMotionPreference.level
+        let oldStyle = AtticReducedMotionStyle.current
+        let oldTuning = AtticMotionTuning.current
+        defer {
+            AtticMotionPreference.level = oldLevel
+            AtticReducedMotionStyle.current = oldStyle
+            AtticMotionTuning.current = oldTuning
+        }
+        let suite = "CI8General.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+        try withCI8Host(GeneralSettingsView(settings: settings,
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            globalHotKey: GlobalHotKey(combination: .newTask))) { host in
+            for level in AtticAnimationLevel.allCases {
+                let row = try XCTUnwrap(ci8Elements(host).first { $0.accessibilityIdentifier?() == "setting-animations" },
+                                       "Animations stays reachable on General")
+                var opened = false
+                AtticGlassMenu.testDriver = { menu in
+                    opened = true
+                    XCTAssertEqual(menu.commands.map(\.title), AtticAnimationLevel.allCases.map(\.title))
+                    menu.choose(menu.commands.first { $0.title == level.title }!)
+                }
+                XCTAssertTrue(row.accessibilityPerformPress?() ?? false)
+                spin()
+                XCTAssertTrue(opened)
+                XCTAssertEqual(settings.animations, level)
+                let updated = ci8Elements(host).first { $0.accessibilityIdentifier?() == "setting-animations" }
+                XCTAssertEqual(ci8Value(updated), level.title)
+            }
+        }
+    }
+
+    func testCI8AppearancePopUpsSurviveModeAndPaletteChanges() throws {
+        let oldLevel = AtticMotionPreference.level
+        let oldStyle = AtticReducedMotionStyle.current
+        let oldTuning = AtticMotionTuning.current
+        defer {
+            AtticMotionPreference.level = oldLevel
+            AtticReducedMotionStyle.current = oldStyle
+            AtticMotionTuning.current = oldTuning
+        }
+        let suite = "CI8Appearance.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+        try withCI8Host(AppearanceSettingsView(settings: settings)) { host in
+            for mode in [AppearancePreference.dark, .light, .dark] {
+                settings.appearance = mode
+                for palette in AtticPanelTheme.allCases {
+                    settings.panelTheme = palette
+                    spin(0.02)
+                    host.layoutSubtreeIfNeeded()
+                    for style in PanelSurfaceStyle.allCases {
+                        let row = try XCTUnwrap(ci8Elements(host).first { $0.accessibilityIdentifier?() == "setting-panel-surface" },
+                                               "Surface remains reachable after \(mode)/\(palette)")
+                        var opened = false
+                        AtticGlassMenu.testDriver = { menu in
+                            opened = true
+                            XCTAssertEqual(menu.commands.map(\.title), PanelSurfaceStyle.allCases.map(\.title))
+                            menu.choose(menu.commands.first { $0.title == style.title }!)
+                        }
+                        XCTAssertTrue(row.accessibilityPerformPress?() ?? false)
+                        spin(0.02)
+                        XCTAssertTrue(opened)
+                        XCTAssertEqual(settings.panelSurfaceStyle, style)
+                    }
+                    XCTAssertEqual(ci8Elements(host).filter { $0.accessibilityIdentifier?() == "setting-panel-tint" }.count, 1)
+                }
+            }
+        }
+    }
+
     func testSettingsHuntHostedNavigationReadsTheScratchSuite() throws {
         let suite = "SettingsHuntNavigation.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
