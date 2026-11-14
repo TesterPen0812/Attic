@@ -1167,21 +1167,39 @@ final class TasksPageModel: ObservableObject {
     /// A task just made or changed on a filtered page stays in view until
     /// the view changes ("+" while filtered; Accepted 2026-11-13).
     func keepInView(_ id: UUID, on tab: TasksTab) {
-        guard tab != .done else { return }
+        keepInView([id], on: tab)
+    }
+
+    /// The tasks stay in view on `tab` for the filter it shows now. The stay
+    /// record is made for that filter if the page has not built it yet (a
+    /// paste right after the filter changed, R-7), and the set is written in
+    /// place, once for the whole batch (a 2,000-line paste copied the growing
+    /// set once per task, R-6).
+    private func keepInView(_ ids: [UUID], on tab: TasksTab) {
+        guard tab != .done, !ids.isEmpty else { return }
         let picks = tagPicks(on: tab)
-        let view = viewOptions(for: tab)
-        guard trimmedQuery(for: tab).isEmpty, view.filters || !picks.isEmpty else { return }
-        let key = TasksStayKey(view: view, picks: picks)
+        guard trimmedQuery(for: tab).isEmpty, viewOptions(for: tab).filters || !picks.isEmpty else { return }
+        let key = TasksStayKey(view: viewOptions(for: tab), picks: picks)
         if filterStay[tab]?.key != key { filterStay[tab] = (key, []) }
-        guard var stay = filterStay[tab] else { return }
-        stay.ids.insert(id)
-        filterStay[tab] = stay
+        #if DEBUG
+        filterStayWrites += 1
+        #endif
+        filterStay[tab]?.ids.formUnion(ids)
         rowsCache[tab] = nil
     }
+    #if DEBUG
+    /// Tests only: how many times a stay set was written to.
+    var filterStayWrites = 0
+    #endif
 
     /// A batch made at once (a paste): each task, on the page its state lists it.
     func keepInView(_ tasks: [TaskItem]) {
-        for task in tasks { keepInView(task.id, on: task.listedStatus == .backlog ? .backlog : .now) }
+        var now: [UUID] = [], later: [UUID] = []
+        for task in tasks {
+            if task.listedStatus == .backlog { later.append(task.id) } else { now.append(task.id) }
+        }
+        keepInView(now, on: .now)
+        keepInView(later, on: .backlog)
     }
 
     /// The view changed for the person (the panel hid, another tab): what

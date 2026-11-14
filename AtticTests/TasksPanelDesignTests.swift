@@ -404,6 +404,26 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(shown.isSuperset(of: ["switched one", "switched two"]), "R-7, a different built filter: \(shown)")
     }
 
+    /// Dot R-6: a large filtered paste writes the stay set back once for the
+    /// batch, not once per task (each write copied the growing set).
+    func testAFilteredPasteWritesTheStaySetOncePerPageNotOncePerTask() throws {
+        _ = try add("Tagged", due: nil)
+        model.chooseTagChip("launch")
+        _ = model.rows(for: .now)
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer("seed one\nseed two"))
+        model.acceptPaste(asOne: false)
+        let lines = (0..<2_000).map { "line \($0)" }.joined(separator: "\n")
+        model.pasteOffer = try XCTUnwrap(TaskPasteOffer(lines))
+        let before = model.filterStayWrites
+        model.acceptPaste(asOne: false)
+        let writes = model.filterStayWrites - before
+        print("R6_STAY_SET_WRITES \(writes) for 2000 rows")
+        XCTAssertEqual(writes, 1, "2,000 pasted Now tasks: \(writes) stay-set writes (one for the batch)")
+        XCTAssertEqual(model.rows(for: .now).filter { $0.model.title.hasPrefix("line ") }.count, 2_000, "every line stays in view")
+        XCTAssertTrue(Set(model.rows(for: .now).map(\.model.title)).isSuperset(of: ["seed one", "seed two"]),
+                      "the batch preserves rows retained by the preceding paste")
+    }
+
     func testGroupsMoveOnAtMidnight() throws {
         try add("Soon", due: 1)
         XCTAssertEqual(headers(.now), ["Tomorrow"])
