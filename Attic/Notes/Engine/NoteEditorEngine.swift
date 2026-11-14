@@ -1149,7 +1149,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textStorage.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: markRange)
             if marks[.code] != nil { textView?.setSpellingState(0, range: markRange) }
         }
-        NoteTextStyle.applyInlineCodeSpacing(to: textStorage, in: range)
+        NoteTextStyle.applyInlineCodeSpacing(to: textStorage, in: inlineCodeSpacingRange(around: range))
+    }
+
+    /// The range whose inline-code kerning a restyle of `range` must recompute.
+    /// A run clipped to a few typed characters would put the run's "last
+    /// character" kern on the clip, so any code run the range touches or
+    /// borders is taken whole, with the character before it (which carries
+    /// the room before the chip) and the one next to each end of the range
+    /// (whose kern may now be stale). It stays inside the paragraph.
+    private func inlineCodeSpacingRange(around range: NSRange) -> NSRange {
+        let length = textStorage.length
+        guard range.length > 0, range.location >= 0, NSMaxRange(range) <= length else { return range }
+        let paragraph = (textStorage.string as NSString).paragraphRange(for: range)
+        var lower = range.location, upper = NSMaxRange(range)
+        for index in [range.location - 1, range.location, NSMaxRange(range) - 1, NSMaxRange(range)]
+        where index >= paragraph.location && index < NSMaxRange(paragraph) {
+            var run = NSRange(location: 0, length: 0)
+            guard textStorage.attribute(.noteMark(.code), at: index, longestEffectiveRange: &run, in: paragraph) != nil else { continue }
+            lower = min(lower, run.location); upper = max(upper, NSMaxRange(run))
+        }
+        lower = max(paragraph.location, min(lower, range.location - 1) - 1)
+        upper = min(NSMaxRange(paragraph), max(upper, NSMaxRange(range) + 1))
+        return NSRange(location: lower, length: upper - lower)
     }
 
     /// The paragraphs covering `range`, plus one on each side.

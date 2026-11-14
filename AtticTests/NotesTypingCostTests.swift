@@ -354,6 +354,51 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    /// Review R-2: inline code's room (4 pt of kern) sits on the run's true
+    /// last character and the character before the run, however it was edited.
+    private func assertInlineCodeKernIsExact(_ engine: NoteEditorEngine, _ context: String,
+                                             file: StaticString = #filePath, line: UInt = #line) {
+        let storage = engine.textStorage
+        let string = storage.string as NSString
+        var expected = Set<Int>()
+        storage.enumerateAttribute(.noteMark(.code), in: NSRange(location: 0, length: storage.length)) { value, run, _ in
+            guard value != nil, run.length > 0 else { return }
+            let last = NSMaxRange(run) - 1
+            if string.character(at: last) != 0x0A { expected.insert(last) }
+            let before = run.location - 1
+            if before >= 0, string.character(at: before) != 0x0A,
+               storage.attribute(.noteMark(.code), at: before, effectiveRange: nil) == nil { expected.insert(before) }
+        }
+        var actual = Set<Int>()
+        storage.enumerateAttribute(.kern, in: NSRange(location: 0, length: storage.length)) { value, run, _ in
+            if value != nil { actual.formUnion(run.location..<NSMaxRange(run)) }
+        }
+        XCTAssertEqual(actual, expected, "kern only on the run's last character and the one before it: \(context)",
+                       file: file, line: line)
+    }
+
+    func testPF12TypingAroundInlineCodeKeepsItsRoomOnTheRunEdgesOnly() throws {
+        var block = NoteBlock.text("Say launch now")
+        block.marks = [NoteMark(.code, offset: 4, length: 6)]
+        // Offsets inside the paragraph: before the run, inside it, at its end.
+        for (name, inRun) in [("just before the run", 0), ("in the middle", 3), ("at the end", 6)] {
+            let (engine, view) = editor([.text("Title"), block])
+            defer { engine.detachView() }
+            let start = (view.string as NSString).range(of: "launch").location
+            assertInlineCodeKernIsExact(engine, "\(name), before typing")
+            view.setSelectedRange(NSRange(location: start + inRun, length: 0))
+            for character in ["x", "y"] {
+                view.insertText(character, replacementRange: view.selectedRange())
+                assertInlineCodeKernIsExact(engine, "\(name) after typing \(character)")
+            }
+            // The two typed characters coalesce into one Undo step.
+            XCTAssertTrue(engine.history.undo(), name)
+            assertInlineCodeKernIsExact(engine, "\(name) after Undo")
+            XCTAssertTrue(engine.history.redo(), name)
+            assertInlineCodeKernIsExact(engine, "\(name) after Redo")
+        }
+    }
+
     func testPF16SingleTableCellFindEditDoesNotScanUnrelatedCells() throws {
         for rows in [10, 250] {
             let table = NoteTable(texts: (0..<rows).map { row in
