@@ -27,10 +27,12 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         )
         let hosting = NSHostingView(rootView: root)
         hosting.frame = CGRect(origin: .zero, size: size)
+        let offscreen = hosting.frame.offsetBy(dx: -6000, dy: -6000)
         let window: NSWindow = key
-            ? KeyTestWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
-            : NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            ? KeyTestWindow(contentRect: offscreen, styleMask: [.titled], backing: .buffered, defer: false)
+            : NSWindow(contentRect: offscreen, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.title = "Attic hosted \(UUID().uuidString)"
         window.appearance = NSAppearance(named: context.mode == .dark ? .darkAqua : .aqua)
         window.contentView = hosting
         if key {
@@ -170,12 +172,15 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             perform(kAXIncrementAction as String, on: slider.element)
             XCTAssertGreaterThan(tint, before, "\(context.caption): the slider's increment moves Tint length")
 
-            // Both the title menu and the Settings pop-up open through
-            // Attic's glass menu. VoiceOver sees each as a menu button,
-            // which can be pressed or asked to Show Menu.
+            // Both controls open Attic's glass menu. The Settings row
+            // keeps its one real VoiceOver button, with its live value;
+            // only the title trigger has a menu-button role.
+            let popUp = try XCTUnwrap(items.first { $0.description == "Surface" }, "Settings has a named Surface row")
+            XCTAssertEqual(popUp.role, kAXButtonRole as String)
             let menus = items.filter { $0.role == kAXPopUpButtonRole as String || $0.role == kAXMenuButtonRole as String }
-            XCTAssertGreaterThanOrEqual(menus.count, 2, "\(context.caption): a menu control is missing its AX menu role: \(items.map(\.role))")
-            for menu in menus {
+            XCTAssertGreaterThanOrEqual(menus.count, 1, "\(context.caption): the title is missing its AX menu role: \(items.map(\.role))")
+            let openers = menus + [popUp]
+            for menu in openers {
                 XCTAssertTrue(menu.actions.contains(kAXPressAction as String) || menu.actions.contains("AXShowMenu"),
                               "\(context.caption): a menu button VoiceOver cannot press: \(menu.actions)")
             }
@@ -187,9 +192,9 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             // right. Opening a menu and choosing an item is proved in the
             // running, activated app by AtticNativeMenuUITests on every
             // supported macOS.
-            let opened = openMenus(menus)
+            let opened = openMenus(openers)
             // CI diagnostic: how many menus opened in this host on this OS.
-            print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(menus.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
+            print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(openers.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
             if !opened.isEmpty {
                 let titles = opened.flatMap { $0 }
                 XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): title menu missing its items: \(opened)")
@@ -491,7 +496,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let actions: [String]
     }
 
-    private func accessibilityItems() -> [AXItem] {
+    private func accessibilityItems(in window: NSWindow? = nil) -> [AXItem] {
         var items: [AXItem] = []
         func walk(_ element: AXUIElement, depth: Int) {
             guard depth < 16 else { return }
@@ -506,7 +511,23 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
             for child in (children as? [AXUIElement]) ?? [] { walk(child, depth: depth + 1) }
         }
-        walk(AXUIElementCreateApplication(getpid()), depth: 0)
+        let application = AXUIElementCreateApplication(getpid())
+        var root = application
+        if let window {
+            var rawWindows: CFTypeRef?
+            AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &rawWindows)
+            let match = ((rawWindows as? [AXUIElement]) ?? []).first { candidate in
+                var title: CFTypeRef?
+                AXUIElementCopyAttributeValue(candidate, kAXTitleAttribute as CFString, &title)
+                return title as? String == window.title
+            }
+            guard let match else {
+                XCTFail("The hosted window must be present in the accessibility tree: \(window.title)")
+                return []
+            }
+            root = match
+        }
+        walk(root, depth: 0)
         return items
     }
 
@@ -694,19 +715,20 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// button selects its page. The tabs take ← → while they have focus.
     func testThePagesReadAsNamedButtonsAndTakeArrows() throws {
         try requireKeyWindowTests()
+        print("CI8R2_PAGES pid=\(getpid())")
         final class Record { var tab = 0; var page = 0 }
         let record = Record()
         let harness = PagesHarness(onTab: { record.tab = $0 }, onPage: { record.page = $0 })
-        _ = host(harness, size: CGSize(width: 320, height: 90), key: true)
+        let (window, _) = host(harness, size: CGSize(width: 320, height: 90), key: true)
 
-        let items = accessibilityItems()
+        let items = accessibilityItems(in: window)
         XCTAssertEqual(items.filter { $0.description == "Pages" }.count, 2, "one group for the button, one for the tabs")
         for name in ["Tasks", "Notes", "Canvas", "Now", "Backlog", "Done"] {
             XCTAssertTrue(items.contains { $0.description == name && $0.role == kAXButtonRole as String },
                           "\(name) is a named button: \(items.map(\.description))")
         }
         func selected(_ name: String) -> Bool {
-            guard let item = accessibilityItems().first(where: { $0.description == name }) else { return false }
+            guard let item = accessibilityItems(in: window).first(where: { $0.description == name }) else { return false }
             var value: CFTypeRef?
             AXUIElementCopyAttributeValue(item.element, kAXSelectedAttribute as CFString, &value)
             return (value as? Bool) == true
@@ -714,7 +736,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertTrue(selected("Tasks") && selected("Now"))
         XCTAssertFalse(selected("Notes") || selected("Backlog"))
 
-        let canvas = try XCTUnwrap(accessibilityItems().first { $0.description == "Canvas" })
+        let canvas = try XCTUnwrap(accessibilityItems(in: window).first { $0.description == "Canvas" })
         AXUIElementPerformAction(canvas.element, kAXPressAction as CFString)
         spin()
         XCTAssertEqual(record.page, 2, "pressing Canvas selects it, even with the button shut")
@@ -726,10 +748,38 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertEqual(AtticPageArrows.next(from: 2, key: .rightArrow, modifiers: [], count: 3), 2, "the last page stays")
         XCTAssertNil(AtticPageArrows.next(from: 0, key: .rightArrow, modifiers: .command, count: 3))
         XCTAssertNil(AtticPageArrows.next(from: 0, key: .downArrow, modifiers: [], count: 3))
-        let done = try XCTUnwrap(accessibilityItems().first { $0.description == "Done" })
+        let done = try XCTUnwrap(accessibilityItems(in: window).first { $0.description == "Done" })
         AXUIElementPerformAction(done.element, kAXPressAction as CFString)
         spin()
         XCTAssertEqual(record.tab, 2)
+    }
+
+    /// Other hosted windows can remain in AppKit's accessibility snapshot.
+    /// The Pages assertions must address the fixture they just created.
+    func testCI8R2PagesAssertionsIgnoreOtherHostedWindows() throws {
+        try requireKeyWindowTests()
+        for _ in 0..<3 {
+            _ = host(AtticPageButton(items: AtticGallerySamples.pages,
+                                     selection: .constant(0), pinnedOpen: false),
+                     size: CGSize(width: 320, height: 90))
+        }
+        try testThePagesReadAsNamedButtonsAndTakeArrows()
+    }
+
+    func testCI8R2PagePressTargetsItsWindowBehindAnotherFixture() throws {
+        try requireKeyWindowTests()
+        print("CI8R2_PAGE_PRESS pid=\(getpid())")
+        final class Record { var page = 0 }
+        let own = Record(), foreign = Record()
+        let (window, _) = host(PagesHarness(onTab: { _ in }, onPage: { own.page = $0 }),
+                               size: CGSize(width: 320, height: 90), key: true)
+        _ = host(PagesHarness(onTab: { _ in }, onPage: { foreign.page = $0 }),
+                 size: CGSize(width: 320, height: 90))
+        let canvas = try XCTUnwrap(accessibilityItems(in: window).first { $0.description == "Canvas" })
+        XCTAssertEqual(AXUIElementPerformAction(canvas.element, kAXPressAction as CFString), .success)
+        spin()
+        XCTAssertEqual(own.page, 2, "the press must reach the fixture being checked")
+        XCTAssertEqual(foreign.page, 0, "a foreground fixture must not receive another window's press")
     }
 
     func testTaskCardOffersExpandAndTheTaskActions() throws {

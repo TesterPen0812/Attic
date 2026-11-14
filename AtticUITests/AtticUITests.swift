@@ -473,7 +473,7 @@ final class AtticUITests: XCTestCase {
 
     /// Phase 1 Settings: the Appearance page is built from the design
     /// system. Mode is three tiles, palettes are tiles, and Surface and Tint
-    /// are native ⌃⌄ pop-ups (menu items), with Tint length under Advanced.
+    /// open Attic's glass choice lists, with Tint length under Advanced.
     func testAppearanceControlsCoverEveryPaletteSurfaceAndTint() throws {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
@@ -500,7 +500,7 @@ final class AtticUITests: XCTestCase {
             popUp.click()
             let item = popUpChoice(title)
             XCTAssertTrue(item.waitForExistence(timeout: 3), "the pop-up offers \(title)")
-            item.click()
+            clickGlassMenuItem(item, titled: title, in: app)
             waitFor("\(popUp.label) shows \(title)") { (popUp.value as? String) == title }
         }
         func recordPanel(_ name: String) {
@@ -625,7 +625,7 @@ final class AtticUITests: XCTestCase {
             surface.click()
             let item = popUpChoice(style)
             XCTAssertTrue(item.waitForExistence(timeout: 3))
-            item.click()
+            clickGlassMenuItem(item, titled: style, in: app)
             waitFor("Surface selection must settle on \(style)") { (surface.value as? String) == style }
         }
         settings.buttons[XCUIIdentifierCloseWindow].click()

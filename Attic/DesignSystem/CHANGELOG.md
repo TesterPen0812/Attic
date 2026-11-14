@@ -1,3 +1,10 @@
+## 2026-11-13 · Settings pop-up accessibility (CI8-AX)
+
+Settings pop-up rows keep their real, enabled VoiceOver button, identifier
+and live selected value while opening the accepted system-menu glass list.
+The replacement menu-button accessibility view had dropped the identifier
+and enabled state. The row's face, menu material and motion stay the same.
+
 ## 2026-11-13 · Menu dismissal (catchup-2 R-2)
 
 A dismissing click is consumed over ordinary controls. Switching to another
