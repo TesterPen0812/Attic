@@ -657,7 +657,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let linkRoom = linkSuggestionGap?.offset == offset ? linkSuggestionGap?.height ?? 0 : 0
         let changed = historyDifferenceOffsets.contains(offset)
         let review = reviewMarkOffsets[offset]
-        let inStorage = offset > 0 && offset < textStorage.length
+        let inStorage = offset >= bodyStart && offset < textStorage.length
         let native = inStorage ? decoration(forParagraphAt: offset) : nil
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
         let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
@@ -746,7 +746,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
     /// What the paragraph at `location` draws beside its text, if anything.
     func decoration(forParagraphAt location: Int) -> NoteBlockLayoutFragment.Decoration? {
         let line = paragraphRange(at: location)
-        guard line.location > 0, line.location < textStorage.length else { return nil }
+        guard line.location >= bodyStart, line.location < textStorage.length else { return nil }
         let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
         let name = attributes[.noteBlockStyle] as? String
         let depth = CGFloat(attributes[.noteBlockIndent] as? Int ?? 0) * AtticNoteType.listLevelStep
@@ -771,9 +771,9 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
 
     /// The callout icon of the paragraph above (nil: not a callout).
     private func calloutIcon(paragraphBefore line: NSRange) -> String? {
-        guard line.location > 0 else { return nil }
+        guard line.location > bodyStart else { return nil }
         let previous = paragraphRange(at: line.location - 1)
-        guard previous.location > 0 else { return nil }
+        guard previous.location >= bodyStart else { return nil }
         return textStorage.attribute(.noteCalloutIcon, at: previous.location, effectiveRange: nil) as? String
     }
 
@@ -808,9 +808,9 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
     }
 
     private func isPlainQuote(paragraphBefore line: NSRange) -> Bool {
-        guard line.location > 0 else { return false }
+        guard line.location > bodyStart else { return false }
         let previous = paragraphRange(at: line.location - 1)
-        guard previous.location > 0 else { return false }
+        guard previous.location >= bodyStart else { return false }
         return textStorage.attribute(.noteBlockStyle, at: previous.location, effectiveRange: nil) as? String == "quote"
             && textStorage.attribute(.noteCalloutIcon, at: previous.location, effectiveRange: nil) == nil
     }
