@@ -68,6 +68,33 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertEqual(model.object(object.id), object, "dragging has not committed the resized ink")
     }
 
+    func testPF20MovedPressureStrokeRendersInOrderWithoutCopyingEverySample() throws {
+        // This direct renderer-equivalence test runs on the test main actor.
+        // Reset its global probe state before other tests assert that normal
+        // board rendering never paints on the main thread.
+        defer { DrawRasterProbe.reset() }
+        let ink = (0..<2_000).map { n in
+            DrawPoint(x: 8 + Double(n) * 0.03, y: 40 + Double(n % 3), pressure: Double(n % 10) / 10)
+        }
+        let below = DrawObject(frame: DrawFrame(x: 5, y: 5, width: 80, height: 80), zIndex: 0,
+                               content: .shape(.rectangle))
+        let stroke = DrawObject(frame: DrawGeometry.strokeFrame(ink), zIndex: 1, content: .stroke(ink))
+        let above = DrawObject(frame: DrawFrame(x: 65, y: 25, width: 20, height: 30), zIndex: 2,
+                               content: .shape(.rectangle))
+        let offset = DrawPoint(x: 15, y: -6)
+        let baseline = DrawRasterRequest(key: DrawRasterKey(size: CGSize(width: 110, height: 100), scale: 1),
+                                         objects: [below, stroke.translated(by: offset, id: stroke.id), above])
+        let expected = try XCTUnwrap(DrawRaster.render(baseline)?.image.dataProvider?.data as Data?)
+        DrawRasterProbe.reset()
+        let moving = DrawRasterRequest(key: DrawRasterKey(size: CGSize(width: 110, height: 100), scale: 1,
+                                                        moved: [stroke.id], offset: CGPoint(x: offset.x, y: offset.y)),
+                                       objects: [below, stroke, above])
+        let actual = try XCTUnwrap(DrawRaster.render(moving)?.image.dataProvider?.data as Data?)
+        XCTAssertEqual(actual, expected, "the moved stroke still composites between the same two objects")
+        XCTAssertEqual(DrawRasterProbe.translatedSamples, 0,
+                       "each render must move ink with a context transform instead of allocating 2,000 new points")
+    }
+
     /// keyboard-hunt (13 Nov): real DrawKey actions, in randomized order,
     /// with a focus and object-liveness check after every action. Nothing is
     /// shown; the canvas repository and pasteboard are private to this test.

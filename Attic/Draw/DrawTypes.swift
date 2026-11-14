@@ -104,6 +104,9 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
         result.frame.x += offset.x
         result.frame.y += offset.y
         if case .stroke(let points) = content {
+            #if DEBUG
+            DrawRasterProbe.recordTranslatedSamples(points.count)
+            #endif
             result.content = .stroke(points.map { DrawPoint(x: $0.x + offset.x, y: $0.y + offset.y, pressure: $0.pressure) })
         }
         return result

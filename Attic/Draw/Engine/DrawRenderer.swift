@@ -96,7 +96,7 @@ struct DrawRasterImage: @unchecked Sendable { let image: CGImage }
 /// and how many ran on the main thread, where none may.
 enum DrawRasterProbe {
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var counts = (all: 0, main: 0)
+    nonisolated(unsafe) private static var counts = (all: 0, main: 0, translatedSamples: 0)
     #if DEBUG
     nonisolated(unsafe) private static var delayedBy: TimeInterval = 0
 
@@ -113,6 +113,11 @@ enum DrawRasterProbe {
 
     static var rasters: Int { lock.lock(); defer { lock.unlock() }; return counts.all }
     static var mainThreadRasters: Int { lock.lock(); defer { lock.unlock() }; return counts.main }
+    static var translatedSamples: Int { lock.lock(); defer { lock.unlock() }; return counts.translatedSamples }
+
+    static func recordTranslatedSamples(_ count: Int) {
+        lock.lock(); counts.translatedSamples += count; lock.unlock()
+    }
 
     static func record() {
         let main = Thread.isMainThread
@@ -122,7 +127,7 @@ enum DrawRasterProbe {
         lock.unlock()
     }
 
-    static func reset() { lock.lock(); counts = (0, 0); lock.unlock() }
+    static func reset() { lock.lock(); counts = (0, 0, 0); lock.unlock() }
 }
 
 /// The committed board: every object in the drawing's world extent, on a
@@ -153,12 +158,20 @@ enum DrawRaster {
         for (index, original) in request.objects.enumerated() {
             if index % 32 == 0, cancelled() { return nil }
             guard !key.hidden.contains(original.id) else { continue }
-            let object = request.replacements[original.id] ?? (key.moved.contains(original.id)
-                ? original.translated(by: DrawPoint(x: key.offset.x, y: key.offset.y), id: original.id) : original)
+            // Moving selected ink must not allocate and translate the entire
+            // sample array on every pointer update. The context carries its
+            // pixels while the original order still controls overpainting.
+            let replacement = request.replacements[original.id]
+            let object = replacement ?? original
+            let moving = replacement == nil && key.moved.contains(original.id)
             // Off-screen objects cost nothing.
-            let reach = DrawGeometry.bounds(object).insetBy(dx: -8, dy: -8)
+            let reach = DrawGeometry.bounds(object)
+                .offsetBy(dx: moving ? key.offset.x : 0, dy: moving ? key.offset.y : 0)
+                .insetBy(dx: -8, dy: -8)
             guard key.viewport.screen(reach).intersects(visible) else { continue }
+            if moving { context.saveGState(); context.translateBy(x: key.offset.x, y: key.offset.y) }
             draw(object, in: context, palette: palette)
+            if moving { context.restoreGState() }
         }
         guard !cancelled(), let image = context.makeImage() else { return nil }
         return DrawRasterImage(image: image)
