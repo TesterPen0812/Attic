@@ -612,9 +612,6 @@ final class AgentChatModel: ObservableObject {
     private(set) var replyParsingCharactersExamined = 0
     private(set) var replyParsingWordsMaterialized = 0
     #endif
-    /// While a saved thread is put back: its words are already written.
-    private var restoring = false
-
     /// True only while `panelDidHide` closes the chat.
     private(set) var closedAtOnce = false
 
@@ -656,17 +653,29 @@ final class AgentChatModel: ObservableObject {
 
     /// A saved thread, drawn as it ended: nothing in it plays again.
     private func restore(_ archived: [AgentThreadEntry]) {
-        restoring = true
-        // Putting a reply back is not the agent acting.
-        let resting = phase
-        defer { restoring = false; phase = resting }
-        entries = []
+        // Build one settled snapshot. Appending to @Published `entries` for
+        // each saved row repeatedly invalidates the whole chat on the main actor.
+        var restored: [AgentChatEntry] = []
+        restored.reserveCapacity(archived.count)
         replyParser = nil
+        nextWordTime = nil
+        replyEnds = nil
         for message in archived {
             switch message.role {
-            case "user": entries.append(AgentChatEntry(.asked(message.text)))
-            case "assistant": if !message.text.isEmpty { appendText(message.text); closeReply() }
-            case "tool", "error", "notice": entries.append(AgentChatEntry(.note(message.text)))
+            case "user": restored.append(AgentChatEntry(.asked(message.text)))
+            case "assistant":
+                if !message.text.isEmpty {
+                    let parser = AgentChatWords.Stream()
+                    parser.append(message.text)
+                    #if DEBUG
+                    replyParsingCharactersExamined += parser.charactersExamined
+                    #endif
+                    restored.append(AgentChatEntry(.reply(AgentChatReply(
+                        raw: message.text,
+                        wordTimes: Array(repeating: .distantPast, count: parser.wordCount),
+                        parsed: nil, marksStart: .distantPast))))
+                }
+            case "tool", "error", "notice": restored.append(AgentChatEntry(.note(message.text)))
             case "receipt":
                 if let set = message.changeSet {
                     let canUndo = runner?.canUndoRecovered(set.id) == true
@@ -678,16 +687,17 @@ final class AgentChatModel: ObservableObject {
                     let fallback = set.pages.sorted { $0.rawValue < $1.rawValue }.map {
                         AgentChatChange(title: $0.rawValue.capitalized, detail: "Review")
                     }
-                    entries.append(AgentChatEntry(.changes(AgentChatChanges(
+                    restored.append(AgentChatEntry(.changes(AgentChatChanges(
                         set: set, items: items.isEmpty ? fallback : items, steps: [], week: nil,
                         state: canUndo ? .ready : .recovered))))
                     if !canUndo {
-                        entries.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
+                        restored.append(AgentChatEntry(.note("Review these saved changes. Undo from a previous app session is unavailable.")))
                     }
                 }
             default: break
             }
         }
+        entries = restored
     }
 
     // MARK: Open and close
@@ -1513,7 +1523,7 @@ final class AgentChatModel: ObservableObject {
 
     private func appendText(_ text: String) {
         #if DEBUG && ATTIC_LOCAL_ONLY
-        if !restoring && !text.isEmpty { AgentPassProbe.firstDelta() }
+        if !text.isEmpty { AgentPassProbe.firstDelta() }
         #endif
         phase = .acting
         let time = now()
@@ -1535,7 +1545,7 @@ final class AgentChatModel: ObservableObject {
         replyParsingCharactersExamined += parser.charactersExamined - previousCharacters
         #endif
         // Closed, or with Reduce Motion: already written when it is next seen.
-        let writes = isOpen && !reducesMotion() && !restoring
+        let writes = isOpen && !reducesMotion()
         var next = writes ? max(nextWordTime ?? time, time) : time
         while reply.wordTimes.count < parser.wordCount {
             let word = parser.word(at: reply.wordTimes.count)
@@ -1545,7 +1555,7 @@ final class AgentChatModel: ObservableObject {
         #if DEBUG
         let previousMaterialized = parser.wordsMaterialized
         #endif
-        reply.parsed = isOpen && !restoring ? parser.present() : nil
+        reply.parsed = isOpen ? parser.present() : nil
         #if DEBUG
         replyParsingWordsMaterialized += parser.wordsMaterialized - previousMaterialized
         #endif
@@ -1561,7 +1571,7 @@ final class AgentChatModel: ObservableObject {
     /// The reply is complete: its underlines may start.
     private func closeReply() {
         guard let last = entries.last, case var .reply(reply) = last.content, reply.marksStart == nil else { return }
-        reply.marksStart = isOpen && !reducesMotion() && !restoring
+        reply.marksStart = isOpen && !reducesMotion()
             ? (replyEnds?.addingTimeInterval(-pacing.settle) ?? now()) : .distantPast
         update(last.id) { $0 = .reply(reply) }
         replyParser = nil
