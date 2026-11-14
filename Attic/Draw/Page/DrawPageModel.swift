@@ -663,6 +663,7 @@ final class DrawPageModel: ObservableObject {
     func setShown(_ shown: Bool) {
         guard shown != isShown else { return }
         if !shown {
+            spaceHeld = false
             finishLiveInput()
             flushThumbnail()
         }

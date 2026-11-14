@@ -13,6 +13,21 @@ final class DrawBoardViewTests: XCTestCase {
     private var model: DrawPageModel!
     private var board: DrawBoardView!
 
+    func testBG32SpacePanKeyReleasedByPageHideWithoutKeyUp() throws {
+        let keyDown = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+        model.setTool(.pen)
+        board.keyDown(with: keyDown)
+        XCTAssertTrue(model.spaceHeld)
+        model.setShown(false)
+        XCTAssertFalse(model.spaceHeld, "The key may be released while Draw is hidden")
+        model.setShown(true)
+        model.pointerDown(at: CGPoint(x: 60, y: 100))
+        guard case .ink = model.live else { return XCTFail("Pen input cannot stay in pan mode") }
+        model.pointerUp()
+    }
+
     override func setUp() {
         super.setUp()
         AtticMotionPreference.systemReduceMotionOverride = true

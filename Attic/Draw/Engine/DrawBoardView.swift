@@ -678,6 +678,12 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         super.keyUp(with: event)
     }
 
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { model.spaceHeld = false }
+        return resigned
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let window, window.firstResponder === self, model.isShown, !isHiddenOrHasHiddenAncestor else {
             return super.performKeyEquivalent(with: event)
@@ -756,6 +762,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func viewDidMoveToWindow() {
+        model.spaceHeld = false
         releaseCursor()
         super.viewDidMoveToWindow()
         for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
@@ -774,6 +781,11 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         for (name, object) in names {
             stateObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    if name == NSWindow.didResignKeyNotification ||
+                        name == NSApplication.didResignActiveNotification ||
+                        name == AtticPanel.willOrderOutNotification || name == NSWindow.willCloseNotification {
+                        self?.model.spaceHeld = false
+                    }
                     if name == AtticPanel.willOrderOutNotification || name == NSWindow.willCloseNotification {
                         self?.releaseCursor()
                     } else { self?.queueCursorRefresh() }
