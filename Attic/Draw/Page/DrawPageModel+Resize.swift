@@ -83,7 +83,12 @@ extension DrawPageModel {
     }
 
     /// The objects after dragging `handle` by `delta` (world points).
-    static func resized(_ originals: [DrawObject], handle: DrawHandle, delta: CGPoint, shift: Bool) -> [DrawObject] {
+    ///
+    /// `minimum` is the pointer's smallest extent. An explicit scale factor
+    /// (VoiceOver, the keyboard) passes 0 so that a smaller command can never
+    /// force a short object up to that minimum and make it bigger.
+    static func resized(_ originals: [DrawObject], handle: DrawHandle, delta: CGPoint, shift: Bool,
+                        minimum: CGFloat = DrawPageModel.minimumResize) -> [DrawObject] {
         guard let first = originals.first else { return [] }
         if originals.count == 1 {
             switch handle {
@@ -95,7 +100,7 @@ extension DrawPageModel {
                 return [object]
             case .left, .right:
                 var object = first
-                let width = max(Self.minimumResize, first.frame.width + (handle == .right ? delta.x : -delta.x))
+                let width = max(minimum, first.frame.width + (handle == .right ? delta.x : -delta.x))
                 if handle == .left { object.frame.x = first.frame.x + first.frame.width - width }
                 object.textWidth = width
                 measure(&object, text: object.text)
@@ -111,14 +116,19 @@ extension DrawPageModel {
         let signX: CGFloat = handle == .topLeft || handle == .bottomLeft ? -1 : 1
         let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
         let flatX = box.width < 0.001, flatY = box.height < 0.001
-        var sx = flatX ? 1 : max(Self.minimumResize, box.width + signX * delta.x) / box.width
-        var sy = flatY ? 1 : max(Self.minimumResize, box.height + signY * delta.y) / box.height
+        var sx = flatX ? 1 : max(minimum, box.width + signX * delta.x) / box.width
+        var sy = flatY ? 1 : max(minimum, box.height + signY * delta.y) / box.height
         // Images and groups keep their proportions; Shift keeps a shape's.
         let uniform = shift || originals.count > 1 || first.isImage || flatX || flatY
         if uniform {
             // A zero extent is a straight line or point, not a tiny length
-            // from which to derive a huge reciprocal scale.
-            let s = flatX ? sy : flatY ? sx : abs(sx - 1) >= abs(sy - 1) ? sx : sy
+            // from which to derive a huge reciprocal scale. An axis shorter than the pointer minimum has that minimum win
+            // the pick (a 2 pt axis "doubles" to 4 pt), so it only decides
+            // when the other axis is just as short.
+            let shortX = box.width < minimum, shortY = box.height < minimum
+            let s = flatX ? sy : flatY ? sx
+                : shortX != shortY ? (shortX ? sy : sx)
+                : abs(sx - 1) >= abs(sy - 1) ? sx : sy
             sx = s
             sy = s
         }
@@ -205,6 +215,6 @@ extension DrawPageModel {
         }
         let delta = CGPoint(x: box.width * (factor - 1), y: box.height * (factor - 1))
         let handle: DrawHandle = chosen.count == 1 && chosen[0].text.isEmpty == false ? .right : .bottomRight
-        performAcknowledged(.put(Self.resized(chosen, handle: handle, delta: delta, shift: true)))
+        performAcknowledged(.put(Self.resized(chosen, handle: handle, delta: delta, shift: true, minimum: 0)))
     }
 }

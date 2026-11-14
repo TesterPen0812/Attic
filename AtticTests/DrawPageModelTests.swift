@@ -124,6 +124,52 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == line.id }).frame.height, 110, accuracy: 0.001)
     }
 
+    /// BG-31 review R-1: a short but real extent (0.001–4.4 pt) must not let
+    /// the pointer minimum win the uniform pick and turn Make Smaller into a
+    /// two- or four-fold enlargement. A smaller command never grows the
+    /// object, and its Undo is exact.
+    func testBG31MakeSmallerNeverEnlargesShortStrokesAndUndoIsExact() throws {
+        let canvas = try XCTUnwrap(model.canvasID)
+        let cases: [(name: String, points: [DrawPoint])] = [
+            ("100 x 2 hand-drawn stroke", [DrawPoint(x: 10, y: 20), DrawPoint(x: 60, y: 22), DrawPoint(x: 110, y: 21)]),
+            ("2 x 100 stroke", [DrawPoint(x: 10, y: 20), DrawPoint(x: 12, y: 70), DrawPoint(x: 11, y: 120)]),
+            ("2 pt long straight stroke", [DrawPoint(x: 10, y: 20), DrawPoint(x: 12, y: 20)]),
+            ("2 pt tall straight stroke", [DrawPoint(x: 10, y: 20), DrawPoint(x: 10, y: 22)]),
+        ]
+        for item in cases {
+            let stroke = DrawObject(frame: DrawGeometry.strokeFrame(item.points), content: .stroke(item.points))
+            XCTAssertTrue(store.perform(.put([stroke]), on: canvas).isSaved)
+            model.open(canvas)
+            model.setTool(.select)
+            model.select([stroke.id])
+            model.scaleSelection(by: 0.9)
+            let smaller = try XCTUnwrap(model.objects.first { $0.id == stroke.id })
+            XCTAssertEqual(smaller.frame.width, stroke.frame.width * 0.9, accuracy: 0.001, item.name)
+            XCTAssertEqual(smaller.frame.height, stroke.frame.height * 0.9, accuracy: 0.001, item.name)
+            model.undo()
+            XCTAssertEqual(try XCTUnwrap(model.objects.first { $0.id == stroke.id }), stroke, "\(item.name): exact Undo")
+            model.select([stroke.id])
+            model.scaleSelection(by: 1.1)
+            let larger = try XCTUnwrap(model.objects.first { $0.id == stroke.id })
+            XCTAssertEqual(larger.frame.width, stroke.frame.width * 1.1, accuracy: 0.001, item.name)
+            XCTAssertEqual(larger.frame.height, stroke.frame.height * 1.1, accuracy: 0.001, item.name)
+            model.undo()
+            XCTAssertTrue(store.perform(.remove([stroke.id]), on: canvas).isSaved)
+            model.open(canvas)
+        }
+    }
+
+    func testBG31ProportionalDragIgnoresAnAxisThatIsBelowThePointerMinimum() {
+        let flat = DrawObject(frame: DrawFrame(x: 10, y: 20, width: 100, height: 2),
+                              content: .stroke([DrawPoint(x: 10, y: 20), DrawPoint(x: 110, y: 22)]))
+        let grown = DrawPageModel.resized([flat], handle: .bottomRight, delta: CGPoint(x: 10, y: 0), shift: true)[0]
+        XCTAssertEqual(grown.frame.width, 110, accuracy: 0.001, "A 10 pt drag of a 100 pt stroke must not double it")
+        let a = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 100, height: 0), content: .shape(.line))
+        let b = DrawObject(frame: DrawFrame(x: 0, y: 1, width: 100, height: 0), content: .shape(.line))
+        let pair = DrawPageModel.resized([a, b], handle: .bottomRight, delta: CGPoint(x: 10, y: 10), shift: false)
+        XCTAssertEqual(pair[0].frame.width, 110, accuracy: 0.001, "Lines a point apart must not scale eleven-fold")
+    }
+
     private func drag(_ points: [CGPoint], shift: Bool = false) {
         model.pointerDown(at: points[0], shift: shift)
         for point in points.dropFirst() { model.pointerDragged(to: point, shift: shift) }
