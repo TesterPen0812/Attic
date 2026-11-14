@@ -364,6 +364,8 @@ final class Draw3StoreTests: XCTestCase {
         var reads: [[UUID]] = []
         var broken = Set<UUID>()
         var failEveryRead = false
+        var transientID: UUID?
+        var failNextIndividualRead = true
         init(container: ModelContainer) {
             inner = DrawSwiftDataRepository(container: container, metrics: metrics, save: { try $0.save() }, recovery: nil)
         }
@@ -373,6 +375,10 @@ final class Draw3StoreTests: XCTestCase {
         func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
             reads.append(canvases.map(\.id))
             if failEveryRead || canvases.contains(where: { broken.contains($0.id) }) { throw Injected() }
+            if failNextIndividualRead, let transientID, canvases.contains(where: { $0.id == transientID }) {
+                if canvases.count == 1 { failNextIndividualRead = false }
+                throw Injected()
+            }
             return try inner.hydrateSearchThumbnails(canvases)
         }
         func load(_ id: UUID) throws -> DrawSnapshot? { try inner.load(id) }
@@ -585,9 +591,11 @@ final class Draw3StoreTests: XCTestCase {
         let first = try store.search("#mine")
         XCTAssertEqual(first.count, 11)
         let twelfth = try XCTUnwrap(try store.presentationLibrary().first { $0.tags.isEmpty }).id
-        probe.broken = [twelfth]
+        try damage(twelfth, in: container) // damage after the metadata snapshot
 
+        probe.reads = []
         let broad = try store.search("Board")
+        XCTAssertEqual(probe.reads, [[twelfth]], "the failure is the singleton remainder")
         XCTAssertEqual(broad.count, 12, "every match is still listed")
         XCTAssertEqual(broad.filter { $0.canvas.thumbnail == bytes }.count, 11)
         XCTAssertNil(broad.first { $0.canvas.id == twelfth }?.canvas.thumbnail)
@@ -598,11 +606,11 @@ final class Draw3StoreTests: XCTestCase {
     func testR15TheCacheStaysBoundedAfterFailedRequestedRows() throws {
         let container = try container()
         try seedBoards(container, count: 144)
-        let (store, probe) = probeStore(container)
+        let (store, _) = probeStore(container)
         let ids = try store.presentationLibrary().map(\.id)
         for pageIndex in 0..<12 {
             let first = pageIndex * DrawStore.thumbnailWindow
-            probe.broken = [ids[first]]
+            try damage(ids[first], in: container)
             XCTAssertThrowsError(try rowThumbnail(store, ids, first))
             XCTAssertLessThanOrEqual(store.searchThumbnailCacheCount, 128, "after window \(pageIndex)")
         }
@@ -612,18 +620,23 @@ final class Draw3StoreTests: XCTestCase {
     /// retried later and its mark clears.
     func testR15AnUnreadableMarkHealsOnALaterSuccessfulRead() throws {
         let container = try container()
-        try seedBoards(container, count: 24)
+        try seedBoards(container, count: 156)
         let (store, probe) = probeStore(container)
         let ids = try store.presentationLibrary().map(\.id)
         let flaky = ids[5]
-        probe.broken = [flaky]
+        probe.transientID = flaky
         try rowThumbnail(store, ids, 0)
         XCTAssertThrowsError(try rowThumbnail(store, ids, 5))
         XCTAssertEqual(store.unreadableThumbnailCount, 1)
-        probe.broken = []
-        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[20]).isSaved) // the next revision
+        XCTAssertFalse(probe.failNextIndividualRead, "the single transient failure has recovered")
+        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[20]).isSaved) // bounded retry: next revision
         XCTAssertEqual(try rowThumbnail(store, ids, 5)?.thumbnail?.count, 256, "retried and loaded")
         XCTAssertEqual(store.unreadableThumbnailCount, 0, "the mark cleared")
+        for index in 12..<ids.count { try rowThumbnail(store, ids, index) }
+        XCTAssertEqual(store.searchThumbnailCacheCount, 128)
+        probe.reads = []
+        XCTAssertNotNil(try rowThumbnail(store, ids, 5)?.thumbnail, "evicted row reloads")
+        XCTAssertEqual(probe.reads, [Array(ids.prefix(12))], "the healed id batches with its neighbours again")
     }
 
     /// Dot R-4: a failure of the whole batch does not mark all its ids.
@@ -648,14 +661,32 @@ final class Draw3StoreTests: XCTestCase {
         let ids = try store.presentationLibrary().map(\.id)
         let bad = ids[3]
         probe.broken = [bad]
-        _ = try? rowThumbnail(store, ids, 3)
-        let afterFirst = probe.reads(including: bad)
-        for _ in 0..<19 { _ = try? rowThumbnail(store, ids, 3) }
-        XCTAssertEqual(probe.reads(including: bad), afterFirst, "19 more lookups read nothing")
+        for _ in 0..<20 { _ = try? store.searchThumbnail(bad) }
+        XCTAssertEqual(probe.reads(including: bad), 1, "20 direct lookups do one read per revision")
         XCTAssertTrue(store.perform(.put([stroke()]), on: ids[20]).isSaved)
-        let beforeNext = probe.reads(including: bad)
-        for _ in 0..<20 { _ = try? rowThumbnail(store, ids, 3) }
-        XCTAssertLessThanOrEqual(probe.reads(including: bad) - beforeNext, afterFirst, "one retry cycle for the new revision")
+        for _ in 0..<20 { _ = try? store.searchThumbnail(bad) }
+        XCTAssertEqual(probe.reads(including: bad), 2, "one retry for the new revision")
+
+        // The same bound holds for actual persisted damage after the
+        // current metadata snapshot, rather than only an injected failure.
+        let damaged = ids[7]
+        try damage(damaged, in: container)
+        for _ in 0..<20 { XCTAssertThrowsError(try store.searchThumbnail(damaged)) }
+        XCTAssertEqual(probe.reads(including: damaged), 1, "20 damaged-record hovers do one read")
+
+        // Retain the original batched-row guard as well: the first failed
+        // batch needs an isolating read, then body evaluations do no I/O.
+        let batched = ids[9]
+        probe.broken.insert(batched)
+        _ = try? rowThumbnail(store, ids, 9)
+        let afterFirst = probe.reads(including: batched)
+        for _ in 0..<19 { _ = try? rowThumbnail(store, ids, 9) }
+        XCTAssertEqual(probe.reads(including: batched), afterFirst, "19 more batched lookups read nothing")
+        XCTAssertTrue(store.perform(.put([stroke()]), on: ids[21]).isSaved)
+        let beforeNext = probe.reads(including: batched)
+        for _ in 0..<20 { _ = try? rowThumbnail(store, ids, 9) }
+        XCTAssertLessThanOrEqual(probe.reads(including: batched) - beforeNext, afterFirst,
+                                "one batched retry cycle for the new revision")
     }
 
     /// R-16: one damaged record is left out of the lists, never taking the
