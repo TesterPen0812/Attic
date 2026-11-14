@@ -497,6 +497,181 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
+    // MARK: Pointer and viewport helpers (PF-43 round 2)
+
+    /// Puts a neutral event (not a pointer's) back as the app's current
+    /// event, so the mouse move a test planted does not reach later tests
+    /// (CI 43540675479 came from exactly that stale state).
+    private func restoreNeutralCurrentEvent() {
+        guard let neutral = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                                               context: nil, subtype: 0, data1: 0, data2: 0) else { return }
+        NSApp.postEvent(neutral, atStart: true)
+        if let next = NSApp.nextEvent(matching: .applicationDefined, until: Date().addingTimeInterval(1), inMode: .default, dequeue: true) {
+            NSApp.sendEvent(next)
+        }
+    }
+
+    /// Waits for `condition`, up to `timeout` s, spinning the run loop (the
+    /// event, not a fixed delay; the bound only makes a regression fail).
+    private func wait(timeout: TimeInterval = 10, for host: NSView? = nil, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            host?.layoutSubtreeIfNeeded()
+            spin(0.02)
+        }
+    }
+
+    /// The scroll views under `view`, outermost first.
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] + view.subviews.flatMap(scrollViews(in:)) } ?? view.subviews.flatMap(scrollViews(in:))
+    }
+
+    private func scroll(_ view: NSScrollView, to y: CGFloat) {
+        view.contentView.scroll(to: NSPoint(x: 0, y: y))
+        view.reflectScrolledClipView(view.contentView)
+    }
+
+    /// The pointer on a window point: each tracking area's owner hears it
+    /// enter and move, as AppKit tells them when the real pointer moves (no
+    /// real pointer is touched).
+    private final class Pointer {
+        private var inside: Set<ObjectIdentifier> = []
+
+        func move(in host: NSView, toWindowPoint location: CGPoint) throws {
+            let window = try XCTUnwrap(host.window)
+            host.layoutSubtreeIfNeeded()
+            let now = ProcessInfo.processInfo.systemUptime
+            func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+            let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: now,
+                                                         windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                         clickCount: 0, pressure: 0))
+            for view in views(host) {
+                for area in view.trackingAreas {
+                    guard let owner = area.owner as? NSResponder else { continue }
+                    let rect = area.options.contains(.inVisibleRect) ? view.visibleRect : area.rect
+                    let isInside = rect.contains(view.convert(location, from: nil))
+                    let key = ObjectIdentifier(area)
+                    if isInside, !inside.contains(key), area.options.contains(.mouseEnteredAndExited),
+                       let event = NSEvent.enterExitEvent(with: .mouseEntered, location: location, modifierFlags: [], timestamp: now,
+                                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                          trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil) {
+                        inside.insert(key)
+                        owner.mouseEntered(with: event)
+                    }
+                    if isInside, area.options.contains(.mouseMoved) { owner.mouseMoved(with: moved) }
+                }
+            }
+        }
+
+        /// The pointer on the bottom edge of `scroll` (its last, cut-off row).
+        func moveToBottomEdge(of scroll: NSScrollView, in host: NSView) throws {
+            try move(in: host, toWindowPoint: scroll.convert(NSPoint(x: scroll.bounds.midX, y: scroll.isFlipped ? scroll.bounds.maxY - 6 : 6), to: nil))
+        }
+    }
+
+    /// A model for the nested pickers: the one highlight, what the rows
+    /// publish, and the pointer's origin the viewports share.
+    @MainActor final class NestedModel: ObservableObject {
+        @Published var highlighted: Int?
+        let origin = AtticHighlightOrigin()
+        var proxy: ScrollViewProxy?
+        var preference: String?
+    }
+
+    private static let nestedCap = 2 * AtticDropdownMetrics.inset + AtticTagPicker.chromeHeight + 6 * AtticDropdownMetrics.rowHeight
+
+    /// The real tag picker in a persistent card with a height limit, as a
+    /// presenter hosts it: the card's viewport around the picker's own.
+    struct NestedTagCard: View {
+        @ObservedObject var model: NestedModel
+        let tags: [AtticTagPicker.Tag]
+        @FocusState private var focused: AtticDropdownFocusTarget?
+        var body: some View {
+            AtticDropdownCard(width: AtticDropdownMetrics.fieldCardWidth) {
+                ScrollViewReader { proxy in
+                    AtticTagPicker(query: .constant(""), tags: tags, highlighted: model.highlighted,
+                                   onToggle: { _ in }, onCreate: { _ in }, focus: $focused,
+                                   onHover: { index, inside in
+                                       model.highlighted = AtticListHighlight.hovered(index, inside: inside, current: model.highlighted)
+                                   })
+                        .onPreferenceChange(AtticDropdownHighlightKey.self) { model.preference = $0 }
+                        .onAppear { model.proxy = proxy }
+                }
+            }
+            .environment(\.atticDropdownHeight, AtticDropdownTests.nestedCap)
+            .environment(\.atticDropdownContentHeightChanged, { _ in })
+            .environment(\.atticHighlightOrigin, model.origin)
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        }
+    }
+
+    /// The same around the real task picker.
+    struct NestedTaskCard: View {
+        @ObservedObject var model: NestedModel
+        let choices: [AtticTaskPicker.Choice]
+        @FocusState private var focused: AtticDropdownFocusTarget?
+        var body: some View {
+            AtticDropdownCard(width: AtticDropdownMetrics.fieldCardWidth) {
+                ScrollViewReader { proxy in
+                    AtticTaskPicker(query: .constant(""), choices: choices, highlighted: model.highlighted, onChoose: { _ in },
+                                    focus: $focused,
+                                    onHover: { index, inside in
+                                        model.highlighted = AtticListHighlight.hovered(index, inside: inside, current: model.highlighted)
+                                    })
+                        .onPreferenceChange(AtticDropdownHighlightKey.self) { model.preference = $0 }
+                        .onAppear { model.proxy = proxy }
+                }
+            }
+            .environment(\.atticDropdownHeight, 600)
+            .environment(\.atticDropdownContentHeightChanged, { _ in })
+            .environment(\.atticHighlightOrigin, model.origin)
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        }
+    }
+
+    private func tagNames(_ count: Int) -> [AtticTagPicker.Tag] {
+        (0..<count).map { AtticTagPicker.Tag(name: String(format: "tag-%02d", $0), state: .off) }
+    }
+
+    // MARK: Nested viewports share the pointer's origin (R-1)
+
+    /// A presenter hosts a picker in a persistent, height-limited card: the
+    /// card's viewport around the picker's own. A hover on the cut-off row
+    /// scrolls neither (the pointer made the highlight, the row is under
+    /// the pointer); an arrow key's highlight on a cut-off row still does.
+    func testPF43AHoverInANestedPickerScrollsNeitherViewportAndAKeyboardRowStillScrolls() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        leaveAMouseMoveAsTheCurrentEvent(in: window)
+        defer { restoreNeutralCurrentEvent() }
+        let model = NestedModel()
+        let host = NSHostingView(rootView: NestedTagCard(model: model, tags: tagNames(30)))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 320)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.3)
+        let views = scrollViews(in: host)
+        XCTAssertEqual(views.count, 2, "the card's viewport around the picker's")
+        let outer = try XCTUnwrap(views.first), inner = try XCTUnwrap(views.last)
+        scroll(inner, to: 16)
+        spin(0.3)
+        let start = (outer: outer.contentView.bounds.origin.y, inner: inner.contentView.bounds.origin.y)
+        XCTAssertEqual(start.inner, 16, accuracy: 0.5, "the list sits with its seventh row cut off")
+
+        try Pointer().moveToBottomEdge(of: inner, in: host)
+        wait(for: host) { model.highlighted != nil && model.preference != nil }
+        XCTAssertNotNil(model.highlighted, "the pointer lit the cut-off row")
+        spin(0.3)
+        XCTAssertEqual(outer.contentView.bounds.origin.y, start.outer, accuracy: 0.5, "a hover never scrolls the card")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, start.inner, accuracy: 0.5, "a hover never scrolls the list under the pointer")
+
+        // The keyboard moves on to a row that is not in view at all.
+        model.highlighted = 8
+        wait(for: host) { inner.contentView.bounds.origin.y > start.inner + 20 }
+        XCTAssertGreaterThan(inner.contentView.bounds.origin.y, start.inner + 20, "an arrow key's highlight is brought into view")
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {

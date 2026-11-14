@@ -2492,9 +2492,14 @@ struct AtticDropdownViewport<Content: View>: View {
     /// Rows cut off above and below (U-22): that edge fades, so a list cut
     /// short shows that it scrolls.
     @State private var cut = AtticDropdownViewportCut()
-    @State private var origin = AtticHighlightOrigin()
+    @State private var ownOrigin = AtticHighlightOrigin()
+    /// A viewport inside another (a picker in a presenter's persistent
+    /// card) shares the outer one's origin: a row reports the pointer once,
+    /// and every viewport its highlight reaches knows it was the pointer's.
+    @Environment(\.atticHighlightOrigin) private var inheritedOrigin
 
     var body: some View {
+        let origin = inheritedOrigin ?? ownOrigin
         if height != nil || persistent {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content.modifier(AtticUnfoldContent(scrolls: true)).environment(\.atticHighlightOrigin, origin) }
