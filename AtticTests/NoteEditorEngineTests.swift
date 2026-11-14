@@ -118,6 +118,51 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertNil(ordinary.decoration(forParagraphAt: 0), "an ordinary title stays undecorated")
     }
 
+    func testBG26FirstTaskBodyHeadingFoldsAndUnfoldsItsContent() throws {
+        var heading = NoteBlock.text("Section", id: UUID(), style: "heading")
+        heading.level = 2
+        let (engine, _, _) = bgBodyOnly([heading, .text("Hidden body"), .text("Tail")])
+        defer { engine.detachView() }
+        let section = try XCTUnwrap(engine.headingSections.first)
+        XCTAssertEqual(section.heading.location, 0)
+        XCTAssertTrue(engine.toggleHeadingFold(at: 0))
+        XCTAssertTrue(engine.isRangeFolded(section.content))
+        XCTAssertTrue(engine.toggleHeadingFold(at: 0))
+        XCTAssertFalse(engine.isRangeFolded(section.content))
+    }
+
+    func testBG18DownArrowExitsOnlyFormattedTaskBodyParagraph() throws {
+        var callout = NoteBlock.text("Tip", style: "quote")
+        callout.callout = "💡"
+        for (label, block) in [
+            ("quote", NoteBlock.text("Quote", style: "quote")),
+            ("code", NoteBlock.text("let a = 1", style: "mono")),
+            ("callout", callout)
+        ] {
+            let (engine, view, _) = bgBodyOnly([block])
+            defer { engine.detachView() }
+            let end = engine.textStorage.length
+            view.setSelectedRange(NSRange(location: end, length: 0))
+            XCTAssertTrue(engine.textView(view, doCommandBy: #selector(NSTextView.moveDown(_:))), "\(label): Down Arrow exits the final block")
+            XCTAssertEqual(engine.paragraphStyle(at: engine.textStorage.length), .body)
+            XCTAssertEqual(view.selectedRange().location, engine.textStorage.length)
+            XCTAssertTrue(engine.history.undo(), "\(label): new body line is one Undo")
+        }
+    }
+
+    func testBG14FirstTaskBodyParagraphInheritsInlineMarksWhileTyping() throws {
+        for command in [NoteMark.Kind.bold, .italic, .code] {
+            let (engine, view, _) = bgBodyOnly([.text("Marked words")])
+            defer { engine.detachView() }
+            XCTAssertTrue(engine.perform(.mark(command), selection: NSRange(location: 0, length: 6)))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            engine.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: view))
+            XCTAssertNotNil(view.typingAttributes[.noteMark(command)], "\(command): the first writing line inherits its inline mark")
+            view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertNotNil(engine.textStorage.attribute(.noteMark(command), at: 3, effectiveRange: nil))
+        }
+    }
+
     func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
         let renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let recent = renderer.dateChip("day 0")

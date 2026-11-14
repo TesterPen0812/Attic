@@ -1060,7 +1060,7 @@ extension NoteEditorEngine {
             while offset < NSMaxRange(run) {
                 outlineParagraphVisitCount += 1
                 let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
-                if paragraph.location > 0, seen.insert(paragraph.location).inserted {
+                if !isTitleLine(paragraph.location), seen.insert(paragraph.location).inserted {
                     var id: UUID?, sourceID: UUID?
                     textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
                         if let found = value as? UUID {
@@ -1156,7 +1156,7 @@ extension NoteEditorEngine {
         var location = affected.location
         while location < NSMaxRange(affected) {
             let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
-            if location > 0, textStorage.attribute(.noteBlockStyle, at: location, effectiveRange: nil) as? String == "heading" {
+            if !isTitleLine(location), textStorage.attribute(.noteBlockStyle, at: location, effectiveRange: nil) as? String == "heading" {
                 var id: UUID?
                 textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
                     if let found = value as? UUID { id = found; stop.pointee = true }

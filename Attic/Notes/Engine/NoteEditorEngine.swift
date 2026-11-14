@@ -2291,7 +2291,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             history.selectionMoved(to: selection)
         }
         let line = lineRange(at: selection.location)
-        if line.length == 0 || line.location == 0 {
+        if line.length == 0 || isTitleLine(line.location) {
             textView.typingAttributes = attributes(forParagraphAt: selection.location)
         } else {
             // At a line's start use that line, never the preceding separator.
@@ -5124,11 +5124,11 @@ extension NoteEditorEngine {
         guard !isReadOnly, let textView, textStorage.length > 0 else { return false }
         let end = textStorage.length
         let last = lineRange(at: end)
-        if last.location > 0, last.length == 0, paragraphStyle(at: end) == .body {
+        if !isTitleLine(last.location), last.length == 0, paragraphStyle(at: end) == .body {
             textView.setSelectedRange(NSRange(location: end, length: 0))
             return true
         }
-        if last.location > 0, paragraphStyle(at: end) != .body { return ensureBodyAfterFinalBlock() }
+        if !isTitleLine(last.location), paragraphStyle(at: end) != .body { return ensureBodyAfterFinalBlock() }
         history.beginGroup(); defer { history.endGroup() }
         return performEdit(NSRange(location: end, length: 0), with: NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: end)),
                            name: "New Body Line", selection: NSRange(location: end + 1, length: 0))
@@ -5137,7 +5137,7 @@ extension NoteEditorEngine {
     /// The visible builder calls this for a click below the final block too.
     @discardableResult func ensureBodyAfterFinalBlock() -> Bool {
         let end = textStorage.length
-        guard end > 0, lineRange(at: end).location > 0,
+        guard end > 0, !isTitleLine(lineRange(at: end).location),
               paragraphStyle(at: end) != .body || isBlockObject(at: lineRange(at: end).location) else { return false }
         history.beginGroup(); defer { history.endGroup() }
         guard performEdit(NSRange(location: end, length: 0), with: NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: end)), name: "New Body Line", selection: NSRange(location: end + 1, length: 0)) else { return false }
