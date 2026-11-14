@@ -18,7 +18,9 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private var recoveredCanvasIDs = Set<UUID>()
     @ObservationIgnored private var states: [UUID: State] = [:]
     @ObservationIgnored private var searchMetadataCache: (revision: UInt64, canvases: [DrawCanvas])?
-    @ObservationIgnored private var searchThumbnails: (revision: UInt64, canvases: [UUID: DrawCanvas])?
+    /// Hydrated thumbnail bodies by canvas. A thumbnail write drops only its
+    /// own canvas's entry; any other change drops them all.
+    @ObservationIgnored private var searchThumbnails: [UUID: DrawCanvas] = [:]
     @ObservationIgnored private var histories: [UUID: History] = [:]
     /// The current in-memory head left by our own recovered inverse. A newer
     /// owner edit replaces that head and must still block earlier agent Undo.
@@ -121,6 +123,13 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
+    /// Every change publishes a new revision. Cached thumbnail bodies stay
+    /// valid only across a thumbnail write on another canvas.
+    private func bumpRevision(thumbnailOf id: UUID? = nil) {
+        revision &+= 1
+        if let id { searchThumbnails[id] = nil } else { searchThumbnails.removeAll() }
+    }
+
     func library(deleted: Bool = false) throws -> [DrawCanvas] {
         // Observe successful changes while keeping the query body-free.
         _ = revision
@@ -173,11 +182,13 @@ class DrawStore: DrawStoreProtocol {
 
     func searchThumbnail(_ id: UUID) throws -> DrawCanvas? {
         if recoveredCanvasIDs.contains(id) { return states[id]?.canvas }
-        if searchThumbnails?.revision != revision { searchThumbnails = (revision, [:]) }
-        if let canvas = searchThumbnails?.canvases[id] { return canvas }
-        guard let metadata = try searchMetadata().first(where: { $0.id == id }) else { return nil }
+        if let canvas = searchThumbnails[id] { return canvas }
+        // The summary only names the canvas; the hydrated row is read fresh.
+        // A stale cached summary is enough, so no metadata refetch per write.
+        let known = searchMetadataCache?.canvases.first { $0.id == id }
+        guard let metadata = try known ?? searchMetadata().first(where: { $0.id == id }) else { return nil }
         let loaded = try repository.hydrateSearchThumbnails([metadata]).first
-        if let loaded { searchThumbnails?.canvases[id] = loaded }
+        if let loaded { searchThumbnails[id] = loaded }
         return loaded
     }
 
@@ -284,7 +295,7 @@ class DrawStore: DrawStoreProtocol {
             histories[canvasID] = nil
         }
         let removed = result.removedCanvases.count + result.removedImages.count
-        if removed > 0 { revision &+= 1 }
+        if removed > 0 { bumpRevision() }
         return DrawPurgeReport(removed: removed, kept: kept + result.kept)
     }
 
@@ -496,7 +507,7 @@ class DrawStore: DrawStoreProtocol {
             recoveredCanvasIDs.remove(id)
             repository.discardAttempt(for: id)
         }
-        revision &+= 1
+        bumpRevision()
         return true
     }
 
@@ -626,7 +637,7 @@ class DrawStore: DrawStoreProtocol {
         histories[id] = nil
         touch(id)
         trimCachedStates(protecting: id)
-        revision &+= 1
+        bumpRevision()
     }
 
     private func state(_ id: UUID) throws -> State {
@@ -654,7 +665,7 @@ class DrawStore: DrawStoreProtocol {
         // A draft keeps its thumbnail in memory until its first save.
         guard current.persisted else {
             states[id]?.canvas = after
-            revision &+= 1
+            bumpRevision(thumbnailOf: id)
             return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
         }
         let change = DrawChange(canvasID: id, before: current.canvas, after: after, objectsBefore: [:], objectsAfter: [:])
@@ -666,7 +677,7 @@ class DrawStore: DrawStoreProtocol {
         switch outcome {
         case .committed:
             states[id]?.canvas = after
-            revision &+= 1
+            bumpRevision(thumbnailOf: id)
             return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
         case .retry(let message): return .retry(message)
         case .held(let message): return .held(message)
@@ -820,7 +831,7 @@ class DrawStore: DrawStoreProtocol {
             _ = histories[id]?.redo.popLast()
             appendUndo(step, on: id)
         }
-        revision &+= 1
+        bumpRevision()
         let delta = DrawDelta(canvas: step.after,
                               upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
                               removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },

@@ -124,6 +124,44 @@ final class Draw3StoreTests: XCTestCase {
                                  "the unfiltered menu must avoid reading hundreds of offscreen thumbnails")
     }
 
+    func testR6ThumbnailWritesOnOtherCanvasesLeaveRealizedRowsCachedBodiesAlone() throws {
+        let container = try container()
+        let seeded = ModelContext(container)
+        seeded.autosaveEnabled = false
+        let bytes = Data(repeating: 37, count: 256)
+        for index in 0..<120 {
+            let canvas = DrawCanvas(name: "Board \(index)", thumbnail: bytes)
+            let record = DrawCanvasRecord()
+            try record.apply(canvas)
+            seeded.insert(record)
+            let payload = DrawPayloadRecord()
+            payload.apply(bytes, id: canvas.id, canvasID: canvas.id, role: "thumbnail")
+            seeded.insert(payload)
+        }
+        try seeded.save()
+
+        let reader = DrawPersistentStore(container: container)
+        let menu = try reader.presentationLibrary()
+        let realized = menu[12..<24].map(\.id)
+        for id in realized { XCTAssertEqual(try reader.searchThumbnail(id)?.thumbnail, bytes) }
+        let other = menu[0].id
+        var reread = 0
+        for index in 0..<10 {
+            XCTAssertTrue(reader.perform(.thumbnail(Data(repeating: UInt8(100 + index), count: 64), dark: true), on: other).isSaved)
+            reader.metrics.reset()
+            for id in realized { XCTAssertEqual(try reader.searchThumbnail(id)?.thumbnail, bytes) }
+            reread += reader.metrics.metadataRowsRead + reader.metrics.thumbnailBytesRead
+        }
+        XCTAssertEqual(reread, 0,
+                       "a thumbnail write on another canvas must not refetch the realized rows' metadata or bodies")
+        let own = realized[0]
+        let fresh = Data(repeating: 9, count: 64)
+        XCTAssertTrue(reader.perform(.thumbnail(fresh, dark: true), on: own).isSaved)
+        XCTAssertEqual(try reader.searchThumbnail(own)?.thumbnail, fresh, "a canvas's own write is seen at once")
+        XCTAssertTrue(reader.perform(.thumbnail(nil, dark: true), on: own).isSaved)
+        XCTAssertNil(try reader.searchThumbnail(own)?.thumbnail, "a cleared thumbnail is seen at once")
+    }
+
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {
         let container = try container()
         let draw = DrawPersistentStore(container: container)
