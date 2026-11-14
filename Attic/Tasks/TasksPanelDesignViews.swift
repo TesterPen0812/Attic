@@ -681,6 +681,9 @@ struct TasksFoldLayout: Layout {
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         #if DEBUG
         TasksFoldLayoutProbe.shared.measure(size.height)
+        AtticHangProbe.note("fold.size", key: String(describing: row.id),
+                            value: "proposal=\(proposal) child=\(size) visible=\(String(describing: visible))",
+                            detail: "result-height=\(visible.map { min(size.height, max(0, $0)) } ?? size.height)")
         #endif
         guard let visible else { return size }
         return CGSize(width: size.width, height: min(size.height, max(0, visible)))
@@ -692,6 +695,10 @@ struct TasksFoldLayout: Layout {
         TasksFoldLayoutProbe.shared.place()
         #endif
         let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        #if DEBUG
+        AtticHangProbe.note("fold.place", key: String(describing: row.id),
+                            value: "bounds=\(bounds) proposal=\(proposal) child=\(size)")
+        #endif
         row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }

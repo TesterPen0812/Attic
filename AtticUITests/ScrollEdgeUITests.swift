@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import XCTest
 
 /// Clean cut with the owner's revised 2026-10-06 scroll-under rule:
@@ -35,6 +36,109 @@ final class ScrollEdgeUITests: XCTestCase {
                 save(panel.screenshot(), name: "scroll-edges-\(surface)-\(mode)-soft-\(index)")
             }
             app.terminate()
+        }
+    }
+
+    /// Diagnostic-only CI experiment. The long fixture and these events are
+    /// deliberately identical to the Dark Glass pass of the capture test.
+    /// Each run has a fresh app process, so a hang cannot contaminate the
+    /// next sample. The recovery thread uses the launched PID only.
+    func testDarkGlassHoverScrollRepeats() {
+        let requested = Int(ProcessInfo.processInfo.environment["ATTIC_HANG_REPETITIONS"] ?? "25") ?? 25
+        repeatHoveredScroll(surface: "glass", mode: "dark", count: min(max(1, requested), 25))
+    }
+
+    /// Controlled appearance comparison: same hover and wheel sequence,
+    /// independent process, probe and fixture.
+    func testLightGlassHoverScrollControl() {
+        repeatHoveredScroll(surface: "glass", mode: "light", count: 1)
+    }
+
+    private func repeatHoveredScroll(surface: String, mode: String, count: Int) {
+        var failures: [String] = []
+        for number in 1...count {
+            let prefix = "hover-scroll-\(mode)-\(number)"
+            let probe = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-hang-\(UUID().uuidString).txt")
+            let screenshot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("attic-hang-screen-\(UUID().uuidString).png")
+            let app = XCUIApplication()
+            app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+            app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
+            app.launchEnvironment["ATTIC_HANG_PROBE_PATH"] = probe.path
+            app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
+            app.launch()
+
+            let pin = app.buttons["panel-pin-button"]
+            let tabs = app.buttons["tasks-page-now"]
+            guard pin.waitForExistence(timeout: 8), tabs.waitForExistence(timeout: 4) else {
+                failures.append("\(prefix): panel or tabs did not appear")
+                attachProbe(at: probe, name: prefix)
+                app.terminate()
+                continue
+            }
+
+            // This test is selected by CI's unsigned AtticUI lane, where
+            // the app and UI runner share the user's temporary directory.
+            let armed = waitFor(timeout: 2) {
+                (try? String(contentsOf: probe, encoding: .utf8))?.hasPrefix("ARMED:") == true
+            }
+            guard armed else {
+                failures.append("\(prefix): probe file is not accessible to the UI runner")
+                app.terminate()
+                continue
+            }
+
+            let pidValue = app.responds(to: NSSelectorFromString("processID"))
+                ? app.value(forKey: "processID") : nil
+            let pid = (pidValue as? NSNumber)?.int32Value ?? (pidValue as? Int32) ?? 0
+            guard pid > 0 else {
+                failures.append("\(prefix): launched app PID unavailable for recovery")
+                app.terminate()
+                continue
+            }
+
+            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot)
+            recovery.start()
+            let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+            let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+            middle.hover()
+            for delta in [CGFloat(-140), 280] {
+                if recovery.hasRecovered { break }
+                middle.scroll(byDeltaX: 0, deltaY: delta)
+                if recovery.hasRecovered { break }
+                RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+            }
+            let result = recovery.finish()
+            let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
+            let hangDumped = contents.hasPrefix("HANG:")
+            if result.recovered || hangDumped {
+                failures.append("\(prefix): \(result.reason ?? "probe reported a run-loop hang")")
+                attachProbe(at: probe, name: prefix)
+                if FileManager.default.fileExists(atPath: screenshot.path) {
+                    let capture = XCTAttachment(contentsOfFile: screenshot)
+                    capture.name = "\(prefix)-frozen-screen"
+                    capture.lifetime = .keepAlways
+                    add(capture)
+                } else {
+                    let note = XCTAttachment(string: "System screenshot unavailable for \(prefix)")
+                    note.name = "\(prefix)-screenshot-unavailable"
+                    note.lifetime = .keepAlways
+                    add(note)
+                }
+            }
+            if !result.recovered { app.terminate() }
+        }
+        XCTAssertTrue(failures.isEmpty, "\(mode) \(count) independent attempts: \(failures.joined(separator: "; "))")
+    }
+
+    private func attachProbe(at path: URL, name: String) {
+        for (url, suffix) in [(path, "latest"), (URL(fileURLWithPath: path.path + ".first"), "first")] {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let attachment = XCTAttachment(contentsOfFile: url)
+            attachment.name = "\(name)-probe-\(suffix)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
     }
 
@@ -302,5 +406,67 @@ final class ScrollEdgeUITests: XCTestCase {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
+    }
+}
+
+/// XCUITest can wait indefinitely for AX to become idle while the app's main
+/// thread is spinning. A separate watchdog reads the app's background dump,
+/// captures the frozen screen with screencapture (no AX request), and sends
+/// SIGTERM only to the PID captured from this particular launched instance.
+private final class HoverScrollHangRecovery {
+    private let pid: Int32
+    private let probe: URL
+    private let screenshot: URL
+    private let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "attic.ci.hover-scroll.recovery"))
+    private let finished = DispatchGroup()
+    private let lock = NSLock()
+    private let startNanos = DispatchTime.now().uptimeNanoseconds
+    private var reason: String?
+
+    init(pid: Int32, probe: URL, screenshot: URL) {
+        self.pid = pid
+        self.probe = probe
+        self.screenshot = screenshot
+    }
+
+    var hasRecovered: Bool { lock.withLock { reason != nil } }
+
+    func start() {
+        finished.enter()
+        let completion = finished
+        timer.setCancelHandler { completion.leave() }
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in self?.check() }
+        timer.resume()
+    }
+
+    func finish() -> (recovered: Bool, reason: String?) {
+        timer.cancel()
+        _ = finished.wait(timeout: .now() + .seconds(6))
+        return lock.withLock { (reason != nil, reason) }
+    }
+
+    private func check() {
+        let elapsed = DispatchTime.now().uptimeNanoseconds - startNanos
+        let contents = (try? String(contentsOf: probe, encoding: .utf8)) ?? ""
+        guard contents.hasPrefix("HANG:") || elapsed > 18_000_000_000 else { return }
+        lock.withLock {
+            reason = contents.hasPrefix("HANG:") ? "app's background watchdog saw a non-idling run loop" : "scroll/AX did not return within 18 seconds"
+        }
+
+        // A window-specific AX screenshot can itself block on a hung app.
+        // Capture the display without asking the app's main run loop.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-t", "png", screenshot.path]
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        if (try? process.run()) != nil {
+            if exited.wait(timeout: .now() + .seconds(3)) == .timedOut {
+                process.terminate()
+            }
+        }
+        if pid > 0 { _ = Darwin.kill(pid, SIGTERM) }
+        timer.cancel()
     }
 }

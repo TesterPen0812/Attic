@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         AtticFrameMonitor.startIfRequested()
+        AtticHangProbe.startIfRequested()
         // Preview builds only: `--attic-gallery` opens the design-system
         // gallery instead of starting the panel (Release has no gallery).
         switch AppRuntimeEnvironment().galleryLaunch {

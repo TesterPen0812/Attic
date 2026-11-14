@@ -1339,6 +1339,10 @@ struct AtticSelectedRunBounds: PreferenceKey {
 
     static func reduce(value: inout [UUID: AtticSelectedRunAnchor], nextValue: () -> [UUID: AtticSelectedRunAnchor]) {
         value.merge(nextValue(), uniquingKeysWith: { _, newer in newer })
+        #if DEBUG
+        AtticHangProbe.note("selected.run.reduce", key: "all", value: String(value.count),
+                            detail: "ids=\(value.keys.map(\.uuidString).sorted())")
+        #endif
     }
 }
 
@@ -1386,6 +1390,10 @@ struct AtticJoinedSelectedRuns: View {
             GeometryReader { geometry in
                 let pieces = anchors.map { Piece(id: $0.key, frame: geometry[$0.value.bounds], run: $0.value.run) }
                 ForEach(Self.joined(pieces)) { group in
+                    #if DEBUG
+                    let _ = AtticHangProbe.note("selected.run.resolved", key: group.id.uuidString,
+                                                value: "\(group.frame)")
+                    #endif
                     Color.clear
                         .frame(width: group.frame.width, height: group.frame.height)
                         .atticRaisedMaterial(cornerRadius: TasksRowDesign.radius, interactive: false, edgeLight: true)
@@ -1505,6 +1513,7 @@ struct AtticTaskRow: View {
     var body: some View {
         #if DEBUG
         let _ = Self.evaluations[model.id, default: 0] += 1
+        let _ = AtticHangProbe.note("row.body", key: model.id.uuidString, value: "evaluated")
         #endif
         let tokens = design.tokens
         let m = AtticTaskRowMetrics.self
@@ -1671,6 +1680,8 @@ struct AtticTaskRow: View {
         .contentShape(Rectangle())
         .onHover { inside in
             #if DEBUG
+            AtticHangProbe.note("row.hover", key: model.id.uuidString, value: String(inside),
+                                detail: "old=\(hovered) global-pointer=\(NSEvent.mouseLocation)")
             Self.hoverEvents[model.id, default: 0] += 1
             if Self.hoverHistory[model.id, default: []].count < 32 {
                 Self.hoverHistory[model.id, default: []].append(inside)
@@ -1731,7 +1742,13 @@ struct AtticTaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .onHover { dateHovered = $0 }
+                .onHover { inside in
+                    #if DEBUG
+                    AtticHangProbe.note("row.dateHover", key: model.id.uuidString, value: String(inside),
+                                        detail: "old=\(dateHovered)")
+                    #endif
+                    dateHovered = inside
+                }
                 .atticRowControl()
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
@@ -1880,6 +1897,9 @@ private struct AtticRowControlAnchorsKey: PreferenceKey {
 
     static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
         value.append(contentsOf: nextValue())
+        #if DEBUG
+        AtticHangProbe.note("row.controlAnchors.reduce", key: "all", value: String(value.count))
+        #endif
     }
 }
 
@@ -1896,7 +1916,8 @@ extension View {
 
     /// Resolve the anchors in the row's coordinates. Only actual rectangle
     /// changes reach the input cache; geometry never constructs a writer.
-    func onAtticRowControlFramesChange(_ action: @escaping ([CGRect]) -> Void) -> some View {
+    func onAtticRowControlFramesChange(probeID: UUID? = nil,
+                                      _ action: @escaping ([CGRect]) -> Void) -> some View {
         overlayPreferenceValue(AtticRowControlAnchorsKey.self) { anchors in
             Color.clear
                 // On a 1/256 pt grid: a transform animating at identity
@@ -1904,7 +1925,17 @@ extension View {
                 // frame, and each read was a new report. A departing cell
                 // then took its row's controls back from a newer cell, and
                 // its teardown erased them (RoundN L04).
-                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { atticControlGrid(proxy[$0]) } } action: { frames in
+                .onGeometryChange(for: [CGRect].self) { proxy in
+                    let frames = anchors.map { atticControlGrid(proxy[$0]) }
+                    #if DEBUG
+                    AtticHangProbe.note("row.controls.transform", key: probeID?.uuidString ?? "other",
+                                        value: "\(frames)", detail: "anchors=\(anchors.count)")
+                    #endif
+                    return frames
+                } action: { frames in
+                    #if DEBUG
+                    AtticHangProbe.note("row.controls.action", key: probeID?.uuidString ?? "other", value: "\(frames)")
+                    #endif
                     action(frames)
                 }
                 .allowsHitTesting(false)

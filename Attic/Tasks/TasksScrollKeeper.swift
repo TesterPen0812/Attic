@@ -36,6 +36,9 @@ struct TasksScrollKeeper: NSViewRepresentable {
     }
 
     func updateNSView(_ view: KeeperView, context: Context) {
+        #if DEBUG
+        AtticHangProbe.note("scroll.keeperUpdate", key: String(describing: tab), value: "updated")
+        #endif
         view.model = model
         view.tab = tab
         view.proxies = proxies
@@ -168,6 +171,11 @@ struct TasksScrollKeeper: NSViewRepresentable {
         private var marquee: TasksMarqueeSelection?
         private weak var observedClip: NSClipView?
         private var observer: NSObjectProtocol?
+        #if DEBUG
+        private weak var observedDocument: NSView?
+        private var documentObserver: NSObjectProtocol?
+        private var documentPostedFrames = false
+        #endif
         /// Until the remembered place is back, the list's own first layout
         /// (at the top) is not recorded over it.
         private var restoring = false
@@ -237,9 +245,27 @@ struct TasksScrollKeeper: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.record() }
             }
+            #if DEBUG
+            if AtticHangProbe.isEnabled, let document = clip.enclosingScrollView?.documentView {
+                observedDocument = document
+                documentPostedFrames = document.postsFrameChangedNotifications
+                document.postsFrameChangedNotifications = true
+                documentObserver = NotificationCenter.default.addObserver(
+                    forName: NSView.frameDidChangeNotification, object: document, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.record() }
+                }
+            }
+            #endif
         }
 
         func stopObserving() {
+            #if DEBUG
+            if let documentObserver { NotificationCenter.default.removeObserver(documentObserver) }
+            documentObserver = nil
+            observedDocument?.postsFrameChangedNotifications = documentPostedFrames
+            observedDocument = nil
+            #endif
             marquee = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
@@ -249,6 +275,13 @@ struct TasksScrollKeeper: NSViewRepresentable {
         }
 
         private func record() {
+            #if DEBUG
+            if let clip = observedClip {
+                AtticHangProbe.note("scroll.geometry", key: String(describing: tab),
+                                    value: "clip=\(clip.bounds) document=\(String(describing: enclosingScrollView?.documentView?.frame))",
+                                    detail: "restoring=\(restoring)")
+            }
+            #endif
             if let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay {
                 TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
             }

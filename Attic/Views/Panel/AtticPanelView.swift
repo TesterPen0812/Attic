@@ -266,6 +266,10 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+            #if DEBUG
+            AtticHangProbe.note("notice.clearance", key: "panel", value: "\(clearance)",
+                                detail: "old=\(noticeClearance)")
+            #endif
             guard noticeClearance != clearance else { return }
             // A page's bottom controls grow or shrink with a spring (the
             // composer's date and tags row): the notices ride it, never
@@ -681,6 +685,10 @@ struct AtticPanelView: View {
             }
             .onPreferenceChange(PanelNoticeHeightPreferenceKey.self) { measured in
                 let resolved = max(0, measured.isFinite ? measured : 0)
+                #if DEBUG
+                AtticHangProbe.note("notice.height", key: "panel", value: "\(resolved)",
+                                    detail: "old=\(noticeHeight)")
+                #endif
                 if abs(noticeHeight - resolved) >= 0.5 { noticeHeight = resolved }
             }
     }

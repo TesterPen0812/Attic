@@ -1710,7 +1710,16 @@ struct TasksPage: View {
                                         toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                                     }
                                 }
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
+                                .onGeometryChange(for: CGRect.self) { proxy in
+                                    let frame = proxy.frame(in: Self.slotSpace(tab))
+                                    #if DEBUG
+                                    AtticHangProbe.note("group.frame.transform", key: "\(tab):\(dateGroup.key)", value: "\(frame)")
+                                    #endif
+                                    return frame
+                                } action: { [pointer, tab, key = dateGroup.key] frame in
+                                    #if DEBUG
+                                    AtticHangProbe.note("group.frame", key: "\(tab):\(key)", value: "\(frame)")
+                                    #endif
                                     if tab == .now { pointer.setHeaderFrame(frame, for: key) }
                                 }
                                 .onDisappear { [pointer, tab, key = dateGroup.key] in
@@ -1760,7 +1769,16 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab] frame in
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            let frame = proxy.frame(in: Self.slotSpace(tab))
+                            #if DEBUG
+                            AtticHangProbe.note("completed.frame.transform", key: String(describing: tab), value: "\(frame)")
+                            #endif
+                            return frame
+                        } action: { [pointer, tab] frame in
+                            #if DEBUG
+                            AtticHangProbe.note("completed.frame", key: String(describing: tab), value: "\(frame)")
+                            #endif
                             pointer.setCompletedTodayFrame(frame, for: tab)
                         }
                         .onDisappear { [pointer, tab] in pointer.setCompletedTodayFrame(nil, for: tab) }
@@ -3535,7 +3553,17 @@ struct TasksPage: View {
         // The lists' clearance changes only past the room always kept for
         // the strip (a selection bar, a paste offer): the strip appearing
         // with the first keystroke never re-lays the lists.
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            let height = proxy.size.height
+            #if DEBUG
+            AtticHangProbe.note("bottomStack.height.transform", key: "tasks", value: "\(height)")
+            #endif
+            return height
+        } action: { height in
+            #if DEBUG
+            AtticHangProbe.note("bottomStack.height", key: "tasks", value: "\(height)",
+                                detail: "old=\(bottomStack.height) controls=\(bottomControlsHeight)")
+            #endif
             bottomStack.height = height
             let clearance = max(height, TasksViewport.reservedStack)
             if bottomControlsHeight != clearance { bottomControlsHeight = clearance }
@@ -4524,8 +4552,12 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onAtticRowControlFramesChange { [session, id, tab, reports] frames in
+                .onAtticRowControlFramesChange(probeID: id) { [session, id, tab, reports] frames in
                     MainActor.assumeIsolated {
+                        #if DEBUG
+                        AtticHangProbe.note("row.controls", key: "\(tab):\(id)",
+                                            value: "\(frames)", detail: "old=\(reports.controls)")
+                        #endif
                         reports.controls = frames
                         session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
                     }
@@ -4539,6 +4571,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         .opacity(hidden ? 0.001 : 1)
         .offset(y: hidden ? 0 : offset)
         .animation(hidden || design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        #if DEBUG
+        .onAppear {
+            AtticHangProbe.note("row.realized", key: "\(tab):\(id)", value: "appeared")
+        }
+        #endif
         // A Done row's cell can draw another task after a new query
         // (`TasksDoneSlots`): its controls' frames go with it.
         .onChange(of: id) { [session, pointer, tab, reports] old, new in
@@ -4547,11 +4584,24 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         }
         // Each row's frame in the page, for the pointer's questions (which
         // row a right-click, a drop or a drag-out is on) and the reveal.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.slotSpace(tab)) } action: { [pointer, tab, id, reports] frame in
+        .onGeometryChange(for: CGRect.self) { proxy in
+            let frame = proxy.frame(in: TasksPage.slotSpace(tab))
+            #if DEBUG
+            AtticHangProbe.note("row.slotFrame.transform", key: "\(tab):\(id)", value: "\(frame)")
+            #endif
+            return frame
+        } action: { [pointer, tab, id, reports] frame in
+            #if DEBUG
+            AtticHangProbe.note("row.slotFrame", key: "\(tab):\(id)", value: "\(frame)",
+                                detail: "old=\(String(describing: reports.frame))")
+            #endif
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }
         .onDisappear { [session, pointer, tab, id, reports] in
+            #if DEBUG
+            AtticHangProbe.note("row.realized", key: "\(tab):\(id)", value: "disappeared")
+            #endif
             let row = TasksRowID(tab: tab, id: id)
             session.removeControlFrames(for: row, of: reports)
             pointer.removeFrame(for: row, of: reports)
