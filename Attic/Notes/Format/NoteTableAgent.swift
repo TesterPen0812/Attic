@@ -89,9 +89,10 @@ enum NoteAgentTableText {
         table.rows.map { $0.cells.map { NoteTextExport.agentInlineText($0.block) } }
     }
 
-    /// Merges an agent's rows into `table`: rows and columns the agent kept
-    /// keep their ids (matched by their text, in order, then by position);
-    /// a cell whose text is unchanged keeps its marks and dates.
+    /// Merges an agent's rows into `table`. Unchanged rows and uniquely named
+    /// columns keep their ids across moves; edits within ordered gaps keep row
+    /// ids, while ambiguous inserts during reordering get new ones. Cells whose
+    /// text is unchanged keep their marks and dates.
     static func merge(_ table: NoteTable, rows: [[String]], alignments: [NoteTable.Alignment]) -> NoteTable {
         let old = texts(table)
         let width = rows.first?.count ?? 0
@@ -100,7 +101,13 @@ enum NoteAgentTableText {
         let newHeaders = rows.first ?? []
         let columnMap: [Int?] = Set(oldHeaders).count == oldHeaders.count && Set(newHeaders).count == newHeaders.count
             ? match(old: oldHeaders, new: newHeaders) : (0..<width).map { $0 < table.columnCount ? $0 : nil }
-        let rowMap = match(old: old.map { $0.joined(separator: "\u{1}") }, new: rows.map { $0.joined(separator: "\u{1}") })
+        // Match rows in the new column order: a column move does not edit a
+        // row, and cell boundaries must not collapse into a joined-text key.
+        let sharedColumns = columnMap.enumerated().compactMap { index, source in source.map { (index, $0) } }
+        let rowMap = match(
+            old: old.map { row in sharedColumns.map { row[$0.1] } },
+            new: rows.map { row in sharedColumns.map { row[$0.0] } }
+        )
         var columns: [NoteTable.Column] = []
         for (index, source) in columnMap.enumerated() {
             var column = source.map { table.columns[$0] } ?? NoteTable.Column()
@@ -133,34 +140,43 @@ enum NoteAgentTableText {
         return merged
     }
 
-    /// New index → old index: equal keys in order first; then, between two
-    /// kept neighbours, the changed entries pair up in order (an edited row
-    /// keeps its id); the rest are new.
-    static func match(old: [String], new: [String]) -> [Int?] {
+    /// New index → old index. Match unchanged entries globally, including
+    /// moves, only once each. With unchanged ordering, pair edited entries
+    /// inside their original gaps. When those matches cross, an unmatched
+    /// entry could be an insertion, so it must not inherit an old identity.
+    static func match<Key: Hashable>(old: [Key], new: [Key]) -> [Int?] {
         var result = [Int?](repeating: nil, count: new.count)
-        var cursor = 0
+        var positions: [Key: [Int]] = [:]
+        for (index, key) in old.enumerated() { positions[key, default: []].append(index) }
+        var consumed: [Key: Int] = [:]
         for (index, key) in new.enumerated() {
-            if cursor < old.count, let found = old[cursor...].firstIndex(of: key) {
-                result[index] = found
-                cursor = found + 1
+            let next = consumed[key, default: 0]
+            if let candidates = positions[key], next < candidates.count {
+                result[index] = candidates[next]
+                consumed[key] = next + 1
             }
         }
-        // The gaps between anchors (and before the first, after the last).
-        var newStart = 0, oldStart = 0
-        func pairGap(newEnd: Int, oldEnd: Int) {
-            var oldIndex = oldStart
-            for newIndex in newStart..<newEnd where oldIndex < oldEnd {
-                result[newIndex] = oldIndex
-                oldIndex += 1
+
+        let anchors = result.compactMap { $0 }
+        if zip(anchors, anchors.dropFirst()).allSatisfy({ $0.0 < $0.1 }) {
+            // Preserve the pre-existing edited-row behavior without recycling
+            // a deleted identity into an inserted row in a different gap.
+            var newStart = 0, oldStart = 0
+            func pairGap(newEnd: Int, oldEnd: Int) {
+                var oldIndex = oldStart
+                for newIndex in newStart..<newEnd where oldIndex < oldEnd {
+                    result[newIndex] = oldIndex
+                    oldIndex += 1
+                }
             }
+            for (index, value) in result.enumerated() {
+                guard let value else { continue }
+                pairGap(newEnd: index, oldEnd: value)
+                newStart = index + 1
+                oldStart = value + 1
+            }
+            pairGap(newEnd: new.count, oldEnd: old.count)
         }
-        for (index, value) in result.enumerated() {
-            guard let value else { continue }
-            pairGap(newEnd: index, oldEnd: value)
-            newStart = index + 1
-            oldStart = value + 1
-        }
-        pairGap(newEnd: new.count, oldEnd: old.count)
         return result
     }
 

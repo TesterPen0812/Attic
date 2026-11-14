@@ -961,6 +961,169 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertThrowsError(try NoteAgentTextParser.document(title: "T", body: unknown, base: base))
     }
 
+    func testNotesHuntAgentTableReorderingPreservesRichCellsAndStableIds() throws {
+        let tableID = UUID()
+        let dateID = UUID()
+        var original = NoteTable(texts: [
+            ["A", "B", "C"], ["alpha", "beta", "gamma"],
+            ["delta", "epsilon", "zeta"], ["eta", "theta", "iota"]
+        ])
+        original.rows[1].cells[1].marks = [NoteMark(.bold, offset: 0, length: 4)]
+        original.rows[2].cells[2] = NoteTable.Cell(
+            String(NoteDocument.objectCharacter),
+            inlines: [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 11, day: 14)!))]
+        )
+        let base = NoteDocument(blocks: [.text("Original"), .table(original, id: tableID)])
+        var lines = NoteTextExport.agentBody(base).components(separatedBy: "\n")
+        lines.swapAt(3, 4)
+        let updated = try NoteAgentTextParser.document(title: "Original", body: lines.joined(separator: "\n"), base: base)
+        let rows = try XCTUnwrap(updated.blocks[1].table)
+        XCTAssertEqual(updated.blocks[1].id, tableID)
+        XCTAssertEqual(rows.rows.map(\.id), [original.rows[0].id, original.rows[2].id,
+                                              original.rows[1].id, original.rows[3].id])
+        XCTAssertEqual(rows.rows[1].cells[2], original.rows[2].cells[2], "the moved date keeps its inline id")
+        XCTAssertEqual(rows.rows[2].cells[1], original.rows[1].cells[1], "the moved bold mark stays intact")
+
+        var columnTexts = NoteAgentTableText.texts(original)
+        for index in columnTexts.indices { columnTexts[index].swapAt(0, 1) }
+        let columns = NoteAgentTableText.merge(original, rows: columnTexts, alignments: [.left, .left, .left])
+        XCTAssertEqual(columns.columns.map(\.id), [original.columns[1].id, original.columns[0].id, original.columns[2].id])
+        XCTAssertEqual(columns.rows.map(\.id), original.rows.map(\.id))
+        XCTAssertEqual(columns.rows[1].cells[0], original.rows[1].cells[1], "bold follows the reordered column")
+        XCTAssertEqual(columns.rows[2].cells[2], original.rows[2].cells[2])
+
+        // Separate cells containing U+0001 must not collide when their row keys are formed.
+        let control = "\u{1}"
+        let separated = NoteTable(texts: [["Left", "Right"],
+                                          ["a\(control)b", "c"], ["a", "b\(control)c"]])
+        var reversed = NoteAgentTableText.texts(separated)
+        reversed.swapAt(1, 2)
+        let distinct = NoteAgentTableText.merge(separated, rows: reversed, alignments: [.left, .left])
+        XCTAssertEqual(distinct.rows.map(\.id), [separated.rows[0].id, separated.rows[2].id, separated.rows[1].id],
+                       "separator characters in cells must not confuse distinct rows")
+
+        // A deleted row followed by a new row between other unchanged rows gets a new ID.
+        let replacement = NoteAgentTableText.match(old: ["A", "B", "C", "D"],
+                                                    new: ["A", "C", "new", "D"])
+        XCTAssertNil(replacement[2], "a new row must not inherit an unrelated deleted row's ID")
+
+        // Moving surviving rows must not turn a simultaneous insertion into
+        // the row that was deleted, including its persistent row identity.
+        let movedReplacement = NoteAgentTableText.match(old: ["A", "B", "C", "D"],
+                                                         new: ["C", "A", "new", "D"])
+        XCTAssertEqual(movedReplacement[0], 2)
+        XCTAssertEqual(movedReplacement[1], 0)
+        XCTAssertNil(movedReplacement[2], "the inserted row must have a fresh identity after reordering")
+        XCTAssertEqual(movedReplacement[3], 3)
+
+        let mixed = NoteTable(texts: [["Key", "Value"], ["A", "apple"],
+                                       ["B", "banana"], ["C", "cherry"], ["D", "date"]])
+        let mixedTexts = NoteAgentTableText.texts(mixed)
+        let mixedEdit = [mixedTexts[0], mixedTexts[3], mixedTexts[1], ["new", "entry"], mixedTexts[4]]
+        let mixedResult = NoteAgentTableText.merge(mixed, rows: mixedEdit, alignments: [.left, .left])
+        XCTAssertEqual(mixedResult.rows[1].id, mixed.rows[3].id)
+        XCTAssertEqual(mixedResult.rows[2].id, mixed.rows[1].id)
+        XCTAssertNotEqual(mixedResult.rows[3].id, mixed.rows[2].id,
+                          "a fresh row must not reuse the ID of a deleted row")
+    }
+
+    func testNotesHuntSeededAgentTableReshufflesPreserveEverythingThroughSaveAndReload() throws {
+        for seed: UInt64 in [20261114, 20261115, 20261116] {
+            var state = seed
+            func pick(_ count: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 32) % UInt64(count))
+            }
+            var current = NoteTable(texts: (0..<21).map { row in
+                (0..<4).map { column in "r\(row)-c\(column)" }
+            })
+            current.rows[2].cells[0].marks = [NoteMark(.italic, offset: 0, length: 2)]
+            current.rows[12].cells[3].marks = [NoteMark(.bold, offset: 0, length: 3)]
+            for step in 0..<240 {
+                var expected = current
+                if pick(2) == 0 {
+                    let from = 1 + pick(expected.rowCount - 1)
+                    let to = 1 + pick(expected.rowCount - 1)
+                    expected.rows.swapAt(from, to)
+                } else {
+                    let from = pick(expected.columnCount)
+                    let to = pick(expected.columnCount)
+                    expected.columns.swapAt(from, to)
+                    for index in expected.rows.indices { expected.rows[index].cells.swapAt(from, to) }
+                }
+                current = NoteAgentTableText.merge(current, rows: NoteAgentTableText.texts(expected),
+                                                   alignments: expected.columns.map(\.align))
+                XCTAssertEqual(current, expected, "seed \(seed), step \(step): IDs and marks survive")
+                let snapshot = NoteDocument(blocks: [.text("Table test"), .table(current)], requires: ["table-v1"])
+                let restored = NoteContentCodec.decode(try NoteContentCodec.encode(snapshot)).document
+                XCTAssertEqual(restored, snapshot, "seed \(seed), step \(step): save/reopen round trip")
+            }
+        }
+    }
+
+    func testNotesHuntSeededMixedTableMovesReplacementsAndEditsKeepSurvivingIdentities() throws {
+        for seed: UInt64 in [20261120, 20261121, 20261122] {
+            var state = seed
+            func pick(_ count: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 32) % UInt64(count))
+            }
+            var current = NoteTable(texts: (0..<18).map { row in
+                (0..<4).map { col in "original-\(row)-\(col)" }
+            })
+            current.rows[5].cells[1].marks = [NoteMark(.bold, offset: 0, length: 5)]
+            current.rows[9].cells[2].marks = [NoteMark(.italic, offset: 0, length: 5)]
+            for step in 0..<240 {
+                var expected = current
+                var insertedIndex: Int?
+                switch pick(4) {
+                case 0:
+                    expected.rows.swapAt(1 + pick(expected.rowCount - 1),
+                                         1 + pick(expected.rowCount - 1))
+                case 1:
+                    let from = pick(expected.columnCount), to = pick(expected.columnCount)
+                    expected.columns.swapAt(from, to)
+                    for index in expected.rows.indices { expected.rows[index].cells.swapAt(from, to) }
+                case 2:
+                    let removed = 1 + pick(expected.rowCount - 1)
+                    expected.rows.remove(at: removed)
+                    var index = 1 + pick(expected.rowCount)
+                    // A changed value in the same slot is indistinguishable
+                    // from editing that row, which correctly keeps its ID.
+                    if index == removed { index = index == expected.rowCount ? 1 : index + 1 }
+                    expected.rows.insert(NoteTable.Row(cells: (0..<4).map {
+                        NoteTable.Cell("new-\(seed)-\(step)-\($0)")
+                    }), at: index)
+                    insertedIndex = index
+                default:
+                    let row = 1 + pick(expected.rowCount - 1), col = pick(expected.columnCount)
+                    expected.rows[row].cells[col] = NoteTable.Cell("edited-\(seed)-\(step)")
+                }
+                let previousIDs = Set(current.rows.map(\.id))
+                let actual = NoteAgentTableText.merge(current, rows: NoteAgentTableText.texts(expected),
+                                                      alignments: expected.columns.map(\.align))
+                XCTAssertEqual(actual.columns, expected.columns, "seed \(seed), step \(step): columns")
+                XCTAssertEqual(NoteAgentTableText.texts(actual), NoteAgentTableText.texts(expected),
+                               "seed \(seed), step \(step): contents")
+                for row in actual.rows.indices {
+                    if row == insertedIndex {
+                        XCTAssertFalse(previousIDs.contains(actual.rows[row].id),
+                                       "seed \(seed), step \(step): inserted row reuses deleted ID")
+                    } else {
+                        XCTAssertEqual(actual.rows[row].id, expected.rows[row].id,
+                                       "seed \(seed), step \(step): surviving row ID")
+                        XCTAssertEqual(actual.rows[row].cells, expected.rows[row].cells,
+                                       "seed \(seed), step \(step): surviving cell styles")
+                    }
+                }
+                current = actual
+                let snapshot = NoteDocument(blocks: [.text("Table test"), .table(current)], requires: ["table-v1"])
+                XCTAssertEqual(NoteContentCodec.decode(try NoteContentCodec.encode(snapshot)).document, snapshot,
+                               "seed \(seed), step \(step): save/reopen")
+            }
+        }
+    }
+
     func testUpdateNoteTableOperationsByIdAreValidated() throws {
         var table = pillars
         let rowID = table.rows[2].id, columnID = table.columns[1].id
