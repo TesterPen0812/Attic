@@ -1375,37 +1375,66 @@ final class TaskNoteComposedHostTests: XCTestCase {
     /// recovery surface (read-only, "unreadable"), never an open that fails on
     /// every attempt, and the preparation never invents bytes.
     func testPF13MissingDocumentBytesStillOpenTheReadOnlyUnreadablePage() async throws {
-        let taskID = try seed(.heavy)
-        let context = ModelContext(container)
-        let noteID = try XCTUnwrap(try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
-        for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.content = nil }
-        try context.save()
-        notes.store.refresh()
-        let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
-        XCTAssertNil(prepared.load)
-        let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
-                                              design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
-        presenters.append(presenter)
-        let session = try XCTUnwrap(presenter.session)
-        XCTAssertTrue(session.isReadOnly)
-        XCTAssertEqual(session.readOnlyReason, .unreadable("missing document bytes"))
-        let closed1 = await presenter.close()
-        XCTAssertTrue(closed1)
-        XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content,
-                     "opening the recovery page never writes bytes")
+        let root = ownedTemporaryDirectory(prefix: "PF13MissingBytes")
+        let storeURL = root.appendingPathComponent("notes.store")
+        // Teardown blocks run before tearDown(): release the store before
+        // the owned temporary-directory cleanup, including a red open failure.
+        addTeardownBlock { @MainActor in
+            for presenter in self.presenters { _ = await presenter.close() }
+            self.presenters.removeAll()
+            self.notes = nil; self.library = nil; self.tasks = nil; self.coordinator = nil; self.container = nil
+        }
+        func diskContainer() throws -> ModelContainer {
+            try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+                               configurations: ModelConfiguration(url: storeURL, cloudKitDatabase: .none))
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        func firstLaunch() async throws -> (taskID: UUID, noteID: UUID) {
+            container = try diskContainer()
+            coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+            let taskID = try seed(.heavy)
+            let context = ModelContext(container)
+            let noteID = try XCTUnwrap(try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
+            for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.content = nil }
+            try context.save()
+            notes.store.refresh()
+            let prepared = try await notes.prepareTaskNoteOpen(taskID: taskID)
+            XCTAssertNil(prepared.load)
+            let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                                  design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+            presenters.append(presenter)
+            let session = try XCTUnwrap(presenter.session)
+            XCTAssertTrue(session.isReadOnly)
+            XCTAssertEqual(session.readOnlyReason, .unreadable("missing document bytes"))
+            let closed1 = await presenter.close()
+            XCTAssertTrue(closed1)
+            XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content,
+                         "opening the recovery page never writes bytes")
+            return (taskID, noteID)
+        }
+        let (taskID, noteID) = try await firstLaunch()
+        weak var previousCoordinator = coordinator
+        presenters.removeAll()
+        notes = nil; library = nil; tasks = nil; coordinator = nil; container = nil
+        for _ in 0..<500 where previousCoordinator != nil { try await Task.sleep(for: .milliseconds(10)) }
+        guard previousCoordinator == nil else { return XCTFail("release the first persistence stack before relaunch") }
 
-        // Relaunch: a fresh controller over the same store opens it again.
-        let relaunched = NotesPageController(store: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
-                                             journal: coordinator.journal, defaults: nil,
+        // Reopen the disk store through an entirely fresh persistence stack.
+        let secondContainer = try diskContainer()
+        let secondCoordinator = try WorkspaceLegacyBridge.coordinator(for: secondContainer)
+        let secondTasks = TaskStore(container: secondContainer)
+        let secondLibrary = AtticLibrary(tasks: secondTasks)
+        let relaunched = NotesPageController(store: NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore()),
+                                             journal: secondCoordinator.journal, defaults: nil,
                                              saveDelay: .seconds(600), durabilityDelay: .seconds(600))
         let again = try await relaunched.prepareTaskNoteOpen(taskID: taskID)
-        let second = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: relaunched,
+        let second = try TaskNotePresenter(taskID: taskID, tasks: secondTasks, library: secondLibrary, notes: relaunched,
                                            design: .default, columnInset: columnInset, defaults: nil, prepared: again)
         presenters.append(second)
         XCTAssertEqual(second.session?.readOnlyReason, .unreadable("missing document bytes"))
         let closed2 = await second.close()
         XCTAssertTrue(closed2)
-        XCTAssertNil(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content)
+        XCTAssertNil(try ModelContext(secondContainer).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first?.content)
     }
 
     // MARK: Review R-3, R-6, panel R-4 and Dot R-8: the page's open sequence
