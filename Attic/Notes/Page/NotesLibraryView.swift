@@ -461,7 +461,8 @@ struct NotesLibraryView: View {
                             if !folded {
                                 ForEach(group.rows) { row in
                                     PreparedNotesLibraryRow(library: model, store: store, revision: store.revision,
-                                        tagFilter: model.tagPicks, matchedQuery: model.matchedQuery, row: row,
+                                        tagFilter: model.tagPicks, matchedQuery: model.matchedQuery,
+                                        taskTags: model.taskTags(for: row.id, store: store), row: row,
                                         isSelected: row.id == selected && model.highlightedID == nil,
                                         isHighlighted: row.id == model.highlightedID,
                                         commands: { rowCommands(row.id) }, anchors: anchors,
@@ -558,7 +559,8 @@ struct NotesLibraryView: View {
                 LazyVStack(alignment: .leading, spacing: NotesBoardMetrics.cardGap) {
                     ForEach(columns[index]) { row in
                         PreparedNotesBoardCard(library: model, store: store, revision: store.revision,
-                            tagFilter: model.tagPicks, matchedQuery: model.matchedQuery, row: row,
+                            tagFilter: model.tagPicks, matchedQuery: model.matchedQuery,
+                            taskTags: model.taskTags(for: row.id, store: store), row: row,
                             isSelected: row.id == selected && model.highlightedID == nil,
                             isHighlighted: row.id == model.highlightedID,
                             commands: { rowCommands(row.id) }, anchors: anchors,
@@ -722,6 +724,8 @@ private struct PreparedNotesLibraryRow: View, Equatable {
     /// the picked ones, and the excerpt follows the completed query.
     let tagFilter: TagPicks
     let matchedQuery: String
+    /// Task tags change without a note revision bump (including search excerpts).
+    let taskTags: [String]?
     let row: AtticNoteRowModel
     let isSelected: Bool
     let isHighlighted: Bool
@@ -738,6 +742,7 @@ private struct PreparedNotesLibraryRow: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
             && lhs.tagFilter == rhs.tagFilter && lhs.matchedQuery == rhs.matchedQuery
+            && lhs.taskTags == rhs.taskTags
             && lhs.row == rhs.row && lhs.isSelected == rhs.isSelected
             && lhs.isHighlighted == rhs.isHighlighted && lhs.anchors === rhs.anchors
     }
@@ -753,6 +758,8 @@ private struct PreparedNotesBoardCard: View, Equatable {
     /// The first tag a card shows is never the one the list is filtered by.
     let tagFilter: TagPicks
     let matchedQuery: String
+    /// Task tags change without a note revision bump (including search excerpts).
+    let taskTags: [String]?
     let row: AtticNoteRowModel
     let isSelected: Bool
     let isHighlighted: Bool
@@ -769,7 +776,8 @@ private struct PreparedNotesBoardCard: View, Equatable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
-            && lhs.tagFilter == rhs.tagFilter && lhs.matchedQuery == rhs.matchedQuery && lhs.row == rhs.row
+            && lhs.tagFilter == rhs.tagFilter && lhs.matchedQuery == rhs.matchedQuery
+            && lhs.taskTags == rhs.taskTags && lhs.row == rhs.row
             && lhs.isSelected == rhs.isSelected && lhs.isHighlighted == rhs.isHighlighted
             && lhs.anchors === rhs.anchors
     }

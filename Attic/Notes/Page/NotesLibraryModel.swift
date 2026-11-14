@@ -639,6 +639,14 @@ final class NotesLibraryModel: ObservableObject {
         let thumbnail: NoteThumbnailContent
     }
 
+    /// Task tags affect both the secondary tag and search excerpts. Task
+    /// edits publish independently of the note store revision.
+    func taskTags(for noteID: UUID, store: NoteStore) -> [String]? {
+        guard let taskID = store.note(withID: noteID)?.taskID,
+              let metadata = taskMetadata[taskID] else { return nil }
+        return metadata.tags
+    }
+
     /// Called by the lazy row's body, before anything is presented.
     func libraryRow(_ row: AtticNoteRowModel, store: NoteStore) -> RowDetails {
         let prepared = preparedRow(row, store: store)

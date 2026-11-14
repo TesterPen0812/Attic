@@ -295,6 +295,67 @@ final class NotesBoardTests: XCTestCase {
         }
     }
 
+    func testBG12TaskTagChangesRedrawTheLibraryRowWithoutANoteRevision() throws {
+        try taskMetadataPixels(layout: .list)
+    }
+
+    func testBG12TaskTagChangesRedrawTheBoardCardWithoutANoteRevision() throws {
+        try taskMetadataPixels(layout: .board)
+    }
+
+    private func taskMetadataPixels(layout: NotesLibraryLayout) throws {
+        let container = store.container
+        let taskID = try TaskNotePreviewSeed.seed(.boundary, in: container)
+        store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tasks = TaskStore(container: container)
+        let controller = controller()
+        XCTAssertTrue(controller.showLibrary())
+        let model = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller, taskStore: tasks)
+        model.layout = layout
+        let row = try XCTUnwrap(model.groups(store: store, drafts: []).flatMap(\.rows).first)
+        let revision = store.revision
+        try withAccessibility {
+            let (host, window) = host(library(model, controller))
+            defer { window.contentView = nil; window.close() }
+            @MainActor func pixels(_ phase: String) throws -> Data {
+                host.layoutSubtreeIfNeeded()
+                let element = try XCTUnwrap(elements(host).first {
+                    $0.accessibilityIdentifier?() == (layout == .list ? "notes-library-row" : "notes-board-card")
+                })
+                let screen = try XCTUnwrap(element.accessibilityFrame?())
+                let frame = host.convert(window.convertFromScreen(screen), from: nil).intersection(host.bounds)
+                XCTAssertGreaterThan(frame.width, 30)
+                XCTAssertGreaterThan(frame.height, 20)
+                let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                    pixelsWide: Int(frame.width * 2), pixelsHigh: Int(frame.height * 2),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                rep.size = frame.size
+                host.cacheDisplay(in: frame, to: rep)
+                let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                if (ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1") {
+                    let path = FileManager.default.temporaryDirectory.appendingPathComponent("R2-BG12-\(layout)-\(phase).png")
+                    try data.write(to: path)
+                    print("R2_SNAPSHOT=\(path.path)")
+                }
+                return data
+            }
+            spin(0.4)
+            let initial = try pixels("initial")
+            XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), status: .done, allowingUnfinishedSubtasks: true))
+            spin(0.4)
+            XCTAssertEqual(model.libraryRow(row, store: store).row.taskState, .done)
+            // Accepted 30 Oct removes status/rings from Notes rows/cards.
+            // A status change has no visual circle to invalidate.
+            XCTAssertEqual(try pixels("completed"), initial, "task status has no visible Notes-row representation")
+            XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), tags: ["fresh-round-two-tag"]))
+            spin(0.4)
+            XCTAssertEqual(store.revision, revision, "task edits leave the note revision alone")
+            XCTAssertEqual(model.libraryRow(row, store: store).tag, "fresh-round-two-tag")
+            XCTAssertNotEqual(try pixels("retagged"), initial, "the task's new tag redraws the same row/card")
+        }
+    }
+
     // MARK: Cards
 
     private func card(title: String, preview: String, pinned: Bool = false, selected: Bool = false,
