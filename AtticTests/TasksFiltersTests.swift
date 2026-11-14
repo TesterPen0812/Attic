@@ -130,6 +130,28 @@ final class TasksFiltersTests: XCTestCase {
 
     // MARK: - Picks
 
+    func testBG1ShowRevealsTasksOutsideThePickedTagsOnNowAndBacklog() throws {
+        for destination: TasksTab in [.now, .backlog] {
+            model.setTagPicks(.none)
+            model.releaseFilterStay()
+            let work = try add("Work \(destination)", tags: ["work"], tab: destination)
+            let home = try add("Home \(destination)", tags: ["home"], tab: destination)
+            model.releaseFilterStay()
+            model.select(tab: destination)
+            model.setTagPicks(TagPicks(["work"]))
+            XCTAssertFalse(model.rows(for: destination).contains { $0.id == home })
+            XCTAssertEqual(model.show(home), .shown)
+            XCTAssertEqual(model.tab, destination)
+            XCTAssertTrue(model.rows(for: destination).contains { $0.id == home }, "BG-1: show must reveal the requested row")
+            XCTAssertTrue(model.selection.contains(home))
+            XCTAssertEqual(model.claimScrollRequest(holding: model.rows(for: destination).map(\.id), in: destination)?.id, home)
+
+            model.setTagPicks(TagPicks(["work"]))
+            XCTAssertEqual(model.show(work), .shown)
+            XCTAssertEqual(model.tagPicks, TagPicks(["work"]), "a compatible filter must survive reveal")
+        }
+    }
+
     func testAnyNeedsOneTagAndAllNeedsEvery() {
         let picks = TagPicks(["work", "home"])
         XCTAssertTrue(picks.matches(["home"]))
