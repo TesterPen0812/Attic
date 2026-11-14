@@ -396,6 +396,7 @@ final class ComposerModel: ObservableObject {
         // Closing has started (Escape, a click outside): nothing creates.
         guard isOpen else { return false }
         guard canCreate else { return false }
+        guard !tasks.refuseNonTaskCreationWhileFilesWait() else { return false }
         isCreating = true
         defer { isCreating = false }
         let generation = draftGeneration
@@ -543,6 +544,7 @@ final class ComposerModel: ObservableObject {
 
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
+        if kind != .task, tasks.refuseNonTaskCreationWhileFilesWait() { return false }
         let made = kind == .task
             ? IdleLatencyTrace.span("task_add_submit") { createTask(openingPage: openingPage) }
             : createNote(openingPage: openingPage)

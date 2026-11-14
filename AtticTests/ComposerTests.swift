@@ -1333,6 +1333,31 @@ final class ComposerTests: XCTestCase {
         XCTAssertGreaterThan(targets.count, after, "after the commit Tab moves the composer's keyboard")
     }
 
+    /// Dot R-4: a file staged for a Task must not be consumed or inherited by
+    /// a Note made from the same shared draft. The note does not silently
+    /// leave the file behind for a later, unrelated task: it waits, the file
+    /// stays staged and removable, and the person is told.
+    func testStagedTaskFilesDoNotSurviveANoteSubmitIntoALaterTask() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("r4-\(UUID().uuidString).txt")
+        try "staged".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        model.open(on: .tasks(.now))
+        type("Draft with a file")
+        page.addComposerFiles(urls: [file])
+        XCTAssertEqual(page.addBarState.fileNames.count, 1)
+        model.choose(.note)
+        let made = await model.create()
+        XCTAssertFalse(made, "a Note must not use up a draft that holds a Task's staged file")
+        XCTAssertTrue(notes.notes.filter { $0.deletedAt == nil }.isEmpty)
+        XCTAssertEqual(page.addBarState.fileNames.count, 1, "the file stays staged and removable")
+        XCTAssertNotNil(page.toasts.current, "the person is told why nothing was made")
+        // Back on Task the file is shown and goes onto the task it was staged for.
+        model.choose(.task)
+        XCTAssertNotNil(page.composerFilesValue)
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertTrue(page.addBarState.fileNames.isEmpty, "the Task took its file")
+    }
+
     func testBG11ImagePasteInSharedTaskTitleStagesAndAttachesTheFile() throws {
         let (_, _, field) = try mountForKeys(on: .tasks(.now))
         typeKeys(field, "Screenshot to review")
