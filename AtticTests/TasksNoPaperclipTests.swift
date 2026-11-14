@@ -161,4 +161,30 @@ final class TasksNoPaperclipTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(flippedY, rowFrame.minY - 0.5, "inside its row")
         XCTAssertLessThanOrEqual(flippedY + inRoot.height, rowFrame.maxY + 0.5)
     }
+
+    func testBG4PagerLeavesAnOverflowingFileStripToNativeHorizontalScrolling() throws {
+        let hosted = try Host()
+        defer { hosted.close() }
+        let task = try XCTUnwrap(hosted.store.create(title: "Attachments to browse"))
+        try hosted.attach(files(14), to: task.id)
+        let root = try XCTUnwrap(hosted.window.contentView)
+        let tiles = try XCTUnwrap(strip(of: 14, in: root))
+        let page = try XCTUnwrap(hosted.pointer.view)
+        let inside = tiles.convert(CGPoint(x: tiles.bounds.midX, y: tiles.bounds.midY), to: nil)
+        func event(_ point: CGPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        }
+        let band = TasksPagerBand(top: 0, bottomInset: 0)
+        XCTAssertGreaterThan(tiles.documentView!.bounds.width, tiles.contentView.bounds.width)
+        XCTAssertTrue(band.contains(page.convert(inside, from: nil), height: page.bounds.height, stackHeight: 0))
+        XCTAssertFalse(TasksPage.pagerTakes(try event(inside), pointer: hosted.pointer,
+                         band: band, stackHeight: 0, pageShown: true),
+            "BG-4: the pager must not steal a horizontal gesture begun over file tiles")
+        let outside = CGPoint(x: max(3, inside.x - tiles.bounds.width / 2 - 20), y: inside.y)
+        XCTAssertTrue(TasksPage.pagerTakes(try event(outside), pointer: hosted.pointer,
+                        band: band, stackHeight: 0, pageShown: true),
+            "normal row space still pages horizontally")
+    }
 }

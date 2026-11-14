@@ -1473,7 +1473,38 @@ struct TasksPage: View {
                            pageShown: Bool) -> Bool {
         guard pageShown, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
               let point = pointer.location(of: event), let view = pointer.view else { return false }
+        // A horizontal tile strip owns gestures that begin over its clip.
+        // TasksPagerSwipe remembers a foreign gesture through its end and
+        // momentum, even if the pointer later crosses ordinary row space.
+        if let root = pointer.view?.window?.contentView {
+            let inRoot = root.convert(event.locationInWindow, from: nil)
+            var hit = root.hitTest(inRoot)
+            while let current = hit {
+                if let scroll = current as? NSScrollView,
+                   abs(scroll.frame.height - TasksRowDesign.tile) < 2,
+                   (scroll.documentView?.bounds.width ?? 0) > scroll.contentView.bounds.width + 1 {
+                    return false
+                }
+                hit = current.superview
+            }
+            // A SwiftUI drag overlay can own AppKit hit testing above a
+            // native clip. The clip's own geometry still owns the gesture.
+            if Self.scrollableTile(at: inRoot, root: root, inside: root) { return false }
+        }
         return band.contains(point, height: view.bounds.height, stackHeight: stackHeight)
+    }
+
+    private static func scrollableTile(at point: CGPoint, root: NSView, inside view: NSView) -> Bool {
+        // Ignore other rows and offscreen clips. A wheel event should inspect
+        // only the AppKit branch underneath its pointer, not the entire list.
+        guard view.bounds.contains(view.convert(point, from: root)) else { return false }
+        if let scroll = view as? NSScrollView,
+           abs(scroll.frame.height - TasksRowDesign.tile) < 2,
+           (scroll.documentView?.bounds.width ?? 0) > scroll.contentView.bounds.width + 1,
+           scroll.bounds.contains(scroll.convert(point, from: root)) {
+            return true
+        }
+        return view.subviews.contains { scrollableTile(at: point, root: root, inside: $0) }
     }
 
     /// The pager's band in the page (see `pagerTakes`).
