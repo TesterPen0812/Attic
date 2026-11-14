@@ -1425,10 +1425,22 @@ final class TaskNoteOpening {
                 if Task.isCancelled { return false }
                 return self?.token == token
             }
+            var prepared: TaskNotePreparedOpen?
+            for _ in 0..<2 {
+                do {
+                    prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
+                    guard current() else { return }
+                    if let presenter = try install(prepared) { opened(presenter) }
+                    return
+                } catch WorkspaceFoundationError.conflict {
+                    guard current() else { return }
+                } catch {
+                    if current() { failed() }
+                    return
+                }
+            }
             do {
-                let prepared = try await controller.prepareTaskNoteOpen(taskID: taskID)
-                guard current() else { return }
-                if let presenter = try install(prepared) { opened(presenter) }
+                if let presenter = try install(nil) { opened(presenter) }
             } catch {
                 if current() { failed() }
             }

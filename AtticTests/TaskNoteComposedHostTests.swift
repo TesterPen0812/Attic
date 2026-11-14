@@ -1417,6 +1417,17 @@ final class TaskNoteComposedHostTests: XCTestCase {
         notes.attachUndoRoute(library.undo)
     }
 
+    private func reviseExternally(_ noteID: UUID, _ text: String) {
+        guard let source = notes.store.loadDocument(noteID: noteID), var blocks = source.content.document?.blocks else {
+            return XCTFail("the revision fixture needs a readable note")
+        }
+        blocks.append(.text(text))
+        guard case .success = notes.store.saveDocument(noteID: noteID, document: NoteDocument(blocks: blocks),
+                                                       baseRevisionID: source.revisionID) else {
+            return XCTFail("the revision fixture must save")
+        }
+    }
+
     /// R-3: Back or Esc on the blank opening page of a cold task note ends the
     /// open. A decode that finishes while the route is still leaving must not
     /// install a leased presenter that blocks every later task.
@@ -1491,6 +1502,50 @@ final class TaskNoteComposedHostTests: XCTestCase {
         await again?.value
         XCTAssertEqual(opened, 1)
         XCTAssertEqual(failed, 0)
+    }
+
+    /// Panel half of R-4: a preparation that goes stale retries once and then
+    /// opens synchronously; the panel never shows the failed-open page where
+    /// the synchronous open succeeded.
+    private func openThroughOpening(_ taskID: UUID, hold: OpenDecodeHold, midway: (() async -> Void)? = nil)
+        async throws -> (opened: TaskNotePresenter?, failed: Int) {
+        useHeldDecode(hold)
+        let opening = TaskNoteOpening()
+        var opened: TaskNotePresenter?, failed = 0
+        let task = opening.begin(taskID: taskID, controller: notes, install: { [self] prepared in
+            let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                                  design: .default, columnInset: columnInset, defaults: nil, prepared: prepared)
+            presenters.append(presenter)
+            return presenter
+        }, opened: { opened = $0 }, failed: { failed += 1 })
+        if let midway { try await hold.waitUntilHeld(); await midway() }
+        await task?.value
+        return (opened, failed)
+    }
+
+    func testPF13AStalePreparationRetriesOnce() async throws {
+        let taskID = try seed(.heavy)
+        let noteID = try XCTUnwrap(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
+        let hold = OpenDecodeHold(holdFirst: true)
+        let result = try await openThroughOpening(taskID, hold: hold) { [self] in
+            reviseExternally(noteID, "agent write during the decode")
+            await hold.release()
+        }
+        XCTAssertNotNil(result.opened, "the stale preparation is retried, not shown as a failed open")
+        XCTAssertEqual(result.failed, 0)
+        let decodes = await hold.decodes
+        XCTAssertEqual(decodes, 2)
+    }
+
+    func testPF13AnAlwaysStalePreparationFallsBackToTheSynchronousOpen() async throws {
+        let taskID = try seed(.heavy)
+        let noteID = try XCTUnwrap(try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).first?.id)
+        let hold = OpenDecodeHold(holdFirst: false) { [unowned self] in
+            reviseExternally(noteID, "racing write \(UUID().uuidString)")
+        }
+        let result = try await openThroughOpening(taskID, hold: hold)
+        XCTAssertNotNil(result.opened, "never the failed-open page where the synchronous open succeeded")
+        XCTAssertEqual(result.failed, 0)
     }
 
     /// § 9: scrolling the composed view shows no regression against the
