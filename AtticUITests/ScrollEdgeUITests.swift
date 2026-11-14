@@ -71,20 +71,15 @@ final class ScrollEdgeUITests: XCTestCase {
     /// sets the number of launches (default 25); xcodebuild forwards only
     /// `TEST_RUNNER_`-prefixed variables to this runner.
     func testDarkGlassHoverScrollRepeats() throws {
-        try XCTSkipUnless(Self.diagnosticsRequested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
-        let requested = Int(ProcessInfo.processInfo.environment["ATTIC_HANG_REPETITIONS"] ?? "25") ?? 25
-        repeatHoveredScroll(surface: "glass", mode: "dark", count: min(max(1, requested), 25))
+        try XCTSkipUnless(HangDiagnosticOptions().requested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
+        repeatHoveredScroll(surface: "glass", mode: "dark", count: HangDiagnosticOptions().repetitions)
     }
 
     /// Controlled appearance comparison: same hover and wheel sequence,
     /// independent process, probe and fixture.
     func testLightGlassHoverScrollControl() throws {
-        try XCTSkipUnless(Self.diagnosticsRequested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
+        try XCTSkipUnless(HangDiagnosticOptions().requested, "hang diagnostics are opt-in: TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1")
         repeatHoveredScroll(surface: "glass", mode: "light", count: 1)
-    }
-
-    private static var diagnosticsRequested: Bool {
-        ProcessInfo.processInfo.environment["ATTIC_HANG_DIAGNOSTICS"] == "1"
     }
 
     private func repeatHoveredScroll(surface: String, mode: String, count: Int) {
@@ -776,6 +771,18 @@ func runHangTool(_ executable: String, _ arguments: [String], timeout: TimeInter
     return "exited \(process.terminationStatus)" + (output.isEmpty ? "" : ": \(output)")
 }
 
+/// xcodebuild strips TEST_RUNNER_ when forwarding variables to the runner.
+struct HangDiagnosticOptions {
+    let requested: Bool
+    let repetitions: Int
+
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        requested = environment["ATTIC_HANG_DIAGNOSTICS"] == "1"
+        let count = Int(environment["ATTIC_HANG_REPETITIONS"] ?? "25") ?? 25
+        repetitions = min(max(1, count), 25)
+    }
+}
+
 /// The stack must be attempted before terminating the launched app, even when
 /// no window is available. The callbacks let a test verify this order without
 /// sampling or terminating any real process.
@@ -799,6 +806,22 @@ final class HangRecoverySupportTests: XCTestCase {
 
     private func hang(waits: Int?, age: Double = 1) -> HangProbeReading {
         HangProbeReading(isHang: true, healthyWaits: waits, ageSeconds: age)
+    }
+
+    func testDiagnosticsAreOptInAndRepetitionsAreBounded() {
+        XCTAssertFalse(HangDiagnosticOptions(environment: [:]).requested)
+        XCTAssertTrue(HangDiagnosticOptions(environment: ["ATTIC_HANG_DIAGNOSTICS": "1"]).requested)
+        for (text, count) in [("2", 2), ("0", 1), ("99", 25), ("invalid", 25)] {
+            XCTAssertEqual(HangDiagnosticOptions(environment: ["ATTIC_HANG_REPETITIONS": text]).repetitions, count)
+        }
+    }
+
+    func testXcodebuildForwardsTheRequestedRepetitions() throws {
+        let text = ProcessInfo.processInfo.environment["ATTIC_EXPECT_HANG_REPETITIONS"]
+        try XCTSkipIf(text == nil, "transport check uses TEST_RUNNER_ATTIC_EXPECT_HANG_REPETITIONS")
+        let expected = try XCTUnwrap(text.flatMap(Int.init))
+        XCTAssertEqual(HangDiagnosticOptions().repetitions, expected,
+                       "run with TEST_RUNNER_ATTIC_HANG_REPETITIONS=2; xcodebuild strips TEST_RUNNER_")
     }
 
     func testTheStackIsSampledAndEvidenceFinishedBeforeTermination() {

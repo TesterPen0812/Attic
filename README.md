@@ -168,6 +168,12 @@ Scripts/run_local_ui_tests.zsh
   has a window on a display. Tests that
   need a real key window opt in with `TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS=1`;
   CI sets it.
+- **Hover-scroll hang diagnostics.** The required scroll capture arms its recovery
+  in the signed local runner. The additional Dark Glass repetitions and Light
+  Glass control skip unless `TEST_RUNNER_ATTIC_HANG_DIAGNOSTICS=1` is set.
+  `TEST_RUNNER_ATTIC_HANG_REPETITIONS=2` sets 1–25 Dark Glass launches (default
+  25). Pass these variables to `Scripts/run_local_ui_tests.zsh`; xcodebuild
+  forwards them to the UI runner with `TEST_RUNNER_` removed.
 - **Generated round trips.** Long generated tests (editing sequences, models,
   matrices, stress and Markdown round trips) live in the `AtticRoundTripTests`
   bundle. `Scripts/generated_test_routes.json` lists which test methods move
