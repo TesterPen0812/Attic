@@ -1190,3 +1190,42 @@ extension PanelSharedChromeTests {
     }
 }
 
+// MARK: - Round 2 N-5 (the picked-tags summary is no extra stop)
+
+extension PanelSharedChromeTests {
+    /// Round 2 review N-5: with tags picked the collapsed bar shows a summary
+    /// whose two native buttons are the stops. The summary's container wears
+    /// the same key-stop modifier as "#", so on Notes it became a third stop
+    /// around them. One stop per control: it is none, and "#" (no picks) is
+    /// still one.
+    func testThePickedTagsSummaryIsNoKeyboardStopAroundItsTwoButtonsOnNotes() throws {
+        let chrome = PanelSharedChrome()
+        chrome.setBar(tagLook(.notes, picks: TagPicks(["launch"])), actions: PanelBottomBarActions(), for: .notes)
+        let window = mountBar(chrome, SharedBarModel(page: .notes))
+        defer { close(window) }
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], false, "the summary's container is no stop; its two buttons are")
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        spin(0.4)
+        XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], true, "without picks # is the one stop")
+    }
+
+    /// The stops across the summary (Full Keyboard Access, CI): its two
+    /// buttons, and nothing around them.
+    func testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("needs Full Keyboard Access (CI)") }
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        library.tagPicks = TagPicks(["launch"])
+        shell.spin(0.8)
+        var visited: [[String]] = []
+        for _ in 0..<24 {
+            shell.tab()
+            visited.append(shell.focusedIdentifiers())
+        }
+        let flat = Set(visited.flatMap { $0 })
+        XCTAssertTrue(flat.contains("notes-tag-bar-picked"), "Tab reaches the summary's picked button")
+        XCTAssertTrue(flat.contains("notes-tag-bar-clear"), "and its clear button")
+        XCTAssertFalse(flat.contains("notes-tag-bar"), "the summary's container is not a stop")
+    }
+}

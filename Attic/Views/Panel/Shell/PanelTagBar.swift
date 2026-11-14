@@ -279,7 +279,8 @@ struct NotesTagBar: View {
         .background(AtticSelectionMarker(cornerRadius: m.pillRadius))
         .clipShape(shape)
         .atticFocusRing(state.keyFocused && !state.isOpen, cornerRadius: m.pillRadius)
-        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown))
+        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown,
+                                   plainStop: false))
     }
 
     // MARK: Open: All and the tags
@@ -611,6 +612,11 @@ private struct PanelTagKeyFocus: ViewModifier {
     /// class), while the bar shows.
     let managed: Bool
     let reachable: Bool
+    /// A stop in AppKit's key loop while the bar shows: the "#" key. The
+    /// picked-tags summary is not: its two native buttons are its stops, and
+    /// a container around them would be a third (round 2 review N-5). Like
+    /// the key it still takes the keyboard when ⌥⌘T asks.
+    var plainStop = true
     @FocusState private var focused: Bool
     @State private var armed = false
     /// The Tab order this "#" lends its requests from (Tasks'), so that Tab
@@ -623,7 +629,7 @@ private struct PanelTagKeyFocus: ViewModifier {
         // Tasks keeps its own Tab order exactly as before (the page asks for
         // "#" itself, whatever the bar shows); the other pages' key loop
         // walks it only while the bar shows.
-        let focusable = managed ? armed : reachable
+        let focusable = (managed || !plainStop) ? armed : reachable
         #if DEBUG
         let _ = PanelKeyStopSeam.tagKey[seam] = focusable
         #endif
