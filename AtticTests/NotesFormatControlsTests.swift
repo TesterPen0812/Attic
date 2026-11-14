@@ -1153,6 +1153,37 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Links
 
+    func testReviewNotesLinkSuggestionsDoNotResortTheWholeLibraryForEveryKey() {
+        let model = NoteFormatCardModel()
+        let candidates = (0..<5_000).map { index in
+            NoteLinkCandidate(id: UUID(), title: String(format: "Research %04d", index))
+        }
+        var libraryEnumerations = 0
+        model.noteCandidates = {
+            libraryEnumerations += 1
+            return candidates.sorted { $0.title < $1.title }
+        }
+        model.openLink(url: nil)
+        for step in 0..<160 {
+            model.linkText = String(format: "Research %04d", (step * 37) % 5_000)
+        }
+        model.linkText = "Research 000"
+        XCTAssertEqual(model.linkSuggestions.count, 4)
+        XCTAssertEqual(libraryEnumerations, 1,
+                       "Typing in Link must reuse the ordered note inventory rather than sort all 5,000 notes per key")
+
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        let first = try? XCTUnwrap(model.linkSuggestions.first?.id)
+        model.chooseNote(0)
+        XCTAssertEqual(committed, first.map(NoteLinkPolicy.noteURL))
+        XCTAssertEqual(libraryEnumerations, 2, "Committing validates the target against the live library")
+
+        model.openLink(url: nil)
+        model.linkText = "Research 050"
+        XCTAssertEqual(libraryEnumerations, 3, "A reopened Link card must refresh the inventory")
+    }
+
     func testBG24EditingAnUnchangedInternalLinkNeverSelectsAnotherMatchingNote() {
         let model = NoteFormatCardModel()
         let otherIDs = (0..<4).map { _ in UUID() }

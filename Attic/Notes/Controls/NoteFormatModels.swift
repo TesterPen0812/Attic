@@ -509,7 +509,12 @@ final class NoteFormatCardModel: ObservableObject {
         case link(hasLink: Bool)
     }
 
-    @Published var card: Card?
+    @Published var card: Card? {
+        didSet {
+            // Closed cards must not retain a potentially large note inventory.
+            if card == nil { openedNoteCandidates = nil }
+        }
+    }
     @Published var viewportHeight: CGFloat?
     @Published var viewportWidth: CGFloat?
     /// The card opened above its text (no room below).
@@ -531,12 +536,22 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var linkSuggestionIndex = 0
     var noteCandidates: (() -> [NoteLinkCandidate])?
     var onLinkSuggestionsChange: (() -> Void)?
+    /// The library's recency order is stable for one open Link card. Typing
+    /// filters this snapshot; picking still validates against live notes.
+    private var openedNoteCandidates: [NoteLinkCandidate]?
     /// A title is only the editable label; an existing link keeps its exact
     /// destination until the person edits or explicitly picks a suggestion.
     private var openedLink: (url: String, text: String)?
     /// The highlighted row when the card opened. Return commits the opened
     /// link only while the highlight is still there; arrows or hover move it.
     private var openedLinkSuggestionIndex = 0
+
+    private func candidatesForOpenLink() -> [NoteLinkCandidate] {
+        if let openedNoteCandidates { return openedNoteCandidates }
+        let candidates = noteCandidates?() ?? []
+        openedNoteCandidates = candidates
+        return candidates
+    }
 
     func refreshLinkSuggestions() {
         let query = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -546,7 +561,7 @@ final class NoteFormatCardModel: ObservableObject {
         } != nil
         let next: [NoteLinkCandidate]
         if case .link = card, !query.isEmpty, !web, !query.contains("://") {
-            next = Array((noteCandidates?() ?? []).filter { $0.title.localizedStandardContains(query) }.prefix(Self.maxLinkSuggestions))
+            next = Array(candidatesForOpenLink().lazy.filter { $0.title.localizedStandardContains(query) }.prefix(Self.maxLinkSuggestions))
         } else { next = [] }
         guard next != linkSuggestions else { return }
         linkSuggestions = next
@@ -564,6 +579,9 @@ final class NoteFormatCardModel: ObservableObject {
         // Re-read current candidates so a deleted/renamed target cannot be committed stale.
         let candidate = linkSuggestions[index]
         guard noteCandidates?().contains(where: { $0.id == candidate.id }) == true else {
+            // A note removed while this card was open must disappear from
+            // suggestions rather than remain selectable from the snapshot.
+            openedNoteCandidates = nil
             refreshLinkSuggestions()
             return
         }
@@ -609,9 +627,10 @@ final class NoteFormatCardModel: ObservableObject {
     }
 
     func openLink(url: String?) {
+        openedNoteCandidates = nil
         let noteID = url.flatMap(NoteLinkPolicy.noteID)
         if let noteID {
-            linkText = noteCandidates?().first(where: { $0.id == noteID })?.title ?? ""
+            linkText = candidatesForOpenLink().first(where: { $0.id == noteID })?.title ?? ""
         } else { linkText = url ?? "" }
         openedLink = url.map { (url: $0, text: linkText) }
         linkError = nil
