@@ -176,9 +176,11 @@ jobs:
             testAQueuedTagKeyHandoffNeverOutlivesTheReleaseThatCameBetween
             testARevealNeverLeavesTheKeyboardOnTheSharedPlusWithFullKeyboardAccess
             testARevealOfTheRetainedPanelReleasesTheSharedPlusOnTheRealShell
+            testBG67TheAXObserverFindsTheRealControlsWithCIEnhancedUIOff
             testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
             testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard
             testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
+            testR3TheTabDriverUsesTheApplicationsKeyboardPath
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
             testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen
             testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess

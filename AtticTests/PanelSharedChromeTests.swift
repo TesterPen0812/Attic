@@ -9,6 +9,18 @@ import XCTest
 /// above the pages, and the page switch's open moves the bar with it.
 @MainActor
 final class PanelSharedChromeTests: XCTestCase {
+    override func record(_ issue: XCTIssue) {
+        if issue.type == .assertionFailure {
+            for shell in RealShell.live.allObjects {
+                let attachment = XCTAttachment(string: shell.focusDiagnostics())
+                attachment.name = "BG-67 native focus and Tab history"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        super.record(issue)
+    }
+
     override func setUp() {
         super.setUp()
         resetStaticState()
@@ -434,6 +446,46 @@ final class PanelSharedChromeTests: XCTestCase {
 /// (AppKit's own key loop), in a key `AtticPanel`, with real Tab key events.
 @MainActor
 private final class RealShell {
+    static let live = NSHashTable<RealShell>.weakObjects()
+    private var tabHistory: [String] = []
+
+    func focusDiagnostics() -> String {
+        let attr = NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")
+        let axFocus = NSApp.accessibilityAttributeValue(attr)
+        let tree = elements(host).map { node in
+            "\(type(of: node)) id=\(node.accessibilityIdentifier?() ?? nil ?? "nil") role=\(String(describing: node.accessibilityRole?())) frame=\(String(describing: node.accessibilityFrame?())) settable=\((node as? NSObject)?.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused"))) focused=\((node as? NSObject)?.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocused")))"
+        }.joined(separator: "\n")
+        return "panelFrame=\(panel.frame) visible=\(panel.isVisible) screenVisibleFrame=\(String(describing: panel.screen?.visibleFrame)) page=\(state.selectedSection) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) focusableInputs=\(PanelKeyStopSeam.plus) FKA=\(NSApp.isFullKeyboardAccessEnabled) active=\(NSApp.isActive) key=\(String(describing: NSApp.keyWindow)) panelKey=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder)) AXFocusedUIElement=\(String(describing: axFocus))\nTab stops actually visited:\n\(tabHistory.joined(separator: "\n"))\nAX tree:\n\(tree)\nNative key loop:\n\(nativeKeyLoop())"
+    }
+
+    func writeFocusRenderIfRequested() throws {
+        let env = ProcessInfo.processInfo.environment
+        let path = env["ATTIC_R3_FOCUS_RENDER_DIR"] ?? env["TEST_RUNNER_ATTIC_R3_FOCUS_RENDER_DIR"] ?? "verification"
+        host.layoutSubtreeIfNeeded()
+        let bounds = host.bounds
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2),
+            pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = bounds.size
+        host.cacheDisplay(in: bounds, to: bitmap)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = "picked-summary-\(URL(fileURLWithPath: path).lastPathComponent)"
+        attachment.lifetime = .keepAlways
+        XCTContext.runActivity(named: "Offscreen production summary at 2×") { $0.add(attachment) }
+    }
+
+    private func nativeKeyLoop() -> String {
+        var current = panel.contentView
+        var seen: Set<ObjectIdentifier> = []
+        var lines: [String] = []
+        while let view = current, seen.insert(ObjectIdentifier(view)).inserted, lines.count < 128 {
+            lines.append("\(view) accepts=\(view.acceptsFirstResponder) canBecomeKey=\(view.canBecomeKeyView) hidden=\(view.isHiddenOrHasHiddenAncestor)")
+            current = view.nextValidKeyView
+        }
+        return lines.joined(separator: "\n")
+    }
+
     let panel: AtticPanel
     let host: AtticPanelHostingView
     let state: PanelUIState
@@ -475,6 +527,7 @@ private final class RealShell {
         panel.orderFront(nil)
         panel.makeKey()
         spin(0.8)
+        Self.live.add(self)
     }
 
     func close() {
@@ -502,9 +555,10 @@ private final class RealShell {
                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
                                          context: nil, characters: characters, charactersIgnoringModifiers: characters,
                                          isARepeat: false, keyCode: 48)!
-            panel.sendEvent(event)
+            NSApp.sendEvent(event)
         }
         spin(0.12)
+        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(String(describing: NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement"))))")
     }
 
     func tabTo(_ identifier: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -532,7 +586,7 @@ private final class RealShell {
                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
                                          context: nil, characters: characters, charactersIgnoringModifiers: characters,
                                          isARepeat: false, keyCode: keyCode)!
-            panel.sendEvent(event)
+            NSApp.sendEvent(event)
         }
         spin(0.15)
     }
@@ -540,7 +594,7 @@ private final class RealShell {
     /// A key through `NSApp.sendEvent`, so the app's local monitors (the
     /// library's keys, the tag bar's) see it as they do a real key, then it
     /// goes on to the window.
-    func appKey(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+    func appKey(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [], settle: Bool = true) {
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
@@ -548,7 +602,7 @@ private final class RealShell {
                                          isARepeat: false, keyCode: keyCode)!
             NSApp.sendEvent(event)
         }
-        spin(0.2)
+        if settle { spin(0.2) }
     }
 
     /// Runs the loop until `condition` holds, at most `seconds` (a release
@@ -561,14 +615,14 @@ private final class RealShell {
 
     /// A click at `point` (window coordinates, origin bottom left) through
     /// `NSApp.sendEvent`.
-    func appClick(at point: CGPoint) {
+    func appClick(at point: CGPoint, settle: Bool = true) {
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
                                            context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
             NSApp.sendEvent(event)
         }
-        spin(0.3)
+        if settle { spin(0.3) }
     }
 
     func elements(_ root: AnyObject, depth: Int = 0) -> [AnyObject] {
@@ -594,7 +648,7 @@ private final class RealShell {
 
     var responder: String {
         guard let responder = panel.firstResponder else { return "nil" }
-        return "\(type(of: responder))"
+        return String(describing: responder)
     }
 }
 
@@ -1373,5 +1427,36 @@ extension PanelSharedChromeTests {
         XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "a click beside the visible bar releases #")
         shell.appKey(Self.downArrow, keyCode: 125)
         XCTAssertNotNil(library.highlightedID, "the library's arrows work after clicking the empty gap")
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testBG67TheAXObserverFindsTheRealControlsWithCIEnhancedUIOff() throws {
+        try requireKeyWindowTests()
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(false, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+        defer { shell.close() }
+        for (section, identifier) in [(PanelSection.calendar, "calendar-new-task"), (.notes, "notes-new-note"), (.canvas, "draw-new-canvas")] {
+            shell.go(to: section)
+            if section == .notes { XCTAssertTrue(shell.draft.pages.showLibrary()); shell.spin(0.8) }
+            XCTAssertNotNil(shell.element(identifier), "\(section): the observer sees the visible real control")
+        }
+    }
+}
+
+
+extension PanelSharedChromeTests {
+    func testR3TheTabDriverUsesTheApplicationsKeyboardPath() throws {
+        try requireKeyWindowTests()
+        let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+        defer { shell.close() }
+        XCTAssertTrue(shell.state.keyboardFocus.isTracking)
+        XCTAssertFalse(shell.state.keyboardFocus.isKeyboardDriving)
+        shell.tab()
+        XCTAssertTrue(shell.state.keyboardFocus.isKeyboardDriving, "real Tab must traverse application monitors before the native key loop")
     }
 }
