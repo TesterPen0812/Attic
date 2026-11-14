@@ -946,6 +946,39 @@ final class AgentRunHostedTests: XCTestCase {
             $0.role == "assistant" && $0.text == "New chat reply."
         })
     }
+
+    func testBG47StopCancelsQueuedNewChatRequestWithoutAbandoningOldDrain() async {
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        let originalChange = AgentChangeSet(id: UUID(), title: "Existing receipt", pages: [.tasks], count: 1)
+        tools.change = originalChange
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: {
+            let helper = FakeRunHelper()
+            helpers.append(helper)
+            return helper
+        }, tools: { tools }, journalURL: journalURL())
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Original change"
+        chat.send()
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+
+        chat.newChat()
+        chat.draft = "Do not run this"
+        chat.send()
+        XCTAssertEqual(chat.phase, .waiting)
+        chat.stop()
+        tools.releaseDrain()
+        try? await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(helpers.count, 1, "Stop must prevent starting the waiting helper")
+        XCTAssertEqual(chat.phase, .idle, "The cancelled new message must leave Stop state")
+        XCTAssertEqual(chat.draft, "Do not run this", "The stopped message is recoverable")
+        XCTAssertTrue(runner.chats().contains { $0.title == "Original change" },
+                      "The old run still records its committed receipt")
+    }
     #endif
 
     private func journalURL() -> URL {
