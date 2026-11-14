@@ -1278,25 +1278,20 @@ final class ComposerTests: XCTestCase {
         }
     }
 
-    /// Opus R-6 = Dot R-5: while text is marked, the input method must see
-    /// Tab and Shift-Tab (it may use them to pick a candidate), and the
-    /// composer's keyboard must not move (BG-70).
-    func testMarkedTextTabAndBacktabReachTheInputMethodAndKeepTheComposerFocus() throws {
+    /// Opus R-6 = Dot R-5, and R-9: a Tab typed while text is marked goes the
+    /// normal way (the text view offers it to the input method first), and the
+    /// Tab command a key the input method leaves alone becomes (`insertTab:`,
+    /// `insertBacktab:`) neither inserts a tab nor moves the composer's
+    /// keyboard (BG-70). Here the source is the Air's plain layout: it does not
+    /// consume the key, as an input method that commits and passes Tab on does.
+    func testMarkedTextTabAndBacktabAreAnsweredWithNothingAndKeepTheComposerFocus() throws {
         var targets: [ComposerCard.KeyboardTarget] = []
         let (window, _, field) = try mountForKeys(on: .tasks(.now), onKeyboardTargetChange: { targets.append($0) })
         field.insertTab(nil)
         spin()
         let writing = try XCTUnwrap(window.firstResponder as? NSTextView)
         XCTAssertFalse(writing === field)
-        var delivered: [Bool] = []
-        ComposerInputMethod.deliver = { _, event in delivered.append(event.modifierFlags.contains(.shift)); return true }
-        defer { ComposerInputMethod.deliver = ComposerInputMethod.native }
-        for backwards in [false, true] {
-            window.makeFirstResponder(writing)
-            writing.setMarkedText("漢", selectedRange: NSRange(location: 1, length: 0),
-                                  replacementRange: NSRange(location: NSNotFound, length: 0))
-            XCTAssertTrue(writing.hasMarkedText())
-            let before = targets.count
+        func send(backwards: Bool) throws {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
                 modifierFlags: backwards ? .shift : [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil,
@@ -1310,26 +1305,32 @@ final class ComposerTests: XCTestCase {
                 dispatched += 1
             }
             spin(0.1)
-            XCTAssertEqual(delivered.last, backwards, "the input method receives the \(backwards ? "Shift-Tab" : "Tab")")
-            XCTAssertEqual(targets.count, before, "and the composer's keyboard does not move")
+        }
+        for backwards in [false, true] {
+            window.makeFirstResponder(writing)
+            writing.setMarkedText("漢", selectedRange: NSRange(location: 1, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(writing.hasMarkedText())
+            let before = targets.count
+            let swallowed = ComposerInputMethod.swallowedTabCommands
+            let text = writing.string
+            try send(backwards: backwards)
+            XCTAssertEqual(ComposerInputMethod.swallowedTabCommands, swallowed + 1,
+                           "the \(backwards ? "Shift-Tab" : "Tab") went the normal way and its command was answered with nothing")
+            XCTAssertEqual(writing.string, text, "no tab is inserted")
+            XCTAssertTrue(writing.hasMarkedText(), "composition is untouched")
+            XCTAssertEqual(targets.count, before, "the composer's keyboard does not move")
             XCTAssertTrue(window.firstResponder === writing, "composition keeps the keyboard")
+            XCTAssertFalse(writing.delegate.map { String(describing: Swift.type(of: $0)).contains("TabCommandGuard") } ?? false,
+                           "the boundary is taken down after the key")
             writing.unmarkText()
         }
-        XCTAssertEqual(delivered, [false, true])
         // Committed: Tab navigates again.
         let after = targets.count
         window.makeFirstResponder(writing)
-        let tab = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-            characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
-        NSApp.postEvent(tab, atStart: false)
-        var dispatched = 0
-        while dispatched < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
-            NSApp.sendEvent(next)
-            dispatched += 1
-        }
-        spin(0.1)
-        XCTAssertEqual(delivered, [false, true], "no marked text: the input method is not asked")
+        let swallowed = ComposerInputMethod.swallowedTabCommands
+        try send(backwards: false)
+        XCTAssertEqual(ComposerInputMethod.swallowedTabCommands, swallowed, "no marked text: nothing is swallowed")
         XCTAssertGreaterThan(targets.count, after, "after the commit Tab moves the composer's keyboard")
     }
 
