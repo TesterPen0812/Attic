@@ -585,7 +585,7 @@ final class DrawPageModel: ObservableObject {
     func start() {
         guard canvasID == nil else { return }
         if let raw = resumeDefaults?.string(forKey: "AtticDraw.lastCanvas"), let id = UUID(uuidString: raw),
-           (try? store.open(id)) != nil { open(id) }
+           let snapshot = try? store.open(id), snapshot.canvas.deletedAt == nil { open(id) }
         else if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
     }
 
@@ -601,7 +601,8 @@ final class DrawPageModel: ObservableObject {
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
         flushViewportMemory()
-        guard let snapshot = try? IdleLatencyTrace.span("draw_board_open", { try store.open(id) }) else { return }
+        guard let snapshot = try? IdleLatencyTrace.span("draw_board_open", { try store.open(id) }),
+              snapshot.canvas.deletedAt == nil else { return }
         IdleLatencyTrace.count("draw_objects_opened", snapshot.objects.count)
         store.activate(id)
         canvasID = id

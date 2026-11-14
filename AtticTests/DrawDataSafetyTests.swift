@@ -611,6 +611,25 @@ final class DrawDataSafetyTests: XCTestCase {
                        "Undo after Cut restores the exact duplicate")
     }
 
+    func testHunt17ResumingDeletedLastCanvasOpensAnEditableLiveCanvas() throws {
+        let defaultsName = "DrawLastCanvas-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let store = DrawInMemoryStore()
+        let deleted = store.create(name: "Deleted while away")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .shape(.rectangle))]), on: deleted.id).isSaved)
+        let surviving = store.create(name: "Working canvas")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .shape(.ellipse))]), on: surviving.id).isSaved)
+        defaults.set(deleted.id.uuidString, forKey: "AtticDraw.lastCanvas")
+        XCTAssertTrue(store.perform(.deleteCanvas, on: deleted.id).isSaved)
+
+        let relaunched = DrawPageModel(store: store, resumeDefaults: defaults)
+        relaunched.start()
+        XCTAssertEqual(relaunched.canvasID, surviving.id,
+                       "A saved last-canvas pointer can outlive its deletion; startup must choose a live board")
+        XCTAssertTrue(relaunched.perform(.put([DrawObject(content: .text("Can draw"))])).isSaved)
+    }
+
     func testHunt17DuplicatingCanvasImmediatelyAfterInkIncludesTheLastStroke() throws {
         let store = try persistent()
         let page = DrawPageModel(store: store)
