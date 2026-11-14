@@ -2031,6 +2031,10 @@ final class TasksPageModel: ObservableObject {
         return command()
     }
 
+    var hasPendingAcknowledgement: Bool {
+        acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
+    }
+
     private func recordAcknowledgementFailure(_ outcome: CommandOutcome) {
         if case let .failed(failure) = outcome, failure != .taskGone {
             acknowledgementFailures &+= 1
@@ -2866,7 +2870,7 @@ final class TasksPageModel: ObservableObject {
     /// notice (Astra 23).
     @discardableResult
     func undo() -> CommandOutcome {
-        let hadPending = acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
+        let hadPending = hasPendingAcknowledgement
         let savedPending = settlePendingCompletionAcknowledgements()
         // A failed acknowledged click never acquired an Undo step. Do not
         // let ⌘Z reach back into an unrelated earlier saved task edit.
@@ -2889,7 +2893,11 @@ final class TasksPageModel: ObservableObject {
 
     @discardableResult
     func redo() -> CommandOutcome {
-        settlePendingCompletionAcknowledgements()
+        let hadPending = hasPendingAcknowledgement
+        let savedPending = settlePendingCompletionAcknowledgements()
+        // No new step was recorded when an acknowledged write failed. Keep
+        // an older undone change from being redone by this keystroke.
+        if hadPending && !savedPending { return .applied }
         let outcome = library.redo(in: .tasks)
         if outcome.isApplied {
             reloadDoneLogAfterChange()

@@ -785,6 +785,68 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: saved), Data("keep these files with the task".utf8))
     }
 
+    func testUndoDuringAcknowledgedTaskCreationUndoesThatTaskNotThePreviousOne() async throws {
+        let before = try XCTUnwrap(library.createTasks([TaskDraft(title: "Existing task")])?.first)
+        model.open(on: .tasks(.now))
+        type("Optimistic task")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+        XCTAssertTrue(page.rows(for: .now).contains { $0.model.title == "Optimistic task" })
+
+        // After submit clears the text history, Command-Z falls back to
+        // composer.undoPage(), even before the acknowledged write settles.
+        model.undoPage()
+        try await waitForComposer { !self.model.isCreating }
+
+        XCTAssertEqual(liveTasks().map(\.id), [before.id],
+            "Undo must settle and reverse the just-submitted task, not an older history step")
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Existing task", "Optimistic task"])
+    }
+
+    func testUndoDuringFailedAcknowledgedCreationDoesNotUndoAnOlderTask() async throws {
+        let previous = try XCTUnwrap(library.createTasks([TaskDraft(title: "Keep this task")])?.first)
+        model.open(on: .tasks(.now))
+        type("Will fail to save")
+        model.writing = "Keep this draft"
+        saveFailure.on = true
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+        model.undoPage()
+        try await waitForComposer { !self.model.isCreating }
+
+        XCTAssertEqual(liveTasks().map(\.id), [previous.id])
+        XCTAssertTrue(library.undo.canUndo(in: .tasks), "the previous task's history survives")
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+        XCTAssertTrue(model.failed)
+        XCTAssertEqual(page.addBar.text, "Will fail to save")
+        XCTAssertEqual(model.writing, "Keep this draft")
+    }
+
+    func testRedoDuringFailedAcknowledgedCreationDoesNotRedoAnOlderTask() async throws {
+        let previous = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier task")])?.first)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+
+        model.open(on: .tasks(.now))
+        type("Cannot be saved")
+        model.writing = "Keep the failed draft"
+        saveFailure.on = true
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+        model.redoPage()
+        try await waitForComposer { !self.model.isCreating }
+
+        XCTAssertTrue(liveTasks().isEmpty,
+            "Redo during a failed submission must not restore an unrelated earlier task")
+        XCTAssertEqual(try rows(TaskItem.self).map(\.id), [previous.id])
+        XCTAssertTrue(library.undo.canRedo(in: .tasks), "the earlier Redo step remains available")
+        XCTAssertTrue(model.failed)
+        XCTAssertEqual(model.writing, "Keep the failed draft")
+    }
+
     func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
         model.open(on: .tasks(.now))
         type("Call Sam")
