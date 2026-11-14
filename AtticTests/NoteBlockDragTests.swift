@@ -96,6 +96,59 @@ final class NoteBlockDragTests: XCTestCase {
         XCTAssertTrue(engine.history.undo() == false, "drag without a drop never changes the document")
     }
 
+    /// Review R-8: autoscroll moves the clip every display frame, but the slots
+    /// cover about a viewport beyond each edge. They are measured again only
+    /// once the visible rectangle leaves that band, not on every frame.
+    func testPF15AutoscrollMeasuresSlotsOnlyWhenTheViewportLeavesTheMeasuredBand() throws {
+        let blocks = [NoteBlock.text("Title"), .text("Source")] + (0..<5_000).map { NoteBlock.text("Offscreen block \($0)") }
+        let (engine, text) = editor(blocks, height: 280, prelayout: false)
+        let source = engine.blockRange(at: location(of: "Source", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let press = text.convert(CGPoint(x: sourceRect.minX - 10, y: sourceRect.midY), to: nil)
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source, sourceRect: sourceRect, pressPoint: press))
+        defer { session.finish() }
+        let clip = try XCTUnwrap(text.enclosingScrollView?.contentView)
+        let pointer = text.convert(CGPoint(x: sourceRect.minX, y: clip.bounds.midY), to: nil)
+        let start = clip.bounds.minY
+        for step in 1...30 {   // 30 display frames of 6 pt: well inside one viewport
+            clip.scroll(to: NSPoint(x: 0, y: start + CGFloat(step) * 6))
+            text.enclosingScrollView?.reflectScrolledClipView(clip)
+            session.pointerMoved(to: pointer)
+        }
+        print("PF15 autoscroll_frames=30 slot_builds=\(session.slotBuildCount)")
+        XCTAssertEqual(session.slotBuildCount, 1, "frames inside the measured band measure nothing")
+        clip.scroll(to: NSPoint(x: 0, y: start + 2_000))
+        text.enclosingScrollView?.reflectScrolledClipView(clip)
+        session.pointerMoved(to: pointer)
+        XCTAssertEqual(session.slotBuildCount, 2, "leaving the band measures the new viewport once")
+    }
+
+    /// Review R-8: a re-measure keeps the choice while its block still has a
+    /// slot, so the line keeps its half of the block (and its hysteresis).
+    func testPF15RemeasuringKeepsTheChoiceWhileItsBlockStillHasASlot() throws {
+        let blocks = [NoteBlock.text("Title"), .text("Source")] + (0..<40).map { NoteBlock.text("Block \($0)") }
+        let (engine, text) = editor(blocks, height: 400)
+        let source = engine.blockRange(at: location(of: "Source", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let press = text.convert(CGPoint(x: sourceRect.minX - 10, y: sourceRect.midY), to: nil)
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source, sourceRect: sourceRect, pressPoint: press))
+        defer { session.finish() }
+        let target = engine.blockRange(at: location(of: "Block 3", in: engine))
+        let rect = try XCTUnwrap(text.rect(ofBlock: target))
+        session.pointerMoved(to: text.convert(CGPoint(x: sourceRect.minX, y: rect.midY + 8), to: nil))
+        let chosen = try XCTUnwrap(session.choice)
+        XCTAssertTrue(chosen.after)
+        let range = session.slots.blocks[chosen.index].range
+        XCTAssertEqual(range, target)
+        session.refreshSlots()
+        let kept = try XCTUnwrap(session.choice, "the choice survives a re-measure")
+        XCTAssertEqual(session.slots.blocks[kept.index].range, range)
+        XCTAssertTrue(kept.after)
+        // Within the hysteresis of the block's middle the kept half holds.
+        session.pointerMoved(to: text.convert(CGPoint(x: sourceRect.minX, y: rect.midY - 2), to: nil))
+        XCTAssertEqual(session.choice?.after, true, "no flip on the boundary after a re-measure")
+    }
+
     func testTheSlotIsTheBlockHalfUnderThePointerWithHysteresis() {
         func block(_ y: CGFloat, _ index: Int) -> NoteBlockDropSlots.Block {
             let slot = { (location: Int) in

@@ -32,6 +32,9 @@ struct NoteBlockDropSlots {
 
     /// Top to bottom.
     let blocks: [Block]
+    /// The vertical band (in the text view) these slots were measured over.
+    /// A drag that stays inside it needs no new measurement.
+    var band: ClosedRange<CGFloat>?
     /// How far past a block's middle the pointer must go before the
     /// choice flips to its other half (no flicker on the boundary).
     static let hysteresis: CGFloat = 4
@@ -80,6 +83,7 @@ extension NoteEditorTextView {
         let titleEnd = engine.titleParagraphRange.length
         let visible = visibleRect
         let upper = visible.maxY + max(visible.height, 200)
+        let band = (visible.minY - max(visible.height, 200))...upper
         // Starting at the first laid-out fragment avoids walking thousands
         // of earlier offscreen blocks when lifting from deep in a note.
         let origin = textContainerOrigin
@@ -137,7 +141,7 @@ extension NoteEditorTextView {
             return NoteBlockDropSlots.Block(range: range, rect: rect, before: slot(range, rect, after: false),
                                             after: slot(range, rect, after: true))
         }.sorted { $0.rect.minY < $1.rect.minY }
-        return NoteBlockDropSlots(blocks: blocks)
+        return NoteBlockDropSlots(blocks: blocks, band: band)
     }
 }
 
@@ -299,7 +303,8 @@ final class NoteBlockDragSession: NSObject {
     private weak var textView: NoteEditorTextView?
     let source: NSRange
     private(set) var slots: NoteBlockDropSlots
-    private var slotsViewport: CGRect
+    /// How many times the slots were measured (the lift counts once).
+    private(set) var slotBuildCount = 1
     let stage: NoteBlockDragStage
     private let sourceRect: CGRect
     /// The pointer's offset from the card's origin, held for the whole drag.
@@ -329,7 +334,6 @@ final class NoteBlockDragSession: NSObject {
         self.sourceRect = sourceRect
         windowPoint = pressPoint
         animated = !engine.style.design.reduceMotion
-        slotsViewport = scrollView.contentView.bounds
         slots = textView.blockDropSlots(moving: source)
         let snapshot = NoteDragLiftView.snapshot(of: sourceRect, in: textView)
         let pageFrame = parent.convert(scrollView.bounds, from: scrollView)
@@ -401,22 +405,35 @@ final class NoteBlockDragSession: NSObject {
         stage.place(origin: origin)
     }
 
+    /// Measure the slots again around the current viewport. The choice stays
+    /// while its block still has a slot, so the line keeps its half of it.
+    func refreshSlots() {
+        guard let textView else { return }
+        let kept = choice.flatMap { choice -> (NSRange, Bool)? in
+            slots.blocks.indices.contains(choice.index) ? (slots.blocks[choice.index].range, choice.after) : nil
+        }
+        slots = textView.blockDropSlots(moving: source)
+        slotBuildCount += 1
+        choice = kept.flatMap { range, after in
+            slots.blocks.firstIndex { $0.range == range }.map { NoteBlockDropSlots.Choice(index: $0, after: after) }
+        }
+    }
+
     private func chooseSlot() {
         guard let textView else { return }
-        var viewportChanged = false
-        if let viewport = textView.enclosingScrollView?.contentView.bounds, viewport != slotsViewport {
-            slotsViewport = viewport
-            slots = textView.blockDropSlots(moving: source)
-            choice = nil
-            viewportChanged = true
+        let before = slots.slot(for: choice)
+        // Autoscroll moves the clip every display frame; the slots cover about
+        // a viewport beyond each edge, so they are measured again only once
+        // the visible rectangle leaves that band.
+        let visible = textView.visibleRect
+        if let band = slots.band, visible.minY < band.lowerBound || visible.maxY > band.upperBound {
+            refreshSlots()
         }
         let point = textView.convert(windowPoint, from: nil)
         let next = slots.choice(atY: point.y, current: choice)
-        guard viewportChanged || next != choice else { return }
-        let before = viewportChanged ? nil : slots.slot(for: choice)
         choice = next
         let slot = slots.slot(for: next)
-        guard viewportChanged || slot != before else { return }
+        guard slot != before else { return }
         showLine(slot?.line, in: textView)
     }
 
