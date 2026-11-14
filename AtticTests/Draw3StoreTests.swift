@@ -185,7 +185,7 @@ final class Draw3StoreTests: XCTestCase {
         func openMenu() throws -> (batches: Int, bytes: Int) {
             reader.metrics.reset()
             let window = try reader.presentationLibrary().prefix(12).map(\.id)
-            for id in window { XCTAssertEqual(try reader.searchThumbnail(id)?.thumbnail, bytes) }
+            for id in window { XCTAssertEqual(try reader.searchThumbnail(id, near: window)?.thumbnail, bytes) }
             return (reader.metrics.thumbnailHydrations, reader.metrics.thumbnailBytesRead)
         }
         let cold = try openMenu()
@@ -239,7 +239,8 @@ final class Draw3StoreTests: XCTestCase {
         for window in [12..<24, 60..<72] {
             reader.metrics.reset()
             let menu = try reader.presentationLibrary()
-            for row in menu[window] { XCTAssertEqual(try reader.searchThumbnail(row.id)?.thumbnail, bytes) }
+            let ids = menu.map(\.id)
+            for index in window { XCTAssertEqual(try rowThumbnail(reader, ids, index)?.thumbnail, bytes) }
             XCTAssertLessThanOrEqual(reader.metrics.thumbnailHydrations, 1,
                                      "menu rows \(window) read their thumbnails in \(reader.metrics.thumbnailHydrations) batches")
         }
@@ -258,7 +259,8 @@ final class Draw3StoreTests: XCTestCase {
         let found = try reader.search("Board 1")
         XCTAssertGreaterThan(found.count, 21)
         reader.metrics.reset()
-        for match in found[12..<21] { XCTAssertEqual(try reader.searchThumbnail(match.canvas.id)?.thumbnail, bytes) }
+        let ranks = found.map(\.canvas.id)
+        for index in 12..<21 { XCTAssertEqual(try rowThumbnail(reader, ranks, index)?.thumbnail, bytes) }
         XCTAssertLessThanOrEqual(reader.metrics.thumbnailHydrations, 1,
                                  "search ranks 12 to 20 read their thumbnails in \(reader.metrics.thumbnailHydrations) batches")
     }
@@ -338,14 +340,151 @@ final class Draw3StoreTests: XCTestCase {
         record.tagsJSON = "{not json"
         try other.save()
 
-        XCTAssertEqual(try reader.searchThumbnail(menu[2].id)?.thumbnail, bytes,
+        let ids = menu.map(\.id)
+        XCTAssertEqual(try rowThumbnail(reader, ids, 2)?.thumbnail, bytes,
                        "a valid row loads although a damaged record is in its window")
         reader.metrics.reset()
-        for row in menu[2..<12] where row.id != damaged {
-            XCTAssertEqual(try reader.searchThumbnail(row.id)?.thumbnail, bytes)
+        for index in 2..<12 where ids[index] != damaged {
+            XCTAssertEqual(try rowThumbnail(reader, ids, index)?.thumbnail, bytes)
         }
         XCTAssertEqual(reader.metrics.thumbnailHydrations, 0, "the other rows of that window were loaded with it")
-        XCTAssertThrowsError(try reader.searchThumbnail(damaged), "the damaged row alone fails")
+        XCTAssertThrowsError(try rowThumbnail(reader, ids, 5), "the damaged row alone fails")
+    }
+
+    // MARK: Round 4: the window the caller sees, aging, failure isolation, a damaged record
+
+    /// Wraps the real SwiftData repository: records every batched thumbnail
+    /// read and can make reads that include a chosen id (or all) fail.
+    @MainActor
+    private final class ProbeRepository: DrawRepository {
+        let inner: DrawSwiftDataRepository
+        let metrics = DrawSaveMetrics()
+        var reads: [[UUID]] = []
+        var broken = Set<UUID>()
+        var failEveryRead = false
+        init(container: ModelContainer) {
+            inner = DrawSwiftDataRepository(container: container, metrics: metrics, save: { try $0.save() }, recovery: nil)
+        }
+        func reads(including id: UUID) -> Int { reads.filter { $0.contains(id) }.count }
+        func library() throws -> [DrawCanvas] { try inner.library() }
+        func searchMetadata() throws -> [DrawCanvas] { try inner.searchMetadata() }
+        func hydrateSearchThumbnails(_ canvases: [DrawCanvas]) throws -> [DrawCanvas] {
+            reads.append(canvases.map(\.id))
+            if failEveryRead || canvases.contains(where: { broken.contains($0.id) }) { throw Injected() }
+            return try inner.hydrateSearchThumbnails(canvases)
+        }
+        func load(_ id: UUID) throws -> DrawSnapshot? { try inner.load(id) }
+        func textMatches(_ words: [String], in id: UUID) throws -> [UUID] { try inner.textMatches(words, in: id) }
+        func write(_ change: DrawChange) -> DrawWriteOutcome { inner.write(change) }
+        func reconcile(_ change: DrawChange) -> DrawWriteOutcome { inner.reconcile(change) }
+        func recoveryProof(for id: UUID) -> Data? { inner.recoveryProof(for: id) }
+        func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool { inner.matchesAgentUndoPrestate(change) }
+        func discardAttempt(for id: UUID) { inner.discardAttempt(for: id) }
+        func deletedImageHeaders() throws -> [DrawDeletedImage] { try inner.deletedImageHeaders() }
+        func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+            inner.purge(canvases: canvases, images: images)
+        }
+    }
+
+    private func probeStore(_ container: ModelContainer) -> (store: DrawStore, probe: ProbeRepository) {
+        let probe = ProbeRepository(container: container)
+        return (DrawStore(repository: probe), probe)
+    }
+
+    /// The rows a list shows around `index`: its aligned page of
+    /// `thumbnailWindow` rows, in the list's own order.
+    private func page(of ids: [UUID], containing index: Int) -> [UUID] {
+        DrawStore.thumbnailPage(of: ids, containing: index)
+    }
+
+    /// What a row does while it is built.
+    @discardableResult
+    private func rowThumbnail(_ store: DrawStore, _ ids: [UUID], _ index: Int) throws -> DrawCanvas? {
+        try store.searchThumbnail(ids[index], near: page(of: ids, containing: index))
+    }
+
+    /// What the list does when rows come on screen.
+    private func shown(_ store: DrawStore, _ ids: [UUID]) { store.touchThumbnails(ids) }
+
+    private func damage(_ id: UUID, in container: ModelContainer) throws {
+        let other = ModelContext(container)
+        let record = try XCTUnwrap(other.fetch(FetchDescriptor<DrawCanvasRecord>()).first { $0.id == id })
+        record.tagsJSON = "{not json"
+        try other.save()
+    }
+
+    /// R-14 A (Dot R-3): rows reached from below (a scroll back up, the arrow
+    /// key walking up) read their window in one batch, not one per row.
+    func testR14RowsReachedFromBelowReadInOneBatchAfterAnEdit() throws {
+        let container = try container()
+        try seedBoards(container, count: 120)
+        let (store, probe) = probeStore(container)
+        for row in try store.presentationLibrary().prefix(12) { _ = try store.searchThumbnail(row.id) }
+        XCTAssertTrue(store.perform(.put([stroke()]), on: try store.presentationLibrary()[3].id).isSaved)
+        let menu = try store.presentationLibrary()
+        let ids = menu.map(\.id)
+        probe.reads = []
+        for index in stride(from: 59, through: 48, by: -1) { try rowThumbnail(store, ids, index) }
+        XCTAssertLessThanOrEqual(probe.reads.count, 1, "rows 59 down to 48 read in \(probe.reads.count) batches")
+    }
+
+    /// R-14 B: a menu opened after a search (its rows come from a cached
+    /// list, so the store is never asked for it again) batches in menu order.
+    func testR14MenuAfterASearchBatchesInMenuOrder() throws {
+        let container = try container()
+        try seedBoards(container, count: 120)
+        let (store, probe) = probeStore(container)
+        let ids = try store.presentationLibrary().map(\.id)
+        XCTAssertGreaterThan(try store.search("Board 1").count, 20)
+        probe.reads = []
+        for index in ids.indices { try rowThumbnail(store, ids, index) }
+        XCTAssertFalse(probe.reads.isEmpty)
+        for batch in probe.reads {
+            let positions = batch.map { ids.firstIndex(of: $0)! }
+            XCTAssertEqual(positions, positions.sorted(), "a batch follows the menu's order")
+            XCTAssertEqual(Set(positions.map { $0 / DrawStore.thumbnailWindow }).count, 1, "a batch stays in one menu page")
+        }
+    }
+
+    /// R-14 A: with no row highlighted, Up jumps to the last result and
+    /// walks up; the results read page by page.
+    func testR14WalkingUpThroughSearchResultsReadsOneBatchPerPage() throws {
+        let container = try container()
+        try seedBoards(container, count: 120)
+        let (store, probe) = probeStore(container)
+        let results = try store.search("Board 1").map(\.canvas.id)
+        XCTAssertGreaterThan(results.count, 24)
+        probe.reads = []
+        for index in results.indices.reversed() { try rowThumbnail(store, results, index) }
+        let pages = (results.count + DrawStore.thumbnailWindow - 1) / DrawStore.thumbnailWindow
+        XCTAssertLessThanOrEqual(probe.reads.count, pages, "walking up \(results.count) results read in \(probe.reads.count) batches")
+    }
+
+    /// R-14 C: rows that are on screen are used, so scrolling a broad search
+    /// back to the top does not evict the top results first.
+    func testR14TheRowsOnScreenAreTheLastToBeEvicted() throws {
+        let container = try container()
+        try seedBoards(container, count: 150)
+        let (store, probe) = probeStore(container)
+        var found = try store.search("Board").map(\.canvas.id)
+        XCTAssertEqual(found.count, 150)
+        shown(store, page(of: found, containing: 0))
+        for pageIndex in 1...8 {
+            for index in (pageIndex * 12)..<((pageIndex + 1) * 12) { try rowThumbnail(store, found, index) }
+            shown(store, page(of: found, containing: pageIndex * 12))
+        }
+        shown(store, page(of: found, containing: 0)) // scrolled back to the top
+        for pageIndex in 9...11 {
+            for index in (pageIndex * 12)..<((pageIndex + 1) * 12) { try rowThumbnail(store, found, index) }
+        }
+        XCTAssertLessThanOrEqual(store.searchThumbnailCacheCount, 128)
+        XCTAssertTrue(store.perform(.put([stroke()]), on: found[5]).isSaved)
+        probe.metrics.reset()
+        probe.reads = []
+        let again = try store.search("Board")
+        found = again.map(\.canvas.id)
+        XCTAssertEqual(again.prefix(12).filter { $0.canvas.thumbnail != nil }.count, 12)
+        XCTAssertEqual(probe.reads.flatMap { $0 }.count, 1, "the next search re-read \(probe.reads.flatMap { $0 }.count) thumbnails")
     }
 
     func testGuardedAgentDrawWriteRefusesDivergentPhysicalCanvasAndObjectReplicas() throws {

@@ -196,7 +196,7 @@ struct DrawSearchResults: View {
                                 },
                                 thumbnailsShown: { [actions = model.actions] in actions.thumbnailsShown($0) },
                                 thumbnailsHidden: { [actions = model.actions] in actions.thumbnailsHidden($0) },
-                                searchThumbnail: { [actions = model.actions] in actions.searchThumbnail($0) },
+                                searchThumbnail: { [actions = model.actions] in actions.searchThumbnail($0, $1) },
                                 thumbnailRevision: model.store.revision)
             }
             .accessibilityLabel(String(localized: "Canvases found"))

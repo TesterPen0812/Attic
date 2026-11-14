@@ -424,7 +424,7 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
     }
 
     private func hostedRows(_ rows: [DrawLibraryMenuModel.Row], revision: UInt64,
-                            searchThumbnail: @escaping (UUID) -> DrawCanvas?) -> some View {
+                            searchThumbnail: @escaping (UUID, [UUID]) -> DrawCanvas?) -> some View {
         DrawLibraryRows(rows: rows, litID: nil, maxHeight: 320,
                         hover: { _, _ in }, choose: { _ in },
                         thumbnailsShown: { _ in }, thumbnailsHidden: { _ in },
@@ -446,7 +446,7 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
         var built: [(id: UUID, hasThumbnail: Bool)] = []
         DrawThumbnailCache.onLookup = { built.append(($0.id, $0.thumbnail != nil)) }
         defer { DrawThumbnailCache.onLookup = nil }
-        let host = NSHostingView(rootView: hostedRows(rows, revision: 0) { id in
+        let host = NSHostingView(rootView: hostedRows(rows, revision: 0) { id, _ in
             var canvas = rows.compactMap(\.canvas).first { $0.id == id }
             canvas?.thumbnail = stored
             return canvas
@@ -471,7 +471,7 @@ final class DrawThumbnailAppearanceTests: XCTestCase {
         let canvas = DrawCanvas(name: "Cleared", thumbnailDark: true)
         let rows = [DrawLibraryMenuModel.Row(kind: .canvas(canvas), title: canvas.name)]
         var cleared = false
-        let lookup: (UUID) -> DrawCanvas? = { _ in
+        let lookup: (UUID, [UUID]) -> DrawCanvas? = { _, _ in
             var found = canvas
             if !cleared { found.thumbnail = stored }
             return found

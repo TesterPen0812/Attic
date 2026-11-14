@@ -49,12 +49,8 @@ class DrawStore: DrawStoreProtocol {
     /// batches so one damaged record never hides the others. Same lifetime
     /// as `searchThumbnails`.
     @ObservationIgnored private var unreadableThumbnails = Set<UUID>()
-    /// The last search result's order, which batches follow while its rows
-    /// are on screen; otherwise batches follow the library order.
-    @ObservationIgnored private var searchOrder: [UUID] = []
-    @ObservationIgnored private var searchOrderPositions: [UUID: Int] = [:]
-    @ObservationIgnored private var searchOrderIsCurrent = false
     var searchThumbnailCacheCount: Int { searchThumbnails.count }
+    var unreadableThumbnailCount: Int { unreadableThumbnails.count }
     @ObservationIgnored private var histories: [UUID: History] = [:]
     /// The current in-memory head left by our own recovered inverse. A newer
     /// owner edit replaces that head and must still block earlier agent Undo.
@@ -189,8 +185,7 @@ class DrawStore: DrawStoreProtocol {
     /// revision, however often the list asks. Rows read their own thumbnail
     /// (`searchThumbnail`) when they are built, so nothing is hydrated here.
     func presentationLibrary() throws -> [DrawCanvas] {
-        searchOrderIsCurrent = false
-        return try searchMetadata()
+        try searchMetadata()
     }
 
     func search(_ query: String) throws -> [DrawSearchMatch] {
@@ -206,9 +201,6 @@ class DrawStore: DrawStoreProtocol {
             let ids = textWords.isEmpty ? [] : try repository.textMatches(textWords, in: canvas.id)
             return DrawSearchMatch(canvas: canvas, matchingTextBoxIDs: ids)
         }
-        searchOrder = candidates.map(\.canvas.id)
-        searchOrderPositions = Dictionary(uniqueKeysWithValues: searchOrder.enumerated().map { ($1, $0) })
-        searchOrderIsCurrent = true
         guard !candidates.isEmpty else { return [] }
         let hydrated = try hydratedPresentation(candidates.map(\.canvas))
         return zip(candidates, hydrated).map { match, canvas in
@@ -228,7 +220,19 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
-    func searchThumbnail(_ id: UUID) throws -> DrawCanvas? {
+    /// The page of `ids` (an aligned run of `thumbnailWindow` rows, in the
+    /// caller's order) that holds `index`: what a list passes as `near`.
+    static func thumbnailPage(of ids: [UUID], containing index: Int) -> [UUID] {
+        guard ids.indices.contains(index) else { return [] }
+        let start = index / thumbnailWindow * thumbnailWindow
+        return Array(ids[start..<min(start + thumbnailWindow, ids.count)])
+    }
+
+    /// `near` is the rows around this one in the caller's own on-screen
+    /// order (its page, see `thumbnailPage`). A miss reads this row and the
+    /// uncached ones of `near`, in that order and in both directions, in one
+    /// batch: one context, two fetches. The store never guesses an order.
+    func searchThumbnail(_ id: UUID, near: [UUID]) throws -> DrawCanvas? {
         if recoveredCanvasIDs.contains(id) { return states[id]?.canvas }
         // The summary only names the canvas, so a stale snapshot is enough
         // and a write on another canvas costs no metadata read. An id it
@@ -240,21 +244,20 @@ class DrawStore: DrawStoreProtocol {
         }
         let metadata = snapshot.canvases[snapshot.positions[id]!]
         if let entry = cachedThumbnail(id) { return merged(metadata, entry) }
-        // A miss reads the uncached rows from this one to the end of its
-        // window (a page of `thumbnailWindow` rows in the order the caller
-        // lists them) in one batch: one context, two fetches.
         var batch = [metadata]
         if !unreadableThumbnails.contains(id) {
-            let inSearch = searchOrderIsCurrent ? searchOrderPositions[id] : nil
-            let order = inSearch == nil ? snapshot.ids : searchOrder
-            let start = inSearch ?? snapshot.positions[id]!
-            let end = min((start / Self.thumbnailWindow + 1) * Self.thumbnailWindow, order.count)
-            batch = order[start..<end].compactMap { rowID in
+            batch = near.prefix(2 * Self.thumbnailWindow).compactMap { rowID in
                 guard rowID == id || needsThumbnailRead(rowID), let at = snapshot.positions[rowID] else { return nil }
                 return snapshot.canvases[at]
             }
+            if !batch.contains(where: { $0.id == id }) { batch.append(metadata) }
         }
         return try loadThumbnails(batch, requested: id) ?? metadata
+    }
+
+    /// These rows are on screen: they are the last to be evicted.
+    func touchThumbnails(_ ids: [UUID]) {
+        for id in ids { _ = cachedThumbnail(id) }
     }
 
     private func needsThumbnailRead(_ id: UUID) -> Bool {

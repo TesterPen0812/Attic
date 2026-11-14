@@ -145,7 +145,7 @@ struct DrawLibraryRows: View {
     /// lazy stack. Offscreen matches must not open boards or start renders.
     var thumbnailsShown: (([DrawCanvas]) -> Void)?
     var thumbnailsHidden: (([UUID]) -> Void)?
-    var searchThumbnail: ((UUID) -> DrawCanvas?)?
+    var searchThumbnail: ((_ id: UUID, _ near: [UUID]) -> DrawCanvas?)?
     /// A row without a thumbnail body in its metadata reads its own from the
     /// store (cached there, per canvas) while it is built, so its first frame
     /// already shows the stored image. `thumbnailRevision` only makes the
@@ -158,7 +158,7 @@ struct DrawLibraryRows: View {
          hover: @escaping (DrawLibraryMenuModel.Row, Bool) -> Void, choose: @escaping (DrawLibraryMenuModel.Row) -> Void,
          thumbnailsShown: (([DrawCanvas]) -> Void)? = nil,
          thumbnailsHidden: (([UUID]) -> Void)? = nil,
-         searchThumbnail: ((UUID) -> DrawCanvas?)? = nil,
+         searchThumbnail: ((_ id: UUID, _ near: [UUID]) -> DrawCanvas?)? = nil,
          thumbnailRevision: UInt64 = 0) {
         self.rows = rows
         self.litID = litID
@@ -178,25 +178,31 @@ struct DrawLibraryRows: View {
                   hover: { model.hover($0, inside: $1) }, choose: { model.choose($0) },
                   thumbnailsShown: { actions.thumbnailsShown($0) },
                   thumbnailsHidden: { actions.thumbnailsHidden($0) },
-                  searchThumbnail: { actions.searchThumbnail($0) },
+                  searchThumbnail: { actions.searchThumbnail($0, $1) },
                   thumbnailRevision: model.store.revision)
     }
 
-    private func hydrated(_ canvas: DrawCanvas?) -> DrawCanvas? {
-        guard let canvas, canvas.thumbnail == nil,
-              let found = searchThumbnail?(canvas.id), found.thumbnail != nil else { return nil }
+    /// The stored thumbnail of a row that has none in its metadata. The
+    /// store reads the row with the others of its page, in the list's own
+    /// on-screen order, so rows reached from either direction share a batch.
+    private func hydrated(_ canvas: DrawCanvas?, ids: [UUID], positions: [UUID: Int]) -> DrawCanvas? {
+        guard let canvas, canvas.thumbnail == nil, let at = positions[canvas.id],
+              let found = searchThumbnail?(canvas.id, DrawStore.thumbnailPage(of: ids, containing: at)),
+              found.thumbnail != nil else { return nil }
         return found
     }
 
     var body: some View {
         let height = DrawLibraryMetrics.listHeight(rows)
+        let ids = rows.compactMap { $0.canvas?.id }
+        let positions = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if row.startsSection { AtticDropdownRule() }
                         DrawLibraryRowView(row: row, isLit: row.id == litID,
-                                           thumbnailOverride: hydrated(row.canvas),
+                                           thumbnailOverride: hydrated(row.canvas, ids: ids, positions: positions),
                                            onHover: { inside in hover(row, inside) }) {
                             choose(row)
                         }
@@ -208,7 +214,7 @@ struct DrawLibraryRows: View {
                             guard let canvas = row.canvas else { return }
                             // Older stored thumbnails can have no appearance
                             // marker. An absent body is not proof of an empty card.
-                            thumbnailsShown?([hydrated(canvas) ?? canvas])
+                            thumbnailsShown?([hydrated(canvas, ids: ids, positions: positions) ?? canvas])
                         }
                         .onDisappear {
                             if let id = row.canvas?.id { thumbnailsHidden?([id]) }

@@ -340,7 +340,7 @@ final class DrawPageModel: ObservableObject {
                            thumbnailsHidden: { [weak self] in self?.thumbnailsHidden($0) },
                            searchThumbnail: { [weak self] in
                                guard let self else { return nil }
-                               return try? self.store.searchThumbnail($0)
+                               return try? self.store.searchThumbnail($0, near: $1)
                            })
     }
 
@@ -531,6 +531,8 @@ final class DrawPageModel: ObservableObject {
     /// place. Canvases that never show are left alone.
     func thumbnailsShown(_ canvases: [DrawCanvas]) {
         let dark = DrawImageActions.isDark
+        // On screen: the store's thumbnail cache evicts these last.
+        store.touchThumbnails(canvases.map(\.id))
         appearanceVisibleIDs.formUnion(canvases.map(\.id))
         for canvas in canvases where canvas.deletedAt == nil &&
             (unrenderedThumbnails.contains(canvas.id) ||

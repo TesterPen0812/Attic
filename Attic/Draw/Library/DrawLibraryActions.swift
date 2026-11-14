@@ -20,7 +20,9 @@ struct DrawLibraryActions {
     /// page re-renders any drawn for the other appearance.
     let thumbnailsShown: @MainActor (_ canvases: [DrawCanvas]) -> Void
     let thumbnailsHidden: @MainActor (_ ids: [UUID]) -> Void
-    let searchThumbnail: @MainActor (_ id: UUID) -> DrawCanvas?
+    /// A row's stored thumbnail; `near` is the rows around it in the list's
+    /// own order (its page), which the store reads together in one batch.
+    let searchThumbnail: @MainActor (_ id: UUID, _ near: [UUID]) -> DrawCanvas?
 
     init(open: @escaping @MainActor (_ canvasID: UUID) -> Void,
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
@@ -32,7 +34,7 @@ struct DrawLibraryActions {
          hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true },
          thumbnailsShown: @escaping @MainActor (_ canvases: [DrawCanvas]) -> Void = { _ in },
          thumbnailsHidden: @escaping @MainActor (_ ids: [UUID]) -> Void = { _ in },
-         searchThumbnail: @escaping @MainActor (_ id: UUID) -> DrawCanvas? = { _ in nil }) {
+         searchThumbnail: @escaping @MainActor (_ id: UUID, _ near: [UUID]) -> DrawCanvas? = { _, _ in nil }) {
         openCanvas = open
         makeCanvas = newCanvas
         revealObject = reveal

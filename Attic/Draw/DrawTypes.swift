@@ -216,12 +216,14 @@ protocol DrawStoreProtocol: AnyObject {
     func presentationLibrary() throws -> [DrawCanvas]
     func search(_ query: String) throws -> [DrawSearchMatch]
     /// The thumbnail of one realized row, without opening its drawing. The
-    /// store keeps a bounded number of them; a miss reads this row and the
-    /// uncached rows after it in the same window (a page of 12 in the order
-    /// of the last list asked for, the menu's or the search's) in one batch.
-    /// A canvas it has not listed yet refreshes the list first; nil means
-    /// there is no such canvas.
-    func searchThumbnail(_ id: UUID) throws -> DrawCanvas?
+    /// store keeps a bounded number of them. `near` is the rows around it in
+    /// the caller's own on-screen order (`DrawStore.thumbnailPage`): a miss
+    /// reads this row and the uncached ones of `near`, in that order, in one
+    /// batch. A canvas it has not listed yet refreshes the list first; nil
+    /// means there is no such canvas.
+    func searchThumbnail(_ id: UUID, near: [UUID]) throws -> DrawCanvas?
+    /// These rows are on screen; the cache evicts them last.
+    func touchThumbnails(_ ids: [UUID])
     func create(name: String?) -> DrawCanvas
     func open(_ id: UUID) throws -> DrawSnapshot
     /// The canvas presently owned by the Draw page; never evict its session.
@@ -269,7 +271,9 @@ protocol DrawStoreProtocol: AnyObject {
 
 extension DrawStoreProtocol {
     func presentationLibrary() throws -> [DrawCanvas] { try library() }
-    func searchThumbnail(_ id: UUID) throws -> DrawCanvas? { try library().first { $0.id == id } }
+    func searchThumbnail(_ id: UUID, near: [UUID]) throws -> DrawCanvas? { try library().first { $0.id == id } }
+    func searchThumbnail(_ id: UUID) throws -> DrawCanvas? { try searchThumbnail(id, near: []) }
+    func touchThumbnails(_ ids: [UUID]) {}
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         var result: DrawSaveResult = .unchanged
         for command in commands { result = perform(command, on: id) }
